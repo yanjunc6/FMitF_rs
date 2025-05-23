@@ -10,9 +10,11 @@ identifier = @{ letter_or_underscore ~ letter_or_digit_or_underscore* }
 integer_literal = @{ ASCII_DIGIT+ }
 float_literal   = @{ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
 string_literal  = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+bool_literal    = @{ "true" | "false" } // Add Boolean literal
 
-type_name = { "int" | "float" | "string" }
+type_name = { "int" | "float" | "string" | "bool" } // Add bool type
 ret_type = { type_name | "void" }
+global_keyword = { "global" }
 
 // Grammar Start
 
@@ -39,7 +41,7 @@ node_list = {
 
 table_declaration = {
     "table" ~ identifier ~ "on" ~ identifier
-    ~ "{" ~ field_declaration* ~ "}" ~ ";"
+    ~ "{" ~ field_declaration* ~ "}"
 }
 
 field_declaration = {
@@ -69,16 +71,22 @@ function_body_item = {
 // Hop Blocks
 
 hop_block = {
-    "hop" ~ "on" ~ identifier
-    ~ "{" ~ statement* ~ "}"
+    "hop" ~ "on" ~ identifier ~ block
 }
 
 // Statements
 
 statement = {
-    assignment_statement
+    var_decl_statement
+    | var_assignment_statement    // NEW: Add variable assignment
+    | assignment_statement        // Table assignment (existing)
     | if_statement
+    | return_statement
     | empty_statement
+}
+
+var_assignment_statement = {
+    identifier ~ "=" ~ expression ~ ";"
 }
 
 assignment_statement = {
@@ -95,10 +103,20 @@ assignment_statement = {
     ~ ";"
 }
 
+var_decl_statement = {
+    global_keyword? ~ type_name ~ identifier ~ "=" ~ expression ~ ";"
+}
+
+return_statement = {
+    "return" ~ expression? ~ ";"
+}
+
 if_statement = {
-    "if" ~ "(" ~ expression ~ ")" 
-    ~ "{" ~ statement* ~ "}"
-    ~ ( "else" ~ "{" ~ statement* ~ "}" )?
+    "if" ~ "(" ~ expression ~ ")" ~ block ~ ("else" ~ block)?
+}
+
+block = {
+    "{" ~ statement* ~ "}"
 }
 
 empty_statement = { ";" }
@@ -110,46 +128,65 @@ expression = { logic_or }
 
 logic_or = {
     logic_and
-    ~ ( "||" ~ logic_and )*
+    ~ ( logic_or_op ~ logic_and )*
 }
+
+logic_or_op = { "||" }
 
 logic_and = {
     equality
-    ~ ( "&&" ~ equality )*
+    ~ ( logic_and_op ~ equality )*
 }
+
+logic_and_op = { "&&" }
 
 equality = {
     comparison
-    ~ ( ( "==" | "!=" ) ~ comparison )*
+    ~ ( equality_op ~ comparison )*
 }
+
+equality_op = { "==" | "!=" }
 
 comparison = {
     addition
-    ~ ( ( "<" | "<=" | ">" | ">=" ) ~ addition )*
+    ~ ( comparison_op ~ addition )*
 }
+
+comparison_op = { "<=" | ">=" | "<" | ">" }
 
 addition = {
     multiplication
-    ~ ( ( "+" | "-" ) ~ multiplication )*
+    ~ ( addition_op ~ multiplication )*
 }
+
+addition_op = { "+" | "-" }
 
 multiplication = {
     unary
-    ~ ( ( "*" | "/" ) ~ unary )*
+    ~ ( multiplication_op ~ unary )*
 }
+
+multiplication_op = { "*" | "/" }
 
 unary = {
     primary |
-    ( "!" ~ unary ) |
-    ( "-" ~ unary )
+    ( unary_op ~ unary )
 }
 
+unary_op = { "!" | "-" }
+
 primary = {
-    identifier
+    bool_literal        // Put this FIRST
+    | table_field_access
     | float_literal
     | integer_literal
     | string_literal
+    | identifier
     | "(" ~ expression ~ ")"
+}
+
+table_field_access = {
+    identifier ~ "[" ~ identifier ~ ":" ~ expression ~ "]" ~ "." ~ identifier
 }
 
 // We skip whitespace and single-line comments globally:

@@ -17,7 +17,11 @@ pub fn print_program(program: &Program) {
         println!("        On node: {}", table.node.name);
         println!("        Fields:");
         for f in &table.fields {
-            println!("            {} {}", type_name_to_str(&f.field_type), f.field_name);
+            println!(
+                "            {} {}",
+                type_name_to_str(&f.field_type),
+                f.field_name
+            );
         }
     }
 
@@ -31,14 +35,19 @@ pub fn print_program(program: &Program) {
         }
         println!("        Parameters:");
         for param in &func.parameters {
-            println!("            {} {}", type_name_to_str(&param.param_type), param.param_name);
+            println!(
+                "            {} {}",
+                type_name_to_str(&param.param_type),
+                param.param_name
+            );
         }
 
         println!("        Hop Blocks:");
         for (j, hop) in func.hops.iter().enumerate() {
             println!("            [{}] Hop on node: {}", j, hop.node.name);
+            println!("                Statements:");
             for stmt in &hop.statements {
-                print_statement(stmt, 4);
+                print_statement(stmt, 5);
             }
         }
     }
@@ -50,35 +59,56 @@ pub fn print_program(program: &Program) {
 fn print_statement(stmt: &Statement, indent_level: usize) {
     let indent = "    ".repeat(indent_level);
     match stmt {
-        Statement::Assignment(asg) => {
-            println!("{}Assignment:", indent);
-            println!("{}  Table = {}", indent, asg.table.name);
-            println!("{}  PK column = {}", indent, asg.pk_column);
+        Statement::Assignment(assign) => {
+            println!("{}Table Assignment:", indent);
+            println!("{}  Table = {}", indent, assign.table.name);
+            println!("{}  PK column = {}", indent, assign.pk_column);
             println!("{}  PK expr:", indent);
-            print_expression(&asg.pk_expr, indent_level + 2);
-            println!("{}  Field = {}", indent, asg.field_name);
+            print_expression(&assign.pk_expr, indent_level + 2);
+            println!("{}  Field = {}", indent, assign.field_name);
             println!("{}  Rhs expr:", indent);
-            print_expression(&asg.rhs, indent_level + 2);
+            print_expression(&assign.rhs, indent_level + 2);
         }
-        Statement::IfStmt(ifstmt) => {
+        Statement::VarAssignment(var_assign) => {
+            println!("{}Variable Assignment:", indent);
+            println!("{}  Variable: {}", indent, var_assign.var_name);
+            println!("{}  Value:", indent);
+            print_expression(&var_assign.rhs, indent_level + 2);
+        }
+        Statement::IfStmt(if_stmt) => {
             println!("{}IfStatement:", indent);
             println!("{}  Condition:", indent);
-            print_expression(&ifstmt.condition, indent_level + 2);
-
+            print_expression(&if_stmt.condition, indent_level + 2);
             println!("{}  Then branch:", indent);
-            for s in &ifstmt.then_branch {
-                print_statement(s, indent_level + 2);
+            for stmt in &if_stmt.then_branch {
+                print_statement(stmt, indent_level + 2);
             }
-
-            if let Some(else_stmts) = &ifstmt.else_branch {
+            if let Some(else_branch) = &if_stmt.else_branch {
                 println!("{}  Else branch:", indent);
-                for s in else_stmts {
-                    print_statement(s, indent_level + 2);
+                for stmt in else_branch {
+                    print_statement(stmt, indent_level + 2);
                 }
             }
         }
+        Statement::VarDecl(var_decl) => {
+            let scope = if var_decl.is_global { "Global " } else { "" };
+            println!("{}{}Variable Declaration:", indent, scope);
+            println!("{}  Type: {}", indent, type_name_to_str(&var_decl.var_type));
+            println!("{}  Name: {}", indent, var_decl.var_name);
+            println!("{}  Initial value:", indent);
+            print_expression(&var_decl.init_value, indent_level + 2);
+        }
+        Statement::Return(ret_stmt) => {
+            println!("{}Return Statement:", indent);
+            if let Some(value) = &ret_stmt.value {
+                println!("{}  Value:", indent);
+                print_expression(value, indent_level + 2);
+            } else {
+                println!("{}  (void return)", indent);
+            }
+        }
         Statement::Empty => {
-            println!("{}(Empty Statement)", indent);
+            println!("{}Empty Statement", indent);
         }
     }
 }
@@ -99,6 +129,22 @@ fn print_expression(expr: &Expression, indent_level: usize) {
         Expression::StringLit(s) => {
             println!("{}StringLit(\"{}\")", indent, s);
         }
+        Expression::BoolLit(b) => {
+            println!("{}BoolLit({})", indent, b);
+        }
+        Expression::TableFieldAccess {
+            table_name,
+            pk_column,
+            pk_expr,
+            field_name,
+        } => {
+            println!("{}TableFieldAccess:", indent);
+            println!("{}  Table: {}", indent, table_name);
+            println!("{}  PK Column: {}", indent, pk_column);
+            println!("{}  PK Expression:", indent);
+            print_expression(pk_expr, indent_level + 2);
+            println!("{}  Field: {}", indent, field_name);
+        }
         Expression::UnaryOp { op, expr } => {
             let op_str = match op {
                 UnaryOp::Neg => "-",
@@ -113,14 +159,14 @@ fn print_expression(expr: &Expression, indent_level: usize) {
                 BinaryOp::Sub => "-",
                 BinaryOp::Mul => "*",
                 BinaryOp::Div => "/",
-                BinaryOp::Eq  => "==",
+                BinaryOp::Eq => "==",
                 BinaryOp::Neq => "!=",
-                BinaryOp::Lt  => "<",
+                BinaryOp::Lt => "<",
                 BinaryOp::Lte => "<=",
-                BinaryOp::Gt  => ">",
+                BinaryOp::Gt => ">",
                 BinaryOp::Gte => ">=",
                 BinaryOp::And => "&&",
-                BinaryOp::Or  => "||",
+                BinaryOp::Or => "||",
             };
             println!("{}BinaryOp({})", indent, op_str);
             println!("{}  Left:", indent);
@@ -137,5 +183,6 @@ fn type_name_to_str(t: &TypeName) -> &'static str {
         TypeName::Int => "int",
         TypeName::Float => "float",
         TypeName::String => "string",
+        TypeName::Bool => "bool", // Add Boolean type
     }
 }
