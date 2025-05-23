@@ -11,8 +11,8 @@ integer_literal = @{ ASCII_DIGIT+ }
 float_literal   = @{ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
 string_literal  = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 
-type = { "int" | "float" | "string" }
-ret_type = { type | "void" }
+type_name = { "int" | "float" | "string" }
+ret_type = { type_name | "void" }
 
 // Grammar Start
 
@@ -43,7 +43,7 @@ table_declaration = {
 }
 
 field_declaration = {
-    type ~ identifier ~ ";"
+    type_name ~ identifier ~ ";"
 }
 
 // Function Declarations
@@ -58,7 +58,7 @@ parameter_list = {
 }
 
 parameter_decl = {
-    type ~ identifier
+    type_name ~ identifier
 }
 
 function_body_item = {
