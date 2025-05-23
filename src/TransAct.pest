@@ -1,0 +1,156 @@
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT    = _{ "//" ~ (!"\n" ~ ANY)* }
+
+// Basic tokens
+
+letter_or_underscore = { ASCII_ALPHA | "_" }
+letter_or_digit_or_underscore = { ASCII_ALPHANUMERIC | "_" }
+
+identifier = @{ letter_or_underscore ~ letter_or_digit_or_underscore* }
+integer_literal = @{ ASCII_DIGIT+ }
+float_literal   = @{ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
+string_literal  = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+
+type = { "int" | "float" | "string" }
+ret_type = { type | "void" }
+
+// Grammar Start
+
+program = {
+    SOI 
+    ~ nodes_block 
+    ~ table_declaration* 
+    ~ function_declaration* 
+    ~ EOI
+}
+
+// Nodes Block
+
+nodes_block = {
+    "nodes"
+    ~ "{" ~ node_list ~ "}"
+}
+
+node_list = {
+    identifier ~ ("," ~ identifier)*
+}
+
+// Table Declarations
+
+table_declaration = {
+    "table" ~ identifier ~ "on" ~ identifier
+    ~ "{" ~ field_declaration* ~ "}" ~ ";"
+}
+
+field_declaration = {
+    type ~ identifier ~ ";"
+}
+
+// Function Declarations
+
+function_declaration = {
+    ret_type ~ identifier ~ "(" ~ parameter_list? ~ ")"
+    ~ "{" ~ function_body_item* ~ "}"
+}
+
+parameter_list = {
+    parameter_decl ~ ("," ~ parameter_decl)*
+}
+
+parameter_decl = {
+    type ~ identifier
+}
+
+function_body_item = {
+    hop_block
+}
+
+
+// Hop Blocks
+
+hop_block = {
+    "hop" ~ "on" ~ identifier
+    ~ "{" ~ statement* ~ "}"
+}
+
+// Statements
+
+statement = {
+    assignment_statement
+    | if_statement
+    | empty_statement
+}
+
+assignment_statement = {
+    identifier
+    ~ "["
+        ~ identifier
+        ~ ":"
+        ~ expression
+    ~ "]"
+    ~ "."
+    ~ identifier
+    ~ "="
+    ~ expression
+    ~ ";"
+}
+
+if_statement = {
+    "if" ~ "(" ~ expression ~ ")" 
+    ~ "{" ~ statement* ~ "}"
+    ~ ( "else" ~ "{" ~ statement* ~ "}" )?
+}
+
+empty_statement = { ";" }
+
+
+// Expressions (operator precedence)
+
+expression = { logic_or }
+
+logic_or = {
+    logic_and
+    ~ ( "||" ~ logic_and )*
+}
+
+logic_and = {
+    equality
+    ~ ( "&&" ~ equality )*
+}
+
+equality = {
+    comparison
+    ~ ( ( "==" | "!=" ) ~ comparison )*
+}
+
+comparison = {
+    addition
+    ~ ( ( "<" | "<=" | ">" | ">=" ) ~ addition )*
+}
+
+addition = {
+    multiplication
+    ~ ( ( "+" | "-" ) ~ multiplication )*
+}
+
+multiplication = {
+    unary
+    ~ ( ( "*" | "/" ) ~ unary )*
+}
+
+unary = {
+    primary |
+    ( "!" ~ unary ) |
+    ( "-" ~ unary )
+}
+
+primary = {
+    identifier
+    | float_literal
+    | integer_literal
+    | string_literal
+    | "(" ~ expression ~ ")"
+}
+
+// We skip whitespace and single-line comments globally:
+WHITESPACE_SL_COMMENT = _{ WHITESPACE | COMMENT }
