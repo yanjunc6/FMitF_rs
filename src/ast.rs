@@ -1,36 +1,38 @@
-// ast.rs
+use std::rc::Rc;
 
 /// The entire TransAct program, owning all data.
-/// References inside these structs point back into these owned vectors.
-pub struct Program<'ast> {
+pub struct Program {
     /// All node definitions (NodeA, NodeB, etc.).
-    pub nodes: Vec<NodeDef>,
+    pub nodes: Vec<Rc<NodeDef>>,
 
-    /// All table declarations, each referencing a node by &NodeDef.
-    pub tables: Vec<TableDeclaration<'ast>>,
+    /// All table declarations.
+    pub tables: Vec<Rc<TableDeclaration>>,
 
-    /// All functions, each referencing zero or more nodes, etc.
-    pub functions: Vec<FunctionDeclaration<'ast>>,
+    /// All functions.
+    pub functions: Vec<FunctionDeclaration>,
 }
 
 /// Each node has a name, e.g. "NodeA".
+#[derive(Debug, Clone)]
 pub struct NodeDef {
     pub name: String,
 }
 
 /// A table definition references the NodeDef that stores it.
-pub struct TableDeclaration<'ast> {
+#[derive(Debug, Clone)]
+pub struct TableDeclaration {
     /// Table name, e.g. "Customers"
     pub name: String,
 
-    /// Direct reference to the node that holds this table (no leftover node_name).
-    pub node: &'ast NodeDef,
+    /// Reference to the node that holds this table.
+    pub node: Rc<NodeDef>,
 
     /// Table fields.
     pub fields: Vec<FieldDeclaration>,
 }
 
 /// Each field has a type and a name, e.g. "int customerID".
+#[derive(Debug, Clone)]
 pub struct FieldDeclaration {
     pub field_type: TypeName,
     pub field_name: String,
@@ -41,13 +43,15 @@ pub enum TypeName {
     Int,
     Float,
     String,
+    Bool, // Add Boolean type
 }
 
-pub struct FunctionDeclaration<'ast> {
+#[derive(Debug, Clone)]
+pub struct FunctionDeclaration {
     pub return_type: ReturnType,
     pub name: String,
     pub parameters: Vec<ParameterDecl>,
-    pub hops: Vec<HopBlock<'ast>>,
+    pub hops: Vec<HopBlock>,
 }
 
 #[derive(Debug, Clone)]
@@ -56,27 +60,41 @@ pub enum ReturnType {
     Type(TypeName),
 }
 
+#[derive(Debug, Clone)]
 pub struct ParameterDecl {
     pub param_type: TypeName,
     pub param_name: String,
 }
 
-pub struct HopBlock<'ast> {
+#[derive(Debug, Clone)]
+pub struct HopBlock {
     /// Which node this hop runs on.
-    pub node: &'ast NodeDef,
+    pub node: Rc<NodeDef>,
 
     /// Statements in this hop block.
     pub statements: Vec<Statement>,
 }
 
+#[derive(Debug, Clone)]
 pub enum Statement {
-    Assignment(AssignmentStatement),
+    Assignment(AssignmentStatement),     // Table assignment
+    VarAssignment(VarAssignmentStatement), // NEW: Variable assignment
     IfStmt(IfStatement),
+    VarDecl(VarDeclStatement), // NEW: Variable declaration
+    Return(ReturnStatement),   // NEW: Return statement
     Empty,
 }
 
+// Add new statement type:
+#[derive(Debug, Clone)]
+pub struct VarAssignmentStatement {
+    pub var_name: String,
+    pub rhs: Expression,
+}
+
+#[derive(Debug, Clone)]
 pub struct AssignmentStatement {
-    pub table: &'static TableDeclaration<'static>,
+    pub table: Rc<TableDeclaration>,
 
     /// The name of the PK column used.
     pub pk_column: String,
@@ -91,33 +109,59 @@ pub struct AssignmentStatement {
     pub rhs: Expression,
 }
 
+#[derive(Debug, Clone)]
 pub struct IfStatement {
     pub condition: Expression,
     pub then_branch: Vec<Statement>,
     pub else_branch: Option<Vec<Statement>>,
 }
 
-#[derive(Debug)]
+// Add is_global field to VarDeclStatement:
+#[derive(Debug, Clone)]
+pub struct VarDeclStatement {
+    pub var_type: TypeName,
+    pub var_name: String,
+    pub init_value: Expression,
+    pub is_global: bool,  // Whether this is a global variable within the function
+}
+
+#[derive(Debug, Clone)]
+pub struct ReturnStatement {
+    pub value: Option<Expression>, // None for bare "return", Some(expr) for "return expr"
+}
+
+#[derive(Debug, Clone)]
 pub enum Expression {
     /// Variable or parameter name, e.g. "total" or "custID".
     Ident(String),
 
-    /// An integer literal, stored as an i64.
+    /// Integer literal, e.g. 42.
     IntLit(i64),
 
-    /// A float literal, stored as an f64.
+    /// Float literal, e.g. 3.14.
     FloatLit(f64),
 
-    /// A string literal, e.g. "hello".
+    /// String literal, e.g. "hello".
     StringLit(String),
 
-    /// Unary operator (e.g., -expr, !expr).
+    /// Boolean literal, e.g. true, false.
+    BoolLit(bool),
+
+    /// Table field access, e.g. Users[userID: id].balance
+    TableFieldAccess {
+        table_name: String,
+        pk_column: String,
+        pk_expr: Box<Expression>,
+        field_name: String,
+    },
+
+    /// Unary operation, e.g. !flag, -value.
     UnaryOp {
         op: UnaryOp,
         expr: Box<Expression>,
     },
 
-    /// Binary operator (e.g., expr + expr, expr && expr).
+    /// Binary operation, e.g. a + b, x > y.
     BinaryOp {
         left: Box<Expression>,
         op: BinaryOp,
@@ -125,24 +169,38 @@ pub enum Expression {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum UnaryOp {
-    Neg, // e.g. -expr
-    Not, // e.g. !expr
+    /// Logical NOT: !
+    Not,
+    /// Arithmetic negation: -
+    Neg,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BinaryOp {
-    Add,    // +
-    Sub,    // -
-    Mul,    // *
-    Div,    // /
-    Eq,     // ==
-    Neq,    // !=
-    Lt,     // <
-    Lte,    // <=
-    Gt,     // >
-    Gte,    // >=
-    And,    // &&
-    Or,     // ||
+    /// Addition: +
+    Add,
+    /// Subtraction: -
+    Sub,
+    /// Multiplication: *
+    Mul,
+    /// Division: /
+    Div,
+    /// Less than: <
+    Lt,
+    /// Less than or equal: <=
+    Lte,
+    /// Greater than: >
+    Gt,
+    /// Greater than or equal: >=
+    Gte,
+    /// Equal: ==
+    Eq,
+    /// Not equal: !=
+    Neq,
+    /// Logical AND: &&
+    And,
+    /// Logical OR: ||
+    Or,
 }
