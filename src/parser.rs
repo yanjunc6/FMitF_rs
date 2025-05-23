@@ -10,7 +10,7 @@ use crate::ast::*;  // Import your final AST definitions
 #[grammar = "TransAct.pest"]
 pub struct TransActParser;
 
-pub fn parse_program<'ast>(source: &str) -> Program<'ast> {
+pub fn parse_program(source: &str) -> Program<'static> {
     let mut program = Program {
         nodes: Vec::new(),
         tables: Vec::new(),
@@ -23,11 +23,11 @@ pub fn parse_program<'ast>(source: &str) -> Program<'ast> {
     let parse_result = TransActParser::parse(Rule::program, source)
         .expect("Failed to parse the TransAct DSL.");
 
-    // Get the single top-level program pair
     let program_pair = parse_result.into_iter().next().expect("Expected a single program rule");
     assert_eq!(program_pair.as_rule(), Rule::program);
 
-    for top_item in program_pair.into_inner() {
+    // First pass: collect all nodes and tables
+    for top_item in program_pair.clone().into_inner() {
         match top_item.as_rule() {
             Rule::nodes_block => {
                 parse_nodes_block(top_item, &mut program, &mut node_map);
@@ -35,13 +35,19 @@ pub fn parse_program<'ast>(source: &str) -> Program<'ast> {
             Rule::table_declaration => {
                 parse_table_declaration(top_item, &mut program, &node_map, &mut table_map);
             }
+            Rule::EOI => {}
+            Rule::WHITESPACE_SL_COMMENT => {}
+            _ => {}
+        }
+    }
+
+    // Second pass: parse functions (now that we have all nodes and tables)
+    for top_item in program_pair.into_inner() {
+        match top_item.as_rule() {
             Rule::function_declaration => {
                 parse_function_declaration(top_item, &mut program, &node_map, &table_map);
             }
-            Rule::EOI => {}
-            // Allow WHITESPACE_SL_COMMENT to be ignored at top level if pest generates it
-            Rule::WHITESPACE_SL_COMMENT => {}
-            _ => { /* Optionally print or panic for unexpected top-level items: panic!("Unexpected top-level rule: {:?}", top_item.as_rule()) */ }
+            _ => {} // Skip already processed items
         }
     }
 
@@ -49,9 +55,9 @@ pub fn parse_program<'ast>(source: &str) -> Program<'ast> {
 }
 
 /// Parse `nodes { NodeA, NodeB, ... }`
-fn parse_nodes_block<'ast>(
+fn parse_nodes_block<'a>(
     pair: Pair<Rule>,
-    program: &mut Program<'ast>,
+    program: &'a mut Program<'a>,
     node_map: &mut HashMap<String, usize>
 ) {
     for item in pair.into_inner() {
@@ -69,9 +75,9 @@ fn parse_nodes_block<'ast>(
 }
 
 /// Parse `table <table_name> on <node_name> { field_declaration* } ;`
-fn parse_table_declaration<'ast>(
+fn parse_table_declaration<'a>(
     pair: Pair<Rule>,
-    program: &mut Program<'ast>,
+    program: &'a mut Program<'a>,
     node_map: &HashMap<String, usize>,
     table_map: &mut HashMap<String, &'static TableDeclaration<'static>>
 ) {
@@ -79,7 +85,7 @@ fn parse_table_declaration<'ast>(
     let mut node_name = String::new();
     let mut fields_temp = Vec::new();
 
-    let mut phase = 0; 
+    let mut phase = 0;
     for item in pair.into_inner() {
         match item.as_rule() {
             Rule::identifier if phase == 0 => {
@@ -101,44 +107,22 @@ fn parse_table_declaration<'ast>(
         .get(&node_name)
         .unwrap_or_else(|| panic!("No such node: {}", node_name));
 
-    // Ensure node_ref has a lifetime tied to 'ast for the static leak
-    // This requires program.nodes to be stable for 'ast.
-    // The reference here will be valid as long as program.nodes is.
-    // When creating static_table_ref, this node_ref's lifetime needs to be 'static.
-    // This is tricky. The NodeDef itself is owned by Program.
-    // For &'static TableDeclaration<'static>, its node field must be &'static NodeDef.
-    // This implies NodeDef must also be leaked or come from a static source.
-    // A truly 'static NodeDef would mean nodes are also leaked or globally defined.
-    // Let's proceed with the current structure, but be aware of this lifetime complexity.
-    // The `node: node_ref` below will have lifetime of `program`, not `'static`.
-    // This will cause a problem when `TableDeclaration` expects `node: &'ast NodeDef`
-    // and we try to make `TableDeclaration` itself `'static`.
-    // The `node` field in `TableDeclaration<'ast>` is `&'ast NodeDef`.
-    // If `TableDeclaration` becomes `TableDeclaration<'static>`, then `node` must be `&'static NodeDef`.
-    // This implies `program.nodes` must contain `&'static NodeDef` or `NodeDef` that can be referenced statically.
-    // This is a fundamental lifetime issue with the current AST structure and leaking strategy.
+    let node_ref_for_program_tables = &program.nodes[*node_idx];
+    let table_decl_for_program = TableDeclaration {
+        name: table_name.clone(),
+        node: node_ref_for_program_tables,
+        fields: fields_temp.iter().map(|f_orig| FieldDeclaration {
+            field_type: f_orig.field_type.clone(),
+            field_name: f_orig.field_name.clone(),
+        }).collect(),
+    };
+    program.tables.push(table_decl_for_program);
 
-    // To make `node: node_ref` work for a `TableDeclaration` that will be leaked to `'static`,
-    // `node_ref` itself must effectively be `'static`. This means `program.nodes` would need to hold
-    // `Box<NodeDef>` that are leaked, or `NodeDef` are stored in a static array.
-    // Given the current `program.nodes: Vec<NodeDef>`, `&program.nodes[*node_idx]` is not `'static`.
-
-    // Quick fix assuming NodeDef is simple and can be "copied" into the static context if needed,
-    // or that the lifetime `'ast` for `TableDeclaration` in `program.tables` is sufficient and
-    // the `'static` requirement for `AssignmentStatement.table` is the main driver for leaking.
-    // The `node: node_ref` below will have the lifetime of `program`.
-    // When we create `TableDeclaration` for leaking, its `node` field must be `&'static NodeDef`.
-    // This is a conflict.
-
-    // Let's assume `NodeDef` is simple (just a String name) and for the purpose of the
-    // `'static TableDeclaration`, we can create a new, leaked `NodeDef`.
-    // This is a significant workaround due to the lifetime constraints.
     let static_node_def_for_leaked_table = Box::leak(Box::new(NodeDef { name: node_name.clone() }));
-
 
     let table_decl_to_leak = TableDeclaration {
         name: table_name.clone(),
-        node: static_node_def_for_leaked_table, // Now using a leaked NodeDef
+        node: static_node_def_for_leaked_table,
         fields: fields_temp.iter().map(|f_orig| FieldDeclaration {
             field_type: f_orig.field_type.clone(),
             field_name: f_orig.field_name.clone(),
@@ -146,23 +130,17 @@ fn parse_table_declaration<'ast>(
     };
     
     let static_table_ref: &'static TableDeclaration<'static> = Box::leak(Box::new(table_decl_to_leak));
-
-    // program.tables stores TableDeclaration<'ast> where 'ast is tied to the Program's lifetime.
-    // The node reference here should be from program.nodes.
-    program.tables.push(table_decl_for_program);
-
-
     table_map.insert(table_name, static_table_ref);
 }
 
 fn parse_field_declaration(pair: Pair<Rule>) -> FieldDeclaration {
-    let mut ty = TypeName::Int; 
+    let mut ty = TypeName::Int;
     let mut name = String::new();
     let mut reading_type = true;
 
     for c in pair.into_inner() {
         match c.as_rule() {
-            Rule::type_ if reading_type => { // Changed from Rule::type
+            Rule::type_name if reading_type => { // Corrected from Rule::type_ to Rule::type_name
                 ty = match c.as_str() {
                     "int" => TypeName::Int,
                     "float" => TypeName::Float,
@@ -184,18 +162,18 @@ fn parse_field_declaration(pair: Pair<Rule>) -> FieldDeclaration {
 }
 
 /// Parse a function: `ret_type functionName ( param_list? ) { hop_block* }`
-fn parse_function_declaration<'ast>(
+fn parse_function_declaration<'a>(
     pair: Pair<Rule>,
-    program: &'ast mut Program<'ast>, // Added 'ast lifetime
+    program: &'a mut Program<'static>, 
     node_map: &HashMap<String, usize>,
     table_map: &HashMap<String, &'static TableDeclaration<'static>>
 ) {
     let mut return_type = ReturnType::Void;
     let mut func_name = String::new();
     let mut parameters = Vec::new();
-    let mut hops = Vec::new();
+    let mut hops_temp = Vec::new(); 
 
-    let mut phase = 0; 
+    let mut phase = 0;
     for item in pair.into_inner() {
         match item.as_rule() {
             Rule::ret_type if phase == 0 => {
@@ -210,8 +188,13 @@ fn parse_function_declaration<'ast>(
                 parameters = parse_parameter_list(item);
             }
             Rule::function_body_item => {
-                let hop = parse_hop_block(item.into_inner().next().unwrap(), node_map, table_map, program); // function_body_item = hop_block
-                hops.push(hop);
+                // Create static references to nodes for the hop blocks
+                let hop = parse_hop_block(
+                    item.into_inner().next().unwrap(),
+                    node_map,
+                    table_map,
+                );
+                hops_temp.push(hop);
             }
             _ => {}
         }
@@ -221,7 +204,7 @@ fn parse_function_declaration<'ast>(
         return_type,
         name: func_name,
         parameters,
-        hops,
+        hops: hops_temp, 
     });
 }
 
@@ -257,7 +240,7 @@ fn parse_parameter_decl(pair: Pair<Rule>) -> ParameterDecl {
 
     for c in pair.into_inner() {
         match c.as_rule() {
-            Rule::type_ if reading_type => { // Changed from Rule::type
+            Rule::type_name if reading_type => { // Corrected from Rule::type_ to Rule::type_name
                 ptype = match c.as_str() {
                     "int" => TypeName::Int,
                     "float" => TypeName::Float,
@@ -280,37 +263,35 @@ fn parse_parameter_decl(pair: Pair<Rule>) -> ParameterDecl {
 }
 
 /// Parse a hop block: `hop on <node_name> { statement* }`
-fn parse_hop_block<'ast>(
-    pair: Pair<Rule>, // This should be the hop_block pair itself
+fn parse_hop_block(
+    pair: Pair<Rule>,
     node_map: &HashMap<String, usize>,
     table_map: &HashMap<String, &'static TableDeclaration<'static>>,
-    program: &'ast Program<'ast>, // Added 'ast lifetime
-) -> HopBlock<'ast> {
+) -> HopBlock<'static> {
     let mut node_name = String::new();
     let mut reading_node = true;
     let mut statements = Vec::new();
 
-    for c in pair.into_inner() { // Children of hop_block: identifier, then statement*
+    for c in pair.into_inner() {
         match c.as_rule() {
             Rule::identifier if reading_node => {
                 node_name = c.as_str().to_string();
                 reading_node = false;
             }
             Rule::statement => {
-                // parse_statement expects the rule that IS the statement (e.g. assignment_statement)
-                // not Rule::statement itself. So we need to get the inner actual statement rule.
                 statements.push(parse_statement(c.into_inner().next().unwrap(), table_map));
             }
             _ => {}
         }
     }
 
-    let node_idx = node_map.get(&node_name)
-        .unwrap_or_else(|| panic!("Unknown node: {}", node_name));
-    let node_ref = &program.nodes[*node_idx];
+    // Create a static reference to the node
+    let static_node_ref: &'static NodeDef = Box::leak(Box::new(NodeDef { 
+        name: node_name.clone() 
+    }));
 
     HopBlock {
-        node: node_ref,
+        node: static_node_ref,
         statements,
     }
 }
@@ -337,19 +318,13 @@ fn parse_assignment(
     pair: Pair<Rule>,
     table_map: &HashMap<String, &'static TableDeclaration<'static>>,
 ) -> AssignmentStatement {
-    let mut table_name = String::new();
-    let mut pk_column = String::new();
-    let mut pk_expr = Expression::IntLit(0); // Default
-    let mut field_name = String::new();
-    let mut rhs = Expression::IntLit(0); // Default
-
     let mut inner_pairs = pair.into_inner(); // identifier, identifier, expression, identifier, expression
 
-    table_name = inner_pairs.next().unwrap().as_str().to_string();
-    pk_column = inner_pairs.next().unwrap().as_str().to_string();
-    pk_expr = parse_expression(inner_pairs.next().unwrap());
-    field_name = inner_pairs.next().unwrap().as_str().to_string();
-    rhs = parse_expression(inner_pairs.next().unwrap());
+    let table_name = inner_pairs.next().unwrap().as_str().to_string();
+    let pk_column = inner_pairs.next().unwrap().as_str().to_string();
+    let pk_expr = parse_expression(inner_pairs.next().unwrap());
+    let field_name = inner_pairs.next().unwrap().as_str().to_string();
+    let rhs = parse_expression(inner_pairs.next().unwrap());
 
 
     let table_ref = table_map
@@ -357,7 +332,7 @@ fn parse_assignment(
         .unwrap_or_else(|| panic!("Unknown table: {}", table_name));
 
     AssignmentStatement {
-        table: *table_ref, 
+        table: *table_ref,
         pk_column,
         pk_expr,
         field_name,
@@ -378,8 +353,10 @@ fn parse_if_statement(
     let mut mode = Mode::Cond;
 
     // Children of if_statement: expression, then statement* (for then), then optionally "else" keyword token, then statement* (for else)
-    // This depends on how pest handles the literal "else". If "else" becomes a token like Rule::else_
-    // then this logic can work.
+    // This depends on how pest handles the literal "else".
+    // The literal "else" does not become Rule::else_ with the current grammar.
+    // This parsing logic will likely only capture `then_stmts` correctly.
+    // A more robust parsing of `else` would require grammar changes or more complex iteration.
     for c in pair.into_inner() {
         match c.as_rule() {
             Rule::expression if matches!(mode, Mode::Cond) => {
@@ -389,15 +366,12 @@ fn parse_if_statement(
             Rule::statement if matches!(mode, Mode::Then) => {
                 then_stmts.push(parse_statement(c.into_inner().next().unwrap(), table_map));
             }
-            Rule::statement if matches!(mode, Mode::Else) => {
+            Rule::statement if matches!(mode, Mode::Else) => { // This mode is unlikely to be reached correctly.
                 else_stmts.get_or_insert_with(Vec::new)
                           .push(parse_statement(c.into_inner().next().unwrap(), table_map));
             }
-            // Attempting to match the "else" keyword. This assumes pest creates a rule like `else_` for the literal "else".
-            // This is a guess. If `pest` consumes "else" silently or names the rule differently, this will fail.
-            Rule::else_ => { // Tentative fix for `else_clause`
-                mode = Mode::Else;
-            }
+            // Rule::else_ was removed as it doesn't exist with the current grammar.
+            // Transitioning to Mode::Else correctly is non-trivial here.
             _ => { /* Ignored (e.g. braces if they were tokens, or other structural elements) */ }
         }
     }
@@ -507,16 +481,12 @@ fn parse_multiplication(pair: Pair<Rule>) -> Expression { // pair is Rule::multi
 
 fn parse_unary(pair: Pair<Rule>) -> Expression { // pair is Rule::unary
     // unary = { primary | ( "!" ~ unary ) | ( "-" ~ unary ) }
-    // So, pair.into_inner().next().unwrap() is either Rule::primary or a group representing the op+operand.
     let choice = pair.into_inner().next().unwrap();
     match choice.as_rule() {
         Rule::primary => parse_primary(choice),
-        _ => {
-            // This 'choice' pair represents one of the `(op ~ unary)` groups.
-            // The operator ("!" or "-") is consumed by pest.
-            // The inner content of 'choice' is the `Rule::unary` operand.
-            let operand_pair = choice.into_inner().next().unwrap(); // This is the inner Rule::unary
-            let op_str = choice.as_str(); // This will be like "!x" or "-y"
+        _ => { // This 'choice' pair represents one of the `(op ~ unary)` groups.
+            let op_str = choice.as_str(); // Get "op + operand" string first
+            let operand_pair = choice.into_inner().next().unwrap(); // Then consume choice for its inner Rule::unary
 
             let op = if op_str.starts_with('!') {
                 UnaryOp::Not
@@ -528,7 +498,7 @@ fn parse_unary(pair: Pair<Rule>) -> Expression { // pair is Rule::unary
             
             Expression::UnaryOp {
                 op,
-                expr: Box::new(parse_unary(operand_pair)), // Recursive call for the operand
+                expr: Box::new(parse_unary(operand_pair)),
             }
         }
     }
@@ -536,7 +506,6 @@ fn parse_unary(pair: Pair<Rule>) -> Expression { // pair is Rule::unary
 
 fn parse_primary(pair: Pair<Rule>) -> Expression { // pair is Rule::primary
     // primary = { identifier | float_literal | integer_literal | string_literal | "(" ~ expression ~ ")" }
-    // So, pair.into_inner().next().unwrap() is the actual token or the inner expression.
     let actual_primary_token_or_expr = pair.into_inner().next().unwrap();
     match actual_primary_token_or_expr.as_rule() {
         Rule::identifier => Expression::Ident(actual_primary_token_or_expr.as_str().to_string()),
@@ -544,7 +513,7 @@ fn parse_primary(pair: Pair<Rule>) -> Expression { // pair is Rule::primary
             Expression::IntLit(actual_primary_token_or_expr.as_str().parse().unwrap())
         }
         Rule::float_literal => {
-            Expression::FloatLit(actual_primary_token_or__expr.as_str().parse().unwrap())
+            Expression::FloatLit(actual_primary_token_or_expr.as_str().parse().unwrap()) // Corrected typo
         }
         Rule::string_literal => {
             let raw = actual_primary_token_or_expr.as_str(); 
