@@ -68,7 +68,7 @@ fn parse_type_name(pair: Pair<Rule>) -> TypeName {
         "int" => TypeName::Int,
         "float" => TypeName::Float,
         "string" => TypeName::String,
-        "bool" => TypeName::Bool, // Add Boolean type
+        "bool" => TypeName::Bool,
         other => panic!("Unknown type: {}", other),
     }
 }
@@ -79,7 +79,6 @@ fn parse_return_type(pair: Pair<Rule>) -> ReturnType {
     if pair.as_str() == "void" {
         ReturnType::Void
     } else {
-        // For non-void return types, we need to extract the inner type_name rule
         let inner = pair.into_inner().next().unwrap();
         ReturnType::Type(parse_type_name(inner))
     }
@@ -113,8 +112,6 @@ fn parse_bool_literal(pair: Pair<Rule>) -> bool {
         other => panic!("Unknown boolean literal: {}", other),
     }
 }
-
-// Compound parsing functions
 
 fn parse_nodes_block(
     pair: Pair<Rule>,
@@ -476,7 +473,6 @@ fn parse_unary(pair: Pair<Rule>) -> Expression {
     match choice.as_rule() {
         Rule::primary => parse_primary(choice),
         Rule::unary_op => {
-            // Parse the unary operation structure directly
             let mut inner = choice.into_inner();
             let op_token = inner.next().unwrap();
             let operand = inner.next().unwrap();
@@ -512,7 +508,6 @@ fn parse_primary(pair: Pair<Rule>) -> Expression {
     }
 }
 
-// Add new parsing function:
 fn parse_table_field_access(pair: Pair<Rule>) -> Expression {
     assert_eq!(pair.as_rule(), Rule::table_field_access);
 
@@ -530,8 +525,6 @@ fn parse_table_field_access(pair: Pair<Rule>) -> Expression {
         field_name,
     }
 }
-
-// Operator parsing functions
 
 fn parse_logic_or_op(pair: Pair<Rule>) -> BinaryOp {
     assert_eq!(pair.as_rule(), Rule::logic_or_op);
@@ -613,14 +606,11 @@ fn parse_var_decl_statement(pair: Pair<Rule>) -> VarDeclStatement {
     
     let mut inner = pair.into_inner();
     
-    // Check if first token is global keyword
     let first = inner.next().unwrap();
     let (is_global, var_type, mut remaining) = if first.as_rule() == Rule::global_keyword {
-        // global type_name identifier = expression ;
         let var_type = parse_type_name(inner.next().unwrap());
         (true, var_type, inner)
     } else {
-        // type_name identifier = expression ;
         let var_type = parse_type_name(first);
         (false, var_type, inner)
     };
@@ -640,8 +630,6 @@ fn parse_return_statement(pair: Pair<Rule>) -> ReturnStatement {
     assert_eq!(pair.as_rule(), Rule::return_statement);
 
     let mut inner = pair.into_inner();
-
-    // Check if there's an expression after "return"
     let value = inner.next().map(parse_expression);
 
     ReturnStatement { value }
