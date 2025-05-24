@@ -1,37 +1,23 @@
 use std::rc::Rc;
 
-/// The entire TransAct program, owning all data.
 pub struct Program {
-    /// All node definitions (NodeA, NodeB, etc.).
     pub nodes: Vec<Rc<NodeDef>>,
-
-    /// All table declarations.
     pub tables: Vec<Rc<TableDeclaration>>,
-
-    /// All functions.
     pub functions: Vec<FunctionDeclaration>,
 }
 
-/// Each node has a name, e.g. "NodeA".
 #[derive(Debug, Clone)]
 pub struct NodeDef {
     pub name: String,
 }
 
-/// A table definition references the NodeDef that stores it.
 #[derive(Debug, Clone)]
 pub struct TableDeclaration {
-    /// Table name, e.g. "Customers"
     pub name: String,
-
-    /// Reference to the node that holds this table.
     pub node: Rc<NodeDef>,
-
-    /// Table fields.
     pub fields: Vec<FieldDeclaration>,
 }
 
-/// Each field has a type and a name, e.g. "int customerID".
 #[derive(Debug, Clone)]
 pub struct FieldDeclaration {
     pub field_type: TypeName,
@@ -43,7 +29,7 @@ pub enum TypeName {
     Int,
     Float,
     String,
-    Bool, // Add Boolean type
+    Bool,
 }
 
 #[derive(Debug, Clone)]
@@ -68,24 +54,20 @@ pub struct ParameterDecl {
 
 #[derive(Debug, Clone)]
 pub struct HopBlock {
-    /// Which node this hop runs on.
     pub node: Rc<NodeDef>,
-
-    /// Statements in this hop block.
     pub statements: Vec<Statement>,
 }
 
 #[derive(Debug, Clone)]
 pub enum Statement {
-    Assignment(AssignmentStatement),     // Table assignment
-    VarAssignment(VarAssignmentStatement), // NEW: Variable assignment
+    Assignment(AssignmentStatement),
+    VarAssignment(VarAssignmentStatement),
     IfStmt(IfStatement),
-    VarDecl(VarDeclStatement), // NEW: Variable declaration
-    Return(ReturnStatement),   // NEW: Return statement
+    VarDecl(VarDeclStatement),
+    Return(ReturnStatement),
     Empty,
 }
 
-// Add new statement type:
 #[derive(Debug, Clone)]
 pub struct VarAssignmentStatement {
     pub var_name: String,
@@ -95,17 +77,9 @@ pub struct VarAssignmentStatement {
 #[derive(Debug, Clone)]
 pub struct AssignmentStatement {
     pub table: Rc<TableDeclaration>,
-
-    /// The name of the PK column used.
     pub pk_column: String,
-
-    /// Expression for the PK value, e.g. cid or 123.
     pub pk_expr: Expression,
-
-    /// The field to update, e.g. "customerPoints"
     pub field_name: String,
-
-    /// The new value expression, e.g. float literal 100.0
     pub rhs: Expression,
 }
 
@@ -116,18 +90,17 @@ pub struct IfStatement {
     pub else_branch: Option<Vec<Statement>>,
 }
 
-// Add is_global field to VarDeclStatement:
 #[derive(Debug, Clone)]
 pub struct VarDeclStatement {
     pub var_type: TypeName,
     pub var_name: String,
     pub init_value: Expression,
-    pub is_global: bool,  // Whether this is a global variable within the function
+    pub is_global: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct ReturnStatement {
-    pub value: Option<Expression>, // None for bare "return", Some(expr) for "return expr"
+    pub value: Option<Expression>,
 }
 
 #[derive(Debug, Clone)]
