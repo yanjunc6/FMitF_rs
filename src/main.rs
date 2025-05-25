@@ -2,10 +2,12 @@ mod ast;
 mod parser;
 mod printer;
 mod semantic;
+mod errors;
 
 use crate::parser::parse_program;
-use crate::printer::print_program;
-use crate::semantic::{format_semantic_errors, SemanticAnalyzer};
+use crate::semantic::SemanticAnalyzer;
+use crate::errors::format_errors;
+use crate::printer::{print_program, PrintOptions, PrintMode};
 
 fn main() {
     let source_code: &'static str = r#"
@@ -26,7 +28,6 @@ table Orders on NodeB {
     bool isPaid;
 }
 
-// Test basic function with variables and if-else
 int calculateDiscount(int points, bool isPremium) {
     hop on NodeA {
         int discount = 0;
@@ -42,7 +43,6 @@ int calculateDiscount(int points, bool isPremium) {
     }
 }
 
-// Test void function and multiple hops
 void processPayment(int userID, int orderID) {
     hop on NodeA {
         float userBalance = Users[userID: userID].balance;
@@ -56,98 +56,38 @@ void processPayment(int userID, int orderID) {
     }
 }
 
-// Test global variables across hops
-bool validateTransaction(int amount, bool urgent) {
+int invalidCrossNodeAccess(int userID) {
     hop on NodeA {
-        global int totalChecked = 0;
-        global bool hasIssues = false;
-        
-        int threshold = 100;
-        float fee = 2.5;
-        
-        // Test arithmetic and comparison
-        bool expensive = (amount + fee) > threshold;
-        totalChecked = totalChecked + 1;
-        
-        if (expensive == true) {
-            hasIssues = true;
-        }
-    }
-    
-    hop on NodeB {
-        // Global variables are accessible here
-        // Local variables from previous hop are NOT accessible
-        
-        bool affordable = amount <= 1000;
-        bool valid = false;
-        
-        if (hasIssues == false && affordable == true) {
-            valid = true;
-        } else {
-            valid = false;
-        }
-        
-        totalChecked = totalChecked + 1;
-        return valid;
-    }
-}
-
-// Test complex global variable usage
-int processMultipleOrders(int userID) {
-    hop on NodeA {
-        global int processedCount = 0;
-        global float totalAmount = 0.0;
-        
-        bool userActive = Users[userID: userID].isActive;
-        if (userActive == true) {
-            processedCount = 1;
-            totalAmount = Users[userID: userID].balance;
-        }
-    }
-    
-    hop on NodeB {
-        // Can access global variables from previous hop
-        int orderID = userID + 100;
-        float orderAmount = Orders[orderID: orderID].amount;
-        
-        if (orderAmount > 0.0) {
-            totalAmount = totalAmount + orderAmount;
-            processedCount = processedCount + 1;
-            Orders[orderID: orderID].isPaid = true;
-        }
-        
-        return processedCount;
+        // This should cause an error: trying to access Users table (on NodeA) from NodeB
+        float balance = Users[userID: userID].balance;
+        return 0;
     }
 }
 "#;
 
-    println!("🚀 Testing TransAct Language Features");
-    println!("====================================");
-
-    match std::panic::catch_unwind(|| parse_program(source_code)) {
+    match parse_program(source_code) {
         Ok(program) => {
-            println!("✅ Parsing successful!");
-
+            println!("🎉 Parse successful!\n");
+            
+            print_program(&program, &PrintOptions {
+                mode: PrintMode::Verbose,
+                show_spans: true,
+            });
+            
+            println!("\n{}\n", "=".repeat(50));
+            
             let mut analyzer = SemanticAnalyzer::new();
             match analyzer.analyze(&program) {
-                Ok(()) => {
-                    println!("✅ Semantic analysis passed!");
-                    println!("\n📊 Summary:");
-                    println!("  - Nodes: {}", program.nodes.len());
-                    println!("  - Tables: {}", program.tables.len());
-                    println!("  - Functions: {}", program.functions.len());
-
-                    println!("\n🔍 AST Structure:");
-                    print_program(&program);
-                }
+                Ok(()) => println!("✅ Analysis passed!"),
                 Err(errors) => {
-                    println!("❌ Semantic errors ({}): ", errors.len());
-                    println!("{}", format_semantic_errors(&errors));
+                    println!("❌ Semantic analysis failed!\n");
+                    println!("{}", format_errors(&errors, source_code));
                 }
             }
         }
-        Err(_) => {
-            println!("💥 Parsing failed!");
+        Err(errors) => {
+            println!("❌ Parse failed!\n");
+            println!("{}", format_errors(&errors, source_code));
         }
     }
 }

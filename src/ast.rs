@@ -1,5 +1,40 @@
 use std::rc::Rc;
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct Span {
+    pub start: usize,
+    pub end: usize,
+    pub line: usize,
+    pub column: usize,
+}
+
+impl Span {
+    pub fn from_pest(span: pest::Span) -> Self {
+        let (line, column) = span.start_pos().line_col();
+        Self {
+            start: span.start(),
+            end: span.end(),
+            line,
+            column,
+        }
+    }
+}
+
+impl Default for Span {
+    fn default() -> Self {
+        Self { start: 0, end: 0, line: 1, column: 1 }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Spanned<T> {
+    pub node: T,
+    pub span: Span,
+}
+
+pub type Expression = Spanned<ExpressionKind>;
+pub type Statement = Spanned<StatementKind>;
+
 pub struct Program {
     pub nodes: Vec<Rc<NodeDef>>,
     pub tables: Vec<Rc<TableDeclaration>>,
@@ -9,6 +44,7 @@ pub struct Program {
 #[derive(Debug, Clone)]
 pub struct NodeDef {
     pub name: String,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -16,20 +52,19 @@ pub struct TableDeclaration {
     pub name: String,
     pub node: Rc<NodeDef>,
     pub fields: Vec<FieldDeclaration>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct FieldDeclaration {
     pub field_type: TypeName,
     pub field_name: String,
+    pub span: Span,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TypeName {
-    Int,
-    Float,
-    String,
-    Bool,
+    Int, Float, String, Bool,
 }
 
 #[derive(Debug, Clone)]
@@ -38,28 +73,30 @@ pub struct FunctionDeclaration {
     pub name: String,
     pub parameters: Vec<ParameterDecl>,
     pub hops: Vec<HopBlock>,
+    pub span: Span,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ReturnType {
-    Void,
-    Type(TypeName),
+    Void, Type(TypeName),
 }
 
 #[derive(Debug, Clone)]
 pub struct ParameterDecl {
     pub param_type: TypeName,
     pub param_name: String,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct HopBlock {
     pub node: Rc<NodeDef>,
     pub statements: Vec<Statement>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
-pub enum Statement {
+pub enum StatementKind {
     Assignment(AssignmentStatement),
     VarAssignment(VarAssignmentStatement),
     IfStmt(IfStatement),
@@ -104,37 +141,22 @@ pub struct ReturnStatement {
 }
 
 #[derive(Debug, Clone)]
-pub enum Expression {
-    /// Variable or parameter name, e.g. "total" or "custID".
+pub enum ExpressionKind {
     Ident(String),
-
-    /// Integer literal, e.g. 42.
     IntLit(i64),
-
-    /// Float literal, e.g. 3.14.
     FloatLit(f64),
-
-    /// String literal, e.g. "hello".
     StringLit(String),
-
-    /// Boolean literal, e.g. true, false.
     BoolLit(bool),
-
-    /// Table field access, e.g. Users[userID: id].balance
     TableFieldAccess {
         table_name: String,
         pk_column: String,
         pk_expr: Box<Expression>,
         field_name: String,
     },
-
-    /// Unary operation, e.g. !flag, -value.
     UnaryOp {
         op: UnaryOp,
         expr: Box<Expression>,
     },
-
-    /// Binary operation, e.g. a + b, x > y.
     BinaryOp {
         left: Box<Expression>,
         op: BinaryOp,
@@ -143,37 +165,9 @@ pub enum Expression {
 }
 
 #[derive(Debug, Clone)]
-pub enum UnaryOp {
-    /// Logical NOT: !
-    Not,
-    /// Arithmetic negation: -
-    Neg,
-}
+pub enum UnaryOp { Not, Neg }
 
 #[derive(Debug, Clone)]
 pub enum BinaryOp {
-    /// Addition: +
-    Add,
-    /// Subtraction: -
-    Sub,
-    /// Multiplication: *
-    Mul,
-    /// Division: /
-    Div,
-    /// Less than: <
-    Lt,
-    /// Less than or equal: <=
-    Lte,
-    /// Greater than: >
-    Gt,
-    /// Greater than or equal: >=
-    Gte,
-    /// Equal: ==
-    Eq,
-    /// Not equal: !=
-    Neq,
-    /// Logical AND: &&
-    And,
-    /// Logical OR: ||
-    Or,
+    Add, Sub, Mul, Div, Lt, Lte, Gt, Gte, Eq, Neq, And, Or,
 }
