@@ -1,5 +1,5 @@
 use crate::ast::*;
-use crate::parse::{TransActError, Results, SpannedError};
+use crate::frontend::parse::{TransActError, Results, SpannedError};
 use std::collections::HashMap;
 use std::rc::Rc;
 

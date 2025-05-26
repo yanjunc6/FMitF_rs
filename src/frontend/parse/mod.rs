@@ -10,7 +10,7 @@ pub use errors::{TransActError, Results, SpannedError, format_errors};
 pub mod errors;
 
 #[derive(Parser)]
-#[grammar = "parse/grammar.pest"]  // Updated path
+#[grammar = "frontend/parse/grammar.pest"]  // Updated path
 pub struct TransActParser;
 
 fn error_at(pair: &Pair<Rule>, error: TransActError) -> SpannedError {
