@@ -7,5 +7,5 @@ pub mod output;
 pub use ast::*;
 pub use frontend::parse::{parse_program, TransActError, Results, SpannedError, format_errors};
 pub use frontend::analyze::SemanticAnalyzer;
-pub use output::{print_program, PrintOptions, PrintMode};
+pub use output::{print_program, PrintOptions, PrintMode, save_dot_file, print_dot_graph};
 pub use graph::{SCGraph, EdgeType};
