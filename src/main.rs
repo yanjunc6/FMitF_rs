@@ -1,13 +1,4 @@
-mod ast;
-mod parser;
-mod printer;
-mod semantic;
-mod errors;
-
-use crate::parser::parse_program;
-use crate::semantic::SemanticAnalyzer;
-use crate::errors::format_errors;
-use crate::printer::{print_program, PrintOptions, PrintMode};
+use FMitF_rs::{parse_program, SemanticAnalyzer, format_errors, print_program, PrintOptions, PrintMode};
 
 fn main() {
     let source_code: &'static str = r#"

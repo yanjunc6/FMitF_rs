@@ -5,10 +5,12 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::ast::*;
-use crate::errors::{TransActError, Results, SpannedError};
+pub use errors::{TransActError, Results, SpannedError, format_errors};
+
+pub mod errors;
 
 #[derive(Parser)]
-#[grammar = "TransAct.pest"]
+#[grammar = "parse/grammar.pest"]  // Updated path
 pub struct TransActParser;
 
 fn error_at(pair: &Pair<Rule>, error: TransActError) -> SpannedError {
