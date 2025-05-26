@@ -146,7 +146,7 @@ fn parse_function(
             }
             Rule::function_body_item => {
                 let hop_pair = item.into_inner().next().unwrap();
-                hops.push(parse_hop(hop_pair, node_map, table_map)?);
+                hops.push(Rc::new(parse_hop(hop_pair, node_map, table_map)?));  // Wrap in Rc
             }
             _ => {}
         }

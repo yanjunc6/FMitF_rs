@@ -1,0 +1,32 @@
+nodes {
+    NodeA,
+    NodeB
+}
+
+table Users on NodeA {
+    int userID;
+    float balance;
+}
+
+table Orders on NodeB {
+    int orderID;
+    float amount;
+}
+
+void transfer(int fromUser, int toUser, float amount) {
+    hop on NodeA {
+        Users[userID: fromUser].balance = Users[userID: fromUser].balance - amount;
+    }
+    hop on NodeA {
+        Users[userID: toUser].balance = Users[userID: toUser].balance + amount;
+    }
+}
+
+void processOrder(int userID, int orderID) {
+    hop on NodeA {
+        global float balance = Users[userID: userID].balance;
+    }
+    hop on NodeB {
+        Orders[orderID: orderID].amount = balance;
+    }
+}

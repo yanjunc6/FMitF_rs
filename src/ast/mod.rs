@@ -72,7 +72,7 @@ pub struct FunctionDeclaration {
     pub return_type: ReturnType,
     pub name: String,
     pub parameters: Vec<ParameterDecl>,
-    pub hops: Vec<HopBlock>,
+    pub hops: Vec<Rc<HopBlock>>,
     pub span: Span,
 }
 
