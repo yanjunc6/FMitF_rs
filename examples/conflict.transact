@@ -1,0 +1,28 @@
+nodes {
+    NodeA,
+    NodeB
+}
+
+table Data on NodeA {
+    int id;
+    int value;
+}
+
+void transaction1(int id) {
+    hop on NodeA {
+        int temp = Data[id: id].value;
+        Data[id: id].value = temp + 1;
+    }
+    hop on NodeA {
+        Data[id: id].value = Data[id: id].value * 2;
+    }
+}
+
+void transaction2(int id) {
+    hop on NodeA {
+        Data[id: id].value = Data[id: id].value - 1;
+    }
+    hop on NodeA {
+        int result = Data[id: id].value;
+    }
+}

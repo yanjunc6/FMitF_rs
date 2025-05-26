@@ -7,3 +7,4 @@ edition = "2021"
 pest = "2.8.0"
 pest_derive = "2.8.0"
 petgraph = "0.8"
+clap = { version = "4", features = ["derive"] }

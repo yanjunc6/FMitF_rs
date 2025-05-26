@@ -1,4 +1,5 @@
 use crate::ast::*;
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub struct PrintOptions {
@@ -135,7 +136,7 @@ impl<'a> Printer<'a> {
         }
     }
 
-    fn print_hops(&self, hops: &[HopBlock]) {
+    fn print_hops(&self, hops: &[Rc<HopBlock>]) {
         println!("{}hops[{}]", self.indent(), hops.len());
         for (i, hop) in hops.iter().enumerate() {
             println!("{}[{}] HopBlock{}", self.with_depth(self.depth + 1).indent(), i, self.span(&hop.span));

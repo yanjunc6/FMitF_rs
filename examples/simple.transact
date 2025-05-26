@@ -1,0 +1,14 @@
+nodes {
+    NodeA
+}
+
+table Counter on NodeA {
+    int id;
+    int count;
+}
+
+void increment(int id) {
+    hop on NodeA {
+        Counter[id: id].count = Counter[id: id].count + 1;
+    }
+}
