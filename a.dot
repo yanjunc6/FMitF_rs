@@ -1,0 +1,14 @@
+graph SCGraph {
+  layout=neato;
+  node [shape=box, style=rounded];
+
+  0 [label="Hop 0\ntransfer\nNodeA"];
+  1 [label="Hop 1\ntransfer\nNodeA"];
+  2 [label="Hop 2\nprocessOrder\nNodeA"];
+  3 [label="Hop 3\nprocessOrder\nNodeB"];
+
+  0 -- 1 [color=blue, style=solid, label="S"];
+  2 -- 3 [color=blue, style=solid, label="S"];
+  0 -- 2 [color=red, style=dashed, label="C"];
+  1 -- 2 [color=red, style=dashed, label="C"];
+}
