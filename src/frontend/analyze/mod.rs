@@ -72,10 +72,13 @@ impl SemanticAnalyzer {
         self.globals.clear();
         
         for param in &func.parameters {
-            self.parameters.insert(param.param_name.clone(), param.param_type.clone());
+            if self.parameters.contains_key(&param.param_name) {
+                self.error_at(&param.span, TransActError::DuplicateVariable(param.param_name.clone()));
+            } else {
+                self.parameters.insert(param.param_name.clone(), param.param_type.clone());
+            }
         }
 
-        // NEW: Check abort statements only in first hop
         for (hop_index, hop) in func.hops.iter().enumerate() {
             self.check_hop_block(hop, hop_index, &func.name);
         }
@@ -85,21 +88,19 @@ impl SemanticAnalyzer {
         }
     }
 
-    // NEW: Modified to accept hop_index and function_name for abort checking
     fn check_hop_block(&mut self, hop: &HopBlock, hop_index: usize, function_name: &str) {
         if !self.nodes.contains_key(&hop.node.name) {
             self.error_at(&hop.span, TransActError::UndeclaredNode(hop.node.name.clone()));
         }
 
         self.current_node = Some(hop.node.name.clone());
-        self.variables.clear(); // New hop = new local scope
+        self.variables.clear();
 
         for stmt in &hop.statements {
             self.check_statement(stmt, hop_index, function_name);
         }
     }
 
-    // NEW: Modified to accept hop_index and function_name for abort checking
     fn check_statement(&mut self, stmt: &Statement, hop_index: usize, function_name: &str) {
         match &stmt.node {
             StatementKind::Assignment(a) => self.check_assignment(a, &stmt.span),
@@ -107,12 +108,11 @@ impl SemanticAnalyzer {
             StatementKind::IfStmt(i) => self.check_if_statement(i, &stmt.span, hop_index, function_name),
             StatementKind::VarDecl(v) => self.check_var_decl(v, &stmt.span),
             StatementKind::Return(r) => self.check_return_statement(r, &stmt.span),
-            StatementKind::Abort(_) => self.check_abort_statement(&stmt.span, hop_index, function_name), // NEW
+            StatementKind::Abort(_) => self.check_abort_statement(&stmt.span, hop_index, function_name),
             StatementKind::Empty => {}
         }
     }
 
-    // NEW: Check abort statement is only in first hop
     fn check_abort_statement(&mut self, span: &Span, hop_index: usize, function_name: &str) {
         if hop_index != 0 {
             self.error_at(span, TransActError::AbortNotInFirstHop {
@@ -122,7 +122,6 @@ impl SemanticAnalyzer {
         }
     }
 
-    // NEW: Modified to pass hop_index and function_name to nested statements
     fn check_if_statement(&mut self, if_stmt: &IfStatement, _span: &Span, hop_index: usize, function_name: &str) {
         if let Some(cond_type) = self.check_expression(&if_stmt.condition) {
             if cond_type != TypeName::Bool {
@@ -141,54 +140,67 @@ impl SemanticAnalyzer {
         }
     }
 
-    // Update assignment to use new Rc-based fields
     fn check_assignment(&mut self, assign: &AssignmentStatement, span: &Span) {
-        let table = &assign.table;
+        // Look up the actual table by name to get real information
+        let actual_table = if let Some(real_table) = self.tables.get(&assign.table.name) {
+            real_table.clone()
+        } else {
+            self.error_at(span, TransActError::UndeclaredTable(assign.table.name.clone()));
+            return;
+        };
 
+        // Check cross-node access
         if let Some(current_node) = &self.current_node {
-            if table.node.name != *current_node {
+            if actual_table.node.name != *current_node {
                 self.error_at(span, TransActError::CrossNodeAccess {
-                    table: table.name.clone(),
-                    table_node: table.node.name.clone(),
+                    table: actual_table.name.clone(),
+                    table_node: actual_table.node.name.clone(),
                     current_node: current_node.clone(),
                 });
                 return;
             }
         }
 
-        // NEW: Use Rc-based field access
-        let field = &assign.field;
-        let pk_field = &assign.pk_field;
-
-        // Check that pk_field is actually the primary key
-        if !pk_field.is_primary {
+        // Check that pk_field is actually the primary key of the table
+        if assign.pk_field.field_name != actual_table.primary_key.field_name {
             self.error_at(span, TransActError::InvalidPrimaryKey {
-                table: table.name.clone(),
-                column: pk_field.field_name.clone(),
+                table: actual_table.name.clone(),
+                column: assign.pk_field.field_name.clone(),
             });
             return;
         }
 
+        // Check primary key expression type
         if let Some(pk_type) = self.check_expression(&assign.pk_expr) {
-            if !self.types_compatible(&pk_field.field_type, &pk_type) {
+            if !self.types_compatible(&actual_table.primary_key.field_type, &pk_type) {
                 self.error_at(span, TransActError::TypeMismatch {
-                    expected: pk_field.field_type.clone(),
+                    expected: actual_table.primary_key.field_type.clone(),
                     found: pk_type,
                 });
             }
         }
 
-        if let Some(rhs_type) = self.check_expression(&assign.rhs) {
-            if !self.types_compatible(&field.field_type, &rhs_type) {
-                self.error_at(span, TransActError::TypeMismatch {
-                    expected: field.field_type.clone(),
-                    found: rhs_type,
-                });
+        // Find the actual field being assigned
+        let actual_field = actual_table.fields.iter()
+            .find(|f| f.field_name == assign.field.field_name);
+        
+        if let Some(actual_field) = actual_field {
+            if let Some(rhs_type) = self.check_expression(&assign.rhs) {
+                if !self.types_compatible(&actual_field.field_type, &rhs_type) {
+                    self.error_at(span, TransActError::TypeMismatch {
+                        expected: actual_field.field_type.clone(),
+                        found: rhs_type,
+                    });
+                }
             }
+        } else {
+            self.error_at(span, TransActError::UndeclaredField {
+                table: actual_table.name.clone(),
+                field: assign.field.field_name.clone(),
+            });
         }
     }
 
-    // Update expression checking for new TableFieldAccess structure
     fn check_expression(&mut self, expr: &Expression) -> Option<TypeName> {
         match &expr.node {
             ExpressionKind::Ident(name) => {
@@ -203,7 +215,6 @@ impl SemanticAnalyzer {
             ExpressionKind::FloatLit(_) => Some(TypeName::Float),
             ExpressionKind::StringLit(_) => Some(TypeName::String),
             ExpressionKind::BoolLit(_) => Some(TypeName::Bool),
-            // NEW: Updated for Rc-based TableFieldAccess
             ExpressionKind::TableFieldAccess { table, pk_field, pk_expr, field } => {
                 self.check_expression(pk_expr);
                 
@@ -215,6 +226,7 @@ impl SemanticAnalyzer {
                     return None;
                 };
                 
+                // Check cross-node access
                 if let Some(current_node) = &self.current_node {
                     if actual_table.node.name != *current_node {
                         self.error_at(&expr.span, TransActError::CrossNodeAccess {
@@ -226,11 +238,8 @@ impl SemanticAnalyzer {
                     }
                 }
 
-                // Find the actual primary key field by name
-                let actual_pk_field = actual_table.fields.iter()
-                    .find(|f| f.field_name == pk_field.field_name && f.is_primary);
-                
-                if actual_pk_field.is_none() {
+                // Check that the pk_field is actually the primary key of the table
+                if pk_field.field_name != actual_table.primary_key.field_name {
                     self.error_at(&expr.span, TransActError::InvalidPrimaryKey {
                         table: actual_table.name.clone(),
                         column: pk_field.field_name.clone(),
@@ -245,9 +254,10 @@ impl SemanticAnalyzer {
                 if let Some(actual_field) = actual_field {
                     Some(actual_field.field_type.clone())
                 } else {
-                    self.error_at(&expr.span, TransActError::ParseError(format!(
-                        "Field {} not found in table {}", field.field_name, actual_table.name
-                    )));
+                    self.error_at(&expr.span, TransActError::UndeclaredField {
+                        table: actual_table.name.clone(),
+                        field: field.field_name.clone(),
+                    });
                     None
                 }
             }
@@ -266,7 +276,17 @@ impl SemanticAnalyzer {
                             None
                         }
                     }
-                    UnaryOp::Not => Some(TypeName::Bool),
+                    UnaryOp::Not => {
+                        if operand_type == TypeName::Bool {
+                            Some(TypeName::Bool)
+                        } else {
+                            self.error_at(&expr.span, TransActError::InvalidUnaryOp {
+                                op: "logical not".to_string(),
+                                operand: operand_type,
+                            });
+                            None
+                        }
+                    }
                 }
             }
             ExpressionKind::BinaryOp { left, op, right } => {
@@ -321,7 +341,18 @@ impl SemanticAnalyzer {
                     None
                 }
             }
-            BinaryOp::And | BinaryOp::Or => Some(TypeName::Bool),
+            BinaryOp::And | BinaryOp::Or => {
+                if left == &TypeName::Bool && right == &TypeName::Bool {
+                    Some(TypeName::Bool)
+                } else {
+                    self.error_at(span, TransActError::InvalidBinaryOp {
+                        op: format!("{:?}", op),
+                        left: left.clone(),
+                        right: right.clone(),
+                    });
+                    None
+                }
+            }
         }
     }
 
@@ -350,13 +381,11 @@ impl SemanticAnalyzer {
     }
 
     fn check_var_assignment(&mut self, var_assign: &VarAssignmentStatement, span: &Span) {
-        // Check if variable exists
         if !self.is_variable_declared(&var_assign.var_name) {
             self.error_at(span, TransActError::UndeclaredVariable(var_assign.var_name.clone()));
             return;
         }
 
-        // Check if expression type matches variable type
         if let Some(rhs_type) = self.check_expression(&var_assign.rhs) {
             if let Some(var_type) = self.lookup_variable(&var_assign.var_name) {
                 if !self.types_compatible(&var_type, &rhs_type) {
@@ -370,13 +399,11 @@ impl SemanticAnalyzer {
     }
 
     fn check_var_decl(&mut self, var_decl: &VarDeclStatement, span: &Span) {
-        // Check for duplicate variable declaration
         if self.is_duplicate_variable(&var_decl.var_name) {
             self.error_at(span, TransActError::DuplicateVariable(var_decl.var_name.clone()));
             return;
         }
 
-        // Check if initializer type matches declared type
         if let Some(init_type) = self.check_expression(&var_decl.init_value) {
             if !self.types_compatible(&var_decl.var_type, &init_type) {
                 self.error_at(span, TransActError::TypeMismatch {
@@ -386,7 +413,6 @@ impl SemanticAnalyzer {
             }
         }
 
-        // Add variable to appropriate scope
         if var_decl.is_global {
             self.globals.insert(var_decl.var_name.clone(), var_decl.var_type.clone());
         } else {
@@ -397,7 +423,6 @@ impl SemanticAnalyzer {
     fn check_return_statement(&mut self, ret_stmt: &ReturnStatement, span: &Span) {
         self.has_return = true;
 
-        // Clone the return type to avoid borrow conflicts
         let return_type = self.return_type.clone();
         
         match (&return_type, &ret_stmt.value) {
@@ -421,12 +446,11 @@ impl SemanticAnalyzer {
                 // Valid void return
             }
             (None, _) => {
-                // Should not happen if analyze is called correctly
+                // Should not happen
             }
         }
     }
 
-    // Helper method to check if a variable is declared in any scope
     fn is_variable_declared(&self, name: &str) -> bool {
         self.parameters.contains_key(name) || 
         self.globals.contains_key(name) || 

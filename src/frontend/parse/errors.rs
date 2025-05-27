@@ -48,7 +48,7 @@ impl std::fmt::Display for TransActError {
             Self::DuplicateFunction(name) => write!(f, "Duplicate function: {}", name),
             Self::DuplicateVariable(name) => write!(f, "Duplicate variable: {}", name),
             Self::InvalidPrimaryKey { table, column } => 
-                write!(f, "Invalid primary key '{}' for table '{}'", column, table),
+                write!(f, "Column '{}' is not the primary key of table '{}'. Primary key access required for table operations.", column, table),
             Self::InvalidUnaryOp { op, operand } => 
                 write!(f, "Invalid unary operation '{}' on {:?}", op, operand),
             Self::InvalidBinaryOp { op, left, right } => 
