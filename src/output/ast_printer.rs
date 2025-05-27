@@ -68,7 +68,10 @@ impl<'a> Printer<'a> {
         println!("  Tables:");
         for table in &program.tables {
             let fields: Vec<String> = table.fields.iter()
-                .map(|f| format!("{}:{}", f.field_name, type_name(&f.field_type)))
+                .map(|f| {
+                    let prefix = if f.is_primary { "primary " } else { "" };
+                    format!("{}{}:{}", prefix, f.field_name, type_name(&f.field_type))
+                })
                 .collect();
             println!("    {} on {}: {}", table.name, table.node.name, fields.join(", "));
         }
@@ -103,6 +106,7 @@ impl<'a> Printer<'a> {
             println!("{}[{}] TableDeclaration{}", self.with_depth(self.depth + 1).indent(), i, self.span(&table.span));
             println!("{}name: {}", self.with_depth(self.depth + 2).indent(), table.name);
             println!("{}node: {}", self.with_depth(self.depth + 2).indent(), table.node.name);
+            println!("{}primary_key: {}", self.with_depth(self.depth + 2).indent(), table.primary_key.field_name); // NEW
             self.with_depth(self.depth + 2).print_fields(&table.fields);
         }
     }
@@ -113,6 +117,7 @@ impl<'a> Printer<'a> {
             println!("{}[{}] FieldDeclaration{}", self.with_depth(self.depth + 1).indent(), i, self.span(&field.span));
             println!("{}field_type: {}", self.with_depth(self.depth + 2).indent(), type_name(&field.field_type));
             println!("{}field_name: {}", self.with_depth(self.depth + 2).indent(), field.field_name);
+            println!("{}is_primary: {}", self.with_depth(self.depth + 2).indent(), field.is_primary); // NEW
         }
     }
 
@@ -171,10 +176,10 @@ impl<'a> Printer<'a> {
             StatementKind::Assignment(a) => {
                 println!("{}[{}] AssignmentStatement{}", self.indent(), index, self.span(&stmt.span));
                 println!("{}table: {}", self.with_depth(self.depth + 1).indent(), a.table.name);
-                println!("{}pk_column: {}", self.with_depth(self.depth + 1).indent(), a.pk_column);
+                println!("{}pk_field: {}", self.with_depth(self.depth + 1).indent(), a.pk_field.field_name); // UPDATED
                 println!("{}pk_expr:", self.with_depth(self.depth + 1).indent());
                 self.with_depth(self.depth + 2).print_expression(&a.pk_expr);
-                println!("{}field_name: {}", self.with_depth(self.depth + 1).indent(), a.field_name);
+                println!("{}field: {}", self.with_depth(self.depth + 1).indent(), a.field.field_name); // UPDATED
                 println!("{}rhs:", self.with_depth(self.depth + 1).indent());
                 self.with_depth(self.depth + 2).print_expression(&a.rhs);
             }
@@ -185,6 +190,9 @@ impl<'a> Printer<'a> {
                     Some(expr) => self.with_depth(self.depth + 2).print_expression(expr),
                     None => println!("{}None", self.with_depth(self.depth + 2).indent()),
                 }
+            }
+            StatementKind::Abort(_) => { // NEW: Add abort statement printing
+                println!("{}[{}] AbortStatement{}", self.indent(), index, self.span(&stmt.span));
             }
             StatementKind::IfStmt(i) => {
                 println!("{}[{}] IfStatement{}", self.indent(), index, self.span(&stmt.span));
@@ -226,13 +234,13 @@ impl<'a> Printer<'a> {
             ExpressionKind::BoolLit(value) => {
                 println!("{}BoolLit {}", self.indent(), value);
             }
-            ExpressionKind::TableFieldAccess { table_name, pk_column, pk_expr, field_name } => {
+            ExpressionKind::TableFieldAccess { table, pk_field, pk_expr, field } => { // UPDATED
                 println!("{}TableFieldAccess", self.indent());
-                println!("{}table_name: {}", self.with_depth(self.depth + 1).indent(), table_name);
-                println!("{}pk_column: {}", self.with_depth(self.depth + 1).indent(), pk_column);
+                println!("{}table: {}", self.with_depth(self.depth + 1).indent(), table.name);
+                println!("{}pk_field: {}", self.with_depth(self.depth + 1).indent(), pk_field.field_name);
                 println!("{}pk_expr:", self.with_depth(self.depth + 1).indent());
                 self.with_depth(self.depth + 2).print_expression(pk_expr);
-                println!("{}field_name: {}", self.with_depth(self.depth + 1).indent(), field_name);
+                println!("{}field: {}", self.with_depth(self.depth + 1).indent(), field.field_name);
             }
             ExpressionKind::UnaryOp { op, expr } => {
                 println!("{}UnaryOp", self.indent());

@@ -4,7 +4,7 @@ nodes {
 }
 
 table Data on NodeA {
-    int id;
+    primary int id;
     int value;
 }
 
@@ -24,5 +24,6 @@ void transaction2(int id) {
     }
     hop on NodeA {
         int result = Data[id: id].value;
+        
     }
 }

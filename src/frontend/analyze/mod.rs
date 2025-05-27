@@ -75,8 +75,9 @@ impl SemanticAnalyzer {
             self.parameters.insert(param.param_name.clone(), param.param_type.clone());
         }
 
-        for hop in &func.hops {
-            self.check_hop_block(hop);
+        // NEW: Check abort statements only in first hop
+        for (hop_index, hop) in func.hops.iter().enumerate() {
+            self.check_hop_block(hop, hop_index, &func.name);
         }
 
         if matches!(func.return_type, ReturnType::Type(_)) && !self.has_return {
@@ -84,7 +85,8 @@ impl SemanticAnalyzer {
         }
     }
 
-    fn check_hop_block(&mut self, hop: &HopBlock) {
+    // NEW: Modified to accept hop_index and function_name for abort checking
+    fn check_hop_block(&mut self, hop: &HopBlock, hop_index: usize, function_name: &str) {
         if !self.nodes.contains_key(&hop.node.name) {
             self.error_at(&hop.span, TransActError::UndeclaredNode(hop.node.name.clone()));
         }
@@ -93,61 +95,53 @@ impl SemanticAnalyzer {
         self.variables.clear(); // New hop = new local scope
 
         for stmt in &hop.statements {
-            self.check_statement(stmt);
+            self.check_statement(stmt, hop_index, function_name);
         }
     }
 
-    fn check_statement(&mut self, stmt: &Statement) {
+    // NEW: Modified to accept hop_index and function_name for abort checking
+    fn check_statement(&mut self, stmt: &Statement, hop_index: usize, function_name: &str) {
         match &stmt.node {
             StatementKind::Assignment(a) => self.check_assignment(a, &stmt.span),
             StatementKind::VarAssignment(a) => self.check_var_assignment(a, &stmt.span),
-            StatementKind::IfStmt(i) => self.check_if_statement(i, &stmt.span),
+            StatementKind::IfStmt(i) => self.check_if_statement(i, &stmt.span, hop_index, function_name),
             StatementKind::VarDecl(v) => self.check_var_decl(v, &stmt.span),
             StatementKind::Return(r) => self.check_return_statement(r, &stmt.span),
+            StatementKind::Abort(_) => self.check_abort_statement(&stmt.span, hop_index, function_name), // NEW
             StatementKind::Empty => {}
         }
     }
 
-    fn check_var_decl(&mut self, var_decl: &VarDeclStatement, span: &Span) {
-        if self.is_duplicate_variable(&var_decl.var_name) {
-            self.error_at(span, TransActError::DuplicateVariable(var_decl.var_name.clone()));
-            return;
-        }
-        
-        if let Some(init_type) = self.check_expression(&var_decl.init_value) {
-            if !self.types_compatible(&var_decl.var_type, &init_type) {
-                self.error_at(span, TransActError::TypeMismatch {
-                    expected: var_decl.var_type.clone(),
-                    found: init_type,
-                });
-            }
-        }
-        
-        if var_decl.is_global {
-            self.globals.insert(var_decl.var_name.clone(), var_decl.var_type.clone());
-        } else {
-            self.variables.insert(var_decl.var_name.clone(), var_decl.var_type.clone());
+    // NEW: Check abort statement is only in first hop
+    fn check_abort_statement(&mut self, span: &Span, hop_index: usize, function_name: &str) {
+        if hop_index != 0 {
+            self.error_at(span, TransActError::AbortNotInFirstHop {
+                function: function_name.to_string(),
+                hop_index,
+            });
         }
     }
 
-    fn check_var_assignment(&mut self, var_assign: &VarAssignmentStatement, span: &Span) {
-        let var_type = self.lookup_variable(&var_assign.var_name);
-        
-        let Some(expected_type) = var_type else {
-            self.error_at(span, TransActError::UndeclaredVariable(var_assign.var_name.clone()));
-            return;
-        };
+    // NEW: Modified to pass hop_index and function_name to nested statements
+    fn check_if_statement(&mut self, if_stmt: &IfStatement, _span: &Span, hop_index: usize, function_name: &str) {
+        if let Some(cond_type) = self.check_expression(&if_stmt.condition) {
+            if cond_type != TypeName::Bool {
+                self.error_at(&if_stmt.condition.span, TransActError::InvalidCondition(cond_type));
+            }
+        }
 
-        if let Some(rhs_type) = self.check_expression(&var_assign.rhs) {
-            if !self.types_compatible(&expected_type, &rhs_type) {
-                self.error_at(span, TransActError::TypeMismatch {
-                    expected: expected_type,
-                    found: rhs_type,
-                });
+        for stmt in &if_stmt.then_branch {
+            self.check_statement(stmt, hop_index, function_name);
+        }
+
+        if let Some(else_branch) = &if_stmt.else_branch {
+            for stmt in else_branch {
+                self.check_statement(stmt, hop_index, function_name);
             }
         }
     }
 
+    // Update assignment to use new Rc-based fields
     fn check_assignment(&mut self, assign: &AssignmentStatement, span: &Span) {
         let table = &assign.table;
 
@@ -162,21 +156,18 @@ impl SemanticAnalyzer {
             }
         }
 
-        let Some(field) = table.fields.iter().find(|f| f.field_name == assign.field_name) else {
-            self.error_at(span, TransActError::UndeclaredField {
-                table: table.name.clone(),
-                field: assign.field_name.clone(),
-            });
-            return;
-        };
+        // NEW: Use Rc-based field access
+        let field = &assign.field;
+        let pk_field = &assign.pk_field;
 
-        let Some(pk_field) = table.fields.iter().find(|f| f.field_name == assign.pk_column) else {
+        // Check that pk_field is actually the primary key
+        if !pk_field.is_primary {
             self.error_at(span, TransActError::InvalidPrimaryKey {
                 table: table.name.clone(),
-                column: assign.pk_column.clone(),
+                column: pk_field.field_name.clone(),
             });
             return;
-        };
+        }
 
         if let Some(pk_type) = self.check_expression(&assign.pk_expr) {
             if !self.types_compatible(&pk_field.field_type, &pk_type) {
@@ -197,54 +188,7 @@ impl SemanticAnalyzer {
         }
     }
 
-    fn check_if_statement(&mut self, if_stmt: &IfStatement, _span: &Span) {
-        if let Some(cond_type) = self.check_expression(&if_stmt.condition) {
-            if cond_type != TypeName::Bool {
-                self.error_at(&if_stmt.condition.span, TransActError::InvalidCondition(cond_type));
-            }
-        }
-
-        for stmt in &if_stmt.then_branch {
-            self.check_statement(stmt);
-        }
-
-        if let Some(else_branch) = &if_stmt.else_branch {
-            for stmt in else_branch {
-                self.check_statement(stmt);
-            }
-        }
-    }
-
-    fn check_return_statement(&mut self, ret_stmt: &ReturnStatement, span: &Span) {
-        self.has_return = true;
-        
-        // Clone to avoid borrow checker issues
-        let return_type = self.return_type.clone();
-        
-        match (&return_type, &ret_stmt.value) {
-            (Some(ReturnType::Void), Some(_)) => {
-                self.error_at(span, TransActError::ReturnInVoidFunction);
-            }
-            (Some(ReturnType::Type(expected)), Some(expr)) => {
-                if let Some(actual) = self.check_expression(expr) {
-                    if !self.types_compatible(expected, &actual) {
-                        self.error_at(span, TransActError::ReturnTypeMismatch {
-                            expected: ReturnType::Type(expected.clone()),
-                            found: Some(actual),
-                        });
-                    }
-                }
-            }
-            (Some(ReturnType::Type(expected)), None) => {
-                self.error_at(span, TransActError::ReturnTypeMismatch {
-                    expected: ReturnType::Type(expected.clone()),
-                    found: None,
-                });
-            }
-            _ => {}
-        }
-    }
-
+    // Update expression checking for new TableFieldAccess structure
     fn check_expression(&mut self, expr: &Expression) -> Option<TypeName> {
         match &expr.node {
             ExpressionKind::Ident(name) => {
@@ -259,35 +203,53 @@ impl SemanticAnalyzer {
             ExpressionKind::FloatLit(_) => Some(TypeName::Float),
             ExpressionKind::StringLit(_) => Some(TypeName::String),
             ExpressionKind::BoolLit(_) => Some(TypeName::Bool),
-            ExpressionKind::TableFieldAccess { table_name, pk_expr, field_name, .. } => {
+            // NEW: Updated for Rc-based TableFieldAccess
+            ExpressionKind::TableFieldAccess { table, pk_field, pk_expr, field } => {
                 self.check_expression(pk_expr);
                 
-                let Some(table) = self.tables.get(table_name) else {
-                    self.error_at(&expr.span, TransActError::UndeclaredTable(table_name.clone()));
+                // Look up the actual table by name
+                let actual_table = if let Some(real_table) = self.tables.get(&table.name) {
+                    real_table.clone()
+                } else {
+                    self.error_at(&expr.span, TransActError::UndeclaredTable(table.name.clone()));
                     return None;
                 };
-
+                
                 if let Some(current_node) = &self.current_node {
-                    if table.node.name != *current_node {
+                    if actual_table.node.name != *current_node {
                         self.error_at(&expr.span, TransActError::CrossNodeAccess {
-                            table: table_name.clone(),
-                            table_node: table.node.name.clone(),
+                            table: actual_table.name.clone(),
+                            table_node: actual_table.node.name.clone(),
                             current_node: current_node.clone(),
                         });
                         return None;
                     }
                 }
 
-                table.fields.iter()
-                    .find(|f| f.field_name == *field_name)
-                    .map(|f| f.field_type.clone())
-                    .or_else(|| {
-                        self.error_at(&expr.span, TransActError::UndeclaredField {
-                            table: table_name.clone(),
-                            field: field_name.clone(),
-                        });
-                        None
-                    })
+                // Find the actual primary key field by name
+                let actual_pk_field = actual_table.fields.iter()
+                    .find(|f| f.field_name == pk_field.field_name && f.is_primary);
+                
+                if actual_pk_field.is_none() {
+                    self.error_at(&expr.span, TransActError::InvalidPrimaryKey {
+                        table: actual_table.name.clone(),
+                        column: pk_field.field_name.clone(),
+                    });
+                    return None;
+                }
+
+                // Find the actual field by name
+                let actual_field = actual_table.fields.iter()
+                    .find(|f| f.field_name == field.field_name);
+                
+                if let Some(actual_field) = actual_field {
+                    Some(actual_field.field_type.clone())
+                } else {
+                    self.error_at(&expr.span, TransActError::ParseError(format!(
+                        "Field {} not found in table {}", field.field_name, actual_table.name
+                    )));
+                    None
+                }
             }
             ExpressionKind::UnaryOp { op, expr } => {
                 let Some(operand_type) = self.check_expression(expr) else { return None };
@@ -385,5 +347,89 @@ impl SemanticAnalyzer {
 
     fn types_compatible(&self, expected: &TypeName, actual: &TypeName) -> bool {
         expected == actual || (expected == &TypeName::Float && actual == &TypeName::Int)
+    }
+
+    fn check_var_assignment(&mut self, var_assign: &VarAssignmentStatement, span: &Span) {
+        // Check if variable exists
+        if !self.is_variable_declared(&var_assign.var_name) {
+            self.error_at(span, TransActError::UndeclaredVariable(var_assign.var_name.clone()));
+            return;
+        }
+
+        // Check if expression type matches variable type
+        if let Some(rhs_type) = self.check_expression(&var_assign.rhs) {
+            if let Some(var_type) = self.lookup_variable(&var_assign.var_name) {
+                if !self.types_compatible(&var_type, &rhs_type) {
+                    self.error_at(span, TransActError::TypeMismatch {
+                        expected: var_type,
+                        found: rhs_type,
+                    });
+                }
+            }
+        }
+    }
+
+    fn check_var_decl(&mut self, var_decl: &VarDeclStatement, span: &Span) {
+        // Check for duplicate variable declaration
+        if self.is_duplicate_variable(&var_decl.var_name) {
+            self.error_at(span, TransActError::DuplicateVariable(var_decl.var_name.clone()));
+            return;
+        }
+
+        // Check if initializer type matches declared type
+        if let Some(init_type) = self.check_expression(&var_decl.init_value) {
+            if !self.types_compatible(&var_decl.var_type, &init_type) {
+                self.error_at(span, TransActError::TypeMismatch {
+                    expected: var_decl.var_type.clone(),
+                    found: init_type,
+                });
+            }
+        }
+
+        // Add variable to appropriate scope
+        if var_decl.is_global {
+            self.globals.insert(var_decl.var_name.clone(), var_decl.var_type.clone());
+        } else {
+            self.variables.insert(var_decl.var_name.clone(), var_decl.var_type.clone());
+        }
+    }
+
+    fn check_return_statement(&mut self, ret_stmt: &ReturnStatement, span: &Span) {
+        self.has_return = true;
+
+        // Clone the return type to avoid borrow conflicts
+        let return_type = self.return_type.clone();
+        
+        match (&return_type, &ret_stmt.value) {
+            (Some(ReturnType::Void), Some(_)) => {
+                self.error_at(span, TransActError::UnexpectedReturnValue);
+            }
+            (Some(ReturnType::Type(expected_type)), Some(expr)) => {
+                if let Some(actual_type) = self.check_expression(expr) {
+                    if !self.types_compatible(expected_type, &actual_type) {
+                        self.error_at(span, TransActError::TypeMismatch {
+                            expected: expected_type.clone(),
+                            found: actual_type,
+                        });
+                    }
+                }
+            }
+            (Some(ReturnType::Type(_)), None) => {
+                self.error_at(span, TransActError::MissingReturnValue);
+            }
+            (Some(ReturnType::Void), None) => {
+                // Valid void return
+            }
+            (None, _) => {
+                // Should not happen if analyze is called correctly
+            }
+        }
+    }
+
+    // Helper method to check if a variable is declared in any scope
+    fn is_variable_declared(&self, name: &str) -> bool {
+        self.parameters.contains_key(name) || 
+        self.globals.contains_key(name) || 
+        self.variables.contains_key(name)
     }
 }

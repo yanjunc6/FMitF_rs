@@ -52,6 +52,7 @@ pub struct TableDeclaration {
     pub name: String,
     pub node: Rc<NodeDef>,
     pub fields: Vec<FieldDeclaration>,
+    pub primary_key: Rc<FieldDeclaration>, // Must have exactly one primary key
     pub span: Span,
 }
 
@@ -59,6 +60,7 @@ pub struct TableDeclaration {
 pub struct FieldDeclaration {
     pub field_type: TypeName,
     pub field_name: String,
+    pub is_primary: bool,
     pub span: Span,
 }
 
@@ -102,6 +104,7 @@ pub enum StatementKind {
     IfStmt(IfStatement),
     VarDecl(VarDeclStatement),
     Return(ReturnStatement),
+    Abort(AbortStatement),
     Empty,
 }
 
@@ -114,9 +117,9 @@ pub struct VarAssignmentStatement {
 #[derive(Debug, Clone)]
 pub struct AssignmentStatement {
     pub table: Rc<TableDeclaration>,
-    pub pk_column: String,
+    pub pk_field: Rc<FieldDeclaration>, // Use Rc to point to the primary key field
     pub pk_expr: Expression,
-    pub field_name: String,
+    pub field: Rc<FieldDeclaration>, // Use Rc to point to the field being assigned
     pub rhs: Expression,
 }
 
@@ -141,6 +144,11 @@ pub struct ReturnStatement {
 }
 
 #[derive(Debug, Clone)]
+pub struct AbortStatement {
+    // Simple abort statement with no condition
+}
+
+#[derive(Debug, Clone)]
 pub enum ExpressionKind {
     Ident(String),
     IntLit(i64),
@@ -148,10 +156,10 @@ pub enum ExpressionKind {
     StringLit(String),
     BoolLit(bool),
     TableFieldAccess {
-        table_name: String,
-        pk_column: String,
+        table: Rc<TableDeclaration>,      // Use Rc to point to table
+        pk_field: Rc<FieldDeclaration>,   // Use Rc to point to primary key field
         pk_expr: Box<Expression>,
-        field_name: String,
+        field: Rc<FieldDeclaration>,      // Use Rc to point to accessed field
     },
     UnaryOp {
         op: UnaryOp,

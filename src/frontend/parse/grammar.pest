@@ -3,34 +3,32 @@ COMMENT    = _{ "//" ~ (!"\n" ~ ANY)* }
 
 // Basic tokens
 
-letter_or_underscore = { ASCII_ALPHA | "_" }
+letter_or_underscore          = { ASCII_ALPHA | "_" }
 letter_or_digit_or_underscore = { ASCII_ALPHANUMERIC | "_" }
 
-identifier = @{ letter_or_underscore ~ letter_or_digit_or_underscore* }
+identifier      = @{ letter_or_underscore ~ letter_or_digit_or_underscore* }
 integer_literal = @{ ASCII_DIGIT+ }
 float_literal   = @{ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
 string_literal  = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
-bool_literal    = @{ "true" | "false" } // Add Boolean literal
+bool_literal    = @{ "true" | "false" }
+// Add Boolean literal
 
-type_name = { "int" | "float" | "string" | "bool" } // Add bool type
-ret_type = { type_name | "void" }
-global_keyword = { "global" }
+type_name = { "int" | "float" | "string" | "bool" }
+// Add bool type
+ret_type        = { type_name | "void" }
+global_keyword  = { "global" }
+primary_keyword = { "primary" }
 
 // Grammar Start
 
 program = {
-    SOI 
-    ~ nodes_block 
-    ~ table_declaration* 
-    ~ function_declaration* 
-    ~ EOI
+    SOI ~ nodes_block ~ table_declaration* ~ function_declaration* ~ EOI
 }
 
 // Nodes Block
 
 nodes_block = {
-    "nodes"
-    ~ "{" ~ node_list ~ "}"
+    "nodes" ~ "{" ~ node_list ~ "}"
 }
 
 node_list = {
@@ -40,19 +38,17 @@ node_list = {
 // Table Declarations
 
 table_declaration = {
-    "table" ~ identifier ~ "on" ~ identifier
-    ~ "{" ~ field_declaration* ~ "}"
+    "table" ~ identifier ~ "on" ~ identifier ~ "{" ~ field_declaration* ~ "}"
 }
 
 field_declaration = {
-    type_name ~ identifier ~ ";"
+    primary_keyword? ~ type_name ~ identifier ~ ";"
 }
 
 // Function Declarations
 
 function_declaration = {
-    ret_type ~ identifier ~ "(" ~ parameter_list? ~ ")"
-    ~ "{" ~ function_body_item* ~ "}"
+    ret_type ~ identifier ~ "(" ~ parameter_list? ~ ")" ~ "{" ~ function_body_item* ~ "}"
 }
 
 parameter_list = {
@@ -67,7 +63,6 @@ function_body_item = {
     hop_block
 }
 
-
 // Hop Blocks
 
 hop_block = {
@@ -78,11 +73,15 @@ hop_block = {
 
 statement = {
     var_decl_statement
-    | var_assignment_statement    // NEW: Add variable assignment
-    | assignment_statement        // Table assignment (existing)
-    | if_statement
-    | return_statement
-    | empty_statement
+  | var_assignment_statement // NEW: Add variable assignment
+
+  | assignment_statement // Table assignment (existing)
+
+  | if_statement
+  | return_statement
+  | abort_statement // NEW: Add abort statement
+
+  | empty_statement
 }
 
 var_assignment_statement = {
@@ -90,17 +89,7 @@ var_assignment_statement = {
 }
 
 assignment_statement = {
-    identifier
-    ~ "["
-        ~ identifier
-        ~ ":"
-        ~ expression
-    ~ "]"
-    ~ "."
-    ~ identifier
-    ~ "="
-    ~ expression
-    ~ ";"
+    identifier ~ "[" ~ identifier ~ ":" ~ expression ~ "]" ~ "." ~ identifier ~ "=" ~ expression ~ ";"
 }
 
 var_decl_statement = {
@@ -109,6 +98,10 @@ var_decl_statement = {
 
 return_statement = {
     "return" ~ expression? ~ ";"
+}
+
+abort_statement = {
+    "abort" ~ ";"
 }
 
 if_statement = {
@@ -121,68 +114,62 @@ block = {
 
 empty_statement = { ";" }
 
-
 // Expressions (operator precedence)
 
 expression = { logic_or }
 
 logic_or = {
-    logic_and
-    ~ ( logic_or_op ~ logic_and )*
+    logic_and ~ (logic_or_op ~ logic_and)*
 }
 
 logic_or_op = { "||" }
 
 logic_and = {
-    equality
-    ~ ( logic_and_op ~ equality )*
+    equality ~ (logic_and_op ~ equality)*
 }
 
 logic_and_op = { "&&" }
 
 equality = {
-    comparison
-    ~ ( equality_op ~ comparison )*
+    comparison ~ (equality_op ~ comparison)*
 }
 
 equality_op = { "==" | "!=" }
 
 comparison = {
-    addition
-    ~ ( comparison_op ~ addition )*
+    addition ~ (comparison_op ~ addition)*
 }
 
 comparison_op = { "<=" | ">=" | "<" | ">" }
 
 addition = {
-    multiplication
-    ~ ( addition_op ~ multiplication )*
+    multiplication ~ (addition_op ~ multiplication)*
 }
 
 addition_op = { "+" | "-" }
 
 multiplication = {
-    unary
-    ~ ( multiplication_op ~ unary )*
+    unary ~ (multiplication_op ~ unary)*
 }
 
 multiplication_op = { "*" | "/" }
 
 unary = {
-    primary |
-    ( unary_op ~ unary )
+    primary
+  | (unary_op ~ unary)
 }
 
 unary_op = { "!" | "-" }
 
 primary = {
-    bool_literal        // Put this FIRST
-    | table_field_access
-    | float_literal
-    | integer_literal
-    | string_literal
-    | identifier
-    | "(" ~ expression ~ ")"
+    bool_literal // Put this FIRST
+
+  | table_field_access
+  | float_literal
+  | integer_literal
+  | string_literal
+  | identifier
+  | "(" ~ expression ~ ")"
 }
 
 table_field_access = {
