@@ -1,6 +1,6 @@
 use crate::ast::*;
-use std::rc::Rc;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 /// Edge types in SC-Graph
 #[derive(Debug, Clone, PartialEq)]
@@ -109,13 +109,20 @@ impl SCGraph {
     pub fn find_mixed_cycles(&self) -> Vec<Vec<Rc<HopBlock>>> {
         let mut cycles = Vec::new();
         let mut seen_cycles = HashSet::new();
-        
+
         for start in 0..self.hops.len() {
             let mut path = vec![start];
             let mut visited = vec![false; self.hops.len()];
-            self.dfs_find_cycles(start, start, &mut path, &mut visited, &mut cycles, &mut seen_cycles);
+            self.dfs_find_cycles(
+                start,
+                start,
+                &mut path,
+                &mut visited,
+                &mut cycles,
+                &mut seen_cycles,
+            );
         }
-        
+
         cycles
     }
 
@@ -138,12 +145,11 @@ impl SCGraph {
                     if self.path_has_both_edge_types(path) {
                         // Create canonical representation
                         let canonical = self.canonical_cycle(path);
-                        
+
                         // Only add if we haven't seen this cycle before
                         if seen_cycles.insert(canonical) {
-                            let cycle_hops: Vec<Rc<HopBlock>> = path.iter()
-                                .map(|&idx| self.hops[idx].clone())
-                                .collect();
+                            let cycle_hops: Vec<Rc<HopBlock>> =
+                                path.iter().map(|&idx| self.hops[idx].clone()).collect();
                             cycles.push(cycle_hops);
                         }
                     }
@@ -167,12 +173,12 @@ impl SCGraph {
         // Find the minimum element
         let min_val = *cycle.iter().min().unwrap();
         let min_pos = cycle.iter().position(|&x| x == min_val).unwrap();
-        
+
         // Create the rotation starting from minimum element
         let mut canonical = Vec::new();
         canonical.extend_from_slice(&cycle[min_pos..]);
         canonical.extend_from_slice(&cycle[..min_pos]);
-        
+
         // Also check the reverse direction
         let mut reverse = canonical.clone();
         reverse.reverse();
@@ -181,7 +187,7 @@ impl SCGraph {
         let mut canonical_rev = Vec::new();
         canonical_rev.extend_from_slice(&reverse[min_pos_rev..]);
         canonical_rev.extend_from_slice(&reverse[..min_pos_rev]);
-        
+
         // Return the lexicographically smaller one
         if canonical <= canonical_rev {
             canonical
@@ -202,7 +208,7 @@ impl SCGraph {
         for i in 0..path.len() {
             let curr = path[i];
             let next = path[(i + 1) % path.len()];
-            
+
             // Find the edge between curr and next
             for edge in &self.edges {
                 if edge.connects(curr, next) {
@@ -220,8 +226,16 @@ impl SCGraph {
 
     pub fn stats(&self) -> (usize, usize, usize) {
         let vertices = self.hops.len();
-        let s_edges = self.edges.iter().filter(|e| e.edge_type == EdgeType::S).count();
-        let c_edges = self.edges.iter().filter(|e| e.edge_type == EdgeType::C).count();
+        let s_edges = self
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::S)
+            .count();
+        let c_edges = self
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::C)
+            .count();
         (vertices, s_edges, c_edges)
     }
 }

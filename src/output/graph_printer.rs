@@ -1,4 +1,4 @@
-use crate::graph::{SCGraph, EdgeType};
+use crate::graph::{EdgeType, SCGraph};
 use std::io::Write;
 
 pub fn print_dot_graph<W: Write>(graph: &SCGraph, writer: &mut W) -> std::io::Result<()> {
@@ -38,7 +38,7 @@ pub fn print_dot_graph<W: Write>(graph: &SCGraph, writer: &mut W) -> std::io::Re
 
 pub fn save_dot_file(graph: &SCGraph, filename: &str) -> std::io::Result<()> {
     use std::fs::File;
-    
+
     let mut file = File::create(filename)?;
     print_dot_graph(graph, &mut file)
 }

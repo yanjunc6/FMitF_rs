@@ -1,6 +1,6 @@
-pub mod parse;
 pub mod analyze;
+pub mod parse;
 
 // Re-export for convenience
-pub use parse::*;
 pub use analyze::*;
+pub use parse::*;
