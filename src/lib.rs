@@ -5,7 +5,7 @@ pub mod output;
 
 // Re-export
 pub use ast::*;
-pub use frontend::parse::{parse_program, TransActError, Results, SpannedError, format_errors};
 pub use frontend::analyze::SemanticAnalyzer;
-pub use output::{print_program, PrintOptions, PrintMode, save_dot_file, print_dot_graph};
-pub use graph::{SCGraph, EdgeType};
+pub use frontend::parse::{format_errors, parse_program, Results, SpannedError, TransActError};
+pub use graph::{EdgeType, SCGraph};
+pub use output::{print_dot_graph, print_program, save_dot_file, PrintMode, PrintOptions};

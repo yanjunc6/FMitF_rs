@@ -22,7 +22,12 @@ impl Span {
 
 impl Default for Span {
     fn default() -> Self {
-        Self { start: 0, end: 0, line: 1, column: 1 }
+        Self {
+            start: 0,
+            end: 0,
+            line: 1,
+            column: 1,
+        }
     }
 }
 
@@ -66,7 +71,10 @@ pub struct FieldDeclaration {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeName {
-    Int, Float, String, Bool,
+    Int,
+    Float,
+    String,
+    Bool,
 }
 
 #[derive(Debug, Clone)]
@@ -80,7 +88,8 @@ pub struct FunctionDeclaration {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReturnType {
-    Void, Type(TypeName),
+    Void,
+    Type(TypeName),
 }
 
 #[derive(Debug, Clone)]
@@ -156,10 +165,10 @@ pub enum ExpressionKind {
     StringLit(String),
     BoolLit(bool),
     TableFieldAccess {
-        table: Rc<TableDeclaration>,      // Use Rc to point to table
-        pk_field: Rc<FieldDeclaration>,   // Use Rc to point to primary key field
+        table: Rc<TableDeclaration>,    // Use Rc to point to table
+        pk_field: Rc<FieldDeclaration>, // Use Rc to point to primary key field
         pk_expr: Box<Expression>,
-        field: Rc<FieldDeclaration>,      // Use Rc to point to accessed field
+        field: Rc<FieldDeclaration>, // Use Rc to point to accessed field
     },
     UnaryOp {
         op: UnaryOp,
@@ -173,9 +182,23 @@ pub enum ExpressionKind {
 }
 
 #[derive(Debug, Clone)]
-pub enum UnaryOp { Not, Neg }
+pub enum UnaryOp {
+    Not,
+    Neg,
+}
 
 #[derive(Debug, Clone)]
 pub enum BinaryOp {
-    Add, Sub, Mul, Div, Lt, Lte, Gt, Gte, Eq, Neq, And, Or,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Lt,
+    Lte,
+    Gt,
+    Gte,
+    Eq,
+    Neq,
+    And,
+    Or,
 }

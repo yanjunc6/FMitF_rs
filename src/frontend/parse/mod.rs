@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::ast::*;
-pub use errors::{TransActError, Results, SpannedError, format_errors};
+pub use errors::{format_errors, Results, SpannedError, TransActError};
 
 pub mod errors;
 
@@ -14,11 +14,19 @@ pub mod errors;
 pub struct TransActParser;
 
 pub fn parse_program(source: &str) -> Results<Program> {
-    let pairs = TransActParser::parse(Rule::program, source)
-        .map_err(|e| vec![SpannedError { error: TransActError::ParseError(e.to_string()), span: None }])?;
+    let pairs = TransActParser::parse(Rule::program, source).map_err(|e| {
+        vec![SpannedError {
+            error: TransActError::ParseError(e.to_string()),
+            span: None,
+        }]
+    })?;
 
-    let program_pair = pairs.into_iter().next()
-        .ok_or_else(|| vec![SpannedError { error: TransActError::ParseError("No program found".into()), span: None }])?;
+    let program_pair = pairs.into_iter().next().ok_or_else(|| {
+        vec![SpannedError {
+            error: TransActError::ParseError("No program found".into()),
+            span: None,
+        }]
+    })?;
 
     parse_program_rule(program_pair)
 }
@@ -43,7 +51,9 @@ fn parse_program_rule(pair: Pair<Rule>) -> Results<Program> {
     // Second pass: collect tables
     for item in pair.clone().into_inner() {
         if item.as_rule() == Rule::table_declaration {
-            if let Err(mut errs) = parse_table_declaration(item, &mut tables, &node_map, &mut table_map) {
+            if let Err(mut errs) =
+                parse_table_declaration(item, &mut tables, &node_map, &mut table_map)
+            {
                 errors.append(&mut errs);
             }
         }
@@ -52,20 +62,30 @@ fn parse_program_rule(pair: Pair<Rule>) -> Results<Program> {
     // Third pass: parse functions
     for item in pair.into_inner() {
         if item.as_rule() == Rule::function_declaration {
-            if let Err(mut errs) = parse_function_declaration(item, &mut functions, &node_map, &table_map) {
+            if let Err(mut errs) =
+                parse_function_declaration(item, &mut functions, &node_map, &table_map)
+            {
                 errors.append(&mut errs);
             }
         }
     }
 
     if errors.is_empty() {
-        Ok(Program { nodes, tables, functions })
+        Ok(Program {
+            nodes,
+            tables,
+            functions,
+        })
     } else {
         Err(errors)
     }
 }
 
-fn parse_nodes_block(pair: Pair<Rule>, nodes: &mut Vec<Rc<NodeDef>>, node_map: &mut HashMap<String, Rc<NodeDef>>) -> Results<()> {
+fn parse_nodes_block(
+    pair: Pair<Rule>,
+    nodes: &mut Vec<Rc<NodeDef>>,
+    node_map: &mut HashMap<String, Rc<NodeDef>>,
+) -> Results<()> {
     for item in pair.into_inner() {
         if item.as_rule() == Rule::node_list {
             parse_node_list(item, nodes, node_map)?;
@@ -74,12 +94,19 @@ fn parse_nodes_block(pair: Pair<Rule>, nodes: &mut Vec<Rc<NodeDef>>, node_map: &
     Ok(())
 }
 
-fn parse_node_list(pair: Pair<Rule>, nodes: &mut Vec<Rc<NodeDef>>, node_map: &mut HashMap<String, Rc<NodeDef>>) -> Results<()> {
+fn parse_node_list(
+    pair: Pair<Rule>,
+    nodes: &mut Vec<Rc<NodeDef>>,
+    node_map: &mut HashMap<String, Rc<NodeDef>>,
+) -> Results<()> {
     for node_pair in pair.into_inner() {
         if node_pair.as_rule() == Rule::identifier {
             let name = parse_identifier(node_pair.clone())?;
             let span = Span::from_pest(node_pair.as_span());
-            let node = Rc::new(NodeDef { name: name.clone(), span });
+            let node = Rc::new(NodeDef {
+                name: name.clone(),
+                span,
+            });
             nodes.push(node.clone());
             node_map.insert(name, node);
         }
@@ -88,32 +115,41 @@ fn parse_node_list(pair: Pair<Rule>, nodes: &mut Vec<Rc<NodeDef>>, node_map: &mu
 }
 
 fn parse_table_declaration(
-    pair: Pair<Rule>, 
-    tables: &mut Vec<Rc<TableDeclaration>>, 
+    pair: Pair<Rule>,
+    tables: &mut Vec<Rc<TableDeclaration>>,
     node_map: &HashMap<String, Rc<NodeDef>>,
-    table_map: &mut HashMap<String, Rc<TableDeclaration>>
+    table_map: &mut HashMap<String, Rc<TableDeclaration>>,
 ) -> Results<()> {
     let span = Span::from_pest(pair.as_span());
     let mut inner = pair.into_inner();
-    
+
     let table_name = parse_identifier(inner.next().unwrap())?;
     let node_name = parse_identifier(inner.next().unwrap())?;
-    
-    let node = node_map.get(&node_name)
-        .ok_or_else(|| vec![SpannedError { error: TransActError::UndeclaredNode(node_name), span: Some(span.clone()) }])?
+
+    let node = node_map
+        .get(&node_name)
+        .ok_or_else(|| {
+            vec![SpannedError {
+                error: TransActError::UndeclaredNode(node_name),
+                span: Some(span.clone()),
+            }]
+        })?
         .clone();
 
     let mut fields = Vec::new();
     let mut primary_key = None;
-    
+
     for field_pair in inner {
         if field_pair.as_rule() == Rule::field_declaration {
             let field = parse_field_declaration(field_pair)?;
             if field.is_primary {
                 if primary_key.is_some() {
-                    return Err(vec![SpannedError { 
-                        error: TransActError::ParseError(format!("Table {} has multiple primary keys", table_name)), 
-                        span: Some(span) 
+                    return Err(vec![SpannedError {
+                        error: TransActError::ParseError(format!(
+                            "Table {} has multiple primary keys",
+                            table_name
+                        )),
+                        span: Some(span),
                     }]);
                 }
                 primary_key = Some(Rc::new(field.clone()));
@@ -122,19 +158,24 @@ fn parse_table_declaration(
         }
     }
 
-    let primary_key = primary_key.ok_or_else(|| vec![SpannedError { 
-        error: TransActError::ParseError(format!("Table {} must have exactly one primary key", table_name)), 
-        span: Some(span.clone()) 
-    }])?;
+    let primary_key = primary_key.ok_or_else(|| {
+        vec![SpannedError {
+            error: TransActError::ParseError(format!(
+                "Table {} must have exactly one primary key",
+                table_name
+            )),
+            span: Some(span.clone()),
+        }]
+    })?;
 
-    let table = Rc::new(TableDeclaration { 
-        name: table_name.clone(), 
-        node, 
-        fields, 
-        primary_key, 
-        span 
+    let table = Rc::new(TableDeclaration {
+        name: table_name.clone(),
+        node,
+        fields,
+        primary_key,
+        span,
     });
-    
+
     tables.push(table.clone());
     table_map.insert(table_name, table);
     Ok(())
@@ -143,7 +184,7 @@ fn parse_table_declaration(
 fn parse_field_declaration(pair: Pair<Rule>) -> Result<FieldDeclaration, Vec<SpannedError>> {
     let span = Span::from_pest(pair.as_span());
     let mut inner = pair.into_inner();
-    
+
     // Check if first token is primary keyword
     let first = inner.next().unwrap();
     let (is_primary, field_type) = if first.as_rule() == Rule::primary_keyword {
@@ -151,14 +192,14 @@ fn parse_field_declaration(pair: Pair<Rule>) -> Result<FieldDeclaration, Vec<Spa
     } else {
         (false, parse_type_name(first)?)
     };
-    
+
     let field_name = parse_identifier(inner.next().unwrap())?;
-    
-    Ok(FieldDeclaration { 
-        field_type, 
-        field_name, 
-        is_primary, 
-        span 
+
+    Ok(FieldDeclaration {
+        field_type,
+        field_name,
+        is_primary,
+        span,
     })
 }
 
@@ -166,17 +207,17 @@ fn parse_function_declaration(
     pair: Pair<Rule>,
     functions: &mut Vec<FunctionDeclaration>,
     node_map: &HashMap<String, Rc<NodeDef>>,
-    table_map: &HashMap<String, Rc<TableDeclaration>>
+    table_map: &HashMap<String, Rc<TableDeclaration>>,
 ) -> Results<()> {
     let span = Span::from_pest(pair.as_span());
     let mut inner = pair.into_inner();
-    
+
     let return_type = parse_ret_type(inner.next().unwrap())?;
     let name = parse_identifier(inner.next().unwrap())?;
-    
+
     let mut parameters = Vec::new();
     let mut hops = Vec::new();
-    
+
     for item in inner {
         match item.as_rule() {
             Rule::parameter_list => {
@@ -193,13 +234,13 @@ fn parse_function_declaration(
             _ => {}
         }
     }
-    
-    functions.push(FunctionDeclaration { 
-        return_type, 
-        name, 
-        parameters, 
-        hops, 
-        span 
+
+    functions.push(FunctionDeclaration {
+        return_type,
+        name,
+        parameters,
+        hops,
+        span,
     });
     Ok(())
 }
@@ -217,37 +258,54 @@ fn parse_parameter_list(pair: Pair<Rule>) -> Result<Vec<ParameterDecl>, Vec<Span
 fn parse_parameter_decl(pair: Pair<Rule>) -> Result<ParameterDecl, Vec<SpannedError>> {
     let span = Span::from_pest(pair.as_span());
     let mut inner = pair.into_inner();
-    
+
     let param_type = parse_type_name(inner.next().unwrap())?;
     let param_name = parse_identifier(inner.next().unwrap())?;
-    
-    Ok(ParameterDecl { param_type, param_name, span })
+
+    Ok(ParameterDecl {
+        param_type,
+        param_name,
+        span,
+    })
 }
 
 fn parse_hop_block(
     pair: Pair<Rule>,
     node_map: &HashMap<String, Rc<NodeDef>>,
-    table_map: &HashMap<String, Rc<TableDeclaration>>
+    table_map: &HashMap<String, Rc<TableDeclaration>>,
 ) -> Result<HopBlock, Vec<SpannedError>> {
     let span = Span::from_pest(pair.as_span());
     let mut inner = pair.into_inner();
-    
+
     let node_name = parse_identifier(inner.next().unwrap())?;
-    let node = node_map.get(&node_name)
-        .ok_or_else(|| vec![SpannedError { error: TransActError::UndeclaredNode(node_name), span: Some(span.clone()) }])?
+    let node = node_map
+        .get(&node_name)
+        .ok_or_else(|| {
+            vec![SpannedError {
+                error: TransActError::UndeclaredNode(node_name),
+                span: Some(span.clone()),
+            }]
+        })?
         .clone();
-    
+
     let mut statements = Vec::new();
     for item in inner {
         if item.as_rule() == Rule::block {
             statements = parse_block(item, table_map)?;
         }
     }
-    
-    Ok(HopBlock { node, statements, span })
+
+    Ok(HopBlock {
+        node,
+        statements,
+        span,
+    })
 }
 
-fn parse_block(pair: Pair<Rule>, table_map: &HashMap<String, Rc<TableDeclaration>>) -> Result<Vec<Statement>, Vec<SpannedError>> {
+fn parse_block(
+    pair: Pair<Rule>,
+    table_map: &HashMap<String, Rc<TableDeclaration>>,
+) -> Result<Vec<Statement>, Vec<SpannedError>> {
     let mut statements = Vec::new();
     for stmt_pair in pair.into_inner() {
         if stmt_pair.as_rule() == Rule::statement {
@@ -257,47 +315,43 @@ fn parse_block(pair: Pair<Rule>, table_map: &HashMap<String, Rc<TableDeclaration
     Ok(statements)
 }
 
-fn parse_statement(pair: Pair<Rule>, table_map: &HashMap<String, Rc<TableDeclaration>>) -> Result<Statement, Vec<SpannedError>> {
+fn parse_statement(
+    pair: Pair<Rule>,
+    table_map: &HashMap<String, Rc<TableDeclaration>>,
+) -> Result<Statement, Vec<SpannedError>> {
     let span = Span::from_pest(pair.as_span());
     let inner = pair.into_inner().next().unwrap();
-    
+
     let kind = match inner.as_rule() {
-        Rule::var_decl_statement => {
-            StatementKind::VarDecl(parse_var_decl_statement(inner)?)
-        }
+        Rule::var_decl_statement => StatementKind::VarDecl(parse_var_decl_statement(inner)?),
         Rule::var_assignment_statement => {
             StatementKind::VarAssignment(parse_var_assignment_statement(inner)?)
         }
         Rule::assignment_statement => {
             StatementKind::Assignment(parse_assignment_statement(inner, table_map)?)
         }
-        Rule::if_statement => {
-            StatementKind::IfStmt(parse_if_statement(inner, table_map)?)
-        }
-        Rule::return_statement => {
-            StatementKind::Return(parse_return_statement(inner)?)
-        }
-        Rule::abort_statement => {
-            StatementKind::Abort(parse_abort_statement(inner)?)
-        }
-        Rule::empty_statement => {
-            StatementKind::Empty
-        }
+        Rule::if_statement => StatementKind::IfStmt(parse_if_statement(inner, table_map)?),
+        Rule::return_statement => StatementKind::Return(parse_return_statement(inner)?),
+        Rule::abort_statement => StatementKind::Abort(parse_abort_statement(inner)?),
+        Rule::empty_statement => StatementKind::Empty,
         _ => {
-            return Err(vec![SpannedError { 
-                error: TransActError::ParseError(format!("Unknown statement: {:?}", inner.as_rule())),
-                span: Some(span)
+            return Err(vec![SpannedError {
+                error: TransActError::ParseError(format!(
+                    "Unknown statement: {:?}",
+                    inner.as_rule()
+                )),
+                span: Some(span),
             }]);
         }
     };
-    
+
     Ok(Spanned { node: kind, span })
 }
 
 fn parse_var_decl_statement(pair: Pair<Rule>) -> Result<VarDeclStatement, Vec<SpannedError>> {
     let mut inner = pair.into_inner();
     let first = inner.next().unwrap();
-    
+
     let (is_global, var_type, var_name, init_value) = if first.as_rule() == Rule::global_keyword {
         let var_type = parse_type_name(inner.next().unwrap())?;
         let var_name = parse_identifier(inner.next().unwrap())?;
@@ -310,18 +364,28 @@ fn parse_var_decl_statement(pair: Pair<Rule>) -> Result<VarDeclStatement, Vec<Sp
         (false, var_type, var_name, init_value)
     };
 
-    Ok(VarDeclStatement { var_type, var_name, init_value, is_global })
+    Ok(VarDeclStatement {
+        var_type,
+        var_name,
+        init_value,
+        is_global,
+    })
 }
 
-fn parse_var_assignment_statement(pair: Pair<Rule>) -> Result<VarAssignmentStatement, Vec<SpannedError>> {
+fn parse_var_assignment_statement(
+    pair: Pair<Rule>,
+) -> Result<VarAssignmentStatement, Vec<SpannedError>> {
     let mut inner = pair.into_inner();
     let var_name = parse_identifier(inner.next().unwrap())?;
     let rhs = parse_expression(inner.next().unwrap())?;
-    
+
     Ok(VarAssignmentStatement { var_name, rhs })
 }
 
-fn parse_assignment_statement(pair: Pair<Rule>, table_map: &HashMap<String, Rc<TableDeclaration>>) -> Result<AssignmentStatement, Vec<SpannedError>> {
+fn parse_assignment_statement(
+    pair: Pair<Rule>,
+    table_map: &HashMap<String, Rc<TableDeclaration>>,
+) -> Result<AssignmentStatement, Vec<SpannedError>> {
     let mut inner = pair.into_inner();
     let table_name = parse_identifier(inner.next().unwrap())?;
     let pk_column = parse_identifier(inner.next().unwrap())?;
@@ -336,7 +400,10 @@ fn parse_assignment_statement(pair: Pair<Rule>, table_map: &HashMap<String, Rc<T
         // Create a dummy table for now - semantic analysis will catch undeclared tables
         Rc::new(TableDeclaration {
             name: table_name.clone(),
-            node: Rc::new(NodeDef { name: "unknown".to_string(), span: Span::default() }),
+            node: Rc::new(NodeDef {
+                name: "unknown".to_string(),
+                span: Span::default(),
+            }),
             fields: Vec::new(),
             primary_key: Rc::new(FieldDeclaration {
                 field_type: TypeName::Int,
@@ -362,28 +429,35 @@ fn parse_assignment_statement(pair: Pair<Rule>, table_map: &HashMap<String, Rc<T
         span: Span::default(),
     });
 
-    Ok(AssignmentStatement { 
+    Ok(AssignmentStatement {
         table: dummy_table,
         pk_field: dummy_pk_field,
-        pk_expr, 
+        pk_expr,
         field: dummy_field,
-        rhs 
+        rhs,
     })
 }
 
-fn parse_if_statement(pair: Pair<Rule>, table_map: &HashMap<String, Rc<TableDeclaration>>) -> Result<IfStatement, Vec<SpannedError>> {
+fn parse_if_statement(
+    pair: Pair<Rule>,
+    table_map: &HashMap<String, Rc<TableDeclaration>>,
+) -> Result<IfStatement, Vec<SpannedError>> {
     let mut inner = pair.into_inner();
     let condition = parse_expression(inner.next().unwrap())?;
-    
+
     let then_block = parse_block(inner.next().unwrap(), table_map)?;
-    
+
     let else_branch = if let Some(else_block) = inner.next() {
         Some(parse_block(else_block, table_map)?)
     } else {
         None
     };
-    
-    Ok(IfStatement { condition, then_branch: then_block, else_branch })
+
+    Ok(IfStatement {
+        condition,
+        then_branch: then_block,
+        else_branch,
+    })
 }
 
 fn parse_return_statement(pair: Pair<Rule>) -> Result<ReturnStatement, Vec<SpannedError>> {
@@ -393,7 +467,7 @@ fn parse_return_statement(pair: Pair<Rule>) -> Result<ReturnStatement, Vec<Spann
     } else {
         None
     };
-    
+
     Ok(ReturnStatement { value })
 }
 
@@ -418,7 +492,10 @@ fn parse_expression(pair: Pair<Rule>) -> Result<Expression, Vec<SpannedError>> {
         _ => {
             let span = Span::from_pest(pair.as_span());
             Err(vec![SpannedError {
-                error: TransActError::ParseError(format!("Unknown expression rule: {:?}", pair.as_rule())),
+                error: TransActError::ParseError(format!(
+                    "Unknown expression rule: {:?}",
+                    pair.as_rule()
+                )),
                 span: Some(span),
             }])
         }
@@ -436,28 +513,33 @@ fn parse_logic_and(pair: Pair<Rule>) -> Result<Expression, Vec<SpannedError>> {
 fn parse_equality(pair: Pair<Rule>) -> Result<Expression, Vec<SpannedError>> {
     let span = Span::from_pest(pair.as_span());
     let mut inner = pair.into_inner();
-    
+
     let mut left = parse_expression(inner.next().unwrap())?;
-    
+
     while let Some(op_pair) = inner.next() {
         let right = parse_expression(inner.next().unwrap())?;
         let op = match op_pair.as_rule() {
-            Rule::equality_op => {
-                match op_pair.as_str() {
-                    "==" => BinaryOp::Eq,
-                    "!=" => BinaryOp::Neq,
-                    _ => return Err(vec![SpannedError { 
-                        error: TransActError::ParseError(format!("Unknown equality op: {}", op_pair.as_str())),
-                        span: Some(span)
-                    }]),
+            Rule::equality_op => match op_pair.as_str() {
+                "==" => BinaryOp::Eq,
+                "!=" => BinaryOp::Neq,
+                _ => {
+                    return Err(vec![SpannedError {
+                        error: TransActError::ParseError(format!(
+                            "Unknown equality op: {}",
+                            op_pair.as_str()
+                        )),
+                        span: Some(span),
+                    }])
                 }
+            },
+            _ => {
+                return Err(vec![SpannedError {
+                    error: TransActError::ParseError(format!("Expected equality operator")),
+                    span: Some(span),
+                }])
             }
-            _ => return Err(vec![SpannedError { 
-                error: TransActError::ParseError(format!("Expected equality operator")),
-                span: Some(span)
-            }]),
         };
-        
+
         left = Spanned {
             node: ExpressionKind::BinaryOp {
                 left: Box::new(left),
@@ -467,37 +549,42 @@ fn parse_equality(pair: Pair<Rule>) -> Result<Expression, Vec<SpannedError>> {
             span: span.clone(),
         };
     }
-    
+
     Ok(left)
 }
 
 fn parse_comparison(pair: Pair<Rule>) -> Result<Expression, Vec<SpannedError>> {
     let span = Span::from_pest(pair.as_span());
     let mut inner = pair.into_inner();
-    
+
     let mut left = parse_expression(inner.next().unwrap())?;
-    
+
     while let Some(op_pair) = inner.next() {
         let right = parse_expression(inner.next().unwrap())?;
         let op = match op_pair.as_rule() {
-            Rule::comparison_op => {
-                match op_pair.as_str() {
-                    "<" => BinaryOp::Lt,
-                    "<=" => BinaryOp::Lte,
-                    ">" => BinaryOp::Gt,
-                    ">=" => BinaryOp::Gte,
-                    _ => return Err(vec![SpannedError { 
-                        error: TransActError::ParseError(format!("Unknown comparison op: {}", op_pair.as_str())),
-                        span: Some(span)
-                    }]),
+            Rule::comparison_op => match op_pair.as_str() {
+                "<" => BinaryOp::Lt,
+                "<=" => BinaryOp::Lte,
+                ">" => BinaryOp::Gt,
+                ">=" => BinaryOp::Gte,
+                _ => {
+                    return Err(vec![SpannedError {
+                        error: TransActError::ParseError(format!(
+                            "Unknown comparison op: {}",
+                            op_pair.as_str()
+                        )),
+                        span: Some(span),
+                    }])
                 }
+            },
+            _ => {
+                return Err(vec![SpannedError {
+                    error: TransActError::ParseError(format!("Expected comparison operator")),
+                    span: Some(span),
+                }])
             }
-            _ => return Err(vec![SpannedError { 
-                error: TransActError::ParseError(format!("Expected comparison operator")),
-                span: Some(span)
-            }]),
         };
-        
+
         left = Spanned {
             node: ExpressionKind::BinaryOp {
                 left: Box::new(left),
@@ -507,35 +594,40 @@ fn parse_comparison(pair: Pair<Rule>) -> Result<Expression, Vec<SpannedError>> {
             span: span.clone(),
         };
     }
-    
+
     Ok(left)
 }
 
 fn parse_addition(pair: Pair<Rule>) -> Result<Expression, Vec<SpannedError>> {
     let span = Span::from_pest(pair.as_span());
     let mut inner = pair.into_inner();
-    
+
     let mut left = parse_expression(inner.next().unwrap())?;
-    
+
     while let Some(op_pair) = inner.next() {
         let right = parse_expression(inner.next().unwrap())?;
         let op = match op_pair.as_rule() {
-            Rule::addition_op => {
-                match op_pair.as_str() {
-                    "+" => BinaryOp::Add,
-                    "-" => BinaryOp::Sub,
-                    _ => return Err(vec![SpannedError { 
-                        error: TransActError::ParseError(format!("Unknown addition op: {}", op_pair.as_str())),
-                        span: Some(span)
-                    }]),
+            Rule::addition_op => match op_pair.as_str() {
+                "+" => BinaryOp::Add,
+                "-" => BinaryOp::Sub,
+                _ => {
+                    return Err(vec![SpannedError {
+                        error: TransActError::ParseError(format!(
+                            "Unknown addition op: {}",
+                            op_pair.as_str()
+                        )),
+                        span: Some(span),
+                    }])
                 }
+            },
+            _ => {
+                return Err(vec![SpannedError {
+                    error: TransActError::ParseError(format!("Expected addition operator")),
+                    span: Some(span),
+                }])
             }
-            _ => return Err(vec![SpannedError { 
-                error: TransActError::ParseError(format!("Expected addition operator")),
-                span: Some(span)
-            }]),
         };
-        
+
         left = Spanned {
             node: ExpressionKind::BinaryOp {
                 left: Box::new(left),
@@ -545,35 +637,40 @@ fn parse_addition(pair: Pair<Rule>) -> Result<Expression, Vec<SpannedError>> {
             span: span.clone(),
         };
     }
-    
+
     Ok(left)
 }
 
 fn parse_multiplication(pair: Pair<Rule>) -> Result<Expression, Vec<SpannedError>> {
     let span = Span::from_pest(pair.as_span());
     let mut inner = pair.into_inner();
-    
+
     let mut left = parse_expression(inner.next().unwrap())?;
-    
+
     while let Some(op_pair) = inner.next() {
         let right = parse_expression(inner.next().unwrap())?;
         let op = match op_pair.as_rule() {
-            Rule::multiplication_op => {
-                match op_pair.as_str() {
-                    "*" => BinaryOp::Mul,
-                    "/" => BinaryOp::Div,
-                    _ => return Err(vec![SpannedError { 
-                        error: TransActError::ParseError(format!("Unknown multiplication op: {}", op_pair.as_str())),
-                        span: Some(span)
-                    }]),
+            Rule::multiplication_op => match op_pair.as_str() {
+                "*" => BinaryOp::Mul,
+                "/" => BinaryOp::Div,
+                _ => {
+                    return Err(vec![SpannedError {
+                        error: TransActError::ParseError(format!(
+                            "Unknown multiplication op: {}",
+                            op_pair.as_str()
+                        )),
+                        span: Some(span),
+                    }])
                 }
+            },
+            _ => {
+                return Err(vec![SpannedError {
+                    error: TransActError::ParseError(format!("Expected multiplication operator")),
+                    span: Some(span),
+                }])
             }
-            _ => return Err(vec![SpannedError { 
-                error: TransActError::ParseError(format!("Expected multiplication operator")),
-                span: Some(span)
-            }]),
         };
-        
+
         left = Spanned {
             node: ExpressionKind::BinaryOp {
                 left: Box::new(left),
@@ -583,7 +680,7 @@ fn parse_multiplication(pair: Pair<Rule>) -> Result<Expression, Vec<SpannedError
             span: span.clone(),
         };
     }
-    
+
     Ok(left)
 }
 
@@ -591,20 +688,25 @@ fn parse_unary(pair: Pair<Rule>) -> Result<Expression, Vec<SpannedError>> {
     let span = Span::from_pest(pair.as_span());
     let mut inner = pair.into_inner();
     let first = inner.next().unwrap();
-    
+
     if first.as_rule() == Rule::unary_op {
         let op_str = first.as_str();
         let operand = parse_expression(inner.next().unwrap())?;
         let op = match op_str {
             "!" => UnaryOp::Not,
             "-" => UnaryOp::Neg,
-            _ => return Err(vec![SpannedError { 
-                error: TransActError::ParseError(format!("Unknown unary op: {}", op_str)),
-                span: Some(span)
-            }]),
+            _ => {
+                return Err(vec![SpannedError {
+                    error: TransActError::ParseError(format!("Unknown unary op: {}", op_str)),
+                    span: Some(span),
+                }])
+            }
         };
         Ok(Spanned {
-            node: ExpressionKind::UnaryOp { op, expr: Box::new(operand) },
+            node: ExpressionKind::UnaryOp {
+                op,
+                expr: Box::new(operand),
+            },
             span,
         })
     } else {
@@ -615,7 +717,7 @@ fn parse_unary(pair: Pair<Rule>) -> Result<Expression, Vec<SpannedError>> {
 fn parse_primary(pair: Pair<Rule>) -> Result<Expression, Vec<SpannedError>> {
     let span = Span::from_pest(pair.as_span());
     let inner = pair.into_inner().next().unwrap();
-    
+
     match inner.as_rule() {
         Rule::bool_literal => parse_bool_literal(inner),
         Rule::table_field_access => parse_table_field_access(inner),
@@ -624,12 +726,13 @@ fn parse_primary(pair: Pair<Rule>) -> Result<Expression, Vec<SpannedError>> {
         Rule::string_literal => parse_string_literal(inner),
         Rule::identifier => parse_identifier_expr(inner),
         Rule::expression => parse_expression(inner),
-        _ => {
-            Err(vec![SpannedError {
-                error: TransActError::ParseError(format!("Unknown primary expression: {:?}", inner.as_rule())),
-                span: Some(span),
-            }])
-        }
+        _ => Err(vec![SpannedError {
+            error: TransActError::ParseError(format!(
+                "Unknown primary expression: {:?}",
+                inner.as_rule()
+            )),
+            span: Some(span),
+        }]),
     }
 }
 
@@ -645,16 +748,19 @@ fn parse_bool_literal(pair: Pair<Rule>) -> Result<Expression, Vec<SpannedError>>
 fn parse_table_field_access(pair: Pair<Rule>) -> Result<Expression, Vec<SpannedError>> {
     let span = Span::from_pest(pair.as_span());
     let mut inner = pair.into_inner();
-    
+
     let table_name = parse_identifier(inner.next().unwrap())?;
     let pk_column = parse_identifier(inner.next().unwrap())?;
     let pk_expr = Box::new(parse_expression(inner.next().unwrap())?);
     let field_name = parse_identifier(inner.next().unwrap())?;
-    
+
     // Create dummy references - will be resolved in semantic analysis
     let dummy_table = Rc::new(TableDeclaration {
         name: table_name.clone(),
-        node: Rc::new(NodeDef { name: "unknown".to_string(), span: Span::default() }),
+        node: Rc::new(NodeDef {
+            name: "unknown".to_string(),
+            span: Span::default(),
+        }),
         fields: Vec::new(),
         primary_key: Rc::new(FieldDeclaration {
             field_type: TypeName::Int,
@@ -664,21 +770,21 @@ fn parse_table_field_access(pair: Pair<Rule>) -> Result<Expression, Vec<SpannedE
         }),
         span: Span::default(),
     });
-    
+
     let dummy_pk_field = Rc::new(FieldDeclaration {
         field_type: TypeName::Int,
         field_name: pk_column,
         is_primary: true,
         span: Span::default(),
     });
-    
+
     let dummy_field = Rc::new(FieldDeclaration {
         field_type: TypeName::Int,
         field_name: field_name,
         is_primary: false,
         span: Span::default(),
     });
-    
+
     Ok(Spanned {
         node: ExpressionKind::TableFieldAccess {
             table: dummy_table,
@@ -692,10 +798,12 @@ fn parse_table_field_access(pair: Pair<Rule>) -> Result<Expression, Vec<SpannedE
 
 fn parse_float_literal(pair: Pair<Rule>) -> Result<Expression, Vec<SpannedError>> {
     let span = Span::from_pest(pair.as_span());
-    let value = pair.as_str().parse().map_err(|_| vec![SpannedError {
-        error: TransActError::ParseError(format!("Invalid float: {}", pair.as_str())),
-        span: Some(span.clone()),
-    }])?;
+    let value = pair.as_str().parse().map_err(|_| {
+        vec![SpannedError {
+            error: TransActError::ParseError(format!("Invalid float: {}", pair.as_str())),
+            span: Some(span.clone()),
+        }]
+    })?;
     Ok(Spanned {
         node: ExpressionKind::FloatLit(value),
         span,
@@ -704,10 +812,12 @@ fn parse_float_literal(pair: Pair<Rule>) -> Result<Expression, Vec<SpannedError>
 
 fn parse_integer_literal(pair: Pair<Rule>) -> Result<Expression, Vec<SpannedError>> {
     let span = Span::from_pest(pair.as_span());
-    let value = pair.as_str().parse().map_err(|_| vec![SpannedError {
-        error: TransActError::ParseError(format!("Invalid integer: {}", pair.as_str())),
-        span: Some(span.clone()),
-    }])?;
+    let value = pair.as_str().parse().map_err(|_| {
+        vec![SpannedError {
+            error: TransActError::ParseError(format!("Invalid integer: {}", pair.as_str())),
+            span: Some(span.clone()),
+        }]
+    })?;
     Ok(Spanned {
         node: ExpressionKind::IntLit(value),
         span,
@@ -718,7 +828,7 @@ fn parse_string_literal(pair: Pair<Rule>) -> Result<Expression, Vec<SpannedError
     let span = Span::from_pest(pair.as_span());
     let s = pair.as_str();
     let content = if s.len() >= 2 {
-        s[1..s.len()-1].to_string()
+        s[1..s.len() - 1].to_string()
     } else {
         String::new()
     };
@@ -749,10 +859,10 @@ fn parse_type_name(pair: Pair<Rule>) -> Result<TypeName, Vec<SpannedError>> {
         "float" => Ok(TypeName::Float),
         "string" => Ok(TypeName::String),
         "bool" => Ok(TypeName::Bool),
-        _ => Err(vec![SpannedError { 
-            error: TransActError::ParseError(format!("Unknown type: {}", pair.as_str())), 
-            span: Some(Span::from_pest(pair.as_span())) 
-        }])
+        _ => Err(vec![SpannedError {
+            error: TransActError::ParseError(format!("Unknown type: {}", pair.as_str())),
+            span: Some(Span::from_pest(pair.as_span())),
+        }]),
     }
 }
 
@@ -764,16 +874,19 @@ fn parse_ret_type(pair: Pair<Rule>) -> Result<ReturnType, Vec<SpannedError>> {
 }
 
 // Helper function for binary expressions with simple operators
-fn parse_binary_expr(pair: Pair<Rule>, default_op: BinaryOp) -> Result<Expression, Vec<SpannedError>> {
+fn parse_binary_expr(
+    pair: Pair<Rule>,
+    default_op: BinaryOp,
+) -> Result<Expression, Vec<SpannedError>> {
     let span = Span::from_pest(pair.as_span());
     let mut inner = pair.into_inner();
-    
+
     let mut left = parse_expression(inner.next().unwrap())?;
-    
+
     while inner.peek().is_some() {
         let _op_pair = inner.next().unwrap(); // Skip operator for now, use default
         let right = parse_expression(inner.next().unwrap())?;
-        
+
         left = Spanned {
             node: ExpressionKind::BinaryOp {
                 left: Box::new(left),
@@ -783,6 +896,6 @@ fn parse_binary_expr(pair: Pair<Rule>, default_op: BinaryOp) -> Result<Expressio
             span: span.clone(),
         };
     }
-    
+
     Ok(left)
 }
