@@ -25,8 +25,11 @@ pub enum TransActError {
     InvalidCondition(TypeName),
     ReturnTypeMismatch { expected: ReturnType, found: Option<TypeName> },
     ReturnInVoidFunction,
+    UnexpectedReturnValue,  // NEW: Add this variant
+    MissingReturnValue,     // NEW: Add this variant
     MissingReturn(String),
     CrossNodeAccess { table: String, table_node: String, current_node: String },
+    AbortNotInFirstHop { function: String, hop_index: usize },
 }
 
 pub type Results<T> = std::result::Result<T, Vec<SpannedError>>;
@@ -55,9 +58,13 @@ impl std::fmt::Display for TransActError {
             Self::ReturnTypeMismatch { expected, found } => 
                 write!(f, "Return type mismatch: expected {:?}, found {:?}", expected, found),
             Self::ReturnInVoidFunction => write!(f, "Return value in void function"),
+            Self::UnexpectedReturnValue => write!(f, "Unexpected return value in void function"), // NEW
+            Self::MissingReturnValue => write!(f, "Missing return value in non-void function"),   // NEW
             Self::MissingReturn(func) => write!(f, "Missing return statement in function '{}'", func),
             Self::CrossNodeAccess { table, table_node, current_node } => 
                 write!(f, "Cannot access table '{}' (on '{}') from node '{}'", table, table_node, current_node),
+            Self::AbortNotInFirstHop { function, hop_index } => 
+                write!(f, "Abort statement in function '{}' can only appear in first hop (found in hop {})", function, hop_index),
         }
     }
 }
