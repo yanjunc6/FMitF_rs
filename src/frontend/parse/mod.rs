@@ -329,36 +329,44 @@ fn parse_assignment_statement(pair: Pair<Rule>, table_map: &HashMap<String, Rc<T
     let field_name = parse_identifier(inner.next().unwrap())?;
     let rhs = parse_expression(inner.next().unwrap())?;
 
-    let table = table_map.get(&table_name)
-        .ok_or_else(|| vec![SpannedError { 
-            error: TransActError::UndeclaredTable(table_name.clone()), 
-            span: None 
-        }])?
-        .clone();
+    // Create dummy references - will be resolved in semantic analysis
+    let dummy_table = if let Some(real_table) = table_map.get(&table_name) {
+        real_table.clone()
+    } else {
+        // Create a dummy table for now - semantic analysis will catch undeclared tables
+        Rc::new(TableDeclaration {
+            name: table_name.clone(),
+            node: Rc::new(NodeDef { name: "unknown".to_string(), span: Span::default() }),
+            fields: Vec::new(),
+            primary_key: Rc::new(FieldDeclaration {
+                field_type: TypeName::Int,
+                field_name: "dummy".to_string(),
+                is_primary: true,
+                span: Span::default(),
+            }),
+            span: Span::default(),
+        })
+    };
 
-    // Find the primary key field
-    let pk_field = table.fields.iter()
-        .find(|f| f.field_name == pk_column && f.is_primary)
-        .ok_or_else(|| vec![SpannedError { 
-            error: TransActError::ParseError(format!("Field {} is not the primary key of table {}", pk_column, table_name)), 
-            span: None 
-        }])?
-        .clone();
+    let dummy_pk_field = Rc::new(FieldDeclaration {
+        field_type: TypeName::Int,
+        field_name: pk_column,
+        is_primary: true,
+        span: Span::default(),
+    });
 
-    // Find the field being assigned
-    let field = table.fields.iter()
-        .find(|f| f.field_name == field_name)
-        .ok_or_else(|| vec![SpannedError { 
-            error: TransActError::ParseError(format!("Field {} not found in table {}", field_name, table_name)), 
-            span: None 
-        }])?
-        .clone();
+    let dummy_field = Rc::new(FieldDeclaration {
+        field_type: TypeName::Int,
+        field_name: field_name,
+        is_primary: false,
+        span: Span::default(),
+    });
 
     Ok(AssignmentStatement { 
-        table, 
-        pk_field: Rc::new(pk_field),
+        table: dummy_table,
+        pk_field: dummy_pk_field,
         pk_expr, 
-        field: Rc::new(field),
+        field: dummy_field,
         rhs 
     })
 }

@@ -20,7 +20,7 @@ void transaction1(int id) {
 
 void transaction2(int id) {
     hop on NodeA {
-        Data[id: id].value = Data[id: id].value - 1;
+        Data[value: id].id = Data[id: id].value - 1;
     }
     hop on NodeA {
         int result = Data[id: id].value;
