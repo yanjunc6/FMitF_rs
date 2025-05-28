@@ -181,7 +181,7 @@ impl<'a> Printer<'a> {
         }
     }
 
-    fn print_functions(&self, functions: &[FunctionDeclaration]) {
+    fn print_functions(&self, functions: &[Rc<FunctionDeclaration>]) {
         println!("{}functions[{}]", self.indent(), functions.len());
         for (i, func) in functions.iter().enumerate() {
             println!(
