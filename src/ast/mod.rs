@@ -43,16 +43,15 @@ pub type Statement = Spanned<StatementKind>;
 pub struct Program {
     pub nodes: Vec<Rc<NodeDef>>,
     pub tables: Vec<Rc<TableDeclaration>>,
-    pub functions: Vec<FunctionDeclaration>,
+    pub functions: Vec<Rc<FunctionDeclaration>>,
 }
 
-#[derive(Debug, Clone)]
-pub struct NodeDef {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]pub struct NodeDef {
     pub name: String,
     pub span: Span,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TableDeclaration {
     pub name: String,
     pub node: Rc<NodeDef>,
@@ -61,7 +60,7 @@ pub struct TableDeclaration {
     pub span: Span,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FieldDeclaration {
     pub field_type: TypeName,
     pub field_name: String,
@@ -69,7 +68,7 @@ pub struct FieldDeclaration {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeName {
     Int,
     Float,

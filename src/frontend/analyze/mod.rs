@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 pub struct SemanticAnalyzer {
     errors: Vec<SpannedError>,
-    functions: HashMap<String, FunctionDeclaration>,
+    functions: HashMap<String, Rc<FunctionDeclaration>>, // Changed to Rc
     tables: HashMap<String, Rc<TableDeclaration>>,
     nodes: HashMap<String, Rc<NodeDef>>,
     // Current context
@@ -60,18 +60,18 @@ impl SemanticAnalyzer {
                     TransActError::DuplicateFunction(func.name.clone()),
                 );
             } else {
-                self.functions.insert(func.name.clone(), func.clone());
+                self.functions.insert(func.name.clone(), func.clone()); // Clone the Rc
             }
         }
     }
 
     fn check_functions(&mut self, program: &Program) {
         for func in &program.functions {
-            self.check_function(func);
+            self.check_function(func); // func is now &Rc<FunctionDeclaration>
         }
     }
 
-    fn check_function(&mut self, func: &FunctionDeclaration) {
+    fn check_function(&mut self, func: &FunctionDeclaration) { // Keep the same signature
         self.return_type = Some(func.return_type.clone());
         self.has_return = false;
         self.parameters.clear();

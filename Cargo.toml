@@ -8,3 +8,4 @@ pest = "2.8.0"
 pest_derive = "2.8.0"
 petgraph = "0.8"
 clap = { version = "4", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }

@@ -34,7 +34,7 @@ pub fn parse_program(source: &str) -> Results<Program> {
 fn parse_program_rule(pair: Pair<Rule>) -> Results<Program> {
     let mut nodes = Vec::new();
     let mut tables = Vec::new();
-    let mut functions = Vec::new();
+    let mut functions = Vec::new(); // Still Vec<FunctionDeclaration> temporarily
     let mut node_map = HashMap::new();
     let mut table_map = HashMap::new();
     let mut errors = Vec::new();
@@ -74,7 +74,7 @@ fn parse_program_rule(pair: Pair<Rule>) -> Results<Program> {
         Ok(Program {
             nodes,
             tables,
-            functions,
+            functions: functions.into_iter().map(Rc::new).collect(), // Convert to Vec<Rc<FunctionDeclaration>>
         })
     } else {
         Err(errors)
