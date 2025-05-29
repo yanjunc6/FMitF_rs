@@ -56,6 +56,8 @@ pub enum TransActError {
         function: String,
         hop_index: usize,
     },
+    BreakOutsideLoop, // NEW: Add this variant
+    ContinueOutsideLoop, // NEW: Add this variant
 }
 
 pub type Results<T> = std::result::Result<T, Vec<SpannedError>>;
@@ -91,6 +93,8 @@ impl std::fmt::Display for TransActError {
                 write!(f, "Cannot access table '{}' (on '{}') from node '{}'", table, table_node, current_node),
             Self::AbortNotInFirstHop { function, hop_index } =>
                 write!(f, "Abort statement in function '{}' can only appear in first hop (found in hop {})", function, hop_index),
+            Self::BreakOutsideLoop => write!(f, "'break' statement outside of a loop"), // NEW
+            Self::ContinueOutsideLoop => write!(f, "'continue' statement outside of a loop"), // NEW
         }
     }
 }

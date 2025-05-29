@@ -331,8 +331,11 @@ fn parse_statement(
             StatementKind::Assignment(parse_assignment_statement(inner, table_map)?)
         }
         Rule::if_statement => StatementKind::IfStmt(parse_if_statement(inner, table_map)?),
+        Rule::while_statement => StatementKind::WhileStmt(parse_while_statement(inner, table_map)?),
         Rule::return_statement => StatementKind::Return(parse_return_statement(inner)?),
         Rule::abort_statement => StatementKind::Abort(parse_abort_statement(inner)?),
+        Rule::break_statement => StatementKind::Break(parse_break_statement(inner)?), // NEW: Add break
+        Rule::continue_statement => StatementKind::Continue(parse_continue_statement(inner)?), // NEW: Add continue
         Rule::empty_statement => StatementKind::Empty,
         _ => {
             return Err(vec![SpannedError {
@@ -460,6 +463,17 @@ fn parse_if_statement(
     })
 }
 
+fn parse_while_statement(
+    pair: Pair<Rule>,
+    table_map: &HashMap<String, Rc<TableDeclaration>>,
+) -> Result<WhileStatement, Vec<SpannedError>> {
+    let mut inner = pair.into_inner();
+    let condition = parse_expression(inner.next().unwrap())?;
+    let body = parse_block(inner.next().unwrap(), table_map)?;
+
+    Ok(WhileStatement { condition, body })
+}
+
 fn parse_return_statement(pair: Pair<Rule>) -> Result<ReturnStatement, Vec<SpannedError>> {
     let mut inner = pair.into_inner();
     let value = if let Some(expr_pair) = inner.next() {
@@ -473,6 +487,14 @@ fn parse_return_statement(pair: Pair<Rule>) -> Result<ReturnStatement, Vec<Spann
 
 fn parse_abort_statement(_pair: Pair<Rule>) -> Result<AbortStatement, Vec<SpannedError>> {
     Ok(AbortStatement {})
+}
+
+fn parse_break_statement(_pair: Pair<Rule>) -> Result<BreakStatement, Vec<SpannedError>> {
+    Ok(BreakStatement {})
+}
+
+fn parse_continue_statement(_pair: Pair<Rule>) -> Result<ContinueStatement, Vec<SpannedError>> {
+    Ok(ContinueStatement {})
 }
 
 fn parse_expression(pair: Pair<Rule>) -> Result<Expression, Vec<SpannedError>> {
