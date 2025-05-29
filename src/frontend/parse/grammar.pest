@@ -73,14 +73,14 @@ hop_block = {
 
 statement = {
     var_decl_statement
-  | var_assignment_statement // NEW: Add variable assignment
-
-  | assignment_statement // Table assignment (existing)
-
+  | var_assignment_statement
+  | assignment_statement
   | if_statement
+  | while_statement
   | return_statement
-  | abort_statement // NEW: Add abort statement
-
+  | abort_statement
+  | break_statement // NEW: Add break statement
+  | continue_statement // NEW: Add continue statement
   | empty_statement
 }
 
@@ -104,8 +104,20 @@ abort_statement = {
     "abort" ~ ";"
 }
 
+break_statement = { // NEW: Define break statement
+    "break" ~ ";"
+}
+
+continue_statement = { // NEW: Define continue statement
+    "continue" ~ ";"
+}
+
 if_statement = {
     "if" ~ "(" ~ expression ~ ")" ~ block ~ ("else" ~ block)?
+}
+
+while_statement = {
+    "while" ~ "(" ~ expression ~ ")" ~ block
 }
 
 block = {

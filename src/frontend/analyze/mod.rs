@@ -15,6 +15,7 @@ pub struct SemanticAnalyzer {
     return_type: Option<ReturnType>,
     has_return: bool,
     current_node: Option<String>,
+    in_loop: bool, // NEW: Track if inside a loop
 }
 
 impl SemanticAnalyzer {
@@ -30,6 +31,7 @@ impl SemanticAnalyzer {
             return_type: None,
             has_return: false,
             current_node: None,
+            in_loop: false, // NEW: Initialize in_loop
         }
     }
 
@@ -122,11 +124,16 @@ impl SemanticAnalyzer {
             StatementKind::IfStmt(i) => {
                 self.check_if_statement(i, &stmt.span, hop_index, function_name)
             }
+            StatementKind::WhileStmt(w) => {
+                self.check_while_statement(w, &stmt.span, hop_index, function_name)
+            }
             StatementKind::VarDecl(v) => self.check_var_decl(v, &stmt.span),
             StatementKind::Return(r) => self.check_return_statement(r, &stmt.span),
             StatementKind::Abort(_) => {
                 self.check_abort_statement(&stmt.span, hop_index, function_name)
             }
+            StatementKind::Break(_) => self.check_break_statement(&stmt.span), // NEW: Add break
+            StatementKind::Continue(_) => self.check_continue_statement(&stmt.span), // NEW: Add continue
             StatementKind::Empty => {}
         }
     }
@@ -146,7 +153,7 @@ impl SemanticAnalyzer {
     fn check_if_statement(
         &mut self,
         if_stmt: &IfStatement,
-        _span: &Span,
+        _span: &Span, // _span is for the whole if statement, condition has its own span
         hop_index: usize,
         function_name: &str,
     ) {
@@ -167,6 +174,42 @@ impl SemanticAnalyzer {
             for stmt in else_branch {
                 self.check_statement(stmt, hop_index, function_name);
             }
+        }
+    }
+
+    fn check_while_statement(
+        &mut self,
+        while_stmt: &WhileStatement,
+        _span: &Span, // _span is for the whole while statement
+        hop_index: usize,
+        function_name: &str,
+    ) {
+        if let Some(cond_type) = self.check_expression(&while_stmt.condition) {
+            if cond_type != TypeName::Bool {
+                self.error_at(
+                    &while_stmt.condition.span, // Use condition's span for more precise error
+                    TransActError::InvalidCondition(cond_type),
+                );
+            }
+        }
+
+        let previous_in_loop = self.in_loop; // Save previous state
+        self.in_loop = true; // Set in_loop to true
+        for stmt in &while_stmt.body {
+            self.check_statement(stmt, hop_index, function_name);
+        }
+        self.in_loop = previous_in_loop; // Restore previous state
+    }
+
+    fn check_break_statement(&mut self, span: &Span) {
+        if !self.in_loop {
+            self.error_at(span, TransActError::BreakOutsideLoop);
+        }
+    }
+
+    fn check_continue_statement(&mut self, span: &Span) {
+        if !self.in_loop {
+            self.error_at(span, TransActError::ContinueOutsideLoop);
         }
     }
 

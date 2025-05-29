@@ -4,12 +4,12 @@ nodes {
 }
 
 table Users on NodeA {
-    int userID;
+    primary int userID;
     float balance;
 }
 
 table Orders on NodeB {
-    int orderID;
+    primary int orderID;
     float amount;
 }
 

@@ -110,9 +110,12 @@ pub enum StatementKind {
     Assignment(AssignmentStatement),
     VarAssignment(VarAssignmentStatement),
     IfStmt(IfStatement),
+    WhileStmt(WhileStatement),
     VarDecl(VarDeclStatement),
     Return(ReturnStatement),
     Abort(AbortStatement),
+    Break(BreakStatement), // NEW: Add Break
+    Continue(ContinueStatement), // NEW: Add Continue
     Empty,
 }
 
@@ -139,6 +142,12 @@ pub struct IfStatement {
 }
 
 #[derive(Debug, Clone)]
+pub struct WhileStatement {
+    pub condition: Expression,
+    pub body: Vec<Statement>,
+}
+
+#[derive(Debug, Clone)]
 pub struct VarDeclStatement {
     pub var_type: TypeName,
     pub var_name: String,
@@ -155,6 +164,12 @@ pub struct ReturnStatement {
 pub struct AbortStatement {
     // Simple abort statement with no condition
 }
+
+#[derive(Debug, Clone)] // NEW: Add BreakStatement struct
+pub struct BreakStatement;
+
+#[derive(Debug, Clone)] // NEW: Add ContinueStatement struct
+pub struct ContinueStatement;
 
 #[derive(Debug, Clone)]
 pub enum ExpressionKind {

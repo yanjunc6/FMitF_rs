@@ -368,6 +368,36 @@ impl<'a> Printer<'a> {
                     None => println!("{}None", self.with_depth(self.depth + 2).indent()),
                 }
             }
+            StatementKind::WhileStmt(w) => { // NEW: Add WhileStmt printing
+                println!(
+                    "{}[{}] WhileStatement{}",
+                    self.indent(),
+                    index,
+                    self.span(&stmt.span)
+                );
+                println!("{}condition:", self.with_depth(self.depth + 1).indent());
+                self.with_depth(self.depth + 2)
+                    .print_expression(&w.condition);
+                println!("{}body:", self.with_depth(self.depth + 1).indent());
+                self.with_depth(self.depth + 2)
+                    .print_statements(&w.body);
+            }
+            StatementKind::Break(_) => { // NEW: Add BreakStatement printing
+                println!(
+                    "{}[{}] BreakStatement{}",
+                    self.indent(),
+                    index,
+                    self.span(&stmt.span)
+                );
+            }
+            StatementKind::Continue(_) => { // NEW: Add ContinueStatement printing
+                println!(
+                    "{}[{}] ContinueStatement{}",
+                    self.indent(),
+                    index,
+                    self.span(&stmt.span)
+                );
+            }
             StatementKind::Empty => {
                 println!(
                     "{}[{}] Empty{}",
