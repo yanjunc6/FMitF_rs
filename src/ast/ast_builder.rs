@@ -1,10 +1,10 @@
-use pest::iterators::Pair;
 use id_arena::Arena;
-use std::collections::HashMap;
+use pest::iterators::Pair;
 use pest::Parser;
+use std::collections::HashMap;
 
-use crate::ast::*;
 use crate::ast::errors::*;
+use crate::ast::*;
 
 // Add the grammar rule enum
 #[derive(pest_derive::Parser)]
@@ -101,10 +101,13 @@ impl AstBuilder {
             if node_pair.as_rule() == Rule::identifier {
                 let name = node_pair.as_str().to_string();
                 let span = Span::from_pest(node_pair.as_span());
-                
-                let node = NodeDef { name: name.clone(), span };
+
+                let node = NodeDef {
+                    name: name.clone(),
+                    span,
+                };
                 let node_id = self.program.nodes.alloc(node);
-                
+
                 self.program.node_map.insert(name, node_id);
                 self.program.root_nodes.push(node_id);
             }
@@ -119,7 +122,9 @@ impl AstBuilder {
         let table_name = inner.next().unwrap().as_str().to_string();
         let node_name = inner.next().unwrap().as_str().to_string();
 
-        let node_id = self.program.node_map
+        let node_id = self
+            .program
+            .node_map
             .get(&node_name)
             .copied()
             .ok_or_else(|| {
@@ -136,7 +141,7 @@ impl AstBuilder {
             if field_pair.as_rule() == Rule::field_declaration {
                 let (field_id, is_primary) = self.build_field_declaration(field_pair)?;
                 field_ids.push(field_id);
-                
+
                 if is_primary {
                     if primary_key_id.is_some() {
                         return Err(vec![SpannedError {
@@ -173,11 +178,14 @@ impl AstBuilder {
         let table_id = self.program.tables.alloc(table);
         self.program.table_map.insert(table_name, table_id);
         self.program.root_tables.push(table_id);
-        
+
         Ok(())
     }
 
-    fn build_field_declaration(&mut self, pair: Pair<Rule>) -> Result<(FieldId, bool), Vec<SpannedError>> {
+    fn build_field_declaration(
+        &mut self,
+        pair: Pair<Rule>,
+    ) -> Result<(FieldId, bool), Vec<SpannedError>> {
         let span = Span::from_pest(pair.as_span());
         let mut inner = pair.into_inner();
 
@@ -240,11 +248,14 @@ impl AstBuilder {
         let function_id = self.program.functions.alloc(function);
         self.program.function_map.insert(name, function_id);
         self.program.root_functions.push(function_id);
-        
+
         Ok(())
     }
 
-    fn build_parameter_list(&mut self, pair: Pair<Rule>) -> Result<Vec<ParameterId>, Vec<SpannedError>> {
+    fn build_parameter_list(
+        &mut self,
+        pair: Pair<Rule>,
+    ) -> Result<Vec<ParameterId>, Vec<SpannedError>> {
         let mut parameter_ids = Vec::new();
         for param_pair in pair.into_inner() {
             if param_pair.as_rule() == Rule::parameter_decl {
@@ -276,15 +287,6 @@ impl AstBuilder {
         let mut inner = pair.into_inner();
 
         let node_name = inner.next().unwrap().as_str().to_string();
-        let node_id = self.program.node_map
-            .get(&node_name)
-            .copied()
-            .ok_or_else(|| {
-                vec![SpannedError {
-                    error: AstError::UndeclaredNode(node_name),
-                    span: Some(span.clone()),
-                }]
-            })?;
 
         let mut statement_ids = Vec::new();
         for item in inner {
@@ -294,9 +296,10 @@ impl AstBuilder {
         }
 
         let hop = HopBlock {
-            node: node_id,
+            node_name,
             statements: statement_ids,
             span,
+            resolved_node: None,
         };
 
         Ok(self.program.hops.alloc(hop))
@@ -318,7 +321,9 @@ impl AstBuilder {
         let inner = pair.into_inner().next().unwrap();
 
         let kind = match inner.as_rule() {
-            Rule::var_decl_statement => StatementKind::VarDecl(self.build_var_decl_statement(inner)?),
+            Rule::var_decl_statement => {
+                StatementKind::VarDecl(self.build_var_decl_statement(inner)?)
+            }
             Rule::var_assignment_statement => {
                 StatementKind::VarAssignment(self.build_var_assignment_statement(inner)?)
             }
@@ -347,11 +352,15 @@ impl AstBuilder {
         Ok(self.program.statements.alloc(statement))
     }
 
-    fn build_var_decl_statement(&mut self, pair: Pair<Rule>) -> Result<VarDeclStatement, Vec<SpannedError>> {
+    fn build_var_decl_statement(
+        &mut self,
+        pair: Pair<Rule>,
+    ) -> Result<VarDeclStatement, Vec<SpannedError>> {
         let mut inner = pair.into_inner();
         let first = inner.next().unwrap();
 
-        let (is_global, var_type, var_name, init_value) = if first.as_rule() == Rule::global_keyword {
+        let (is_global, var_type, var_name, init_value) = if first.as_rule() == Rule::global_keyword
+        {
             let var_type = self.parse_type_name(inner.next().unwrap())?;
             let var_name = inner.next().unwrap().as_str().to_string();
             let init_value = self.build_expression(inner.next().unwrap())?;
@@ -371,66 +380,41 @@ impl AstBuilder {
         })
     }
 
-    fn build_var_assignment_statement(&mut self, pair: Pair<Rule>) -> Result<VarAssignmentStatement, Vec<SpannedError>> {
+    fn build_var_assignment_statement(
+        &mut self,
+        pair: Pair<Rule>,
+    ) -> Result<VarAssignmentStatement, Vec<SpannedError>> {
         let mut inner = pair.into_inner();
         let var_name = inner.next().unwrap().as_str().to_string();
         let rhs = self.build_expression(inner.next().unwrap())?;
 
-        Ok(VarAssignmentStatement { var_name, rhs, resolved_var: None })
+        Ok(VarAssignmentStatement {
+            var_name,
+            rhs,
+            resolved_var: None,
+        })
     }
 
-    fn build_assignment_statement(&mut self, pair: Pair<Rule>) -> Result<AssignmentStatement, Vec<SpannedError>> {
+    fn build_assignment_statement(
+        &mut self,
+        pair: Pair<Rule>,
+    ) -> Result<AssignmentStatement, Vec<SpannedError>> {
         let mut inner = pair.into_inner();
         let table_name = inner.next().unwrap().as_str().to_string();
-        let pk_column = inner.next().unwrap().as_str().to_string();
+        let pk_field_name = inner.next().unwrap().as_str().to_string();
         let pk_expr = self.build_expression(inner.next().unwrap())?;
         let field_name = inner.next().unwrap().as_str().to_string();
         let rhs = self.build_expression(inner.next().unwrap())?;
 
-        // For now, create dummy IDs - these will be resolved during semantic analysis
-        let dummy_table_id = self.program.table_map.get(&table_name).copied()
-            .unwrap_or_else(|| {
-                // Create a dummy table for semantic analysis to catch
-                let dummy_node = self.program.nodes.alloc(NodeDef {
-                    name: "unknown".to_string(),
-                    span: Span::default(),
-                });
-                let dummy_field = self.program.fields.alloc(FieldDeclaration {
-                    field_type: TypeName::Int,
-                    field_name: "dummy".to_string(),
-                    is_primary: true,
-                    span: Span::default(),
-                });
-                self.program.tables.alloc(TableDeclaration {
-                    name: table_name.clone(),
-                    node: dummy_node,
-                    fields: vec![dummy_field],
-                    primary_key: dummy_field,
-                    span: Span::default(),
-                })
-            });
-
-        // Create dummy field IDs - will be resolved in semantic analysis
-        let dummy_pk_field = self.program.fields.alloc(FieldDeclaration {
-            field_type: TypeName::Int,
-            field_name: pk_column,
-            is_primary: true,
-            span: Span::default(),
-        });
-
-        let dummy_field = self.program.fields.alloc(FieldDeclaration {
-            field_type: TypeName::Int,
-            field_name: field_name,
-            is_primary: false,
-            span: Span::default(),
-        });
-
         Ok(AssignmentStatement {
-            table: dummy_table_id,
-            pk_field: dummy_pk_field,
+            table_name,
+            pk_field_name,
             pk_expr,
-            field: dummy_field,
+            field_name,
             rhs,
+            resolved_table: None,
+            resolved_pk_field: None,
+            resolved_field: None,
         })
     }
 
@@ -451,7 +435,10 @@ impl AstBuilder {
         })
     }
 
-    fn build_while_statement(&mut self, pair: Pair<Rule>) -> Result<WhileStatement, Vec<SpannedError>> {
+    fn build_while_statement(
+        &mut self,
+        pair: Pair<Rule>,
+    ) -> Result<WhileStatement, Vec<SpannedError>> {
         let mut inner = pair.into_inner();
         let condition = self.build_expression(inner.next().unwrap())?;
         let body = self.build_block(inner.next().unwrap())?;
@@ -459,7 +446,10 @@ impl AstBuilder {
         Ok(WhileStatement { condition, body })
     }
 
-    fn build_return_statement(&mut self, pair: Pair<Rule>) -> Result<ReturnStatement, Vec<SpannedError>> {
+    fn build_return_statement(
+        &mut self,
+        pair: Pair<Rule>,
+    ) -> Result<ReturnStatement, Vec<SpannedError>> {
         let mut inner = pair.into_inner();
         let value = if let Some(expr_pair) = inner.next() {
             Some(self.build_expression(expr_pair)?)
@@ -472,7 +462,7 @@ impl AstBuilder {
 
     fn build_expression(&mut self, pair: Pair<Rule>) -> Result<ExpressionId, Vec<SpannedError>> {
         let span = Span::from_pest(pair.as_span());
-        
+
         let kind = match pair.as_rule() {
             Rule::expression => {
                 let inner = pair.into_inner().next().unwrap();
@@ -637,7 +627,10 @@ impl AstBuilder {
         Ok(left)
     }
 
-    fn build_multiplication(&mut self, pair: Pair<Rule>) -> Result<ExpressionId, Vec<SpannedError>> {
+    fn build_multiplication(
+        &mut self,
+        pair: Pair<Rule>,
+    ) -> Result<ExpressionId, Vec<SpannedError>> {
         let span = Span::from_pest(pair.as_span());
         let mut inner = pair.into_inner();
 
@@ -703,65 +696,39 @@ impl AstBuilder {
         self.build_expression(inner)
     }
 
-    fn build_table_field_access(&mut self, pair: Pair<Rule>) -> Result<ExpressionId, Vec<SpannedError>> {
+    fn build_table_field_access(
+        &mut self,
+        pair: Pair<Rule>,
+    ) -> Result<ExpressionId, Vec<SpannedError>> {
         let span = Span::from_pest(pair.as_span());
         let mut inner = pair.into_inner();
 
         let table_name = inner.next().unwrap().as_str().to_string();
-        let pk_column = inner.next().unwrap().as_str().to_string();
+        let pk_field_name = inner.next().unwrap().as_str().to_string();
         let pk_expr = self.build_expression(inner.next().unwrap())?;
         let field_name = inner.next().unwrap().as_str().to_string();
 
-        // Create dummy IDs - will be resolved during semantic analysis
-        let dummy_table_id = self.program.table_map.get(&table_name).copied()
-            .unwrap_or_else(|| {
-                let dummy_node = self.program.nodes.alloc(NodeDef {
-                    name: "unknown".to_string(),
-                    span: Span::default(),
-                });
-                let dummy_field = self.program.fields.alloc(FieldDeclaration {
-                    field_type: TypeName::Int,
-                    field_name: "dummy".to_string(),
-                    is_primary: true,
-                    span: Span::default(),
-                });
-                self.program.tables.alloc(TableDeclaration {
-                    name: table_name.clone(),
-                    node: dummy_node,
-                    fields: vec![dummy_field],
-                    primary_key: dummy_field,
-                    span: Span::default(),
-                })
-            });
-
-        let dummy_pk_field = self.program.fields.alloc(FieldDeclaration {
-            field_type: TypeName::Int,
-            field_name: pk_column,
-            is_primary: true,
-            span: Span::default(),
-        });
-
-        let dummy_field = self.program.fields.alloc(FieldDeclaration {
-            field_type: TypeName::Int,
-            field_name: field_name,
-            is_primary: false,
-            span: Span::default(),
-        });
-
         let expr = Expression {
             node: ExpressionKind::TableFieldAccess {
-                table: dummy_table_id,
-                pk_field: dummy_pk_field,
+                table_name,
+                pk_field_name,
                 pk_expr,
-                field: dummy_field,
+                field_name,
+                resolved_table: None,
+                resolved_pk_field: None,
+                resolved_field: None,
             },
             span,
         };
-        
+
         Ok(self.program.expressions.alloc(expr))
     }
 
-    fn build_binary_expr(&mut self, pair: Pair<Rule>, default_op: BinaryOp) -> Result<ExpressionId, Vec<SpannedError>> {
+    fn build_binary_expr(
+        &mut self,
+        pair: Pair<Rule>,
+        default_op: BinaryOp,
+    ) -> Result<ExpressionId, Vec<SpannedError>> {
         let span = Span::from_pest(pair.as_span());
         let mut inner = pair.into_inner();
 
@@ -807,7 +774,6 @@ impl AstBuilder {
     }
 }
 
-
 pub fn build_program_from_pair(pair: Pair<Rule>) -> Results<Program> {
     let mut builder = AstBuilder::new();
     builder.build_program(pair)
@@ -815,17 +781,19 @@ pub fn build_program_from_pair(pair: Pair<Rule>) -> Results<Program> {
 
 pub fn parse_and_build(source: &str) -> Results<Program> {
     // Parse using Pest
-    let pairs = TransActParser::parse(Rule::program, source)
-        .map_err(|e| vec![SpannedError {
+    let pairs = TransActParser::parse(Rule::program, source).map_err(|e| {
+        vec![SpannedError {
             error: AstError::ParseError(e.to_string()),
             span: None,
-        }])?;
+        }]
+    })?;
 
-    let program_pair = pairs.into_iter().next()
-        .ok_or_else(|| vec![SpannedError {
+    let program_pair = pairs.into_iter().next().ok_or_else(|| {
+        vec![SpannedError {
             error: AstError::ParseError("No program found".to_string()),
             span: None,
-        }])?;
+        }]
+    })?;
 
     // Build arena-based AST
     build_program_from_pair(program_pair)

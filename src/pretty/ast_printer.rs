@@ -28,24 +28,11 @@ pub fn print_program(program: &Program, opts: &PrintOptions) {
 struct Printer<'a> {
     opts: &'a PrintOptions,
     depth: usize,
-    program: Option<&'a Program>, // Store reference to program for ID lookups
 }
 
 impl<'a> Printer<'a> {
     fn new(opts: &'a PrintOptions) -> Self {
-        Self { 
-            opts, 
-            depth: 0,
-            program: None,
-        }
-    }
-
-    fn with_program(&self, program: &'a Program) -> Self {
-        Self {
-            opts: self.opts,
-            depth: self.depth,
-            program: Some(program),
-        }
+        Self { opts, depth: 0 }
     }
 
     fn indent(&self) -> String {
@@ -56,7 +43,6 @@ impl<'a> Printer<'a> {
         Self {
             opts: self.opts,
             depth,
-            program: self.program,
         }
     }
 
@@ -68,9 +54,7 @@ impl<'a> Printer<'a> {
         }
     }
 
-    fn print_program(&mut self, program: &'a Program) {
-        self.program = Some(program);
-        
+    fn print_program(&mut self, program: &Program) {
         match self.opts.mode {
             PrintMode::Summary => self.print_summary(program),
             PrintMode::Verbose => self.print_verbose(program),
@@ -81,7 +65,8 @@ impl<'a> Printer<'a> {
         println!("Program Summary:");
 
         // Print nodes
-        let nodes: Vec<&str> = program.root_nodes
+        let nodes: Vec<&str> = program
+            .root_nodes
             .iter()
             .map(|&node_id| program.nodes[node_id].name.as_str())
             .collect();
@@ -92,36 +77,38 @@ impl<'a> Printer<'a> {
         for &table_id in &program.root_tables {
             let table = &program.tables[table_id];
             let node_name = &program.nodes[table.node].name;
-            
-            let fields: Vec<String> = table.fields
+
+            let fields: Vec<String> = table
+                .fields
                 .iter()
                 .map(|&field_id| {
                     let field = &program.fields[field_id];
                     let prefix = if field.is_primary { "primary " } else { "" };
-                    format!("{}{}:{}", prefix, field.field_name, type_name(&field.field_type))
+                    format!(
+                        "{}{}:{}",
+                        prefix,
+                        field.field_name,
+                        type_name(&field.field_type)
+                    )
                 })
                 .collect();
-            
-            println!(
-                "    {} on {}: {}",
-                table.name,
-                node_name,
-                fields.join(", ")
-            );
+
+            println!("    {} on {}: {}", table.name, node_name, fields.join(", "));
         }
 
         // Print functions
         println!("  Functions:");
         for &func_id in &program.root_functions {
             let func = &program.functions[func_id];
-            let params: Vec<String> = func.parameters
+            let params: Vec<String> = func
+                .parameters
                 .iter()
                 .map(|&param_id| {
                     let param = &program.parameters[param_id];
                     format!("{}:{}", param.param_name, type_name(&param.param_type))
                 })
                 .collect();
-            
+
             println!(
                 "    {}({}) -> {}",
                 func.name,
@@ -162,7 +149,7 @@ impl<'a> Printer<'a> {
             let table = &program.tables[table_id];
             let node = &program.nodes[table.node];
             let primary_key_field = &program.fields[table.primary_key];
-            
+
             println!(
                 "{}[{}] TableDeclaration{}",
                 self.with_depth(self.depth + 1).indent(),
@@ -184,7 +171,8 @@ impl<'a> Printer<'a> {
                 self.with_depth(self.depth + 2).indent(),
                 primary_key_field.field_name
             );
-            self.with_depth(self.depth + 2).print_fields(program, &table.fields);
+            self.with_depth(self.depth + 2)
+                .print_fields(program, &table.fields);
         }
     }
 
@@ -217,7 +205,11 @@ impl<'a> Printer<'a> {
     }
 
     fn print_functions(&self, program: &Program) {
-        println!("{}functions[{}]", self.indent(), program.root_functions.len());
+        println!(
+            "{}functions[{}]",
+            self.indent(),
+            program.root_functions.len()
+        );
         for (i, &func_id) in program.root_functions.iter().enumerate() {
             let func = &program.functions[func_id];
             println!(
@@ -236,8 +228,10 @@ impl<'a> Printer<'a> {
                 self.with_depth(self.depth + 2).indent(),
                 func.name
             );
-            self.with_depth(self.depth + 2).print_parameters(program, &func.parameters);
-            self.with_depth(self.depth + 2).print_hops(program, &func.hops);
+            self.with_depth(self.depth + 2)
+                .print_parameters(program, &func.parameters);
+            self.with_depth(self.depth + 2)
+                .print_hops(program, &func.hops);
         }
     }
 
@@ -268,8 +262,7 @@ impl<'a> Printer<'a> {
         println!("{}hops[{}]", self.indent(), hop_ids.len());
         for (i, &hop_id) in hop_ids.iter().enumerate() {
             let hop = &program.hops[hop_id];
-            let node = &program.nodes[hop.node];
-            
+
             println!(
                 "{}[{}] HopBlock{}",
                 self.with_depth(self.depth + 1).indent(),
@@ -277,11 +270,29 @@ impl<'a> Printer<'a> {
                 self.span(&hop.span)
             );
             println!(
-                "{}node: {}",
+                "{}node_name: {}",
                 self.with_depth(self.depth + 2).indent(),
-                node.name
+                hop.node_name
             );
-            self.with_depth(self.depth + 2).print_statements(program, &hop.statements);
+
+            // Show resolved node information if available
+            if let Some(resolved_node) = hop.resolved_node {
+                let node = &program.nodes[resolved_node];
+                println!(
+                    "{}resolved_node: {} ({})",
+                    self.with_depth(self.depth + 2).indent(),
+                    node.name,
+                    resolved_node.index()
+                );
+            } else {
+                println!(
+                    "{}resolved_node: None",
+                    self.with_depth(self.depth + 2).indent()
+                );
+            }
+
+            self.with_depth(self.depth + 2)
+                .print_statements(program, &hop.statements);
         }
     }
 
@@ -289,7 +300,8 @@ impl<'a> Printer<'a> {
         println!("{}statements[{}]", self.indent(), stmt_ids.len());
         for (i, &stmt_id) in stmt_ids.iter().enumerate() {
             let stmt = &program.statements[stmt_id];
-            self.with_depth(self.depth + 1).print_statement_with_index(program, i, stmt);
+            self.with_depth(self.depth + 1)
+                .print_statement_with_index(program, i, stmt);
         }
     }
 
@@ -313,7 +325,8 @@ impl<'a> Printer<'a> {
                     v.var_name
                 );
                 println!("{}init_value:", self.with_depth(self.depth + 1).indent());
-                self.with_depth(self.depth + 2).print_expression(program, v.init_value);
+                self.with_depth(self.depth + 2)
+                    .print_expression(program, v.init_value);
                 println!(
                     "{}is_global: {}",
                     self.with_depth(self.depth + 1).indent(),
@@ -332,14 +345,29 @@ impl<'a> Printer<'a> {
                     self.with_depth(self.depth + 1).indent(),
                     v.var_name
                 );
+
+                // Show resolved variable information if available
+                if let Some(resolved_var) = v.resolved_var {
+                    let var = &program.variables[resolved_var];
+                    println!(
+                        "{}resolved_var: {} ({}) - {:?}",
+                        self.with_depth(self.depth + 1).indent(),
+                        var.name,
+                        resolved_var.index(),
+                        var.kind
+                    );
+                } else {
+                    println!(
+                        "{}resolved_var: None",
+                        self.with_depth(self.depth + 1).indent()
+                    );
+                }
+
                 println!("{}rhs:", self.with_depth(self.depth + 1).indent());
-                self.with_depth(self.depth + 2).print_expression(program, v.rhs);
+                self.with_depth(self.depth + 2)
+                    .print_expression(program, v.rhs);
             }
             StatementKind::Assignment(a) => {
-                let table = &program.tables[a.table];
-                let pk_field = &program.fields[a.pk_field];
-                let field = &program.fields[a.field];
-                
                 println!(
                     "{}[{}] AssignmentStatement{}",
                     self.indent(),
@@ -347,24 +375,73 @@ impl<'a> Printer<'a> {
                     self.span(&stmt.span)
                 );
                 println!(
-                    "{}table: {}",
+                    "{}table_name: {}",
                     self.with_depth(self.depth + 1).indent(),
-                    table.name
+                    a.table_name
                 );
                 println!(
-                    "{}pk_field: {}",
+                    "{}pk_field_name: {}",
                     self.with_depth(self.depth + 1).indent(),
-                    pk_field.field_name
+                    a.pk_field_name
                 );
+                println!(
+                    "{}field_name: {}",
+                    self.with_depth(self.depth + 1).indent(),
+                    a.field_name
+                );
+
+                // Show resolved information if available
+                if let Some(resolved_table) = a.resolved_table {
+                    let table = &program.tables[resolved_table];
+                    println!(
+                        "{}resolved_table: {} ({})",
+                        self.with_depth(self.depth + 1).indent(),
+                        table.name,
+                        resolved_table.index()
+                    );
+                } else {
+                    println!(
+                        "{}resolved_table: None",
+                        self.with_depth(self.depth + 1).indent()
+                    );
+                }
+
+                if let Some(resolved_pk_field) = a.resolved_pk_field {
+                    let pk_field = &program.fields[resolved_pk_field];
+                    println!(
+                        "{}resolved_pk_field: {} ({})",
+                        self.with_depth(self.depth + 1).indent(),
+                        pk_field.field_name,
+                        resolved_pk_field.index()
+                    );
+                } else {
+                    println!(
+                        "{}resolved_pk_field: None",
+                        self.with_depth(self.depth + 1).indent()
+                    );
+                }
+
+                if let Some(resolved_field) = a.resolved_field {
+                    let field = &program.fields[resolved_field];
+                    println!(
+                        "{}resolved_field: {} ({})",
+                        self.with_depth(self.depth + 1).indent(),
+                        field.field_name,
+                        resolved_field.index()
+                    );
+                } else {
+                    println!(
+                        "{}resolved_field: None",
+                        self.with_depth(self.depth + 1).indent()
+                    );
+                }
+
                 println!("{}pk_expr:", self.with_depth(self.depth + 1).indent());
-                self.with_depth(self.depth + 2).print_expression(program, a.pk_expr);
-                println!(
-                    "{}field: {}",
-                    self.with_depth(self.depth + 1).indent(),
-                    field.field_name
-                );
+                self.with_depth(self.depth + 2)
+                    .print_expression(program, a.pk_expr);
                 println!("{}rhs:", self.with_depth(self.depth + 1).indent());
-                self.with_depth(self.depth + 2).print_expression(program, a.rhs);
+                self.with_depth(self.depth + 2)
+                    .print_expression(program, a.rhs);
             }
             StatementKind::Return(r) => {
                 println!(
@@ -375,7 +452,9 @@ impl<'a> Printer<'a> {
                 );
                 println!("{}value:", self.with_depth(self.depth + 1).indent());
                 match &r.value {
-                    Some(expr_id) => self.with_depth(self.depth + 2).print_expression(program, *expr_id),
+                    Some(expr_id) => self
+                        .with_depth(self.depth + 2)
+                        .print_expression(program, *expr_id),
                     None => println!("{}None", self.with_depth(self.depth + 2).indent()),
                 }
             }
@@ -395,14 +474,16 @@ impl<'a> Printer<'a> {
                     self.span(&stmt.span)
                 );
                 println!("{}condition:", self.with_depth(self.depth + 1).indent());
-                self.with_depth(self.depth + 2).print_expression(program, i.condition);
+                self.with_depth(self.depth + 2)
+                    .print_expression(program, i.condition);
                 println!("{}then_branch:", self.with_depth(self.depth + 1).indent());
-                self.with_depth(self.depth + 2).print_statements(program, &i.then_branch);
+                self.with_depth(self.depth + 2)
+                    .print_statements(program, &i.then_branch);
                 println!("{}else_branch:", self.with_depth(self.depth + 1).indent());
                 match &i.else_branch {
-                    Some(else_stmts) => {
-                        self.with_depth(self.depth + 2).print_statements(program, else_stmts)
-                    }
+                    Some(else_stmts) => self
+                        .with_depth(self.depth + 2)
+                        .print_statements(program, else_stmts),
                     None => println!("{}None", self.with_depth(self.depth + 2).indent()),
                 }
             }
@@ -414,9 +495,11 @@ impl<'a> Printer<'a> {
                     self.span(&stmt.span)
                 );
                 println!("{}condition:", self.with_depth(self.depth + 1).indent());
-                self.with_depth(self.depth + 2).print_expression(program, w.condition);
+                self.with_depth(self.depth + 2)
+                    .print_expression(program, w.condition);
                 println!("{}body:", self.with_depth(self.depth + 1).indent());
-                self.with_depth(self.depth + 2).print_statements(program, &w.body);
+                self.with_depth(self.depth + 2)
+                    .print_statements(program, &w.body);
             }
             StatementKind::Break(_) => {
                 println!(
@@ -448,7 +531,8 @@ impl<'a> Printer<'a> {
     fn print_expression(&self, program: &Program, expr_id: ExpressionId) {
         let expr = &program.expressions[expr_id];
         println!("{}Expression{}", self.indent(), self.span(&expr.span));
-        self.with_depth(self.depth + 1).print_expression_kind(program, &expr.node);
+        self.with_depth(self.depth + 1)
+            .print_expression_kind(program, &expr.node);
     }
 
     fn print_expression_kind(&self, program: &Program, expr: &ExpressionKind) {
@@ -469,47 +553,97 @@ impl<'a> Printer<'a> {
                 println!("{}BoolLit {}", self.indent(), value);
             }
             ExpressionKind::TableFieldAccess {
-                table,
-                pk_field,
+                table_name,
+                pk_field_name,
                 pk_expr,
-                field,
+                field_name,
+                resolved_table,
+                resolved_pk_field,
+                resolved_field,
             } => {
-                let table_obj = &program.tables[*table];
-                let pk_field_obj = &program.fields[*pk_field];
-                let field_obj = &program.fields[*field];
-                
                 println!("{}TableFieldAccess", self.indent());
                 println!(
-                    "{}table: {}",
+                    "{}table_name: {}",
                     self.with_depth(self.depth + 1).indent(),
-                    table_obj.name
+                    table_name
                 );
                 println!(
-                    "{}pk_field: {}",
+                    "{}pk_field_name: {}",
                     self.with_depth(self.depth + 1).indent(),
-                    pk_field_obj.field_name
+                    pk_field_name
                 );
+                println!(
+                    "{}field_name: {}",
+                    self.with_depth(self.depth + 1).indent(),
+                    field_name
+                );
+
+                // Show resolved information if available
+                if let Some(resolved_table_id) = resolved_table {
+                    let table = &program.tables[*resolved_table_id];
+                    println!(
+                        "{}resolved_table: {} ({})",
+                        self.with_depth(self.depth + 1).indent(),
+                        table.name,
+                        resolved_table_id.index()
+                    );
+                } else {
+                    println!(
+                        "{}resolved_table: None",
+                        self.with_depth(self.depth + 1).indent()
+                    );
+                }
+
+                if let Some(resolved_pk_field_id) = resolved_pk_field {
+                    let pk_field = &program.fields[*resolved_pk_field_id];
+                    println!(
+                        "{}resolved_pk_field: {} ({})",
+                        self.with_depth(self.depth + 1).indent(),
+                        pk_field.field_name,
+                        resolved_pk_field_id.index()
+                    );
+                } else {
+                    println!(
+                        "{}resolved_pk_field: None",
+                        self.with_depth(self.depth + 1).indent()
+                    );
+                }
+
+                if let Some(resolved_field_id) = resolved_field {
+                    let field = &program.fields[*resolved_field_id];
+                    println!(
+                        "{}resolved_field: {} ({})",
+                        self.with_depth(self.depth + 1).indent(),
+                        field.field_name,
+                        resolved_field_id.index()
+                    );
+                } else {
+                    println!(
+                        "{}resolved_field: None",
+                        self.with_depth(self.depth + 1).indent()
+                    );
+                }
+
                 println!("{}pk_expr:", self.with_depth(self.depth + 1).indent());
-                self.with_depth(self.depth + 2).print_expression(program, *pk_expr);
-                println!(
-                    "{}field: {}",
-                    self.with_depth(self.depth + 1).indent(),
-                    field_obj.field_name
-                );
+                self.with_depth(self.depth + 2)
+                    .print_expression(program, *pk_expr);
             }
             ExpressionKind::UnaryOp { op, expr } => {
                 println!("{}UnaryOp", self.indent());
                 println!("{}op: {:?}", self.with_depth(self.depth + 1).indent(), op);
                 println!("{}expr:", self.with_depth(self.depth + 1).indent());
-                self.with_depth(self.depth + 2).print_expression(program, *expr);
+                self.with_depth(self.depth + 2)
+                    .print_expression(program, *expr);
             }
             ExpressionKind::BinaryOp { left, op, right } => {
                 println!("{}BinaryOp", self.indent());
                 println!("{}left:", self.with_depth(self.depth + 1).indent());
-                self.with_depth(self.depth + 2).print_expression(program, *left);
+                self.with_depth(self.depth + 2)
+                    .print_expression(program, *left);
                 println!("{}op: {:?}", self.with_depth(self.depth + 1).indent(), op);
                 println!("{}right:", self.with_depth(self.depth + 1).indent());
-                self.with_depth(self.depth + 2).print_expression(program, *right);
+                self.with_depth(self.depth + 2)
+                    .print_expression(program, *right);
             }
         }
     }

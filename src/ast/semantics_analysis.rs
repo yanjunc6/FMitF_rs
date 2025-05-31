@@ -3,7 +3,7 @@ use crate::ast::*;
 pub struct SemanticAnalyzer<'p> {
     program: &'p Program,
     errors: Vec<SpannedError>,
-    
+
     // Current context
     current_function: Option<FunctionId>,
     current_hop: Option<HopId>,
@@ -45,7 +45,7 @@ impl<'p> SemanticAnalyzer<'p> {
 
     fn check_function(&mut self, func_id: FunctionId) {
         let func = &self.program.functions[func_id];
-        
+
         self.current_function = Some(func_id);
         self.return_type = Some(func.return_type.clone());
         self.has_return = false;
@@ -65,9 +65,10 @@ impl<'p> SemanticAnalyzer<'p> {
 
     fn check_hop_block(&mut self, hop_id: HopId, hop_index: usize, function_name: &str) {
         let hop = &self.program.hops[hop_id];
-        
+
         self.current_hop = Some(hop_id);
-        self.current_node = Some(hop.node);
+        // Use resolved node ID from name resolution
+        self.current_node = hop.resolved_node;
 
         // Check each statement in the hop
         for stmt_id in &hop.statements {
@@ -80,7 +81,7 @@ impl<'p> SemanticAnalyzer<'p> {
 
     fn check_statement(&mut self, stmt_id: StatementId, hop_index: usize, function_name: &str) {
         let stmt = &self.program.statements[stmt_id];
-        
+
         match &stmt.node {
             StatementKind::Assignment(a) => self.check_assignment(a, &stmt.span),
             StatementKind::VarAssignment(a) => self.check_var_assignment(a, &stmt.span),
@@ -124,10 +125,7 @@ impl<'p> SemanticAnalyzer<'p> {
         if let Some(cond_type) = self.check_expression(if_stmt.condition) {
             if cond_type != TypeName::Bool {
                 let cond_expr = &self.program.expressions[if_stmt.condition];
-                self.error_at(
-                    &cond_expr.span,
-                    AstError::InvalidCondition(cond_type),
-                );
+                self.error_at(&cond_expr.span, AstError::InvalidCondition(cond_type));
             }
         }
 
@@ -155,22 +153,19 @@ impl<'p> SemanticAnalyzer<'p> {
         if let Some(cond_type) = self.check_expression(while_stmt.condition) {
             if cond_type != TypeName::Bool {
                 let cond_expr = &self.program.expressions[while_stmt.condition];
-                self.error_at(
-                    &cond_expr.span,
-                    AstError::InvalidCondition(cond_type),
-                );
+                self.error_at(&cond_expr.span, AstError::InvalidCondition(cond_type));
             }
         }
 
         // Set loop context
         let previous_in_loop = self.in_loop;
         self.in_loop = true;
-        
+
         // Check body
         for stmt_id in &while_stmt.body {
             self.check_statement(*stmt_id, hop_index, function_name);
         }
-        
+
         // Restore loop context
         self.in_loop = previous_in_loop;
     }
@@ -188,81 +183,75 @@ impl<'p> SemanticAnalyzer<'p> {
     }
 
     fn check_assignment(&mut self, assign: &AssignmentStatement, span: &Span) {
-        // Get the actual table
-        let table = &self.program.tables[assign.table];
-        
-        // Check cross-node access
-        if let Some(current_node_id) = self.current_node {
-            if table.node != current_node_id {
-                let current_node_name = &self.program.nodes[current_node_id].name;
-                let table_node_name = &self.program.nodes[table.node].name;
-                self.error_at(
-                    span,
-                    AstError::CrossNodeAccess {
-                        table: table.name.clone(),
-                        table_node: table_node_name.clone(),
-                        current_node: current_node_name.clone(),
-                    },
-                );
-                return;
-            }
-        }
-
-        // Check that pk_field is actually the primary key
-        let pk_field = &self.program.fields[assign.pk_field];
-        let primary_key_field = &self.program.fields[table.primary_key];
-        
-        if pk_field.field_name != primary_key_field.field_name {
-            self.error_at(
-                span,
-                AstError::InvalidPrimaryKey {
-                    table: table.name.clone(),
-                    column: pk_field.field_name.clone(),
-                },
-            );
-            return;
-        }
-
-        // Check primary key expression type
-        if let Some(pk_type) = self.check_expression(assign.pk_expr) {
-            if !self.types_compatible(&primary_key_field.field_type, &pk_type) {
-                self.error_at(
-                    span,
-                    AstError::TypeMismatch {
-                        expected: primary_key_field.field_type.clone(),
-                        found: pk_type,
-                    },
-                );
-            }
-        }
-
-        // Check the assigned field exists and type matches
-        let assigned_field = &self.program.fields[assign.field];
-        let field_exists = table.fields.iter().any(|&field_id| {
-            self.program.fields[field_id].field_name == assigned_field.field_name
+        // Use resolved IDs if available
+        let table_id = assign.resolved_table.ok_or_else(|| {
+            self.error_at(span, AstError::UndeclaredTable(assign.table_name.clone()));
         });
 
-        if !field_exists {
-            self.error_at(
-                span,
-                AstError::UndeclaredField {
-                    table: table.name.clone(),
-                    field: assigned_field.field_name.clone(),
-                },
-            );
-            return;
-        }
+        if let Ok(table_id) = table_id {
+            let table = &self.program.tables[table_id];
 
-        // Check RHS type
-        if let Some(rhs_type) = self.check_expression(assign.rhs) {
-            if !self.types_compatible(&assigned_field.field_type, &rhs_type) {
-                self.error_at(
-                    span,
-                    AstError::TypeMismatch {
-                        expected: assigned_field.field_type.clone(),
-                        found: rhs_type,
-                    },
-                );
+            // Check cross-node access
+            if let Some(current_node_id) = self.current_node {
+                if table.node != current_node_id {
+                    let current_node_name = &self.program.nodes[current_node_id].name;
+                    let table_node_name = &self.program.nodes[table.node].name;
+                    self.error_at(
+                        span,
+                        AstError::CrossNodeAccess {
+                            table: table.name.clone(),
+                            table_node: table_node_name.clone(),
+                            current_node: current_node_name.clone(),
+                        },
+                    );
+                    return;
+                }
+            }
+
+            // Use resolved field IDs
+            if let (Some(pk_field_id), Some(field_id)) =
+                (assign.resolved_pk_field, assign.resolved_field)
+            {
+                // Validate primary key field
+                if pk_field_id != table.primary_key {
+                    let pk_field = &self.program.fields[pk_field_id];
+                    self.error_at(
+                        span,
+                        AstError::InvalidPrimaryKey {
+                            table: table.name.clone(),
+                            column: pk_field.field_name.clone(),
+                        },
+                    );
+                    return;
+                }
+
+                // Check primary key expression type
+                if let Some(pk_type) = self.check_expression(assign.pk_expr) {
+                    let primary_key_field = &self.program.fields[table.primary_key];
+                    if !self.types_compatible(&primary_key_field.field_type, &pk_type) {
+                        self.error_at(
+                            span,
+                            AstError::TypeMismatch {
+                                expected: primary_key_field.field_type.clone(),
+                                found: pk_type,
+                            },
+                        );
+                    }
+                }
+
+                // Check RHS type
+                if let Some(rhs_type) = self.check_expression(assign.rhs) {
+                    let assigned_field = &self.program.fields[field_id];
+                    if !self.types_compatible(&assigned_field.field_type, &rhs_type) {
+                        self.error_at(
+                            span,
+                            AstError::TypeMismatch {
+                                expected: assigned_field.field_type.clone(),
+                                found: rhs_type,
+                            },
+                        );
+                    }
+                }
             }
         }
     }
@@ -271,7 +260,7 @@ impl<'p> SemanticAnalyzer<'p> {
         // The name resolver should have already checked if the variable exists
         // We can use the resolutions to get the variable type directly
         // For now, we'll check the type compatibility
-        
+
         if let Some(_rhs_type) = self.check_expression(var_assign.rhs) {
             // We would need to look up the variable type from the name resolver's results
             // For now, we'll skip detailed type checking and let the name resolver handle existence
@@ -308,7 +297,7 @@ impl<'p> SemanticAnalyzer<'p> {
 
         // Clone the return type to avoid borrowing conflicts
         let return_type = self.return_type.clone();
-        
+
         match (&return_type, &ret_stmt.value) {
             (Some(ReturnType::Void), Some(_)) => {
                 self.error_at(span, AstError::UnexpectedReturnValue);
@@ -340,7 +329,7 @@ impl<'p> SemanticAnalyzer<'p> {
 
     fn check_expression(&mut self, expr_id: ExpressionId) -> Option<TypeName> {
         let expr = &self.program.expressions[expr_id];
-        
+
         match &expr.node {
             ExpressionKind::Ident(_name) => {
                 // Use name resolver's resolution to get the variable
@@ -357,22 +346,32 @@ impl<'p> SemanticAnalyzer<'p> {
             ExpressionKind::StringLit(_) => Some(TypeName::String),
             ExpressionKind::BoolLit(_) => Some(TypeName::Bool),
             ExpressionKind::TableFieldAccess {
-                table,
-                pk_field,
+                resolved_table,
+                resolved_pk_field,
                 pk_expr,
-                field,
+                resolved_field,
+                table_name,
+                pk_field_name,
+                field_name,
             } => {
                 // Check primary key expression
                 self.check_expression(*pk_expr);
 
-                let table_obj = &self.program.tables[*table];
-                
+                let table_id = resolved_table
+                    .ok_or_else(|| {
+                        let expr_span = expr.span.clone();
+                        self.error_at(&expr_span, AstError::UndeclaredTable(table_name.clone()));
+                    })
+                    .ok()?;
+
+                let table_obj = &self.program.tables[table_id];
+
                 // Check cross-node access
                 if let Some(current_node_id) = self.current_node {
                     if table_obj.node != current_node_id {
                         let current_node_name = &self.program.nodes[current_node_id].name;
                         let table_node_name = &self.program.nodes[table_obj.node].name;
-                        let expr_span = expr.span.clone(); // Clone the span to avoid borrowing issues
+                        let expr_span = expr.span.clone();
                         self.error_at(
                             &expr_span,
                             AstError::CrossNodeAccess {
@@ -386,11 +385,22 @@ impl<'p> SemanticAnalyzer<'p> {
                 }
 
                 // Check primary key field
-                let pk_field_obj = &self.program.fields[*pk_field];
-                let primary_key_field = &self.program.fields[table_obj.primary_key];
-                
-                if pk_field_obj.field_name != primary_key_field.field_name {
-                    let expr_span = expr.span.clone(); // Clone the span to avoid borrowing issues
+                let pk_field_id = resolved_pk_field
+                    .ok_or_else(|| {
+                        let expr_span = expr.span.clone();
+                        self.error_at(
+                            &expr_span,
+                            AstError::UndeclaredField {
+                                table: table_name.clone(),
+                                field: pk_field_name.clone(),
+                            },
+                        );
+                    })
+                    .ok()?;
+
+                if pk_field_id != table_obj.primary_key {
+                    let pk_field_obj = &self.program.fields[pk_field_id];
+                    let expr_span = expr.span.clone();
                     self.error_at(
                         &expr_span,
                         AstError::InvalidPrimaryKey {
@@ -402,26 +412,26 @@ impl<'p> SemanticAnalyzer<'p> {
                 }
 
                 // Check accessed field exists and return its type
-                let accessed_field = &self.program.fields[*field];
-                let field_exists = table_obj.fields.iter().any(|&field_id| {
-                    self.program.fields[field_id].field_name == accessed_field.field_name
-                });
+                let field_id = resolved_field
+                    .ok_or_else(|| {
+                        let expr_span = expr.span.clone();
+                        self.error_at(
+                            &expr_span,
+                            AstError::UndeclaredField {
+                                table: table_name.clone(),
+                                field: field_name.clone(),
+                            },
+                        );
+                    })
+                    .ok()?;
 
-                if field_exists {
-                    Some(accessed_field.field_type.clone())
-                } else {
-                    let expr_span = expr.span.clone(); // Clone the span to avoid borrowing issues
-                    self.error_at(
-                        &expr_span,
-                        AstError::UndeclaredField {
-                            table: table_obj.name.clone(),
-                            field: accessed_field.field_name.clone(),
-                        },
-                    );
-                    None
-                }
+                let accessed_field = &self.program.fields[field_id];
+                Some(accessed_field.field_type.clone())
             }
-            ExpressionKind::UnaryOp { op, expr: inner_expr } => {
+            ExpressionKind::UnaryOp {
+                op,
+                expr: inner_expr,
+            } => {
                 let Some(operand_type) = self.check_expression(*inner_expr) else {
                     return None;
                 };
@@ -431,7 +441,7 @@ impl<'p> SemanticAnalyzer<'p> {
                         if matches!(operand_type, TypeName::Int | TypeName::Float) {
                             Some(operand_type)
                         } else {
-                            let expr_span = expr.span.clone(); // Clone the span to avoid borrowing issues
+                            let expr_span = expr.span.clone();
                             self.error_at(
                                 &expr_span,
                                 AstError::InvalidUnaryOp {
@@ -446,7 +456,7 @@ impl<'p> SemanticAnalyzer<'p> {
                         if operand_type == TypeName::Bool {
                             Some(TypeName::Bool)
                         } else {
-                            let expr_span = expr.span.clone(); // Clone the span to avoid borrowing issues
+                            let expr_span = expr.span.clone();
                             self.error_at(
                                 &expr_span,
                                 AstError::InvalidUnaryOp {
@@ -462,7 +472,7 @@ impl<'p> SemanticAnalyzer<'p> {
             ExpressionKind::BinaryOp { left, op, right } => {
                 let left_type = self.check_expression(*left)?;
                 let right_type = self.check_expression(*right)?;
-                let expr_span = expr.span.clone(); // Clone the span to avoid borrowing issues
+                let expr_span = expr.span.clone();
                 self.check_binary_op(op, &left_type, &right_type, &expr_span)
             }
         }

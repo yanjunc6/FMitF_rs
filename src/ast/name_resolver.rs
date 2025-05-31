@@ -4,11 +4,11 @@ use std::collections::HashMap;
 pub struct NameResolver<'p> {
     program: &'p mut Program,
     errors: Vec<SpannedError>,
-    
+
     // Current resolution context
     current_function: Option<FunctionId>,
     current_scope: Option<ScopeId>,
-    
+
     // Scope stack for nested blocks
     scope_stack: Vec<ScopeId>,
 }
@@ -57,29 +57,39 @@ impl<'p> NameResolver<'p> {
             kind: ScopeKind::Function(func_id),
             variables: HashMap::new(),
         });
-        
+
         self.push_scope(func_scope);
 
         // Add parameters to function scope
-        let param_ids: Vec<ParameterId> = self.program.functions[func_id].parameters.iter().copied().collect();
-        
+        let param_ids: Vec<ParameterId> = self.program.functions[func_id]
+            .parameters
+            .iter()
+            .copied()
+            .collect();
+
         // Collect parameter data (name, type, span) to avoid borrowing issues
-        let params_to_declare: Vec<(String, TypeName, Span)> = param_ids.iter().map(|&param_id| {
-            let param_decl = &self.program.parameters[param_id];
-            (param_decl.param_name.clone(), param_decl.param_type.clone(), param_decl.span.clone())
-        }).collect();
+        let params_to_declare: Vec<(String, TypeName, Span)> = param_ids
+            .iter()
+            .map(|&param_id| {
+                let param_decl = &self.program.parameters[param_id];
+                (
+                    param_decl.param_name.clone(),
+                    param_decl.param_type.clone(),
+                    param_decl.span.clone(),
+                )
+            })
+            .collect();
 
         for (name, ty, span) in params_to_declare {
-            self.declare_variable(
-                &name,
-                ty,
-                VarKind::Parameter,
-                span,
-            );
+            self.declare_variable(&name, ty, VarKind::Parameter, span);
         }
 
         // Resolve each hop
-        let hop_ids: Vec<_> = self.program.functions[func_id].hops.iter().copied().collect();
+        let hop_ids: Vec<_> = self.program.functions[func_id]
+            .hops
+            .iter()
+            .copied()
+            .collect();
         for hop_id in hop_ids {
             self.resolve_hop(hop_id);
         }
@@ -89,7 +99,18 @@ impl<'p> NameResolver<'p> {
     }
 
     fn resolve_hop(&mut self, hop_id: HopId) {
-        // Create hop scope
+        // Resolve the node name to node ID
+        let node_name = self.program.hops[hop_id].node_name.clone();
+        if let Some(&node_id) = self.program.node_map.get(&node_name) {
+            // Update the resolved_node field
+            self.program.hops[hop_id].resolved_node = Some(node_id);
+        } else {
+            let hop_span = self.program.hops[hop_id].span.clone();
+            self.error_at(&hop_span, AstError::UndeclaredNode(node_name));
+            return;
+        }
+
+        // Create hop scope and continue with existing logic
         let hop_scope = self.program.scopes.alloc(Scope {
             parent: self.current_scope,
             kind: ScopeKind::Hop(hop_id),
@@ -99,7 +120,11 @@ impl<'p> NameResolver<'p> {
         self.push_scope(hop_scope);
 
         // Resolve all statements in the hop
-        let stmt_ids: Vec<_> = self.program.hops[hop_id].statements.iter().copied().collect();
+        let stmt_ids: Vec<_> = self.program.hops[hop_id]
+            .statements
+            .iter()
+            .copied()
+            .collect();
         for stmt_id in stmt_ids {
             self.resolve_statement(stmt_id);
         }
@@ -108,7 +133,6 @@ impl<'p> NameResolver<'p> {
     }
 
     fn resolve_statement(&mut self, stmt_id: StatementId) {
-        // First, extract the statement data we need
         let (stmt_kind, stmt_span) = {
             let stmt = &self.program.statements[stmt_id];
             (stmt.node.clone(), stmt.span.clone())
@@ -118,22 +142,28 @@ impl<'p> NameResolver<'p> {
             StatementKind::VarDecl(var_decl) => {
                 // Resolve initializer first
                 self.resolve_expression(var_decl.init_value);
-                
+
                 // Check for global variable error
                 if var_decl.is_global {
-                    self.error_at(&stmt_span, AstError::GlobalVariableNotAllowed(var_decl.var_name.clone()));
+                    self.error_at(
+                        &stmt_span,
+                        AstError::GlobalVariableNotAllowed(var_decl.var_name.clone()),
+                    );
                     return;
                 }
-                
+
                 // Check for duplicate in current scope
                 if let Some(current_scope_id) = self.current_scope {
                     let current_scope = &self.program.scopes[current_scope_id];
                     if current_scope.variables.contains_key(&var_decl.var_name) {
-                        self.error_at(&stmt_span, AstError::DuplicateVariable(var_decl.var_name.clone()));
+                        self.error_at(
+                            &stmt_span,
+                            AstError::DuplicateVariable(var_decl.var_name.clone()),
+                        );
                         return;
                     }
                 }
-                
+
                 // Declare the variable
                 self.declare_variable(
                     &var_decl.var_name,
@@ -145,22 +175,109 @@ impl<'p> NameResolver<'p> {
             StatementKind::VarAssignment(var_assign) => {
                 // Resolve RHS expression
                 self.resolve_expression(var_assign.rhs);
-                
+
                 // Look up the variable
                 let var_id = self.lookup_variable(&var_assign.var_name);
                 if var_id.is_none() {
-                    self.error_at(&stmt_span, AstError::UndeclaredVariable(var_assign.var_name.clone()));
+                    self.error_at(
+                        &stmt_span,
+                        AstError::UndeclaredVariable(var_assign.var_name.clone()),
+                    );
                 } else {
                     // Update the statement with resolved variable
-                    if let StatementKind::VarAssignment(ref mut var_assign_mut) = 
-                        &mut self.program.statements[stmt_id].node {
+                    if let StatementKind::VarAssignment(ref mut var_assign_mut) =
+                        &mut self.program.statements[stmt_id].node
+                    {
                         var_assign_mut.resolved_var = var_id;
                     }
                 }
             }
             StatementKind::Assignment(assign) => {
+                // First resolve expressions to avoid borrowing conflicts
                 self.resolve_expression(assign.pk_expr);
                 self.resolve_expression(assign.rhs);
+
+                // Clone the assign to avoid borrowing issues
+                let mut assign_copy = assign.clone();
+
+                // Look up table and collect error information without holding borrows
+                let table_lookup_result =
+                    self.program.table_map.get(&assign_copy.table_name).copied();
+
+                match table_lookup_result {
+                    Some(table_id) => {
+                        assign_copy.resolved_table = Some(table_id);
+
+                        // Collect field information without holding borrows
+                        let (pk_field_result, field_result) = {
+                            let table = &self.program.tables[table_id];
+
+                            let pk_field_id = table
+                                .fields
+                                .iter()
+                                .find(|&&field_id| {
+                                    self.program.fields[field_id].field_name
+                                        == assign_copy.pk_field_name
+                                })
+                                .copied();
+
+                            let field_id = table
+                                .fields
+                                .iter()
+                                .find(|&&field_id| {
+                                    self.program.fields[field_id].field_name
+                                        == assign_copy.field_name
+                                })
+                                .copied();
+
+                            (pk_field_id, field_id)
+                        };
+
+                        // Now handle results and report errors
+                        match pk_field_result {
+                            Some(pk_field_id) => {
+                                assign_copy.resolved_pk_field = Some(pk_field_id);
+                            }
+                            None => {
+                                self.error_at(
+                                    &stmt_span,
+                                    AstError::UndeclaredField {
+                                        table: assign_copy.table_name.clone(),
+                                        field: assign_copy.pk_field_name.clone(),
+                                    },
+                                );
+                            }
+                        }
+
+                        match field_result {
+                            Some(field_id) => {
+                                assign_copy.resolved_field = Some(field_id);
+                            }
+                            None => {
+                                self.error_at(
+                                    &stmt_span,
+                                    AstError::UndeclaredField {
+                                        table: assign_copy.table_name.clone(),
+                                        field: assign_copy.field_name.clone(),
+                                    },
+                                );
+                            }
+                        }
+
+                        // Update the statement with resolved assignment
+                        if let StatementKind::Assignment(ref mut assign_mut) =
+                            &mut self.program.statements[stmt_id].node
+                        {
+                            *assign_mut = assign_copy;
+                        }
+                    }
+                    None => {
+                        self.error_at(
+                            &stmt_span,
+                            AstError::UndeclaredTable(assign_copy.table_name.clone()),
+                        );
+                    }
+                }
             }
             StatementKind::IfStmt(if_stmt) => {
                 self.resolve_expression(if_stmt.condition);
@@ -178,10 +295,10 @@ impl<'p> NameResolver<'p> {
                     self.resolve_expression(expr_id);
                 }
             }
-            StatementKind::Abort(_) |
-            StatementKind::Break(_) |
-            StatementKind::Continue(_) |
-            StatementKind::Empty => {
+            StatementKind::Abort(_)
+            | StatementKind::Break(_)
+            | StatementKind::Continue(_)
+            | StatementKind::Empty => {
                 // No resolution needed
             }
         }
@@ -207,7 +324,6 @@ impl<'p> NameResolver<'p> {
     }
 
     fn resolve_expression(&mut self, expr_id: ExpressionId) {
-        // Extract expression data to avoid borrowing conflicts
         let (expr_kind, expr_span) = {
             let expr = &self.program.expressions[expr_id];
             (expr.node.clone(), expr.span.clone())
@@ -222,7 +338,68 @@ impl<'p> NameResolver<'p> {
                     self.error_at(&expr_span, AstError::UndeclaredVariable(name));
                 }
             }
-            ExpressionKind::TableFieldAccess { pk_expr, .. } => {
+            ExpressionKind::TableFieldAccess {
+                table_name,
+                pk_field_name,
+                pk_expr,
+                field_name,
+                ..
+            } => {
+                // Resolve table name
+                if let Some(&table_id) = self.program.table_map.get(&table_name) {
+                    let table = &self.program.tables[table_id];
+
+                    // Find fields and update the expression
+                    let pk_field_id = table
+                        .fields
+                        .iter()
+                        .find(|&&field_id| {
+                            self.program.fields[field_id].field_name == pk_field_name
+                        })
+                        .copied();
+
+                    let field_id = table
+                        .fields
+                        .iter()
+                        .find(|&&field_id| self.program.fields[field_id].field_name == field_name)
+                        .copied();
+
+                    // Update the expression with resolved IDs
+                    if let ExpressionKind::TableFieldAccess {
+                        ref mut resolved_table,
+                        ref mut resolved_pk_field,
+                        ref mut resolved_field,
+                        ..
+                    } = &mut self.program.expressions[expr_id].node
+                    {
+                        *resolved_table = Some(table_id);
+                        *resolved_pk_field = pk_field_id;
+                        *resolved_field = field_id;
+                    }
+
+                    if pk_field_id.is_none() {
+                        self.error_at(
+                            &expr_span,
+                            AstError::UndeclaredField {
+                                table: table_name.clone(),
+                                field: pk_field_name,
+                            },
+                        );
+                    }
+
+                    if field_id.is_none() {
+                        self.error_at(
+                            &expr_span,
+                            AstError::UndeclaredField {
+                                table: table_name.clone(),
+                                field: field_name,
+                            },
+                        );
+                    }
+                } else {
+                    self.error_at(&expr_span, AstError::UndeclaredTable(table_name));
+                }
+
                 self.resolve_expression(pk_expr);
             }
             ExpressionKind::UnaryOp { expr, .. } => {
@@ -232,10 +409,10 @@ impl<'p> NameResolver<'p> {
                 self.resolve_expression(left);
                 self.resolve_expression(right);
             }
-            ExpressionKind::IntLit(_) |
-            ExpressionKind::FloatLit(_) |
-            ExpressionKind::StringLit(_) |
-            ExpressionKind::BoolLit(_) => {
+            ExpressionKind::IntLit(_)
+            | ExpressionKind::FloatLit(_)
+            | ExpressionKind::StringLit(_)
+            | ExpressionKind::BoolLit(_) => {
                 // Literals need no resolution
             }
         }
