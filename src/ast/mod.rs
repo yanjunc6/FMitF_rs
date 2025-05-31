@@ -1,4 +1,13 @@
-use std::rc::Rc;
+use id_arena::{Arena, Id};
+use std::collections::HashMap;
+
+mod ast_builder;
+mod name_resolver;
+mod semantics_analysis;
+pub mod errors;
+
+// Re-export only the essential types users need
+pub use errors::{Results, SpannedError, AstError};
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Span {
@@ -31,6 +40,18 @@ impl Default for Span {
     }
 }
 
+// Arena-based IDs - keep these public for external use
+pub type NodeId = Id<NodeDef>;
+pub type TableId = Id<TableDeclaration>;
+pub type FieldId = Id<FieldDeclaration>;
+pub type FunctionId = Id<FunctionDeclaration>;
+pub type HopId = Id<HopBlock>;
+pub type ParameterId = Id<ParameterDecl>;
+pub type StatementId = Id<Statement>;
+pub type ExpressionId = Id<Expression>;
+pub type VarId = Id<VarDecl>;
+pub type ScopeId = Id<Scope>;
+
 #[derive(Debug, Clone)]
 pub struct Spanned<T> {
     pub node: T,
@@ -40,13 +61,40 @@ pub struct Spanned<T> {
 pub type Expression = Spanned<ExpressionKind>;
 pub type Statement = Spanned<StatementKind>;
 
+/// Main Program structure - this is what users get after processing
+#[derive(Debug)]
 pub struct Program {
-    pub nodes: Vec<Rc<NodeDef>>,
-    pub tables: Vec<Rc<TableDeclaration>>,
-    pub functions: Vec<Rc<FunctionDeclaration>>,
+    // Arena storage - keep public for read access
+    pub nodes: Arena<NodeDef>,
+    pub tables: Arena<TableDeclaration>,
+    pub fields: Arena<FieldDeclaration>,
+    pub functions: Arena<FunctionDeclaration>,
+    pub hops: Arena<HopBlock>,
+    pub parameters: Arena<ParameterDecl>,
+    pub statements: Arena<Statement>,
+    pub expressions: Arena<Expression>,
+    pub variables: Arena<VarDecl>,
+    pub scopes: Arena<Scope>,
+    
+    // Root collections - public for iteration
+    pub root_nodes: Vec<NodeId>,
+    pub root_tables: Vec<TableId>,
+    pub root_functions: Vec<FunctionId>,
+    
+    // Lookup maps - public for convenience
+    pub node_map: HashMap<String, NodeId>,
+    pub table_map: HashMap<String, TableId>,
+    pub function_map: HashMap<String, FunctionId>,
+    
+    // Resolution results - public for type checking access
+    pub global_scope: Option<ScopeId>,
+    pub resolutions: HashMap<ExpressionId, VarId>,
+    pub var_types: HashMap<VarId, TypeName>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]pub struct NodeDef {
+// Essential AST node types - keep these public
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NodeDef {
     pub name: String,
     pub span: Span,
 }
@@ -54,9 +102,9 @@ pub struct Program {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TableDeclaration {
     pub name: String,
-    pub node: Rc<NodeDef>,
-    pub fields: Vec<FieldDeclaration>,
-    pub primary_key: Rc<FieldDeclaration>, // Must have exactly one primary key
+    pub node: NodeId,
+    pub fields: Vec<FieldId>,
+    pub primary_key: FieldId,
     pub span: Span,
 }
 
@@ -80,8 +128,8 @@ pub enum TypeName {
 pub struct FunctionDeclaration {
     pub return_type: ReturnType,
     pub name: String,
-    pub parameters: Vec<ParameterDecl>,
-    pub hops: Vec<Rc<HopBlock>>,
+    pub parameters: Vec<ParameterId>,
+    pub hops: Vec<HopId>,
     pub span: Span,
 }
 
@@ -100,8 +148,8 @@ pub struct ParameterDecl {
 
 #[derive(Debug, Clone)]
 pub struct HopBlock {
-    pub node: Rc<NodeDef>,
-    pub statements: Vec<Statement>,
+    pub node: NodeId,
+    pub statements: Vec<StatementId>,
     pub span: Span,
 }
 
@@ -114,61 +162,60 @@ pub enum StatementKind {
     VarDecl(VarDeclStatement),
     Return(ReturnStatement),
     Abort(AbortStatement),
-    Break(BreakStatement), // NEW: Add Break
-    Continue(ContinueStatement), // NEW: Add Continue
+    Break(BreakStatement),
+    Continue(ContinueStatement),
     Empty,
 }
 
 #[derive(Debug, Clone)]
 pub struct VarAssignmentStatement {
     pub var_name: String,
-    pub rhs: Expression,
+    pub rhs: ExpressionId,
+    pub resolved_var: Option<VarId>, // Add this field
 }
 
 #[derive(Debug, Clone)]
 pub struct AssignmentStatement {
-    pub table: Rc<TableDeclaration>,
-    pub pk_field: Rc<FieldDeclaration>, // Use Rc to point to the primary key field
-    pub pk_expr: Expression,
-    pub field: Rc<FieldDeclaration>, // Use Rc to point to the field being assigned
-    pub rhs: Expression,
+    pub table: TableId,
+    pub pk_field: FieldId,
+    pub pk_expr: ExpressionId,
+    pub field: FieldId,
+    pub rhs: ExpressionId,
 }
 
 #[derive(Debug, Clone)]
 pub struct IfStatement {
-    pub condition: Expression,
-    pub then_branch: Vec<Statement>,
-    pub else_branch: Option<Vec<Statement>>,
+    pub condition: ExpressionId,
+    pub then_branch: Vec<StatementId>,
+    pub else_branch: Option<Vec<StatementId>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct WhileStatement {
-    pub condition: Expression,
-    pub body: Vec<Statement>,
+    pub condition: ExpressionId,
+    pub body: Vec<StatementId>,
 }
 
 #[derive(Debug, Clone)]
 pub struct VarDeclStatement {
     pub var_type: TypeName,
     pub var_name: String,
-    pub init_value: Expression,
+    pub init_value: ExpressionId,
     pub is_global: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct ReturnStatement {
-    pub value: Option<Expression>,
+    pub value: Option<ExpressionId>,
 }
 
 #[derive(Debug, Clone)]
-pub struct AbortStatement {
-    // Simple abort statement with no condition
-}
+pub struct AbortStatement;
 
-#[derive(Debug, Clone)] // NEW: Add BreakStatement struct
+#[derive(Debug, Clone)]
 pub struct BreakStatement;
 
-#[derive(Debug, Clone)] // NEW: Add ContinueStatement struct
+#[derive(Debug, Clone)]
 pub struct ContinueStatement;
 
 #[derive(Debug, Clone)]
@@ -179,19 +226,19 @@ pub enum ExpressionKind {
     StringLit(String),
     BoolLit(bool),
     TableFieldAccess {
-        table: Rc<TableDeclaration>,    // Use Rc to point to table
-        pk_field: Rc<FieldDeclaration>, // Use Rc to point to primary key field
-        pk_expr: Box<Expression>,
-        field: Rc<FieldDeclaration>, // Use Rc to point to accessed field
+        table: TableId,
+        pk_field: FieldId,
+        pk_expr: ExpressionId,
+        field: FieldId,
     },
     UnaryOp {
         op: UnaryOp,
-        expr: Box<Expression>,
+        expr: ExpressionId,
     },
     BinaryOp {
-        left: Box<Expression>,
+        left: ExpressionId,
         op: BinaryOp,
-        right: Box<Expression>,
+        right: ExpressionId,
     },
 }
 
@@ -215,4 +262,48 @@ pub enum BinaryOp {
     Neq,
     And,
     Or,
+}
+
+#[derive(Debug, Clone)]
+pub struct VarDecl {
+    pub name: String,
+    pub ty: TypeName,
+    pub kind: VarKind,
+    pub defined_at: Span,
+    pub scope: ScopeId,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum VarKind {
+    Parameter,
+    Local,
+}
+
+#[derive(Debug)]
+pub struct Scope {
+    pub parent: Option<ScopeId>,
+    pub kind: ScopeKind,
+    pub variables: HashMap<String, VarId>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ScopeKind {
+    Global,
+    Function(FunctionId),
+    Block,
+    Hop(HopId),
+}
+
+/// Main public API - this is the only function users need to call
+pub fn parse_and_analyze(source: &str) -> Results<Program> {
+    // Parse and build AST using ast_builder
+    let mut program = ast_builder::parse_and_build(source)?;
+    
+    // Perform name resolution
+    name_resolver::resolve_names(&mut program)?;
+    
+    // Perform semantic analysis
+    semantics_analysis::analyze_program(&mut program)?;
+    
+    Ok(program)
 }

@@ -27,6 +27,8 @@ void processOrder(int userID, int orderID) {
         global float balance = Users[userID: userID].balance;
     }
     hop on NodeB {
-        Orders[orderID: orderID].amount = balance;
+        if (balance > 50.0) {
+            Orders[orderID: orderID].amount = balance - 50.0;
+        }
     }
 }

@@ -2,8 +2,10 @@ use clap::{Parser, ValueEnum};
 use std::fs;
 use std::path::PathBuf;
 use FMitF_rs::{
-    format_errors, parse_program, print_dot_graph, print_program, PrintMode, PrintOptions, SCGraph,
-    SemanticAnalyzer, AutoVerifier,
+    build_program_from_pair, analyze_program, print_program, PrintMode, PrintOptions, 
+    print_cfg, CfgPrintOptions, CfgFormat, SCGraph, EdgeType, CfgBuilder,
+    TransActParser, Rule,
+    // AutoVerifier,  // Uncomment when verification is working
 };
 
 #[derive(Parser)]
@@ -49,6 +51,8 @@ enum Mode {
     Scgraph,
     /// Run automatic verification and remove verified C edges
     Verify,
+    /// Show Control Flow Graph (CFG)
+    Cfg,
 }
 
 fn main() {
@@ -71,33 +75,44 @@ fn main() {
         Mode::Ast => output_ast(&program, &cli),
         Mode::Scgraph => output_scgraph(&program, &cli),
         Mode::Verify => output_verify(&program, &cli),
+        Mode::Cfg => output_cfg(&program, &cli),
     }
 }
 
 fn run_frontend(source_code: &str, quiet: bool) -> FMitF_rs::Program {
-    // Parse
-    let program = match parse_program(source_code) {
-        Ok(prog) => prog,
-        Err(errors) => {
-            eprintln!("❌ Parse failed!");
-            eprintln!("{}", format_errors(&errors, source_code));
-            std::process::exit(1);
+    use pest::Parser;
+
+    // Parse using Pest
+    let pairs = TransActParser::parse(Rule::program, source_code).unwrap_or_else(|e| {
+        eprintln!("❌ Parse failed!");
+        eprintln!("{}", e);
+        std::process::exit(1);
+    });
+
+    let program_pair = pairs.into_iter().next().unwrap();
+
+    // Build arena-based AST
+    let program = build_program_from_pair(program_pair).unwrap_or_else(|errors| {
+        eprintln!("❌ AST build failed!");
+        // TODO: Implement proper error formatting for the new error types
+        for error in &errors {
+            eprintln!("{:?}", error);
         }
-    };
+        std::process::exit(1);
+    });
 
     // Semantic Analysis
-    let mut analyzer = SemanticAnalyzer::new();
-    match analyzer.analyze(&program) {
-        Ok(()) => {
-            if !quiet {
-                println!("✅ Frontend analysis passed!");
-            }
+    if let Err(errors) = analyze_program(&program) {
+        eprintln!("❌ Semantic analysis failed!");
+        // TODO: Implement proper error formatting for the new error types
+        for error in &errors {
+            eprintln!("{:?}", error);
         }
-        Err(errors) => {
-            eprintln!("❌ Semantic analysis failed!");
-            eprintln!("{}", format_errors(&errors, source_code));
-            std::process::exit(1);
-        }
+        std::process::exit(1);
+    }
+
+    if !quiet {
+        println!("✅ Frontend analysis passed!");
     }
 
     program
@@ -110,11 +125,16 @@ fn output_ast(program: &FMitF_rs::Program, cli: &Cli) {
         PrintMode::Summary
     };
 
+    let opts = PrintOptions {
+        mode: print_mode,
+        show_spans: cli.show_spans,
+    };
+
     match &cli.output {
         Some(file) => {
-            // For file output, we'd need to capture print_program output
-            // For now, write a placeholder to file
-            let content = format!("AST output (mode: {:?}, show_spans: {})\nTODO: Implement actual AST output to file\n", print_mode, cli.show_spans);
+            // TODO: Implement capture-to-string for print_program
+            // For now, print a placeholder since print_program outputs to stdout
+            let content = format!("AST output (mode: {:?}, show_spans: {})\n", print_mode, cli.show_spans);
             match fs::write(file, content) {
                 Ok(()) => {
                     eprintln!("✅ Output written to: {:?}", file);
@@ -126,209 +146,77 @@ fn output_ast(program: &FMitF_rs::Program, cli: &Cli) {
             }
         }
         None => {
-            // For stdout, directly call print_program
-            print_program(
-                program,
-                &PrintOptions {
-                    mode: print_mode,
-                    show_spans: cli.show_spans,
-                },
-            );
+            // Print directly to stdout
+            print_program(program, &opts);
         }
     }
 }
 
 fn output_scgraph(program: &FMitF_rs::Program, cli: &Cli) {
-    // Build SC-Graph
+    // Build SC-Graph 
     let sc_graph = SCGraph::new(program);
 
     if cli.dot {
-        // DOT output mode
         output_dot(&sc_graph, &cli);
     } else {
-        // Regular scgraph analysis
         let output = format_scgraph_output(&sc_graph, cli.verbose, cli.quiet);
         write_output(&output, &cli.output);
     }
 }
 
-fn output_verify(program: &FMitF_rs::Program, cli: &Cli) {
-    // Build SC-Graph
-    let mut sc_graph = SCGraph::new(program);
-    
+fn output_cfg(program: &FMitF_rs::Program, cli: &Cli) {
     if !cli.quiet {
-        println!("🔍 Starting verification process...");
+        println!("⚙️ Building Control Flow Graph (CFG)...");
     }
 
-    // Show initial SC-Graph state if verbose
-    if cli.verbose {
-        let initial_output = format_scgraph_output(&sc_graph, true, false);
-        println!("📊 Initial SC-Graph State:");
-        println!("{}", initial_output);
-        println!("{}", "=".repeat(80));
-    }
+    // Build CFG using the new arena-based builder
+    let cfg_ctx = CfgBuilder::new().build_from_program(program).unwrap_or_else(|e| {
+        eprintln!("❌ CFG build failed: {:?}", e);
+        std::process::exit(1);
+    });
 
-    // Create auto verifier with optional output directory
-    let auto_verifier = if let Some(ref output_path) = cli.output {
-        if !cli.quiet {
-            println!("📁 Saving Boogie files to: {}", output_path.display());
-        }
-        AutoVerifier::new().with_output_dir(output_path)
-    } else {
-        AutoVerifier::new()
+    let cfg_opts = CfgPrintOptions {
+        format: if cli.dot { CfgFormat::Dot } else { CfgFormat::Text },
+        verbose: cli.verbose,
+        quiet: cli.quiet,
+        show_spans: cli.show_spans,
     };
 
-    // Run verification
-    let verification_result = auto_verifier.verify_and_prune_c_edges(program, &mut sc_graph);
-
-    let output = match verification_result {
-        Ok(verified_count) => {
-            let mut result = String::new();
+    match &cli.output {
+        Some(file) => {
+            let mut file_handle = fs::File::create(file).unwrap_or_else(|e| {
+                eprintln!("❌ Failed to create file {:?}: {}", file, e);
+                std::process::exit(1);
+            });
             
-            if !cli.quiet {
-                result.push_str("🔧 Verification Results:\n");
-                result.push_str(&format!("  ✅ Successfully verified and removed {} C edges\n", verified_count));
-                
-                if cli.output.is_some() && verified_count > 0 {
-                    result.push_str(&format!("  📁 {} Boogie files saved to output directory\n", verified_count));
-                }
+            if let Err(e) = print_cfg(&cfg_ctx, &cfg_opts, &mut file_handle) {
+                eprintln!("❌ Failed to write CFG: {}", e);
+                std::process::exit(1);
             }
-
-            // Show final statistics
-            let (vertices, s_edges, c_edges) = sc_graph.stats();
             
-            if !cli.quiet {
-                result.push_str("\n📊 Final SC-Graph Statistics:\n");
-                result.push_str(&format!("  Vertices (hops): {}\n", vertices));
-                result.push_str(&format!("  Sequential edges: {}\n", s_edges));
-                result.push_str(&format!("  Remaining conflict edges: {}\n", c_edges));
-                result.push_str(&format!("  Total edges: {}\n", s_edges + c_edges));
-            }
-
-            // Show detailed final state if verbose
-            if cli.verbose {
-                result.push_str("\n🔍 Final Detailed Graph Structure:\n");
-
-                // List vertices with function names
-                result.push_str("Vertices:\n");
-                for (i, hop) in sc_graph.hops.iter().enumerate() {
-                    let function_name = match sc_graph.get_function_name(i) {
-                        Some(name) => name.clone(),
-                        None => "unknown".to_string(),
-                    };
-                    result.push_str(&format!(
-                        "  {}: {} on {}\n",
-                        i, function_name, hop.node.name
-                    ));
-                }
-
-                // List remaining edges
-                result.push_str("\nRemaining Edges:\n");
-                if sc_graph.edges.is_empty() {
-                    result.push_str("  (no edges remaining)\n");
-                } else {
-                    for edge in &sc_graph.edges {
-                        let edge_symbol = match edge.edge_type {
-                            FMitF_rs::EdgeType::S => "S",
-                            FMitF_rs::EdgeType::C => "C",
-                        };
-                        result.push_str(&format!("  {} -- {} ({})\n", edge.v1, edge.v2, edge_symbol));
-                    }
-                }
-            }
-
-            // Analyze remaining mixed cycles
-            let mixed_cycles = sc_graph.find_mixed_cycles();
-            if mixed_cycles.is_empty() {
-                if !cli.quiet {
-                    result.push_str("\n✅ No mixed S/C cycles found after verification - SERIALIZABLE!\n");
-                }
-            } else {
-                result.push_str(&format!(
-                    "\n⚠️  Found {} remaining mixed cycles (unverified conflicts):\n",
-                    mixed_cycles.len()
-                ));
-                for (i, cycle) in mixed_cycles.iter().enumerate() {
-                    // Get vertex indices for this cycle
-                    let cycle_indices: Vec<usize> = cycle
-                        .iter()
-                        .map(|hop| {
-                            sc_graph
-                                .hops
-                                .iter()
-                                .position(|h| std::rc::Rc::ptr_eq(h, hop))
-                                .unwrap()
-                        })
-                        .collect();
-
-                    let indices_str = cycle_indices
-                        .iter()
-                        .map(|idx| idx.to_string())
-                        .collect::<Vec<_>>()
-                        .join(" → ");
-
-                    result.push_str(&format!(
-                        "  {}. {} vertices: {}\n",
-                        i + 1,
-                        cycle.len(),
-                        indices_str
-                    ));
-                }
-                
-                if !cli.quiet {
-                    result.push_str("\n❌ Program may NOT be serializable due to remaining conflicts!\n");
-                }
-            }
-
-            // Show verification summary
-            if !cli.quiet {
-                result.push_str("\n📋 Verification Summary:\n");
-                result.push_str(&format!("  • Verified C edges: {}\n", verified_count));
-                result.push_str(&format!("  • Remaining C edges: {}\n", c_edges));
-                result.push_str(&format!("  • Remaining mixed cycles: {}\n", mixed_cycles.len()));
-                
-                if cli.output.is_some() && verified_count > 0 {
-                    result.push_str(&format!("  • Boogie files saved to: {}\n", cli.output.as_ref().unwrap().display()));
-                }
-                
-                if mixed_cycles.is_empty() && c_edges == 0 {
-                    result.push_str("  • Status: ✅ SERIALIZABLE\n");
-                } else if c_edges == 0 {
-                    result.push_str("  • Status: ✅ POTENTIALLY SERIALIZABLE (no conflicts)\n");
-                } else {
-                    result.push_str("  • Status: ⚠️  UNKNOWN (unverified conflicts remain)\n");
-                }
-            }
-
-            result
+            eprintln!("✅ Output written to: {:?}", file);
         }
-        Err(e) => {
-            format!("❌ Verification failed: {}\n", e)
+        None => {
+            use std::io::stdout;
+            let mut stdout = stdout();
+            if let Err(e) = print_cfg(&cfg_ctx, &cfg_opts, &mut stdout) {
+                eprintln!("❌ Failed to print CFG: {}", e);
+                std::process::exit(1);
+            }
         }
-    };
-
-    // For verify mode with output directory, only print to stdout (don't save text output)
-    if cli.mode == Mode::Verify && cli.output.is_some() {
-        print!("{}", output);
-    } else {
-        write_output(&output, &cli.output);
     }
 }
 
-fn output_dot(sc_graph: &SCGraph, cli: &Cli) {
-    use std::io::Cursor;
+fn output_verify(program: &FMitF_rs::Program, cli: &Cli) {
+    // TODO: Implement verification once AutoVerifier is updated for arena-based AST
+    eprintln!("❌ Verification mode not yet implemented for arena-based AST");
+    std::process::exit(1);
+}
 
-    let mut buffer = Cursor::new(Vec::<u8>::new());
-    match print_dot_graph(sc_graph, &mut buffer) {
-        Ok(()) => {
-            let dot_content = String::from_utf8(buffer.into_inner()).unwrap();
-            write_output(&dot_content, &cli.output);
-        }
-        Err(e) => {
-            eprintln!("❌ Failed to generate DOT output: {}", e);
-            std::process::exit(1);
-        }
-    }
+fn output_dot(sc_graph: &SCGraph, cli: &Cli) {
+    // TODO: Implement DOT output for SCGraph
+    let dot_content = format!("digraph SCGraph {{\n  // TODO: Implement SCGraph DOT output\n}}");
+    write_output(&dot_content, &cli.output);
 }
 
 fn format_scgraph_output(sc_graph: &SCGraph, verbose: bool, quiet: bool) -> String {
@@ -348,7 +236,6 @@ fn format_scgraph_output(sc_graph: &SCGraph, verbose: bool, quiet: bool) -> Stri
     if verbose {
         output.push_str("\n🔍 Detailed Graph Structure:\n");
 
-        // List vertices with function names
         output.push_str("Vertices:\n");
         for (i, hop) in sc_graph.hops.iter().enumerate() {
             let function_name = match sc_graph.get_function_name(i) {
@@ -361,15 +248,14 @@ fn format_scgraph_output(sc_graph: &SCGraph, verbose: bool, quiet: bool) -> Stri
             ));
         }
 
-        // List edges
         output.push_str("\nEdges:\n");
         if sc_graph.edges.is_empty() {
             output.push_str("  (no edges)\n");
         } else {
             for edge in &sc_graph.edges {
                 let edge_symbol = match edge.edge_type {
-                    FMitF_rs::EdgeType::S => "S",
-                    FMitF_rs::EdgeType::C => "C",
+                    EdgeType::S => "S",
+                    EdgeType::C => "C",
                 };
                 output.push_str(&format!("  {} -- {} ({})\n", edge.v1, edge.v2, edge_symbol));
             }
@@ -388,7 +274,6 @@ fn format_scgraph_output(sc_graph: &SCGraph, verbose: bool, quiet: bool) -> Stri
             mixed_cycles.len()
         ));
         for (i, cycle) in mixed_cycles.iter().enumerate() {
-            // Get vertex indices for this cycle
             let cycle_indices: Vec<usize> = cycle
                 .iter()
                 .map(|hop| {
