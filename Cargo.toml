@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-pest = "2.8.0"
-pest_derive = "2.8.0"
+pest = "2.8"
+pest_derive = "2.8"
 petgraph = "0.8"
 clap = { version = "4", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
+id-arena = "2.2"

@@ -1,13 +1,24 @@
 pub mod ast;
-pub mod frontend;
+pub mod cfg;
 pub mod graph;
-pub mod output;
+pub mod pretty;
 pub mod verification;
 
-// Re-export
-pub use ast::*;
-pub use frontend::analyze::SemanticAnalyzer;
-pub use frontend::parse::{format_errors, parse_program, Results, SpannedError, TransActError};
-pub use graph::{EdgeType, SCGraph};
-pub use output::{print_dot_graph, print_program, save_dot_file, PrintMode, PrintOptions};
-pub use verification::AutoVerifier;
+// Re-export AST functionality
+pub use ast::ast_builder::{build_program_from_pair};
+pub use ast::semantics_analysis::analyze_program;
+
+// Re-export pretty printing
+pub use pretty::ast_printer::{print_program, PrintOptions, PrintMode};
+pub use pretty::cfg_printer::{print_cfg, CfgPrintOptions, CfgFormat};
+
+// Re-export CFG functionality with prefixed names to avoid conflicts
+pub use cfg::cfg_builder::{CfgCtx, CfgBuilder};
+pub use cfg::{NodeId as CfgNodeId, TableId as CfgTableId, FieldId as CfgFieldId,
+              FunctionId as CfgFunctionId, HopId as CfgHopId, BasicBlockId, VariableId};
+
+// Re-export graph functionality
+// pub use graph::{SCGraph, EdgeType};
+
+// Re-export verification (when enabled)
+// pub use verification::{AutoVerifier, VerificationUnit, build_verification_unit, generate_verification_boogie_code};

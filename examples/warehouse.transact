@@ -1,0 +1,76 @@
+nodes {
+    NodeA,
+    NodeB,
+    NodeC
+}
+
+table Warehouse on NodeA {
+    primary int itemID;
+    int quantity;
+    float price;
+}
+
+table Customer on NodeB {
+    primary int customerID;
+    float credit;
+    int orderCount;
+}
+
+table Orders on NodeC {
+    primary int orderID;
+    int customerID;
+    int itemID;
+    int quantity;
+    float totalPrice;
+}
+
+// New Order Transaction
+void newOrder(int custID, int ordID, int itmID, int qty) {
+    // Check warehouse stock and get price
+    hop on NodeA {
+        global int stock = Warehouse[itemID: itmID].quantity;
+        global float price = Warehouse[itemID: itmID].price;
+        Warehouse[itemID: itmID].quantity = stock - qty;
+    }
+    
+    // Update customer order count
+    hop on NodeB {
+        Customer[customerID: custID].orderCount = Customer[customerID: custID].orderCount + 1;
+    }
+    
+    // Create order record
+    hop on NodeC {
+        Orders[orderID: ordID].customerID = custID;
+        Orders[orderID: ordID].itemID = itmID;
+        Orders[orderID: ordID].quantity = qty;
+        Orders[orderID: ordID].totalPrice = price * qty;
+    }
+}
+
+// Payment Transaction
+void payment(int custID, int ordID, float amount) {
+    // Update customer credit
+    hop on NodeB {
+        Customer[customerID: custID].credit = Customer[customerID: custID].credit + amount;
+        global float newCredit = Customer[customerID: custID].credit;
+    }
+    
+    // Get order info
+    hop on NodeC {
+        global float orderTotal = Orders[orderID: ordID].totalPrice;
+        if (newCredit >= orderTotal) {
+            Orders[orderID: ordID].totalPrice = 0.0;  // Mark as paid
+        }
+    }
+}
+
+// Stock Level Check
+void checkStock(int itmID, int threshold) {
+    hop on NodeA {
+        global int currentStock = Warehouse[itemID: itmID].quantity;
+
+        if (currentStock < threshold) {
+            Warehouse[itemID: itmID].quantity = currentStock + 100;  // Restock
+        }
+    }
+}
