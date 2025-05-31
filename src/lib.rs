@@ -5,20 +5,23 @@ pub mod pretty;
 pub mod verification;
 
 // Re-export AST functionality
-pub use ast::ast_builder::{build_program_from_pair};
-pub use ast::semantics_analysis::analyze_program;
+pub use ast::{parse_and_analyze, Program as AstProgram, Span as AstSpan};
+pub use ast::{AstError, Results as AstResults, SpannedError as AstSpannedError};
 
 // Re-export pretty printing
-pub use pretty::ast_printer::{print_program, PrintOptions, PrintMode};
-pub use pretty::cfg_printer::{print_cfg, CfgPrintOptions, CfgFormat};
+pub use pretty::ast_printer::{print_program, PrintMode, PrintOptions};
+pub use pretty::cfg_printer::{print_cfg, CfgFormat, CfgPrintOptions};
 
-// Re-export CFG functionality with prefixed names to avoid conflicts
-pub use cfg::cfg_builder::{CfgCtx, CfgBuilder};
-pub use cfg::{NodeId as CfgNodeId, TableId as CfgTableId, FieldId as CfgFieldId,
-              FunctionId as CfgFunctionId, HopId as CfgHopId, BasicBlockId, VariableId};
+// Re-export CFG functionality
+pub use cfg::CfgProgram;
+pub use cfg::{
+    BasicBlockId as CfgBasicBlockId, CfgBuilder, FieldId as CfgFieldId,
+    FunctionId as CfgFunctionId, HopId as CfgHopId, NodeId as CfgNodeId, TableId as CfgTableId,
+    VarId as CfgVarId,
+};
 
-// Re-export graph functionality
+// Re-export graph functionality (currently commented out)
 // pub use graph::{SCGraph, EdgeType};
 
-// Re-export verification (when enabled)
+// Re-export verification (currently commented out)
 // pub use verification::{AutoVerifier, VerificationUnit, build_verification_unit, generate_verification_boogie_code};

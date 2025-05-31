@@ -1,17 +1,29 @@
+use crate::ast::{ReturnType, Span, TypeName};
 use crate::cfg::*;
-use std::io::{Write, Result};
+use std::io::{Result, Write};
 
 fn escape_dot_label(s: &str) -> String {
-    s.replace("\n", "\\n").replace("\"", "\\\"").replace("{", "\\{").replace("}", "\\}")
+    s.replace("\n", "\\n")
+        .replace("\"", "\\\"")
+        .replace("{", "\\{")
+        .replace("}", "\\}")
+}
+
+fn format_span_str(span: &Span, show_spans: bool) -> String {
+    if show_spans {
+        format!(" @{}:{}", span.line, span.column)
+    } else {
+        String::new()
+    }
 }
 
 fn format_operand(operand: &Operand, function: &FunctionCfg) -> String {
     match operand {
-        Operand::Variable(var_id) => {
+        Operand::Var(var_id) => {
             let var = &function.variables[*var_id];
             format!("%{}", var.name)
         }
-        Operand::Constant(c) => match c {
+        Operand::Const(c) => match c {
             Constant::Int(i) => i.to_string(),
             Constant::Float(f) => f.to_string(),
             Constant::Bool(b) => b.to_string(),
@@ -20,139 +32,247 @@ fn format_operand(operand: &Operand, function: &FunctionCfg) -> String {
     }
 }
 
-fn format_rvalue(rvalue: &Rvalue, function: &FunctionCfg, ctx: &CfgCtx) -> String {
+fn format_rvalue(rvalue: &Rvalue, function: &FunctionCfg, program: &CfgProgram) -> String {
     match rvalue {
         Rvalue::Use(op) => format_operand(op, function),
-        Rvalue::TableAccess { table_id, primary_key, field_id } => {
-            let table = &ctx.tables[*table_id];
-            let field = &ctx.fields[*field_id];
-            format!("{}[pk:{}].{}", table.name, format_operand(primary_key, function), field.field_name)
+        Rvalue::TableAccess {
+            table,
+            pk_field,
+            pk_value,
+            field,
+        } => {
+            let table_info = &program.tables[*table];
+            // pk_field is used implicitly by the structure, but not directly in this format string
+            let _pk_field_info = &program.fields[*pk_field];
+            let field_info = &program.fields[*field];
+            format!(
+                "{}[pk:{}].{}",
+                table_info.name,
+                format_operand(pk_value, function),
+                field_info.name
+            )
         }
         Rvalue::UnaryOp { op, operand } => {
             format!("{:?} {}", op, format_operand(operand, function))
         }
         Rvalue::BinaryOp { op, left, right } => {
-            format!("{} {:?} {}", format_operand(left, function), op, format_operand(right, function))
+            format!(
+                "{} {:?} {}",
+                format_operand(left, function),
+                op,
+                format_operand(right, function)
+            )
         }
     }
 }
 
-fn format_statement(stmt: &Statement, function: &FunctionCfg, ctx: &CfgCtx) -> String {
-    match stmt {
-        Statement::Assign { variable, rvalue, .. } => {
-            let var = &function.variables[*variable];
-            format!("%{} = {}", var.name, format_rvalue(rvalue, function, ctx))
+fn format_statement(
+    stmt: &Statement,
+    function: &FunctionCfg,
+    program: &CfgProgram,
+    show_spans: bool,
+) -> String {
+    let stmt_str = match stmt {
+        Statement::Assign { var, rvalue, .. } => {
+            let variable = &function.variables[*var];
+            format!(
+                "%{} = {}",
+                variable.name,
+                format_rvalue(rvalue, function, program)
+            )
         }
-        Statement::TableAssign { table_id, primary_key, field_id, value, .. } => {
-            let table = &ctx.tables[*table_id];
-            let field = &ctx.fields[*field_id];
-            format!("{}[pk:{}].{} = {}", 
-                table.name, 
-                format_operand(primary_key, function), 
-                field.field_name, 
-                format_operand(value, function))
+        Statement::TableAssign {
+            table,
+            pk_field,
+            pk_value,
+            field,
+            value,
+            ..
+        } => {
+            let table_info = &program.tables[*table];
+            // pk_field is used implicitly by the structure, but not directly in this format string
+            let _pk_field_info = &program.fields[*pk_field];
+            let field_info = &program.fields[*field];
+            format!(
+                "{}[pk:{}].{} = {}",
+                table_info.name,
+                format_operand(pk_value, function),
+                field_info.name,
+                format_operand(value, function)
+            )
         }
-        Statement::DeclareVariable { variable, init, .. } => {
-            let var = &function.variables[*variable];
-            format!("declare %{} = {}", var.name, format_rvalue(init, function, ctx))
-        }
-    }
+    };
+    let span_val = match stmt {
+        Statement::Assign { span, .. } => span,
+        Statement::TableAssign { span, .. } => span,
+    };
+    format!("{}{}", stmt_str, format_span_str(span_val, show_spans))
 }
 
 fn format_terminator(terminator: &Terminator, function: &FunctionCfg) -> String {
     match terminator {
         Terminator::Goto(block_id) => format!("goto bb{}", block_id.index()),
-        Terminator::Branch { condition, then_block, else_block } => {
-            format!("if {} then bb{} else bb{}", 
+        Terminator::Branch {
+            condition,
+            then_block,
+            else_block,
+        } => {
+            format!(
+                "if {} then bb{} else bb{}",
                 format_operand(condition, function),
                 then_block.index(),
-                else_block.index())
+                else_block.index()
+            )
         }
         Terminator::Return(Some(op)) => format!("return {}", format_operand(op, function)),
         Terminator::Return(None) => "return".to_string(),
         Terminator::Abort => "abort".to_string(),
-        Terminator::HopTransition { next_hop, target_block } => {
-            format!("transition to hop{} bb{}", next_hop.index(), target_block.index())
-        }
-        Terminator::FunctionExit => "function_exit".to_string(),
+        Terminator::HopExit { next_hop } => match next_hop {
+            Some(hop_id) => format!("hop_exit -> hop{}", hop_id.index()),
+            None => "hop_exit -> function_end".to_string(),
+        },
     }
 }
 
-pub fn print_cfg_dot_format(ctx: &CfgCtx, writer: &mut impl Write) -> Result<()> {
+pub fn print_cfg_dot_format(
+    program: &CfgProgram,
+    writer: &mut impl Write,
+    show_spans: bool,
+) -> Result<()> {
     writeln!(writer, "digraph CFG {{")?;
     writeln!(writer, "  compound=true;")?;
     writeln!(writer, "  node [shape=box, style=rounded];")?;
     writeln!(writer, "")?;
 
-    for (func_id, function) in ctx.functions.iter() {
+    for (func_id, function) in program.functions.iter() {
         writeln!(writer, "  subgraph cluster_func_{} {{", func_id.index())?;
-        writeln!(writer, "    label=\"Function: {}\";", escape_dot_label(&function.name))?;
+        let func_span_str = format_span_str(&function.span, show_spans);
+        writeln!(
+            writer,
+            "    label=\"Function: {}{}\";",
+            escape_dot_label(&function.name),
+            func_span_str
+        )?;
         writeln!(writer, "    style=filled;")?;
         writeln!(writer, "    color=lightgrey;")?;
         writeln!(writer, "")?;
 
-        // Group blocks by hop for visual clustering
-        let mut hop_to_blocks: std::collections::HashMap<HopId, Vec<BasicBlockId>> = 
+        let mut hop_to_blocks: std::collections::HashMap<HopId, Vec<BasicBlockId>> =
             std::collections::HashMap::new();
-        
+
         for (block_id, block) in function.blocks.iter() {
-            if let Some(hop_id) = block.hop_id {
-                hop_to_blocks.entry(hop_id).or_default().push(block_id);
-            }
+            hop_to_blocks
+                .entry(block.hop_id)
+                .or_default()
+                .push(block_id);
         }
 
         for (hop_id, blocks_in_hop) in &hop_to_blocks {
-            writeln!(writer, "    subgraph cluster_func_{}_hop_{} {{", func_id.index(), hop_id.index())?;
+            writeln!(
+                writer,
+                "    subgraph cluster_func_{}_hop_{} {{",
+                func_id.index(),
+                hop_id.index()
+            )?;
             let hop = &function.hops[*hop_id];
-            let node_name = &ctx.nodes[hop.node_id].name;
-            writeln!(writer, "      label=\"Hop {} on Node {}\";", hop_id.index(), escape_dot_label(node_name))?;
+            let node_name = &program.nodes[hop.node_id].name;
+            let hop_span_str = format_span_str(&hop.span, show_spans);
+            writeln!(
+                writer,
+                "      label=\"Hop {} on Node {}{}\";",
+                hop_id.index(),
+                escape_dot_label(node_name),
+                hop_span_str
+            )?;
             writeln!(writer, "      style=dotted;")?;
-            
+
             for &block_id in blocks_in_hop {
                 let block = &function.blocks[block_id];
-                let mut label = format!("BB{} (Hop {})\n", block_id.index(), hop_id.index());
-                
+                let block_span_str = format_span_str(&block.span, show_spans);
+                let mut label = format!(
+                    "BB{} (Hop {}){}\n",
+                    block_id.index(),
+                    hop_id.index(),
+                    block_span_str
+                );
+
                 for stmt in &block.statements {
-                    label.push_str(&format!("{}\n", format_statement(stmt, function, ctx)));
+                    label.push_str(&format!(
+                        "{}\n",
+                        format_statement(stmt, function, program, show_spans)
+                    ));
                 }
-                
-                if let Some(ref term) = block.terminator {
-                    label.push_str(&format!("Term: {}", format_terminator(term, function)));
-                }
-                
-                writeln!(writer, "      f{}_bb{} [label=\"{}\"];", 
-                    func_id.index(), block_id.index(), escape_dot_label(&label))?;
+
+                label.push_str(&format!(
+                    "Term: {}",
+                    format_terminator(&block.terminator, function)
+                ));
+
+                writeln!(
+                    writer,
+                    "      f{}_bb{} [label=\"{}\"];",
+                    func_id.index(),
+                    block_id.index(),
+                    escape_dot_label(&label)
+                )?;
             }
             writeln!(writer, "    }}")?;
         }
         writeln!(writer, "")?;
 
-        // Draw edges between blocks
         for (block_id, block) in function.blocks.iter() {
             let source_node = format!("f{}_bb{}", func_id.index(), block_id.index());
-            
-            if let Some(ref terminator) = block.terminator {
-                match terminator {
-                    Terminator::Goto(target_bb) => {
-                        writeln!(writer, "    {} -> f{}_bb{};", 
-                            source_node, func_id.index(), target_bb.index())?;
-                    }
-                    Terminator::Branch { condition, then_block, else_block } => {
-                        let cond_str = format_operand(condition, function);
-                        writeln!(writer, "    {} -> f{}_bb{} [label=\"{}\"];", 
-                            source_node, func_id.index(), then_block.index(), 
-                            escape_dot_label(&format!("{} is true", cond_str)))?;
-                        writeln!(writer, "    {} -> f{}_bb{} [label=\"{}\"];", 
-                            source_node, func_id.index(), else_block.index(), 
-                            escape_dot_label(&format!("{} is false", cond_str)))?;
-                    }
-                    Terminator::HopTransition { next_hop, target_block } => {
-                        writeln!(writer, "    {} -> f{}_bb{} [label=\"To Hop {}\", style=dashed];",
-                            source_node, func_id.index(), target_block.index(), next_hop.index())?;
-                    }
-                    Terminator::Return(_) | Terminator::Abort | Terminator::FunctionExit => {
-                        // No outgoing edges
-                    }
+
+            match &block.terminator {
+                Terminator::Goto(target_bb) => {
+                    writeln!(
+                        writer,
+                        "    {} -> f{}_bb{};",
+                        source_node,
+                        func_id.index(),
+                        target_bb.index()
+                    )?;
+                }
+                Terminator::Branch {
+                    condition,
+                    then_block,
+                    else_block,
+                } => {
+                    let cond_str = format_operand(condition, function);
+                    writeln!(
+                        writer,
+                        "    {} -> f{}_bb{} [label=\"{}\"];",
+                        source_node,
+                        func_id.index(),
+                        then_block.index(),
+                        escape_dot_label(&format!("{} is true", cond_str))
+                    )?;
+                    writeln!(
+                        writer,
+                        "    {} -> f{}_bb{} [label=\"{}\"];",
+                        source_node,
+                        func_id.index(),
+                        else_block.index(),
+                        escape_dot_label(&format!("{} is false", cond_str))
+                    )?;
+                }
+                Terminator::HopExit {
+                    next_hop: Some(next_hop_id),
+                } => {
+                    let next_hop_entry = function.hops[*next_hop_id].entry_block.unwrap(); // Use unwrap()
+                    writeln!(
+                        writer,
+                        "    {} -> f{}_bb{} [label=\"To Hop {}\", style=dashed];",
+                        source_node,
+                        func_id.index(),
+                        next_hop_entry.index(),
+                        next_hop_id.index()
+                    )?;
+                }
+                Terminator::Return(_)
+                | Terminator::Abort
+                | Terminator::HopExit { next_hop: None } => {
+                    // No outgoing edges for these terminators in the dot graph
                 }
             }
         }
@@ -164,8 +284,9 @@ pub fn print_cfg_dot_format(ctx: &CfgCtx, writer: &mut impl Write) -> Result<()>
     Ok(())
 }
 
-pub fn format_cfg_text(ctx: &CfgCtx, verbose: bool, quiet: bool) -> String {
-    if quiet {
+pub fn format_cfg_text(program: &CfgProgram, options: &CfgPrintOptions) -> String {
+    if options.quiet && options.format == CfgFormat::Text {
+        // Only return quiet message for text format
         return String::from("CFG generation complete (quiet mode).");
     }
 
@@ -173,9 +294,14 @@ pub fn format_cfg_text(ctx: &CfgCtx, verbose: bool, quiet: bool) -> String {
     s.push_str("Control Flow Graph (CFG):\n");
     s.push_str("===========================\n\n");
 
-    for (func_id, function) in ctx.functions.iter() {
-        s.push_str(&format!("Function {}: {} (", func_id.index(), function.name));
-        
+    for (func_id, function) in program.functions.iter() {
+        let func_span_str = format_span_str(&function.span, options.show_spans);
+        s.push_str(&format!(
+            "Function {}: {} (",
+            func_id.index(),
+            function.name
+        ));
+
         // Print parameters
         for (i, &param_id) in function.parameters.iter().enumerate() {
             let param = &function.variables[param_id];
@@ -184,92 +310,118 @@ pub fn format_cfg_text(ctx: &CfgCtx, verbose: bool, quiet: bool) -> String {
                 s.push_str(", ");
             }
         }
-        s.push_str(&format!(") -> {}\n", return_type_name(&function.return_type)));
-        
-        if let Some(entry_hop) = function.entry_hop {
-            s.push_str(&format!("  Entry Hop: {}\n", entry_hop.index()));
-        }
+        s.push_str(&format!(
+            ") -> {}{}\n",
+            return_type_name(&function.return_type),
+            func_span_str
+        ));
 
-        if verbose {
+        s.push_str(&format!(
+            "  Entry Hop: hop{}\n",
+            function.entry_hop.unwrap().index()
+        )); // Use unwrap()
+
+        if options.verbose {
             s.push_str("  Variables:\n");
             for (var_id, var) in function.variables.iter() {
-                let scope_str = match &var.scope {
-                    VariableScope::Function => "function".to_string(),
-                    VariableScope::Hop(hop_id) => format!("hop {}", hop_id.index()),
-                };
-                let param_str = if var.is_param { " (param)" } else { "" };
-                s.push_str(&format!("    Var {} ({}): {} {} [scope: {}]{}\n", 
-                    var_id.index(), var.name, type_name(&var.ty), var.name, scope_str, param_str));
+                let param_str = if var.is_parameter { " (param)" } else { "" };
+                s.push_str(&format!(
+                    "    Var {} ({}): {} {}{}\n",
+                    var_id.index(),
+                    var.name,
+                    type_name(&var.ty),
+                    var.name,
+                    param_str
+                ));
             }
             s.push_str("\n");
 
             s.push_str("  Hops:\n");
             for (hop_id, hop) in function.hops.iter() {
-                let node_name = &ctx.nodes[hop.node_id].name;
-                s.push_str(&format!("    Hop {} on Node {}\n", hop_id.index(), node_name));
-                if let Some(entry_block) = hop.entry_block {
-                    s.push_str(&format!("      Entry Block: BB{}\n", entry_block.index()));
-                }
-                s.push_str(&format!("      Blocks: {:?}\n", 
-                    hop.blocks.iter().map(|b| b.index()).collect::<Vec<_>>()));
+                let node_name = &program.nodes[hop.node_id].name;
+                let hop_span_str = format_span_str(&hop.span, options.show_spans);
+                s.push_str(&format!(
+                    "    Hop {} on Node {}{}\n",
+                    hop_id.index(),
+                    node_name,
+                    hop_span_str
+                ));
+                s.push_str(&format!(
+                    "      Entry Block: BB{}\n",
+                    hop.entry_block.unwrap().index()
+                )); // Use unwrap()
+                s.push_str(&format!(
+                    "      Blocks: {:?}\n",
+                    hop.blocks.iter().map(|b| b.index()).collect::<Vec<_>>()
+                ));
             }
             s.push_str("\n");
 
             s.push_str("  Basic Blocks:\n");
             for (block_id, block) in function.blocks.iter() {
-                let hop_str = match block.hop_id {
-                    Some(hop_id) => format!("Hop {}", hop_id.index()),
-                    None => "No Hop".to_string(),
-                };
-                s.push_str(&format!("    BB{} ({}):\n", block_id.index(), hop_str));
-                
+                let block_span_str = format_span_str(&block.span, options.show_spans);
+                s.push_str(&format!(
+                    "    BB{} (Hop {}):{}\n",
+                    block_id.index(),
+                    block.hop_id.index(),
+                    block_span_str
+                ));
+
                 for stmt in &block.statements {
-                    s.push_str(&format!("      {}\n", format_statement(stmt, function, ctx)));
+                    s.push_str(&format!(
+                        "      {}\n",
+                        format_statement(stmt, function, program, options.show_spans)
+                    ));
                 }
-                
-                if let Some(ref terminator) = block.terminator {
-                    s.push_str(&format!("      Terminator: {}\n", format_terminator(terminator, function)));
-                }
-                
-                s.push_str(&format!("      Successors: {:?}\n", 
-                    block.successors.iter().map(|b| b.index()).collect::<Vec<_>>()));
-                s.push_str(&format!("      Predecessors: {:?}\n", 
-                    block.predecessors.iter().map(|b| b.index()).collect::<Vec<_>>()));
+
+                s.push_str(&format!(
+                    "      Terminator: {}\n",
+                    format_terminator(&block.terminator, function)
+                ));
             }
         } else {
+            // Not verbose
             s.push_str(&format!("  Number of Hops: {}\n", function.hops.len()));
-            s.push_str(&format!("  Number of Basic Blocks: {}\n", function.blocks.len()));
-            s.push_str(&format!("  Number of Variables: {}\n", function.variables.len()));
+            s.push_str(&format!(
+                "  Number of Basic Blocks: {}\n",
+                function.blocks.len()
+            ));
+            s.push_str(&format!(
+                "  Number of Variables: {}\n",
+                function.variables.len()
+            ));
         }
         s.push_str("\n---------------------------\n\n");
     }
     s
 }
 
-pub fn print_cfg_summary(ctx: &CfgCtx) -> String {
+pub fn print_cfg_summary(program: &CfgProgram) -> String {
     let mut s = String::new();
     s.push_str("CFG Summary:\n");
     s.push_str("============\n\n");
-    
-    s.push_str(&format!("Total Functions: {}\n", ctx.functions.len()));
-    s.push_str(&format!("Total Nodes: {}\n", ctx.nodes.len()));
-    s.push_str(&format!("Total Tables: {}\n", ctx.tables.len()));
+
+    s.push_str(&format!("Total Functions: {}\n", program.functions.len()));
+    s.push_str(&format!("Total Nodes: {}\n", program.nodes.len()));
+    s.push_str(&format!("Total Tables: {}\n", program.tables.len()));
     s.push_str("\n");
-    
+
     s.push_str("Functions:\n");
-    for (func_id, function) in ctx.functions.iter() {
-        s.push_str(&format!("  {}: {} ({} hops, {} blocks, {} variables)\n",
+    for (func_id, function) in program.functions.iter() {
+        s.push_str(&format!(
+            "  {}: {} ({} hops, {} blocks, {} variables)\n",
             func_id.index(),
             function.name,
             function.hops.len(),
             function.blocks.len(),
-            function.variables.len()));
+            function.variables.len()
+        ));
     }
-    
+
     s
 }
 
-// Helper functions
+// Helper functions for type names
 fn type_name(t: &TypeName) -> &'static str {
     match t {
         TypeName::Int => "int",
@@ -295,7 +447,7 @@ pub struct CfgPrintOptions {
     pub show_spans: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CfgFormat {
     Text,
     Dot,
@@ -314,17 +466,29 @@ impl Default for CfgPrintOptions {
 }
 
 /// Main entry point for printing CFG
-pub fn print_cfg(ctx: &CfgCtx, options: &CfgPrintOptions, writer: &mut impl Write) -> Result<()> {
+pub fn print_cfg(
+    program: &CfgProgram,
+    options: &CfgPrintOptions,
+    writer: &mut impl Write,
+) -> Result<()> {
+    if options.quiet && options.format != CfgFormat::Text { // For Dot and Summary, quiet means no extra console output from main, but file still written
+         // For non-text formats, quiet doesn't change the content written to file/stdout for that format.
+         // The main `output_cfg` function handles not printing "Building CFG..." etc.
+         // If we are writing to a file, the file should still be generated.
+         // If we are writing to stdout, then for Dot/Summary, it should still print.
+         // The `format_cfg_text` handles its own "quiet mode" message.
+    }
+
     match options.format {
         CfgFormat::Text => {
-            let output = format_cfg_text(ctx, options.verbose, options.quiet);
+            let output = format_cfg_text(program, options);
             write!(writer, "{}", output)?;
         }
         CfgFormat::Dot => {
-            print_cfg_dot_format(ctx, writer)?;
+            print_cfg_dot_format(program, writer, options.show_spans)?;
         }
         CfgFormat::Summary => {
-            let output = print_cfg_summary(ctx);
+            let output = print_cfg_summary(program);
             write!(writer, "{}", output)?;
         }
     }

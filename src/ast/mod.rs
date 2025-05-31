@@ -2,12 +2,12 @@ use id_arena::{Arena, Id};
 use std::collections::HashMap;
 
 mod ast_builder;
+pub mod errors;
 mod name_resolver;
 mod semantics_analysis;
-pub mod errors;
 
 // Re-export only the essential types users need
-pub use errors::{Results, SpannedError, AstError};
+pub use errors::{AstError, Results, SpannedError};
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Span {
@@ -75,17 +75,17 @@ pub struct Program {
     pub expressions: Arena<Expression>,
     pub variables: Arena<VarDecl>,
     pub scopes: Arena<Scope>,
-    
+
     // Root collections - public for iteration
     pub root_nodes: Vec<NodeId>,
     pub root_tables: Vec<TableId>,
     pub root_functions: Vec<FunctionId>,
-    
+
     // Lookup maps - public for convenience
     pub node_map: HashMap<String, NodeId>,
     pub table_map: HashMap<String, TableId>,
     pub function_map: HashMap<String, FunctionId>,
-    
+
     // Resolution results - public for type checking access
     pub global_scope: Option<ScopeId>,
     pub resolutions: HashMap<ExpressionId, VarId>,
@@ -148,9 +148,10 @@ pub struct ParameterDecl {
 
 #[derive(Debug, Clone)]
 pub struct HopBlock {
-    pub node: NodeId,
+    pub node_name: String,
     pub statements: Vec<StatementId>,
     pub span: Span,
+    pub resolved_node: Option<NodeId>,
 }
 
 #[derive(Debug, Clone)]
@@ -171,16 +172,19 @@ pub enum StatementKind {
 pub struct VarAssignmentStatement {
     pub var_name: String,
     pub rhs: ExpressionId,
-    pub resolved_var: Option<VarId>, // Add this field
+    pub resolved_var: Option<VarId>,
 }
 
 #[derive(Debug, Clone)]
 pub struct AssignmentStatement {
-    pub table: TableId,
-    pub pk_field: FieldId,
+    pub table_name: String,
+    pub pk_field_name: String,
     pub pk_expr: ExpressionId,
-    pub field: FieldId,
+    pub field_name: String,
     pub rhs: ExpressionId,
+    pub resolved_table: Option<TableId>,
+    pub resolved_pk_field: Option<FieldId>,
+    pub resolved_field: Option<FieldId>,
 }
 
 #[derive(Debug, Clone)]
@@ -226,10 +230,13 @@ pub enum ExpressionKind {
     StringLit(String),
     BoolLit(bool),
     TableFieldAccess {
-        table: TableId,
-        pk_field: FieldId,
+        table_name: String,
+        pk_field_name: String,
         pk_expr: ExpressionId,
-        field: FieldId,
+        field_name: String,
+        resolved_table: Option<TableId>,
+        resolved_pk_field: Option<FieldId>,
+        resolved_field: Option<FieldId>,
     },
     UnaryOp {
         op: UnaryOp,
@@ -298,12 +305,12 @@ pub enum ScopeKind {
 pub fn parse_and_analyze(source: &str) -> Results<Program> {
     // Parse and build AST using ast_builder
     let mut program = ast_builder::parse_and_build(source)?;
-    
+
     // Perform name resolution
     name_resolver::resolve_names(&mut program)?;
-    
+
     // Perform semantic analysis
     semantics_analysis::analyze_program(&mut program)?;
-    
+
     Ok(program)
 }

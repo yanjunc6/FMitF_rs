@@ -1,583 +1,776 @@
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use crate::ast;
-use crate::cfg::{
-    self, BasicBlock, BasicBlockData, CfgCtx, Constant, FieldId, FunctionBody, FunctionId, HopId,
-    HopInfo, IndexVec, Local, LocalDecl, NodeId, Operand, Rvalue, Statement, TableId, Terminator,
-    LoopContext, ReturnType, TypeName, UnaryOp, BinaryOp,
-};
+use crate::cfg::*;
 
 /// Builds CFG from an AST Program.
-pub struct CfgBuilder<'ast> {
-    program_ast: &'ast ast::Program,
-    // These maps are built once and then read by FunctionContextBuilder
-    node_map: HashMap<Rc<ast::NodeDef>, NodeId>,
-    table_map: HashMap<Rc<ast::TableDeclaration>, TableId>,
-    field_map: HashMap<Rc<ast::FieldDeclaration>, FieldId>,
+pub struct CfgBuilder;
+
+/// Context for building CFG - holds the program being constructed
+pub struct CfgCtx {
+    pub program: CfgProgram,
+
+    // Lookup maps for resolved AST items
+    pub node_map: HashMap<String, NodeId>,
+    pub table_map: HashMap<String, TableId>,
+    pub field_map: HashMap<String, FieldId>,
 }
 
 /// Helper struct to manage building a single function's CFG.
-struct FunctionContextBuilder<'a, 'ast> {
-    // Global context and AST references
-    ctx: &'a mut CfgCtx, // Mutable reference to add global items like fields if necessary (though mostly populated before)
-    #[allow(dead_code)] // May be used for global lookups not covered by maps
-    program_ast: &'ast ast::Program,
-    node_map: &'a HashMap<Rc<ast::NodeDef>, NodeId>,
-    table_map: &'a HashMap<Rc<ast::TableDeclaration>, TableId>,
-    field_map: &'a HashMap<Rc<ast::FieldDeclaration>, FieldId>,
+struct FunctionContextBuilder<'a> {
+    // Context references
+    ctx: &'a mut CfgCtx,
 
-    // Function-specific data being built
-    fn_ast: &'ast ast::FunctionDeclaration,
-    body: FunctionBody, // The CFG body we are constructing for this function
+    // Function being built
+    function: FunctionCfg,
 
-    local_map: HashMap<String, Local>, // AST name to CFG Local for the current function
-    next_local_idx: u32,               // For allocating new Locals
+    // Local mappings for this function
+    var_map: HashMap<String, VarId>,
 
-    loop_stack: Vec<LoopContext>, // For break/continue resolution
+    // Loop context stack for break/continue
+    loop_stack: Vec<LoopContext>,
 
-    // Current building state within the function
-    current_hop_id: Option<HopId>,    // CFG HopId of the hop being processed
-    current_block_id: Option<BasicBlock>, // Active basic block being appended to
+    // Current building state
+    current_hop_id: Option<HopId>,
+    current_block_id: Option<BasicBlockId>,
 }
 
-// Enum to help manage expression building logic
-enum RvalueOrOperand {
-    Rvalue(cfg::Rvalue),
-    Operand(cfg::Operand),
+#[derive(Debug, Clone)]
+struct LoopContext {
+    continue_target: BasicBlockId,
+    break_target: BasicBlockId,
 }
 
-impl<'ast> CfgBuilder<'ast> {
-    pub fn new(program_ast: &'ast ast::Program) -> Self {
-        CfgBuilder {
-            program_ast,
+impl CfgBuilder {
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Build CFG from AST Program
+    pub fn build_from_program(program: &ast::Program) -> Result<CfgCtx, String> {
+        let mut ctx = CfgCtx {
+            program: CfgProgram {
+                nodes: id_arena::Arena::new(),
+                tables: id_arena::Arena::new(),
+                fields: id_arena::Arena::new(),
+                functions: id_arena::Arena::new(),
+                root_nodes: Vec::new(),
+                root_tables: Vec::new(),
+                root_functions: Vec::new(),
+            },
             node_map: HashMap::new(),
             table_map: HashMap::new(),
             field_map: HashMap::new(),
-        }
-    }
-
-    /// Consumes the builder and returns the populated CfgCtx and a list of FunctionBody CFGs.
-    pub fn build(mut self) -> (CfgCtx, IndexVec<FunctionId, FunctionBody>) {
-        let mut ctx = CfgCtx {
-            nodes: IndexVec::new(),
-            tables: IndexVec::new(),
-            fields: IndexVec::new(),
-            table_fields: HashMap::new(),
-            table_primary_keys: HashMap::new(),
         };
 
-        self.populate_global_maps(&mut ctx);
+        // Build global items first
+        Self::build_nodes(program, &mut ctx)?;
+        Self::build_tables(program, &mut ctx)?;
+        Self::build_functions(program, &mut ctx)?;
 
-        let mut function_bodies = IndexVec::new();
-        for (idx, func_ast) in self.program_ast.functions.iter().enumerate() {
-            let func_id = FunctionId::new(idx as u32);
+        Ok(ctx)
+    }
 
-            let mut fn_ctx_builder = FunctionContextBuilder {
-                ctx: &mut ctx,
-                program_ast: self.program_ast,
-                node_map: &self.node_map,
-                table_map: &self.table_map,
-                field_map: &self.field_map,
-                fn_ast,
-                body: FunctionBody {
-                    id: func_id,
-                    name: Rc::from(func_ast.name.as_str()),
-                    params: Vec::new(), // Populated by build_function
-                    return_type: Self::convert_ast_return_type(&func_ast.return_type),
-                    hops: IndexVec::new(),
-                    blocks: IndexVec::new(),
-                    locals: IndexVec::new(),
-                    entry_block: BasicBlock::new(0), // Placeholder, set by build_function
-                },
-                local_map: HashMap::new(),
-                next_local_idx: 0,
-                loop_stack: Vec::new(),
-                current_hop_id: None,
-                current_block_id: None,
+    /// Build all nodes
+    fn build_nodes(program: &ast::Program, ctx: &mut CfgCtx) -> Result<(), String> {
+        for &node_id in &program.root_nodes {
+            let node_ast = &program.nodes[node_id];
+
+            let cfg_node = NodeInfo {
+                name: node_ast.name.clone(),
+                tables: Vec::new(), // Will be populated when building tables
             };
 
-            let built_body = fn_ctx_builder.build_function();
-            function_bodies.push(built_body);
+            let cfg_node_id = ctx.program.nodes.alloc(cfg_node);
+            ctx.node_map.insert(node_ast.name.clone(), cfg_node_id);
+            ctx.program.root_nodes.push(cfg_node_id);
         }
-
-        (ctx, function_bodies)
+        Ok(())
     }
 
-    /// Populates CfgCtx with global definitions (nodes, tables, fields) and builder's internal maps.
-    fn populate_global_maps(&mut self, ctx: &mut CfgCtx) {
-        // Fix arena iteration - use iter() which returns (Id, &Value) pairs
-        for (node_id, node_def) in self.program_ast.nodes.iter() {
-            ctx.node_map.insert(node_def.name.clone(), node_id);
-        }
+    /// Build all tables and fields
+    fn build_tables(program: &ast::Program, ctx: &mut CfgCtx) -> Result<(), String> {
+        for &table_id in &program.root_tables {
+            let table_ast = &program.tables[table_id];
 
-        for (table_id, table_decl) in self.program_ast.tables.iter() {
-            ctx.table_map.insert(table_decl.name.clone(), table_id);
-            
-            // Build field mappings
+            // Look up the node
+            let node_id = ctx
+                .node_map
+                .get(&program.nodes[table_ast.node].name)
+                .ok_or_else(|| format!("Node {} not found", program.nodes[table_ast.node].name))?;
+
+            // Build fields first
             let mut field_ids = Vec::new();
-            for &field_id in &table_decl.fields {
-                let field = &self.program_ast.fields[field_id];
-                field_ids.push(field_id);
-                if field.is_primary {
-                    ctx.table_primary_keys.insert(table_id, field_id);
+            let mut primary_key_id = None;
+
+            for &field_ast_id in &table_ast.fields {
+                let field_ast = &program.fields[field_ast_id];
+
+                let cfg_field = FieldInfo {
+                    name: field_ast.field_name.clone(),
+                    ty: field_ast.field_type.clone(),
+                    table_id: None, // Will be updated after table_id is allocated
+                    is_primary: field_ast.is_primary,
+                };
+
+                let cfg_field_id = ctx.program.fields.alloc(cfg_field);
+                field_ids.push(cfg_field_id);
+                ctx.field_map
+                    .insert(field_ast.field_name.clone(), cfg_field_id);
+
+                if field_ast.is_primary {
+                    primary_key_id = Some(cfg_field_id);
                 }
             }
-            ctx.table_fields.insert(table_id, field_ids);
+
+            let primary_key = primary_key_id
+                .ok_or_else(|| format!("Table {} has no primary key", table_ast.name))?;
+
+            // Build table
+            let cfg_table = TableInfo {
+                name: table_ast.name.clone(),
+                node_id: *node_id,
+                fields: field_ids.clone(),
+                primary_key,
+            };
+
+            let cfg_table_id = ctx.program.tables.alloc(cfg_table);
+            ctx.table_map.insert(table_ast.name.clone(), cfg_table_id);
+            ctx.program.root_tables.push(cfg_table_id);
+
+            // Update field table references
+            for field_id in field_ids {
+                ctx.program.fields[field_id].table_id = Some(cfg_table_id);
+            }
+
+            // Update node's table list
+            ctx.program.nodes[*node_id].tables.push(cfg_table_id);
         }
-    }
-    
-    // Static conversion helpers
-    fn convert_ast_type(ty: &ast::TypeName) -> cfg::TypeName {
-        match ty {
-            ast::TypeName::Int => cfg::TypeName::Int,
-            ast::TypeName::Float => cfg::TypeName::Float,
-            ast::TypeName::String => cfg::TypeName::String,
-            ast::TypeName::Bool => cfg::TypeName::Bool,
-        }
+        Ok(())
     }
 
-    fn convert_ast_return_type(ty: &ast::ReturnType) -> cfg::ReturnType {
-        match ty {
-            ast::ReturnType::Void => cfg::ReturnType::Void,
-            ast::ReturnType::Type(t) => cfg::ReturnType::Type(Self::convert_ast_type(t)),
-        }
-    }
+    /// Build all functions
+    fn build_functions(program: &ast::Program, ctx: &mut CfgCtx) -> Result<(), String> {
+        for &func_id in &program.root_functions {
+            let func_ast = &program.functions[func_id];
 
-    fn convert_ast_binop(op: ast::BinaryOp) -> cfg::BinaryOp {
-        match op {
-            ast::BinaryOp::Add => cfg::BinaryOp::Add,
-            ast::BinaryOp::Sub => cfg::BinaryOp::Sub,
-            ast::BinaryOp::Mul => cfg::BinaryOp::Mul,
-            ast::BinaryOp::Div => cfg::BinaryOp::Div,
-            ast::BinaryOp::Lt => cfg::BinaryOp::Lt,
-            ast::BinaryOp::Lte => cfg::BinaryOp::Lte,
-            ast::BinaryOp::Gt => cfg::BinaryOp::Gt,
-            ast::BinaryOp::Gte => cfg::BinaryOp::Gte,
-            ast::BinaryOp::Eq => cfg::BinaryOp::Eq,
-            ast::BinaryOp::Neq => cfg::BinaryOp::Neq,
-            ast::BinaryOp::And => cfg::BinaryOp::And,
-            ast::BinaryOp::Or => cfg::BinaryOp::Or,
-        }
-    }
+            let builder = FunctionContextBuilder::new(ctx, func_ast)?; // Removed mut
+            let function = builder.build(program, func_ast)?;
 
-    fn convert_ast_unop(op: ast::UnaryOp) -> cfg::UnaryOp {
-        match op {
-            ast::UnaryOp::Not => cfg::UnaryOp::Not,
-            ast::UnaryOp::Neg => cfg::UnaryOp::Neg,
+            let cfg_func_id = ctx.program.functions.alloc(function);
+            ctx.program.root_functions.push(cfg_func_id);
         }
+        Ok(())
     }
 }
 
-impl<'a, 'ast> FunctionContextBuilder<'a, 'ast> {
-    /// Builds the CFG for the function associated with this builder.
-    fn build_function(mut self) -> FunctionBody {
-        // 1. Process parameters: create LocalDecls and map names
-        for param_ast in &self.fn_ast.parameters {
-            let local_id = self.new_local_decl(
-                Some(param_ast.param_name.clone()),
-                param_ast.param_type.clone(),
-                true,  // is_param
-                false, // is_global
-                param_ast.span.clone(),
-            );
-            self.body.params.push(local_id);
-        }
+impl<'a> FunctionContextBuilder<'a> {
+    fn new(ctx: &'a mut CfgCtx, func_ast: &ast::FunctionDeclaration) -> Result<Self, String> {
+        let function = FunctionCfg {
+            name: func_ast.name.clone(),
+            return_type: func_ast.return_type.clone(),
+            span: func_ast.span.clone(),
+            variables: id_arena::Arena::new(),
+            parameters: Vec::new(),
+            hops: id_arena::Arena::new(),
+            blocks: id_arena::Arena::new(),
+            entry_hop: None, // Will be set
+            hop_order: Vec::new(),
+        };
 
-        // 2. Handle functions with no explicit hops (create a dummy hop)
-        if self.fn_ast.hops.is_empty() {
-            let (dummy_node_id, dummy_span) = self.program_ast.nodes.first().map_or_else(
-                || {
-                    // Fallback if no nodes defined; ideally a semantic error or default node.
-                    (NodeId::new(0), self.fn_ast.span.clone())
-                },
-                |node_def| (*self.node_map.get(node_def).unwrap(), node_def.span.clone()),
-            );
-
-            let dummy_hop_id = self.body.hops.push(HopInfo {
-                node: dummy_node_id,
-                entry: BasicBlock::new(0), // Placeholder
-                exits: Vec::new(),
-                span: dummy_span,
-            });
-            self.current_hop_id = Some(dummy_hop_id);
-
-            let entry_block_id = self.new_basic_block(dummy_hop_id);
-            self.body.hops[dummy_hop_id].entry = entry_block_id;
-            self.body.entry_block = entry_block_id; // Function entry
-
-            self.terminate_block_for_function_end(entry_block_id, dummy_hop_id);
-            self.populate_block_successors();
-            return self.body;
-        }
-
-        // 3. Create all HopInfo and their entry BasicBlocks first
-        let mut hop_entry_blocks = Vec::new();
-        for (idx, hop_ast) in self.fn_ast.hops.iter().enumerate() {
-            let node_rc = hop_ast.node.clone();
-            let cfg_node_id = *self.node_map.get(&node_rc)
-                .expect("AST NodeDef not found in map (should be caught by semantic analysis)");
-
-            let hop_id = self.body.hops.push(HopInfo {
-                node: cfg_node_id,
-                entry: BasicBlock::new(0), // Placeholder
-                exits: Vec::new(),
-                span: hop_ast.span.clone(),
-            });
-            let entry_bb = self.new_basic_block(hop_id);
-            self.body.hops[hop_id].entry = entry_bb;
-            hop_entry_blocks.push(entry_bb);
-
-            if idx == 0 {
-                self.body.entry_block = entry_bb; // Function entry
-            }
-        }
-
-        // 4. Build statements for each hop
-        for (hop_idx, hop_ast) in self.fn_ast.hops.iter().enumerate() {
-            let current_cfg_hop_id = HopId::new(hop_idx as u32);
-            self.current_hop_id = Some(current_cfg_hop_id);
-            self.current_block_id = Some(hop_entry_blocks[hop_idx]); // Start with the hop's entry block
-
-            for stmt_ast in &hop_ast.statements {
-                if self.current_block_id.is_none() {
-                    // Block was terminated by a previous statement (return, abort, break, continue)
-                    break;
-                }
-                self.build_statement(stmt_ast);
-            }
-
-            // If the current block is still active after all statements in this hop
-            if let Some(active_block_id) = self.current_block_id.take() {
-                if hop_idx < self.fn_ast.hops.len() - 1 {
-                    // Not the last hop: transition to the next hop's entry block
-                    let next_hop_entry_block_id = hop_entry_blocks[hop_idx + 1];
-                    let next_cfg_hop_id = HopId::new((hop_idx + 1) as u32);
-                    self.set_terminator(active_block_id, Terminator::HopTransition {
-                        next_hop: next_cfg_hop_id,
-                        target_block: next_hop_entry_block_id,
-                    });
-                    self.body.hops[current_cfg_hop_id].exits.push(active_block_id);
-                } else {
-                    // Last hop: terminate the function
-                    self.terminate_block_for_function_end(active_block_id, current_cfg_hop_id);
-                }
-            }
-        }
-
-        self.populate_block_successors();
-        self.body
-    }
-
-    /// Helper to terminate a block at the end of a function or a dummy hop.
-    fn terminate_block_for_function_end(&mut self, block_id: BasicBlock, hop_id: HopId) {
-         match self.body.return_type {
-            ReturnType::Void => {
-                self.set_terminator(block_id, Terminator::Return(None));
-            }
-            _ => {
-                // Non-void functions must have an explicit return. If we reach here, it's an implicit abort.
-                // This should ideally be a semantic error.
-                self.set_terminator(block_id, Terminator::Abort);
-            }
-        }
-        self.body.hops[hop_id].exits.push(block_id);
-    }
-
-
-    /// Creates a LocalDecl, adds it to the function body, and maps its name.
-    fn new_local_decl(&mut self, name_opt: Option<String>, ty: ast::TypeName, is_param: bool, is_global: bool, span: ast::Span) -> Local {
-        let local_id = Local::new(self.next_local_idx);
-        self.next_local_idx += 1;
-
-        let name_rc = Rc::from(name_opt.clone().unwrap_or_else(|| format!("_temp{}", local_id.as_usize())));
-
-        self.body.locals.push(LocalDecl {
-            name: name_rc,
-            ty: CfgBuilder::convert_ast_type(&ty),
-            is_param,
-            is_global, // Note: CFG `LocalDecl` has `is_global`. AST `VarDeclStatement` also has it.
-            span,
-        });
-
-        if let Some(name) = name_opt {
-            self.local_map.insert(name, local_id);
-        }
-        local_id
-    }
-
-    /// Creates a new BasicBlock associated with the given HopId.
-    fn new_basic_block(&mut self, hop_id: HopId) -> BasicBlock {
-        self.body.blocks.push(BasicBlockData {
-            statements: Vec::new(),
-            terminator: Terminator::Abort, // Placeholder, must be overwritten
-            hop: hop_id,
-            successors: Vec::new(), // Populated at the end
+        Ok(Self {
+            ctx,
+            function,
+            var_map: HashMap::new(),
+            loop_stack: Vec::new(),
+            current_hop_id: None,
+            current_block_id: None,
         })
     }
 
-    fn add_statement(&mut self, block_id: BasicBlock, stmt: cfg::Statement) {
-        self.body.blocks[block_id].statements.push(stmt);
+    fn build(
+        mut self,
+        program: &ast::Program,
+        func_ast: &ast::FunctionDeclaration,
+    ) -> Result<FunctionCfg, String> {
+        // Build parameters
+        self.build_parameters(program, func_ast)?;
+
+        // Build hops
+        self.build_hops(program, func_ast)?;
+
+        Ok(self.function)
     }
 
-    fn set_terminator(&mut self, block_id: BasicBlock, terminator: cfg::Terminator) {
-        self.body.blocks[block_id].terminator = terminator;
+    fn build_parameters(
+        &mut self,
+        program: &ast::Program,
+        func_ast: &ast::FunctionDeclaration,
+    ) -> Result<(), String> {
+        for &param_id in &func_ast.parameters {
+            let param_ast = &program.parameters[param_id];
+
+            let var = Variable {
+                name: param_ast.param_name.clone(),
+                ty: param_ast.param_type.clone(),
+                is_parameter: true,
+            };
+
+            let var_id = self.function.variables.alloc(var);
+            self.var_map.insert(param_ast.param_name.clone(), var_id);
+            self.function.parameters.push(var_id);
+        }
+        Ok(())
     }
 
-    /// Builds a single AST statement and appends its CFG equivalent.
-    /// Updates `self.current_block_id` if the statement terminates the current block.
-    fn build_statement(&mut self, stmt_ast: &'ast ast::Statement) {
-        let current_bb_id = self.current_block_id.expect("No active basic block for statement");
-        let span = stmt_ast.span.clone(); // Capture span for all generated CFG elements
+    fn build_hops(
+        &mut self,
+        program: &ast::Program,
+        func_ast: &ast::FunctionDeclaration,
+    ) -> Result<(), String> {
+        if func_ast.hops.is_empty() {
+            return Err("Function has no hops".to_string());
+        }
 
-        match &stmt_ast.node {
-            ast::StatementKind::VarDecl(var_decl_ast) => {
-                let init_operand = self.build_expr_to_operand(&var_decl_ast.init_value, current_bb_id);
-                let local_id = self.new_local_decl(
-                    Some(var_decl_ast.var_name.clone()),
-                    var_decl_ast.var_type.clone(),
-                    false, // not a param
-                    var_decl_ast.is_global,
-                    span.clone(),
-                );
-                self.add_statement(current_bb_id, cfg::Statement::Assign {
-                    local: local_id,
-                    rvalue: cfg::Rvalue::Use(init_operand), // Assign the already computed operand
-                    span,
-                });
-            }
-            ast::StatementKind::VarAssignment(assign_ast) => {
-                let local_id = *self.local_map.get(&assign_ast.var_name)
-                    .expect("Undeclared variable (semantic error)");
-                let rhs_operand = self.build_expr_to_operand(&assign_ast.rhs, current_bb_id);
-                self.add_statement(current_bb_id, cfg::Statement::Assign {
-                    local: local_id,
-                    rvalue: cfg::Rvalue::Use(rhs_operand),
-                    span,
-                });
-            }
-            ast::StatementKind::Assignment(assign_ast) => {
-                let table_id = *self.table_map.get(&assign_ast.table).expect("Table AST not found");
-                let pk_operand = self.build_expr_to_operand(&assign_ast.pk_expr, current_bb_id);
-                let field_id = *self.field_map.get(&assign_ast.field).expect("Field AST not found");
-                let rhs_operand = self.build_expr_to_operand(&assign_ast.rhs, current_bb_id);
-                self.add_statement(current_bb_id, cfg::Statement::TableAssign {
-                    table: table_id,
-                    primary_key: pk_operand,
-                    field: field_id,
-                    value: rhs_operand,
-                    span,
-                });
-            }
-            ast::StatementKind::IfStmt(if_ast) => {
-                let cond_operand = self.build_expr_to_operand(&if_ast.condition, current_bb_id);
-                
-                let then_block_id = self.new_basic_block(self.current_hop_id.unwrap());
-                let merge_block_id = self.new_basic_block(self.current_hop_id.unwrap());
+        // Build all hops first and populate hop_order
+        for &hop_ast_id in &func_ast.hops {
+            let hop_ast = &program.hops[hop_ast_id];
 
-                let else_target_block_id = if if_ast.else_branch.is_some() {
-                    self.new_basic_block(self.current_hop_id.unwrap())
+            // Resolve node
+            let node_id = if let Some(resolved_node) = hop_ast.resolved_node {
+                resolved_node
+            } else {
+                return Err(format!("Hop node {} not resolved", hop_ast.node_name));
+            };
+
+            // Find the CFG node ID
+            let cfg_node_id = self
+                .ctx
+                .node_map
+                .get(&program.nodes[node_id].name)
+                .ok_or_else(|| format!("CFG node not found for {}", program.nodes[node_id].name))?;
+
+            let hop = HopCfg {
+                node_id: *cfg_node_id,
+                entry_block: None, // Will be set
+                blocks: Vec::new(),
+                span: hop_ast.span.clone(),
+            };
+
+            let hop_id = self.function.hops.alloc(hop);
+            self.function.hop_order.push(hop_id);
+
+            if self.function.entry_hop.is_none() {
+                // First hop allocated becomes entry hop
+                self.function.entry_hop = Some(hop_id);
+            }
+        }
+
+        // Build statements for each hop using the IDs from hop_order
+        for (hop_index, &hop_ast_id) in func_ast.hops.iter().enumerate() {
+            let hop_ast = &program.hops[hop_ast_id];
+            let hop_id = self.function.hop_order[hop_index]; // Use actual HopId from hop_order
+
+            self.current_hop_id = Some(hop_id);
+
+            // Create entry block for this hop
+            let entry_block = self.new_basic_block(hop_id)?;
+            self.function.hops[hop_id].entry_block = Some(entry_block); // Assign Some(id)
+            self.current_block_id = Some(entry_block);
+
+            // Build statements
+            for &stmt_id in &hop_ast.statements {
+                if self.current_block_id.is_none() {
+                    break; // Block was terminated
+                }
+                self.build_statement(program, &program.statements[stmt_id])?;
+            }
+
+            // Handle hop transition
+            if let Some(active_block) = self.current_block_id.take() {
+                if hop_index < func_ast.hops.len() - 1 {
+                    // Transition to next hop
+                    let next_hop_id = self.function.hop_order[hop_index + 1]; // Use actual HopId
+                    self.set_terminator(
+                        active_block,
+                        Terminator::HopExit {
+                            next_hop: Some(next_hop_id),
+                        },
+                    );
                 } else {
-                    merge_block_id // No else, condition false goes directly to merge
+                    // Last hop - function exit
+                    match func_ast.return_type {
+                        ast::ReturnType::Void => {
+                            self.set_terminator(active_block, Terminator::Return(None));
+                        }
+                        _ => {
+                            self.set_terminator(active_block, Terminator::Abort);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn build_statement(
+        &mut self,
+        program: &ast::Program,
+        stmt: &ast::Statement,
+    ) -> Result<(), String> {
+        let current_block = self
+            .current_block_id
+            .ok_or("No active block for statement")?;
+
+        match &stmt.node {
+            ast::StatementKind::VarDecl(var_decl) => {
+                // Create variable
+                let var = Variable {
+                    name: var_decl.var_name.clone(),
+                    ty: var_decl.var_type.clone(),
+                    is_parameter: false,
                 };
 
-                self.set_terminator(current_bb_id, Terminator::Branch {
-                    condition: cond_operand,
-                    then_block: then_block_id,
-                    else_block: else_target_block_id,
-                });
-                // current_bb_id is now terminated. Subsequent statements go into new blocks.
-                
-                // Build then branch
-                self.current_block_id = Some(then_block_id);
-                for stmt in &if_ast.then_branch {
-                    if self.current_block_id.is_none() { break; } // Terminated within then-branch
-                    self.build_statement(stmt);
-                }
-                if let Some(active_then_block) = self.current_block_id.take() {
-                    self.set_terminator(active_then_block, Terminator::Goto(merge_block_id));
-                }
+                let var_id = self.function.variables.alloc(var);
+                self.var_map.insert(var_decl.var_name.clone(), var_id);
 
-                // Build else branch if it exists
-                if let Some(else_stmts) = &if_ast.else_branch {
-                    self.current_block_id = Some(else_target_block_id); // else_target_block_id is the start of else
-                    for stmt in else_stmts {
-                        if self.current_block_id.is_none() { break; } // Terminated within else-branch
-                        self.build_statement(stmt);
-                    }
-                    if let Some(active_else_block) = self.current_block_id.take() {
-                        self.set_terminator(active_else_block, Terminator::Goto(merge_block_id));
-                    }
-                }
-                
-                self.current_block_id = Some(merge_block_id); // Continue building from merge block
+                // Build initializer
+                let init_operand = self.build_expression(program, var_decl.init_value)?;
+
+                self.add_statement(
+                    current_block,
+                    Statement::Assign {
+                        var: var_id,
+                        rvalue: Rvalue::Use(init_operand),
+                        span: stmt.span.clone(),
+                    },
+                );
             }
-            ast::StatementKind::WhileStmt(while_ast) => {
-                let header_block_id = self.new_basic_block(self.current_hop_id.unwrap());
-                let body_block_id = self.new_basic_block(self.current_hop_id.unwrap());
-                let exit_block_id = self.new_basic_block(self.current_hop_id.unwrap());
+            ast::StatementKind::VarAssignment(var_assign) => {
+                let var_id = if let Some(resolved_var) = var_assign.resolved_var {
+                    let var_ast = &program.variables[resolved_var];
+                    *self
+                        .var_map
+                        .get(&var_ast.name)
+                        .ok_or_else(|| format!("Variable {} not found in CFG", var_ast.name))?
+                } else {
+                    return Err(format!("Variable {} not resolved", var_assign.var_name));
+                };
 
-                self.set_terminator(current_bb_id, Terminator::Goto(header_block_id));
+                let rhs_operand = self.build_expression(program, var_assign.rhs)?;
 
-                // Header block: evaluate condition
-                self.current_block_id = Some(header_block_id);
-                let cond_operand = self.build_expr_to_operand(&while_ast.condition, header_block_id);
-                self.set_terminator(header_block_id, Terminator::Branch {
-                    condition: cond_operand,
-                    then_block: body_block_id,
-                    else_block: exit_block_id,
-                });
-                
-                // Body block: push loop context, build statements, jump to header
-                self.current_block_id = Some(body_block_id);
-                self.loop_stack.push(LoopContext {
-                    continue_target: header_block_id,
-                    break_target: exit_block_id,
-                    hop: self.current_hop_id.unwrap(),
-                });
-                for stmt in &while_ast.body {
-                    if self.current_block_id.is_none() { break; } // Terminated by break/continue/return
-                    self.build_statement(stmt);
-                }
-                self.loop_stack.pop();
-                if let Some(active_body_block) = self.current_block_id.take() {
-                    self.set_terminator(active_body_block, Terminator::Goto(header_block_id));
-                }
-                
-                self.current_block_id = Some(exit_block_id); // Continue from exit block
+                self.add_statement(
+                    current_block,
+                    Statement::Assign {
+                        var: var_id,
+                        rvalue: Rvalue::Use(rhs_operand),
+                        span: stmt.span.clone(),
+                    },
+                );
             }
-            ast::StatementKind::Return(ret_ast) => {
-                let ret_val_opt = ret_ast.value.as_ref().map(|expr| self.build_expr_to_operand(expr, current_bb_id));
-                self.set_terminator(current_bb_id, Terminator::Return(ret_val_opt));
-                self.body.hops[self.current_hop_id.unwrap()].exits.push(current_bb_id);
-                self.current_block_id = None; // Block terminated
+            ast::StatementKind::Assignment(assign) => {
+                let table_id = if let Some(resolved_table) = assign.resolved_table {
+                    let table_ast = &program.tables[resolved_table];
+                    *self
+                        .ctx
+                        .table_map
+                        .get(&table_ast.name)
+                        .ok_or_else(|| format!("Table {} not found in CFG", table_ast.name))?
+                } else {
+                    return Err(format!("Table {} not resolved", assign.table_name));
+                };
+
+                let pk_field_id = if let Some(resolved_pk_field) = assign.resolved_pk_field {
+                    let field_ast = &program.fields[resolved_pk_field];
+                    *self
+                        .ctx
+                        .field_map
+                        .get(&field_ast.field_name)
+                        .ok_or_else(|| {
+                            format!(
+                                "Primary key field {} not found in CFG",
+                                field_ast.field_name
+                            )
+                        })?
+                } else {
+                    return Err(format!(
+                        "Primary key field {} not resolved",
+                        assign.pk_field_name
+                    ));
+                };
+
+                let field_id = if let Some(resolved_field) = assign.resolved_field {
+                    let field_ast = &program.fields[resolved_field];
+                    *self
+                        .ctx
+                        .field_map
+                        .get(&field_ast.field_name)
+                        .ok_or_else(|| format!("Field {} not found in CFG", field_ast.field_name))?
+                } else {
+                    return Err(format!("Field {} not resolved", assign.field_name));
+                };
+
+                let pk_operand = self.build_expression(program, assign.pk_expr)?;
+                let value_operand = self.build_expression(program, assign.rhs)?;
+
+                self.add_statement(
+                    current_block,
+                    Statement::TableAssign {
+                        table: table_id,
+                        pk_field: pk_field_id,
+                        pk_value: pk_operand,
+                        field: field_id,
+                        value: value_operand,
+                        span: stmt.span.clone(),
+                    },
+                );
+            }
+            ast::StatementKind::IfStmt(if_stmt) => {
+                self.build_if_statement(program, if_stmt)?;
+            }
+            ast::StatementKind::WhileStmt(while_stmt) => {
+                self.build_while_statement(program, while_stmt)?;
+            }
+            ast::StatementKind::Return(ret_stmt) => {
+                let ret_operand = if let Some(expr_id) = ret_stmt.value {
+                    Some(self.build_expression(program, expr_id)?)
+                } else {
+                    None
+                };
+
+                self.set_terminator(current_block, Terminator::Return(ret_operand));
+                self.current_block_id = None;
             }
             ast::StatementKind::Abort(_) => {
-                self.set_terminator(current_bb_id, Terminator::Abort);
-                self.body.hops[self.current_hop_id.unwrap()].exits.push(current_bb_id);
-                self.current_block_id = None; // Block terminated
+                self.set_terminator(current_block, Terminator::Abort);
+                self.current_block_id = None;
             }
             ast::StatementKind::Break(_) => {
-                let loop_ctx = self.loop_stack.last().expect("Break outside loop (semantic error)");
-                // TODO: Add check if loop_ctx.hop matches current_hop_id (breaks cannot cross hops)
-                self.set_terminator(current_bb_id, Terminator::Goto(loop_ctx.break_target));
-                self.current_block_id = None; // Block terminated
+                let loop_ctx = self.loop_stack.last().ok_or("Break outside loop")?;
+                self.set_terminator(current_block, Terminator::Goto(loop_ctx.break_target));
+                self.current_block_id = None;
             }
             ast::StatementKind::Continue(_) => {
-                let loop_ctx = self.loop_stack.last().expect("Continue outside loop (semantic error)");
-                // TODO: Add check if loop_ctx.hop matches current_hop_id
-                self.set_terminator(current_bb_id, Terminator::Goto(loop_ctx.continue_target));
-                self.current_block_id = None; // Block terminated
+                let loop_ctx = self.loop_stack.last().ok_or("Continue outside loop")?;
+                self.set_terminator(current_block, Terminator::Goto(loop_ctx.continue_target));
+                self.current_block_id = None;
             }
-            ast::StatementKind::Empty => { /* No-op, current_block_id remains active */ }
+            ast::StatementKind::Empty => {
+                // No-op
+            }
         }
+
+        Ok(())
     }
 
-    /// Builds an AST expression, ensuring the result is a `cfg::Operand`.
-    /// If the AST expression is complex (e.g., binary op, table access), it creates a temporary
-    /// local, emits an assignment statement for the complex part, and returns the temporary local.
-    fn build_expr_to_operand(&mut self, expr_ast: &'ast ast::Expression, current_bb_id: BasicBlock) -> cfg::Operand {
-        let span = expr_ast.span.clone();
-        match self.build_expr_to_rvalue_or_operand(expr_ast, current_bb_id) {
-            RvalueOrOperand::Operand(op) => op,
-            RvalueOrOperand::Rvalue(rval) => {
-                // Determine type for the temporary local. This is simplified.
-                // A proper implementation would use type information from a semantic analysis pass.
-                let temp_var_type_ast = match &rval {
-                    cfg::Rvalue::TableAccess { table: _, field, .. } => {
-                        // Get type from FieldDeclaration in CfgCtx
-                        self.convert_cfg_type_to_ast(self.ctx.fields[*field].field_type.clone())
-                    }
-                    // For UnaryOp and BinaryOp, the type depends on the operation and operand types.
-                    // This requires more sophisticated type inference rules.
-                    // For now, let's assume Int for simplicity if not TableAccess. This is a placeholder.
-                    _ => ast::TypeName::Int, // Placeholder: Needs proper type inference
+    fn build_if_statement(
+        &mut self,
+        program: &ast::Program,
+        if_stmt: &ast::IfStatement,
+    ) -> Result<(), String> {
+        let current_block = self
+            .current_block_id
+            .ok_or("No active block for if statement")?;
+        let current_hop = self
+            .current_hop_id
+            .ok_or("No active hop for if statement")?;
+
+        let condition = self.build_expression(program, if_stmt.condition)?;
+
+        let then_block = self.new_basic_block(current_hop)?;
+        let merge_block = self.new_basic_block(current_hop)?;
+
+        let else_block = if if_stmt.else_branch.is_some() {
+            self.new_basic_block(current_hop)?
+        } else {
+            merge_block
+        };
+
+        self.set_terminator(
+            current_block,
+            Terminator::Branch {
+                condition,
+                then_block,
+                else_block,
+            },
+        );
+
+        // Build then branch
+        self.current_block_id = Some(then_block);
+        for &stmt_id in &if_stmt.then_branch {
+            if self.current_block_id.is_none() {
+                break;
+            }
+            self.build_statement(program, &program.statements[stmt_id])?;
+        }
+        if let Some(active_block) = self.current_block_id.take() {
+            self.set_terminator(active_block, Terminator::Goto(merge_block));
+        }
+
+        // Build else branch if present
+        if let Some(else_stmts) = &if_stmt.else_branch {
+            self.current_block_id = Some(else_block);
+            for &stmt_id in else_stmts {
+                if self.current_block_id.is_none() {
+                    break;
+                }
+                self.build_statement(program, &program.statements[stmt_id])?;
+            }
+            if let Some(active_block) = self.current_block_id.take() {
+                self.set_terminator(active_block, Terminator::Goto(merge_block));
+            }
+        }
+
+        self.current_block_id = Some(merge_block);
+        Ok(())
+    }
+
+    fn build_while_statement(
+        &mut self,
+        program: &ast::Program,
+        while_stmt: &ast::WhileStatement,
+    ) -> Result<(), String> {
+        let current_block = self
+            .current_block_id
+            .ok_or("No active block for while statement")?;
+        let current_hop = self
+            .current_hop_id
+            .ok_or("No active hop for while statement")?;
+
+        let header_block = self.new_basic_block(current_hop)?;
+        let body_block = self.new_basic_block(current_hop)?;
+        let exit_block = self.new_basic_block(current_hop)?;
+
+        self.set_terminator(current_block, Terminator::Goto(header_block));
+
+        // Header block
+        self.current_block_id = Some(header_block);
+        let condition = self.build_expression(program, while_stmt.condition)?;
+        self.set_terminator(
+            header_block,
+            Terminator::Branch {
+                condition,
+                then_block: body_block,
+                else_block: exit_block,
+            },
+        );
+
+        // Body block
+        self.current_block_id = Some(body_block);
+        self.loop_stack.push(LoopContext {
+            continue_target: header_block,
+            break_target: exit_block,
+        });
+
+        for &stmt_id in &while_stmt.body {
+            if self.current_block_id.is_none() {
+                break;
+            }
+            self.build_statement(program, &program.statements[stmt_id])?;
+        }
+
+        self.loop_stack.pop();
+
+        if let Some(active_block) = self.current_block_id.take() {
+            self.set_terminator(active_block, Terminator::Goto(header_block));
+        }
+
+        self.current_block_id = Some(exit_block);
+        Ok(())
+    }
+
+    fn build_expression(
+        &mut self,
+        program: &ast::Program,
+        expr_id: ast::ExpressionId,
+    ) -> Result<Operand, String> {
+        let expr = &program.expressions[expr_id];
+
+        match &expr.node {
+            ast::ExpressionKind::Ident(name) => {
+                let var_id = self
+                    .var_map
+                    .get(name)
+                    .ok_or_else(|| format!("Variable {} not found", name))?;
+                Ok(Operand::Var(*var_id))
+            }
+            ast::ExpressionKind::IntLit(val) => Ok(Operand::Const(Constant::Int(*val))),
+            ast::ExpressionKind::FloatLit(val) => Ok(Operand::Const(Constant::Float(*val))),
+            ast::ExpressionKind::StringLit(val) => {
+                Ok(Operand::Const(Constant::String(val.clone())))
+            }
+            ast::ExpressionKind::BoolLit(val) => Ok(Operand::Const(Constant::Bool(*val))),
+            ast::ExpressionKind::TableFieldAccess {
+                resolved_table,
+                resolved_pk_field,
+                pk_expr,
+                resolved_field,
+                table_name,
+                field_name,
+                ..
+            } => {
+                // For complex expressions, we need to create a temporary variable
+                let table_id = if let Some(resolved_table) = resolved_table {
+                    let table_ast = &program.tables[*resolved_table];
+                    *self
+                        .ctx
+                        .table_map
+                        .get(&table_ast.name)
+                        .ok_or_else(|| format!("Table {} not found in CFG", table_ast.name))?
+                } else {
+                    return Err(format!("Table {} not resolved", table_name));
                 };
 
-                let temp_local = self.new_local_decl(None, temp_var_type_ast, false, false, span.clone());
-                self.add_statement(current_bb_id, cfg::Statement::Assign {
-                    local: temp_local,
-                    rvalue: rval,
-                    span,
-                });
-                cfg::Operand::Local(temp_local)
-            }
-        }
-    }
-    
-    /// Converts cfg::TypeName to ast::TypeName (helper for temp var type).
-    fn convert_cfg_type_to_ast(&self, ty: cfg::TypeName) -> ast::TypeName {
-        match ty {
-            cfg::TypeName::Int => ast::TypeName::Int,
-            cfg::TypeName::Float => ast::TypeName::Float,
-            cfg::TypeName::String => ast::TypeName::String,
-            cfg::TypeName::Bool => ast::TypeName::Bool,
-        }
-    }
+                let pk_field_id = if let Some(resolved_pk_field) = resolved_pk_field {
+                    let field_ast = &program.fields[*resolved_pk_field];
+                    *self
+                        .ctx
+                        .field_map
+                        .get(&field_ast.field_name)
+                        .ok_or_else(|| {
+                            format!(
+                                "Primary key field {} not found in CFG",
+                                field_ast.field_name
+                            )
+                        })?
+                } else {
+                    return Err(format!("Primary key field not resolved"));
+                };
 
-    /// Builds an AST expression into either a direct `cfg::Operand` or a `cfg::Rvalue`.
-    fn build_expr_to_rvalue_or_operand(&mut self, expr_ast: &'ast ast::Expression, current_bb_id: BasicBlock) -> RvalueOrOperand {
-        match &expr_ast.node {
-            ast::ExpressionKind::Ident(name) => {
-                let local_id = *self.local_map.get(name).expect("Undeclared identifier (semantic error)");
-                RvalueOrOperand::Operand(cfg::Operand::Local(local_id))
+                let field_id = if let Some(resolved_field) = resolved_field {
+                    let field_ast = &program.fields[*resolved_field];
+                    *self
+                        .ctx
+                        .field_map
+                        .get(&field_ast.field_name)
+                        .ok_or_else(|| format!("Field {} not found in CFG", field_ast.field_name))?
+                } else {
+                    return Err(format!("Field {} not resolved", field_name));
+                };
+
+                let pk_operand = self.build_expression(program, *pk_expr)?;
+
+                // Get field type for temp variable
+                let field_type = self.ctx.program.fields[field_id].ty.clone();
+
+                // Create temporary variable
+                let temp_var = Variable {
+                    name: format!("_temp_{}", self.function.variables.len()),
+                    ty: field_type,
+                    is_parameter: false,
+                };
+
+                let temp_var_id = self.function.variables.alloc(temp_var);
+
+                // Create assignment
+                let current_block = self
+                    .current_block_id
+                    .ok_or("No active block for table access")?;
+
+                self.add_statement(
+                    current_block,
+                    Statement::Assign {
+                        var: temp_var_id,
+                        rvalue: Rvalue::TableAccess {
+                            table: table_id,
+                            pk_field: pk_field_id,
+                            pk_value: pk_operand,
+                            field: field_id,
+                        },
+                        span: expr.span.clone(),
+                    },
+                );
+
+                Ok(Operand::Var(temp_var_id))
             }
-            ast::ExpressionKind::IntLit(val) => RvalueOrOperand::Operand(cfg::Operand::Constant(Constant::Int(*val))),
-            ast::ExpressionKind::FloatLit(val) => RvalueOrOperand::Operand(cfg::Operand::Constant(Constant::Float(*val))),
-            ast::ExpressionKind::StringLit(val) => RvalueOrOperand::Operand(cfg::Operand::Constant(Constant::String(Rc::from(val.as_str())))),
-            ast::ExpressionKind::BoolLit(val) => RvalueOrOperand::Operand(cfg::Operand::Constant(Constant::Bool(*val))),
-            ast::ExpressionKind::TableFieldAccess { table, pk_expr, field, .. } => {
-                let table_id = *self.table_map.get(table).expect("Table AST not found");
-                let pk_op = self.build_expr_to_operand(pk_expr, current_bb_id); // pk_expr must yield an Operand
-                let field_id = *self.field_map.get(field).expect("Field AST not found");
-                RvalueOrOperand::Rvalue(cfg::Rvalue::TableAccess {
-                    table: table_id,
-                    primary_key: Box::new(pk_op),
-                    field: field_id,
-                })
-            }
-            ast::ExpressionKind::UnaryOp { op, expr } => {
-                let operand = self.build_expr_to_operand(expr, current_bb_id);
-                RvalueOrOperand::Rvalue(cfg::Rvalue::UnaryOp {
-                    op: CfgBuilder::convert_ast_unop(*op),
-                    operand: Box::new(operand),
-                })
+            ast::ExpressionKind::UnaryOp {
+                op,
+                expr: inner_expr,
+            } => {
+                let operand = self.build_expression(program, *inner_expr)?;
+
+                // Create temporary variable for result
+                let temp_var = Variable {
+                    name: format!("_temp_{}", self.function.variables.len()),
+                    ty: ast::TypeName::Int, // Simplified - should be based on operation
+                    is_parameter: false,
+                };
+
+                let temp_var_id = self.function.variables.alloc(temp_var);
+
+                let current_block = self
+                    .current_block_id
+                    .ok_or("No active block for unary operation")?;
+
+                self.add_statement(
+                    current_block,
+                    Statement::Assign {
+                        var: temp_var_id,
+                        rvalue: Rvalue::UnaryOp {
+                            op: op.clone(), // Clone the op
+                            operand,
+                        },
+                        span: expr.span.clone(),
+                    },
+                );
+
+                Ok(Operand::Var(temp_var_id))
             }
             ast::ExpressionKind::BinaryOp { left, op, right } => {
-                let left_op = self.build_expr_to_operand(left, current_bb_id);
-                let right_op = self.build_expr_to_operand(right, current_bb_id);
-                RvalueOrOperand::Rvalue(cfg::Rvalue::BinaryOp {
-                    left: Box::new(left_op),
-                    op: CfgBuilder::convert_ast_binop(*op),
-                    right: Box::new(right_op),
-                })
+                let left_operand = self.build_expression(program, *left)?;
+                let right_operand = self.build_expression(program, *right)?;
+
+                // Create temporary variable for result
+                let temp_var = Variable {
+                    name: format!("_temp_{}", self.function.variables.len()),
+                    ty: ast::TypeName::Int, // Simplified - should be based on operation
+                    is_parameter: false,
+                };
+
+                let temp_var_id = self.function.variables.alloc(temp_var);
+
+                let current_block = self
+                    .current_block_id
+                    .ok_or("No active block for binary operation")?;
+
+                self.add_statement(
+                    current_block,
+                    Statement::Assign {
+                        var: temp_var_id,
+                        rvalue: Rvalue::BinaryOp {
+                            op: op.clone(), // Clone the op
+                            left: left_operand,
+                            right: right_operand,
+                        },
+                        span: expr.span.clone(),
+                    },
+                );
+
+                Ok(Operand::Var(temp_var_id))
             }
         }
     }
 
-    /// Populates the `successors` field for each basic block in the current function body.
-    fn populate_block_successors(&mut self) {
-        for i in 0..self.body.blocks.len() {
-            let block_id = BasicBlock::new(i as u32);
-            // Clone terminator to avoid borrow issues if it contains block IDs we might modify (not an issue here)
-            let terminator = self.body.blocks[block_id].terminator.clone();
-            let mut successors = Vec::new();
-            match terminator {
-                Terminator::Goto(target) => {
-                    successors.push(target);
-                }
-                Terminator::Branch { then_block, else_block, .. } => {
-                    successors.push(then_block);
-                    successors.push(else_block);
-                }
-                Terminator::HopTransition { target_block, .. } => {
-                    successors.push(target_block);
-                }
-                Terminator::Return(_) | Terminator::Abort => {
-                    // No successors
-                }
-            }
-            self.body.blocks[block_id].successors = successors;
-        }
+    fn new_basic_block(&mut self, hop_id: HopId) -> Result<BasicBlockId, String> {
+        let block = BasicBlock {
+            hop_id,
+            statements: Vec::new(),
+            terminator: Terminator::Abort, // Placeholder
+            span: ast::Span::default(),
+        };
+
+        let block_id = self.function.blocks.alloc(block);
+        self.function.hops[hop_id].blocks.push(block_id);
+
+        Ok(block_id)
+    }
+
+    fn add_statement(&mut self, block_id: BasicBlockId, stmt: Statement) {
+        self.function.blocks[block_id].statements.push(stmt);
+    }
+
+    fn set_terminator(&mut self, block_id: BasicBlockId, terminator: Terminator) {
+        self.function.blocks[block_id].terminator = terminator;
     }
 }
