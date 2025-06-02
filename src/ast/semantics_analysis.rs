@@ -269,15 +269,6 @@ impl<'p> SemanticAnalyzer<'p> {
     }
 
     fn check_var_decl(&mut self, var_decl: &VarDeclStatement, span: &Span) {
-        // Check if global variables are not allowed (based on your language design)
-        if var_decl.is_global {
-            self.error_at(
-                span,
-                AstError::GlobalVariableNotAllowed(var_decl.var_name.clone()),
-            );
-            return;
-        }
-
         // Check initializer expression type
         if let Some(init_type) = self.check_expression(var_decl.init_value) {
             if !self.types_compatible(&var_decl.var_type, &init_type) {
