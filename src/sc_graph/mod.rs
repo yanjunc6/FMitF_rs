@@ -39,7 +39,11 @@ pub struct Edge {
 
 impl Edge {
     pub fn new(source: SCGraphNodeId, target: SCGraphNodeId, edge_type: EdgeType) -> Self {
-        Self { source, target, edge_type }
+        Self {
+            source,
+            target,
+            edge_type,
+        }
     }
 }
 
@@ -108,7 +112,9 @@ impl SCGraph {
                     let sc_node2_id = cfg_hop_to_sc_node_map[&cfg_hop2_id];
 
                     // Check if hops are from different functions by looking at SCGraphNode properties
-                    if nodes_arena[sc_node1_id].cfg_function_id != nodes_arena[sc_node2_id].cfg_function_id {
+                    if nodes_arena[sc_node1_id].cfg_function_id
+                        != nodes_arena[sc_node2_id].cfg_function_id
+                    {
                         edges.push(Edge::new(sc_node1_id, sc_node2_id, EdgeType::C));
                         // Optionally, add the reverse edge if C-edges are strictly undirected
                         // edges.push(Edge::new(sc_node2_id, sc_node1_id, EdgeType::C));
@@ -175,8 +181,11 @@ impl SCGraph {
                     // Found a cycle
                     if path.len() >= 2 && next_s_edges_count > 0 && next_c_edges_count > 0 {
                         // Convert path of SCGraphNodeId to Vec<CfgHopId>
-                        let cycle_cfg_hops: Vec<CfgHopId> = path.iter().map(|&sc_id| self.nodes[sc_id].cfg_hop_id).collect();
-                        
+                        let cycle_cfg_hops: Vec<CfgHopId> = path
+                            .iter()
+                            .map(|&sc_id| self.nodes[sc_id].cfg_hop_id)
+                            .collect();
+
                         let canonical_cycle = self.canonicalize_cycle(&cycle_cfg_hops);
                         if visited_paths_for_cycle_detection.insert(canonical_cycle.clone()) {
                             mixed_cycles.push(canonical_cycle);
@@ -211,7 +220,10 @@ impl SCGraph {
         }
         // Find the CfgHopId with the smallest index value to start the canonical form
         let min_hop_id_val = cycle_cfg_hops.iter().min_by_key(|h| h.index()).unwrap();
-        let min_pos = cycle_cfg_hops.iter().position(|&h| h == *min_hop_id_val).unwrap();
+        let min_pos = cycle_cfg_hops
+            .iter()
+            .position(|&h| h == *min_hop_id_val)
+            .unwrap();
 
         let mut canonical = Vec::with_capacity(cycle_cfg_hops.len());
         for i in 0..cycle_cfg_hops.len() {
@@ -222,8 +234,16 @@ impl SCGraph {
 
     /// Returns the number of nodes (hops), S-edges, and C-edges in the graph.
     pub fn stats(&self) -> (usize, usize, usize) {
-        let s_edges = self.edges.iter().filter(|e| e.edge_type == EdgeType::S).count();
-        let c_edges = self.edges.iter().filter(|e| e.edge_type == EdgeType::C).count();
+        let s_edges = self
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::S)
+            .count();
+        let c_edges = self
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::C)
+            .count();
         (self.nodes.len(), s_edges, c_edges)
     }
 

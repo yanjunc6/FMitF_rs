@@ -1,14 +1,11 @@
 // dataflow/mod.rs
-use std::collections::{HashMap, VecDeque, HashSet};
-use std::hash::Hash;
+use crate::cfg::{BasicBlock, BasicBlockId, FunctionCfg, Statement, Terminator};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Debug;
-use crate::cfg::{
-    BasicBlock, BasicBlockId, FunctionCfg, Statement, Terminator,
-};
+use std::hash::Hash;
 
 mod liveness;
 pub use liveness::analyze_live_variables;
-
 
 /// Direction of dataflow analysis
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,13 +18,13 @@ pub enum Direction {
 pub trait Lattice: Clone + Eq + Debug {
     /// Bottom element of the lattice
     fn bottom() -> Self;
-    
+
     /// Top element of the lattice (for some analyses)
     fn top() -> Self;
-    
+
     /// Meet operation (∧ or ∨ depending on the lattice)
     fn meet(&self, other: &Self) -> Self;
-    
+
     /// Check if this value is less than or equal to another in the lattice order
     fn less_equal(&self, other: &Self) -> bool {
         self.meet(other) == *self
@@ -38,13 +35,13 @@ pub trait Lattice: Clone + Eq + Debug {
 pub trait TransferFunction<L: Lattice> {
     /// Apply transfer function for a statement
     fn transfer_statement(&self, stmt: &Statement, state: &L) -> L;
-    
+
     /// Apply transfer function for a terminator
     fn transfer_terminator(&self, term: &Terminator, state: &L) -> L;
-    
+
     /// Get initial value for entry/exit of function
     fn initial_value(&self) -> L;
-    
+
     /// Get boundary value for function parameters (for forward analysis)
     /// or return statements (for backward analysis)
     fn boundary_value(&self) -> L;
@@ -73,18 +70,18 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
             _phantom: std::marker::PhantomData,
         }
     }
-    
+
     /// Run dataflow analysis on a function
     pub fn analyze(&self, func: &FunctionCfg) -> DataflowResults<L> {
         let mut entry: HashMap<BasicBlockId, L> = HashMap::new();
         let mut exit: HashMap<BasicBlockId, L> = HashMap::new();
-        
+
         // Initialize all blocks with bottom
         for (block_id, _) in func.blocks.iter() {
             entry.insert(block_id, L::bottom());
             exit.insert(block_id, L::bottom());
         }
-        
+
         // Set initial values
         match self.direction {
             Direction::Forward => {
@@ -106,20 +103,18 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                 }
             }
         }
-        
+
         // Worklist algorithm
-        let mut worklist: VecDeque<BasicBlockId> = func.blocks.iter()
-            .map(|(id, _)| id)
-            .collect();
-        
+        let mut worklist: VecDeque<BasicBlockId> = func.blocks.iter().map(|(id, _)| id).collect();
+
         while let Some(block_id) = worklist.pop_front() {
             let block = &func.blocks[block_id];
-            
+
             let old_val = match self.direction {
                 Direction::Forward => exit[&block_id].clone(),
                 Direction::Backward => entry[&block_id].clone(),
             };
-            
+
             let new_val = match self.direction {
                 Direction::Forward => {
                     // Compute entry as meet of predecessors' exits
@@ -127,12 +122,13 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                     let entry_val = if preds.is_empty() {
                         entry[&block_id].clone()
                     } else {
-                        preds.iter()
+                        preds
+                            .iter()
                             .map(|pred| &exit[pred])
                             .fold(L::top(), |acc, val| acc.meet(val))
                     };
                     entry.insert(block_id, entry_val.clone());
-                    
+
                     // Compute exit by applying transfer function
                     self.transfer_block_forward(block, &entry_val)
                 }
@@ -142,17 +138,18 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                     let exit_val = if succs.is_empty() {
                         exit[&block_id].clone()
                     } else {
-                        succs.iter()
+                        succs
+                            .iter()
                             .map(|succ| &entry[succ])
                             .fold(L::top(), |acc, val| acc.meet(val))
                     };
                     exit.insert(block_id, exit_val.clone());
-                    
+
                     // Compute entry by applying transfer function
                     self.transfer_block_backward(block, &exit_val)
                 }
             };
-            
+
             // Update and add to worklist if changed
             let changed = match self.direction {
                 Direction::Forward => {
@@ -172,7 +169,7 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                     }
                 }
             };
-            
+
             if changed {
                 // Add affected blocks to worklist
                 match self.direction {
@@ -185,53 +182,62 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                 }
             }
         }
-        
+
         DataflowResults { entry, exit }
     }
-    
+
     fn transfer_block_forward(&self, block: &BasicBlock, state: &L) -> L {
         let mut current = state.clone();
-        
+
         // Apply transfer functions for statements
         for stmt in &block.statements {
             current = self.transfer.transfer_statement(stmt, &current);
         }
-        
+
         // Apply transfer function for terminator
-        self.transfer.transfer_terminator(&block.terminator, &current)
+        self.transfer
+            .transfer_terminator(&block.terminator, &current)
     }
-    
+
     fn transfer_block_backward(&self, block: &BasicBlock, state: &L) -> L {
         // First apply terminator
         let mut current = self.transfer.transfer_terminator(&block.terminator, state);
-        
+
         // Then apply statements in reverse order
         for stmt in block.statements.iter().rev() {
             current = self.transfer.transfer_statement(stmt, &current);
         }
-        
+
         current
     }
-    
+
     fn get_successors(&self, block: &BasicBlock) -> Vec<BasicBlockId> {
         match &block.terminator {
             Terminator::Goto(target) => vec![*target],
-            Terminator::Branch { then_block, else_block, .. } => {
+            Terminator::Branch {
+                then_block,
+                else_block,
+                ..
+            } => {
                 vec![*then_block, *else_block]
             }
             Terminator::Return(_) | Terminator::Abort | Terminator::HopExit { .. } => vec![],
         }
     }
-    
+
     fn get_predecessors(&self, func: &FunctionCfg, block_id: BasicBlockId) -> Vec<BasicBlockId> {
         let mut preds = Vec::new();
-        
+
         for (pred_id, pred_block) in func.blocks.iter() {
             match &pred_block.terminator {
                 Terminator::Goto(target) if *target == block_id => {
                     preds.push(pred_id);
                 }
-                Terminator::Branch { then_block, else_block, .. } => {
+                Terminator::Branch {
+                    then_block,
+                    else_block,
+                    ..
+                } => {
                     if *then_block == block_id || *else_block == block_id {
                         preds.push(pred_id);
                     }
@@ -239,7 +245,7 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                 _ => {}
             }
         }
-        
+
         preds
     }
 }
@@ -252,20 +258,24 @@ pub struct SetLattice<T: Clone + Eq + Hash + Debug> {
 
 impl<T: Clone + Eq + Hash + Debug> Lattice for SetLattice<T> {
     fn bottom() -> Self {
-        Self { set: HashSet::new() }
+        Self {
+            set: HashSet::new(),
+        }
     }
-    
+
     fn top() -> Self {
         // For finite sets, we'd need to know the universe
         // For now, we'll handle this in specific analyses
-        Self { set: HashSet::new() }
+        Self {
+            set: HashSet::new(),
+        }
     }
-    
+
     fn meet(&self, other: &Self) -> Self {
         // Default to union for may analyses
         // Override for must analyses (intersection)
         Self {
-            set: self.set.union(&other.set).cloned().collect()
+            set: self.set.union(&other.set).cloned().collect(),
         }
     }
 }

@@ -1,7 +1,6 @@
-use crate::cfg::{ FunctionCfg, Operand, Rvalue, Statement, Terminator, VarId
-};
+use crate::cfg::{FunctionCfg, Operand, Rvalue, Statement, Terminator, VarId};
 use crate::dataflow::{
-    DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice, TransferFunction
+    DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice, TransferFunction,
 };
 
 pub struct LiveVariablesTransfer;
@@ -9,12 +8,12 @@ pub struct LiveVariablesTransfer;
 impl TransferFunction<SetLattice<VarId>> for LiveVariablesTransfer {
     fn transfer_statement(&self, stmt: &Statement, state: &SetLattice<VarId>) -> SetLattice<VarId> {
         let mut result = state.clone();
-        
+
         match stmt {
             Statement::Assign { var, rvalue, .. } => {
                 // Remove defined variable
                 result.set.remove(var);
-                
+
                 // Add used variables
                 match rvalue {
                     Rvalue::Use(operand) => {
@@ -42,7 +41,9 @@ impl TransferFunction<SetLattice<VarId>> for LiveVariablesTransfer {
                     }
                 }
             }
-            Statement::TableAssign { pk_value, value, .. } => {
+            Statement::TableAssign {
+                pk_value, value, ..
+            } => {
                 // Add used variables
                 if let Operand::Var(v) = pk_value {
                     result.set.insert(*v);
@@ -52,13 +53,17 @@ impl TransferFunction<SetLattice<VarId>> for LiveVariablesTransfer {
                 }
             }
         }
-        
+
         result
     }
-    
-    fn transfer_terminator(&self, term: &Terminator, state: &SetLattice<VarId>) -> SetLattice<VarId> {
+
+    fn transfer_terminator(
+        &self,
+        term: &Terminator,
+        state: &SetLattice<VarId>,
+    ) -> SetLattice<VarId> {
         let mut result = state.clone();
-        
+
         match term {
             Terminator::Branch { condition, .. } => {
                 if let Operand::Var(v) = condition {
@@ -72,14 +77,14 @@ impl TransferFunction<SetLattice<VarId>> for LiveVariablesTransfer {
             }
             _ => {}
         }
-        
+
         result
     }
-    
+
     fn initial_value(&self) -> SetLattice<VarId> {
         SetLattice::bottom()
     }
-    
+
     fn boundary_value(&self) -> SetLattice<VarId> {
         SetLattice::bottom()
     }

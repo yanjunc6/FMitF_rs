@@ -1,5 +1,5 @@
 use crate::cfg::{CfgProgram, FunctionId as CfgFunctionId};
-use crate::sc_graph::{SCGraph, SCGraphNodeId, EdgeType as SCGraphEdgeType};
+use crate::sc_graph::{EdgeType as SCGraphEdgeType, SCGraph, SCGraphNodeId};
 use std::collections::HashMap;
 use std::io::{Result, Write};
 
@@ -124,7 +124,10 @@ fn format_sc_graph_text(
     if options.verbose && !mixed_cycles.is_empty() {
         s.push_str("Cycles:\n");
         for (i, cycle) in mixed_cycles.iter().enumerate() {
-            let cycle_str: Vec<String> = cycle.iter().map(|h_id| format!("H{}", h_id.index())).collect();
+            let cycle_str: Vec<String> = cycle
+                .iter()
+                .map(|h_id| format!("H{}", h_id.index()))
+                .collect();
             s.push_str(&format!("  Cycle {}: {}\n", i + 1, cycle_str.join(" -> ")));
         }
     }
@@ -153,11 +156,7 @@ fn format_sc_graph_dot(
 
     for (cfg_func_id, sc_node_ids) in &func_to_sc_nodes {
         let func_name = &cfg_program.functions[*cfg_func_id].name;
-        writeln!(
-            writer,
-            "  subgraph cluster_func_{} {{",
-            cfg_func_id.index()
-        )?;
+        writeln!(writer, "  subgraph cluster_func_{} {{", cfg_func_id.index())?;
         writeln!(
             writer,
             "    label=\"Function: {}\";",

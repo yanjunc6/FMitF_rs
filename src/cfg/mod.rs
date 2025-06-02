@@ -1,6 +1,6 @@
 use id_arena::{Arena, Id};
 
-use crate::ast::{BinaryOp, ReturnType, Span, TypeName, UnaryOp};
+pub use crate::ast::{BinaryOp, ReturnType, Span, TypeName, UnaryOp};
 
 mod cfg_builder;
 pub use cfg_builder::CfgBuilder;

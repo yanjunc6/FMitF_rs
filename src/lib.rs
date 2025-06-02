@@ -1,9 +1,9 @@
 pub mod ast;
 pub mod cfg;
-pub mod sc_graph;
-pub mod pretty;
-pub mod verification;
 pub mod dataflow;
+pub mod pretty;
+pub mod sc_graph;
+pub mod verification;
 
 // Re-export AST functionality
 pub use ast::{parse_and_analyze, Program as AstProgram, Span as AstSpan};
@@ -17,18 +17,13 @@ pub use pretty::sc_graph_printer::{print_sc_graph, SCGraphFormat, SCGraphPrintOp
 // Re-export CFG functionality
 pub use cfg::CfgProgram; // This is the main CFG structure
 pub use cfg::{
-    CfgBuilder,
-    BasicBlockId as CfgBasicBlockId,
-    FieldId as CfgFieldId,
-    FunctionId as CfgFunctionId,
-    HopId as CfgHopId,
-    NodeId as CfgNodeId,
-    TableId as CfgTableId,
+    BasicBlockId as CfgBasicBlockId, CfgBuilder, FieldId as CfgFieldId,
+    FunctionId as CfgFunctionId, HopId as CfgHopId, NodeId as CfgNodeId, TableId as CfgTableId,
     VarId as CfgVarId,
 };
 
 // Re-export SC-Graph functionality
-pub use sc_graph::{SCGraph, EdgeType as SCGraphEdgeType}; // Added
+pub use sc_graph::{EdgeType as SCGraphEdgeType, SCGraph}; // Added
 
 // Re-export verification (currently commented out)
 // pub use verification::{AutoVerifier, VerificationError, VerificationOptions};
