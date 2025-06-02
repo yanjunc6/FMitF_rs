@@ -1,0 +1,25 @@
+// Minimal counter example
+nodes {
+    NodeA
+}
+
+table Counter on NodeA {
+    primary int id;
+    int value;
+}
+
+// Transaction 1: Increment
+void increment(int counterId) {
+    hop on NodeA {
+        int current = Counter[id: counterId].value;
+        Counter[id: counterId].value = current + 1;
+    }
+}
+
+// Transaction 2: Increment by 2
+void increment2(int counterId) {
+    hop on NodeA {
+        int current = Counter[id: counterId].value;
+        Counter[id: counterId].value = current + 2;
+    }
+}

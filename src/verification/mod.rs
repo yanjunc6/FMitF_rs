@@ -1,33 +1,29 @@
-// use std::rc::Rc;
-// use std::collections::HashSet;
-// use crate::ast::*;
-// use crate::graph::*;
+use crate::cfg::{FunctionId, HopId, NodeId, TableId, VarId};
+use std::collections::HashSet;
 
-// pub mod boogie;
-// pub mod build_unit;
-// pub mod auto_verifier;
+#[derive(Debug, Clone)]
+pub struct VerificationUnit {
+    pub conflict_node: NodeId,
+    pub func1_id: FunctionId,
+    pub hop1_id: HopId,
+    pub func2_id: FunctionId,
+    pub hop2_id: HopId,
+    pub relevant_tables: Vec<TableId>,
+    pub live_vars_at_hop1_exit: HashSet<VarId>,
+    pub live_vars_at_hop2_exit: HashSet<VarId>,
+}
 
-// pub use boogie::generate_verification_boogie_code;
-// pub use build_unit::build_verification_unit;
-// pub use auto_verifier::AutoVerifier;
+mod verification_unit_builder;
+pub use verification_unit_builder::VerificationUnitBuilder;
 
-// #[derive(Debug, Clone)]
-// pub struct VerificationUnit {
-//     // Node under consideration
-//     pub node: Rc<NodeDef>,
+mod verification_logic;
+pub use verification_logic::VerificationPlan;
 
-//     // Function 1 and its relevant hops (in order up to and including the conflict)
-//     pub func1: Rc<FunctionDeclaration>,
-//     pub hops1: Vec<Rc<HopBlock>>, // f1..=f3
+mod boogie_codegen;
+pub use boogie_codegen::BoogieCodeGenerator;
 
-//     // Function 2 and its relevant hops (g1..=g2)
-//     pub func2: Rc<FunctionDeclaration>,
-//     pub hops2: Vec<Rc<HopBlock>>,
+mod boogie;
+pub use boogie::generate_verification_boogie_code;
 
-//     // Index of last relevant hop in each function (for traceability)
-//     pub idx1: usize,
-//     pub idx2: usize,
-
-//     // Optionally, any tables that may be read/written by these hops
-//     pub relevant_tables: HashSet<Rc<TableDeclaration>>,
-// }
+mod auto_verifier;
+pub use auto_verifier::{AutoVerifier, VerificationError, VerificationResults};

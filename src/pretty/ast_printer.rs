@@ -714,7 +714,13 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                     )
                 })
                 .collect();
-            writeln!(self.writer, "    {} on {}: {}", table.name, node_name, fields.join(", "))?;
+            writeln!(
+                self.writer,
+                "    {} on {}: {}",
+                table.name,
+                node_name,
+                fields.join(", ")
+            )?;
         }
 
         writeln!(self.writer, "  Functions:")?;
@@ -750,7 +756,12 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
     }
 
     fn print_nodes(&mut self, program: &Program) -> Result<()> {
-        writeln!(self.writer, "{}nodes[{}]", self.indent(), program.root_nodes.len())?;
+        writeln!(
+            self.writer,
+            "{}nodes[{}]",
+            self.indent(),
+            program.root_nodes.len()
+        )?;
         for (i, &node_id) in program.root_nodes.iter().enumerate() {
             let node = &program.nodes[node_id];
             let indent1 = "  ".repeat(self.depth + 1);
@@ -762,18 +773,18 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                 i,
                 self.span(&node.span)
             )?;
-            writeln!(
-                self.writer,
-                "{}name: {}",
-                indent2,
-                node.name
-            )?;
+            writeln!(self.writer, "{}name: {}", indent2, node.name)?;
         }
         Ok(())
     }
 
     fn print_tables(&mut self, program: &Program) -> Result<()> {
-        writeln!(self.writer, "{}tables[{}]", self.indent(), program.root_tables.len())?;
+        writeln!(
+            self.writer,
+            "{}tables[{}]",
+            self.indent(),
+            program.root_tables.len()
+        )?;
         for (i, &table_id) in program.root_tables.iter().enumerate() {
             let table = &program.tables[table_id];
             let node = &program.nodes[table.node];
@@ -789,23 +800,12 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                 i,
                 self.span(&table.span)
             )?;
-            writeln!(
-                self.writer,
-                "{}name: {}",
-                indent2,
-                table.name
-            )?;
-            writeln!(
-                self.writer,
-                "{}node: {}",
-                indent2,
-                node.name
-            )?;
+            writeln!(self.writer, "{}name: {}", indent2, table.name)?;
+            writeln!(self.writer, "{}node: {}", indent2, node.name)?;
             writeln!(
                 self.writer,
                 "{}primary_key: {}",
-                indent2,
-                primary_key_field.field_name
+                indent2, primary_key_field.field_name
             )?;
             self.depth += 2;
             self.print_fields(program, &table.fields)?;
@@ -833,18 +833,8 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                 indent2,
                 type_name(&field.field_type)
             )?;
-            writeln!(
-                self.writer,
-                "{}field_name: {}",
-                indent2,
-                field.field_name
-            )?;
-            writeln!(
-                self.writer,
-                "{}is_primary: {}",
-                indent2,
-                field.is_primary
-            )?;
+            writeln!(self.writer, "{}field_name: {}", indent2, field.field_name)?;
+            writeln!(self.writer, "{}is_primary: {}", indent2, field.is_primary)?;
         }
         Ok(())
     }
@@ -873,12 +863,7 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                 indent2,
                 return_type(&func.return_type)
             )?;
-            writeln!(
-                self.writer,
-                "{}name: {}",
-                indent2,
-                func.name
-            )?;
+            writeln!(self.writer, "{}name: {}", indent2, func.name)?;
             self.depth += 2;
             self.print_parameters(program, &func.parameters)?;
             self.print_hops(program, &func.hops)?;
@@ -888,7 +873,12 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
     }
 
     fn print_parameters(&mut self, program: &Program, param_ids: &[ParameterId]) -> Result<()> {
-        writeln!(self.writer, "{}parameters[{}]", self.indent(), param_ids.len())?;
+        writeln!(
+            self.writer,
+            "{}parameters[{}]",
+            self.indent(),
+            param_ids.len()
+        )?;
         for (i, &param_id) in param_ids.iter().enumerate() {
             let param = &program.parameters[param_id];
             let indent1 = "  ".repeat(self.depth + 1);
@@ -906,12 +896,7 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                 indent2,
                 type_name(&param.param_type)
             )?;
-            writeln!(
-                self.writer,
-                "{}param_name: {}",
-                indent2,
-                param.param_name
-            )?;
+            writeln!(self.writer, "{}param_name: {}", indent2, param.param_name)?;
         }
         Ok(())
     }
@@ -930,12 +915,7 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                 i,
                 self.span(&hop.span)
             )?;
-            writeln!(
-                self.writer,
-                "{}node_name: {}",
-                indent2,
-                hop.node_name
-            )?;
+            writeln!(self.writer, "{}node_name: {}", indent2, hop.node_name)?;
 
             if let Some(resolved_node) = hop.resolved_node {
                 let node = &program.nodes[resolved_node];
@@ -947,11 +927,7 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                     resolved_node.index()
                 )?;
             } else {
-                writeln!(
-                    self.writer,
-                    "{}resolved_node: None",
-                    indent2
-                )?;
+                writeln!(self.writer, "{}resolved_node: None", indent2)?;
             }
 
             self.depth += 2;
@@ -962,7 +938,12 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
     }
 
     fn print_statements(&mut self, program: &Program, stmt_ids: &[StatementId]) -> Result<()> {
-        writeln!(self.writer, "{}statements[{}]", self.indent(), stmt_ids.len())?;
+        writeln!(
+            self.writer,
+            "{}statements[{}]",
+            self.indent(),
+            stmt_ids.len()
+        )?;
         for (i, &stmt_id) in stmt_ids.iter().enumerate() {
             let stmt = &program.statements[stmt_id];
             self.depth += 1;
@@ -972,7 +953,12 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
         Ok(())
     }
 
-    fn print_statement_with_index(&mut self, program: &Program, index: usize, stmt: &Statement) -> Result<()> {
+    fn print_statement_with_index(
+        &mut self,
+        program: &Program,
+        index: usize,
+        stmt: &Statement,
+    ) -> Result<()> {
         let indent = self.indent();
         let indent1 = "  ".repeat(self.depth + 1);
         let _indent2 = "  ".repeat(self.depth + 2); // Prefixed with _ to avoid unused warning
@@ -992,22 +978,12 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                     indent1,
                     type_name(&v.var_type)
                 )?;
-                writeln!(
-                    self.writer,
-                    "{}var_name: {}",
-                    indent1,
-                    v.var_name
-                )?;
+                writeln!(self.writer, "{}var_name: {}", indent1, v.var_name)?;
                 writeln!(self.writer, "{}init_value:", indent1)?;
                 self.depth += 2;
                 self.print_expression(program, v.init_value)?;
                 self.depth -= 2;
-                writeln!(
-                    self.writer,
-                    "{}is_global: {}",
-                    indent1,
-                    v.is_global
-                )?;
+                writeln!(self.writer, "{}is_global: {}", indent1, v.is_global)?;
             }
             StatementKind::VarAssignment(v) => {
                 writeln!(
@@ -1017,12 +993,7 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                     index,
                     self.span(&stmt.span)
                 )?;
-                writeln!(
-                    self.writer,
-                    "{}var_name: {}",
-                    indent1,
-                    v.var_name
-                )?;
+                writeln!(self.writer, "{}var_name: {}", indent1, v.var_name)?;
 
                 if let Some(resolved_var) = v.resolved_var {
                     let var = &program.variables[resolved_var];
@@ -1035,11 +1006,7 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                         var.kind
                     )?;
                 } else {
-                    writeln!(
-                        self.writer,
-                        "{}resolved_var: None",
-                        indent1
-                    )?;
+                    writeln!(self.writer, "{}resolved_var: None", indent1)?;
                 }
 
                 writeln!(self.writer, "{}rhs:", indent1)?;
@@ -1055,24 +1022,9 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                     index,
                     self.span(&stmt.span)
                 )?;
-                writeln!(
-                    self.writer,
-                    "{}table_name: {}",
-                    indent1,
-                    a.table_name
-                )?;
-                writeln!(
-                    self.writer,
-                    "{}pk_field_name: {}",
-                    indent1,
-                    a.pk_field_name
-                )?;
-                writeln!(
-                    self.writer,
-                    "{}field_name: {}",
-                    indent1,
-                    a.field_name
-                )?;
+                writeln!(self.writer, "{}table_name: {}", indent1, a.table_name)?;
+                writeln!(self.writer, "{}pk_field_name: {}", indent1, a.pk_field_name)?;
+                writeln!(self.writer, "{}field_name: {}", indent1, a.field_name)?;
 
                 if let Some(resolved_table) = a.resolved_table {
                     let table = &program.tables[resolved_table];
@@ -1084,11 +1036,7 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                         resolved_table.index()
                     )?;
                 } else {
-                    writeln!(
-                        self.writer,
-                        "{}resolved_table: None",
-                        indent1
-                    )?;
+                    writeln!(self.writer, "{}resolved_table: None", indent1)?;
                 }
 
                 if let Some(resolved_pk_field) = a.resolved_pk_field {
@@ -1101,11 +1049,7 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                         resolved_pk_field.index()
                     )?;
                 } else {
-                    writeln!(
-                        self.writer,
-                        "{}resolved_pk_field: None",
-                        indent1
-                    )?;
+                    writeln!(self.writer, "{}resolved_pk_field: None", indent1)?;
                 }
 
                 if let Some(resolved_field) = a.resolved_field {
@@ -1118,11 +1062,7 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                         resolved_field.index()
                     )?;
                 } else {
-                    writeln!(
-                        self.writer,
-                        "{}resolved_field: None",
-                        indent1
-                    )?;
+                    writeln!(self.writer, "{}resolved_field: None", indent1)?;
                 }
 
                 writeln!(self.writer, "{}pk_expr:", indent1)?;
@@ -1243,7 +1183,12 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
 
     fn print_expression(&mut self, program: &Program, expr_id: ExpressionId) -> Result<()> {
         let expr = &program.expressions[expr_id];
-        writeln!(self.writer, "{}Expression{}", self.indent(), self.span(&expr.span))?;
+        writeln!(
+            self.writer,
+            "{}Expression{}",
+            self.indent(),
+            self.span(&expr.span)
+        )?;
         self.depth += 1;
         self.print_expression_kind(program, &expr.node)?;
         self.depth -= 1;
@@ -1280,24 +1225,9 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                 resolved_field,
             } => {
                 writeln!(self.writer, "{}TableFieldAccess", indent)?;
-                writeln!(
-                    self.writer,
-                    "{}table_name: {}",
-                    indent1,
-                    table_name
-                )?;
-                writeln!(
-                    self.writer,
-                    "{}pk_field_name: {}",
-                    indent1,
-                    pk_field_name
-                )?;
-                writeln!(
-                    self.writer,
-                    "{}field_name: {}",
-                    indent1,
-                    field_name
-                )?;
+                writeln!(self.writer, "{}table_name: {}", indent1, table_name)?;
+                writeln!(self.writer, "{}pk_field_name: {}", indent1, pk_field_name)?;
+                writeln!(self.writer, "{}field_name: {}", indent1, field_name)?;
 
                 if let Some(resolved_table_id) = resolved_table {
                     let table = &program.tables[*resolved_table_id];
@@ -1309,11 +1239,7 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                         resolved_table_id.index()
                     )?;
                 } else {
-                    writeln!(
-                        self.writer,
-                        "{}resolved_table: None",
-                        indent1
-                    )?;
+                    writeln!(self.writer, "{}resolved_table: None", indent1)?;
                 }
 
                 if let Some(resolved_pk_field_id) = resolved_pk_field {
@@ -1326,11 +1252,7 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                         resolved_pk_field_id.index()
                     )?;
                 } else {
-                    writeln!(
-                        self.writer,
-                        "{}resolved_pk_field: None",
-                        indent1
-                    )?;
+                    writeln!(self.writer, "{}resolved_pk_field: None", indent1)?;
                 }
 
                 if let Some(resolved_field_id) = resolved_field {
@@ -1343,11 +1265,7 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                         resolved_field_id.index()
                     )?;
                 } else {
-                    writeln!(
-                        self.writer,
-                        "{}resolved_field: None",
-                        indent1
-                    )?;
+                    writeln!(self.writer, "{}resolved_field: None", indent1)?;
                 }
 
                 writeln!(self.writer, "{}pk_expr:", indent1)?;

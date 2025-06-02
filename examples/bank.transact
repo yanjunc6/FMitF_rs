@@ -1,0 +1,45 @@
+// Simple bank account system for verification testing
+nodes {
+    BankNode1,
+    BankNode2
+}
+
+// Single account table split across two nodes
+table Account on BankNode1 {
+    primary int id;
+    int balance;
+}
+
+table Log on BankNode2 {
+    primary int logId;
+    int accountId;
+    int amount;
+}
+
+// Transaction 1: Deposit money
+void deposit(int accountId, int amount, int logid) {
+    hop on BankNode1 {
+        int currentBalance = Account[id: accountId].balance;
+        Account[id: accountId].balance = currentBalance + amount;
+    }
+    
+    hop on BankNode2 {
+        Log[logId: logid].accountId = accountId;
+        Log[logId: logid].amount = amount;
+    }
+}
+
+// Transaction 2: Withdraw money
+void withdraw(int accountId, int amount, int logid) {
+    hop on BankNode1 {
+        int currentBalance = Account[id: accountId].balance;
+        if (currentBalance >= amount) {
+            Account[id: accountId].balance = currentBalance - amount;
+        }
+    }
+    
+    hop on BankNode2 {
+        Log[logId: logid].accountId = accountId;
+        Log[logId: logid].amount = -amount;
+    }
+}

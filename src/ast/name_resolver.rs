@@ -59,7 +59,7 @@ impl<'p> NameResolver<'p> {
             kind: ScopeKind::Function(func_id),
             variables: HashMap::new(),
         });
-        self.current_function_scope_id = Some(func_scope); 
+        self.current_function_scope_id = Some(func_scope);
 
         self.push_scope(func_scope);
 
@@ -84,7 +84,8 @@ impl<'p> NameResolver<'p> {
             .collect();
 
         for (name, ty, span) in params_to_declare {
-            self.declare_variable(&name, ty, VarKind::Parameter, span, func_scope); // Pass func_scope explicitly
+            self.declare_variable(&name, ty, VarKind::Parameter, span, func_scope);
+            // Pass func_scope explicitly
         }
 
         // Resolve each hop
@@ -150,7 +151,8 @@ impl<'p> NameResolver<'p> {
                 let target_scope_id = if var_decl.is_global {
                     self.current_function_scope_id.expect("Internal error: 'global' keyword used for a variable not inside a function, or function scope not set.")
                 } else {
-                    self.current_scope.expect("Internal error: Variable declared outside of any scope context.")
+                    self.current_scope
+                        .expect("Internal error: Variable declared outside of any scope context.")
                 };
 
                 // Check for duplicate in the target scope
@@ -418,7 +420,14 @@ impl<'p> NameResolver<'p> {
         }
     }
 
-    fn declare_variable(&mut self, name: &str, ty: TypeName, kind: VarKind, span: Span, target_scope_id: ScopeId) {
+    fn declare_variable(
+        &mut self,
+        name: &str,
+        ty: TypeName,
+        kind: VarKind,
+        span: Span,
+        target_scope_id: ScopeId,
+    ) {
         let var_id = self.program.variables.alloc(VarDecl {
             name: name.to_string(),
             ty: ty.clone(),
