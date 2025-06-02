@@ -8,6 +8,7 @@ pub struct NameResolver<'p> {
     // Current resolution context
     current_function: Option<FunctionId>,
     current_scope: Option<ScopeId>,
+    current_function_scope_id: Option<ScopeId>,
 
     // Scope stack for nested blocks
     scope_stack: Vec<ScopeId>,
@@ -20,6 +21,7 @@ impl<'p> NameResolver<'p> {
             errors: Vec::new(),
             current_function: None,
             current_scope: None,
+            current_function_scope_id: None,
             scope_stack: Vec::new(),
         }
     }
@@ -57,6 +59,7 @@ impl<'p> NameResolver<'p> {
             kind: ScopeKind::Function(func_id),
             variables: HashMap::new(),
         });
+        self.current_function_scope_id = Some(func_scope); 
 
         self.push_scope(func_scope);
 
@@ -81,7 +84,7 @@ impl<'p> NameResolver<'p> {
             .collect();
 
         for (name, ty, span) in params_to_declare {
-            self.declare_variable(&name, ty, VarKind::Parameter, span);
+            self.declare_variable(&name, ty, VarKind::Parameter, span, func_scope); // Pass func_scope explicitly
         }
 
         // Resolve each hop
@@ -95,6 +98,7 @@ impl<'p> NameResolver<'p> {
         }
 
         self.pop_scope();
+        self.current_function_scope_id = None; // Clear current function's scope ID
         self.current_function = None;
     }
 
@@ -143,33 +147,29 @@ impl<'p> NameResolver<'p> {
                 // Resolve initializer first
                 self.resolve_expression(var_decl.init_value);
 
-                // Check for global variable error
-                if var_decl.is_global {
+                let target_scope_id = if var_decl.is_global {
+                    self.current_function_scope_id.expect("Internal error: 'global' keyword used for a variable not inside a function, or function scope not set.")
+                } else {
+                    self.current_scope.expect("Internal error: Variable declared outside of any scope context.")
+                };
+
+                // Check for duplicate in the target scope
+                let target_scope_obj = &self.program.scopes[target_scope_id];
+                if target_scope_obj.variables.contains_key(&var_decl.var_name) {
                     self.error_at(
                         &stmt_span,
-                        AstError::GlobalVariableNotAllowed(var_decl.var_name.clone()),
+                        AstError::DuplicateVariable(var_decl.var_name.clone()),
                     );
                     return;
                 }
 
-                // Check for duplicate in current scope
-                if let Some(current_scope_id) = self.current_scope {
-                    let current_scope = &self.program.scopes[current_scope_id];
-                    if current_scope.variables.contains_key(&var_decl.var_name) {
-                        self.error_at(
-                            &stmt_span,
-                            AstError::DuplicateVariable(var_decl.var_name.clone()),
-                        );
-                        return;
-                    }
-                }
-
-                // Declare the variable
+                // Declare the variable in the determined target scope
                 self.declare_variable(
                     &var_decl.var_name,
                     var_decl.var_type,
-                    VarKind::Local,
-                    stmt_span,
+                    VarKind::Local, // 'is_global' here means function-scoped local, not file-level global
+                    stmt_span.clone(),
+                    target_scope_id,
                 );
             }
             StatementKind::VarAssignment(var_assign) => {
@@ -418,20 +418,19 @@ impl<'p> NameResolver<'p> {
         }
     }
 
-    fn declare_variable(&mut self, name: &str, ty: TypeName, kind: VarKind, span: Span) {
+    fn declare_variable(&mut self, name: &str, ty: TypeName, kind: VarKind, span: Span, target_scope_id: ScopeId) {
         let var_id = self.program.variables.alloc(VarDecl {
             name: name.to_string(),
             ty: ty.clone(),
             kind,
             defined_at: span,
-            scope: self.current_scope.unwrap(),
+            scope: target_scope_id, // Use the provided target_scope_id
         });
 
-        // Add to current scope
-        if let Some(scope_id) = self.current_scope {
-            let scope = &mut self.program.scopes[scope_id];
-            scope.variables.insert(name.to_string(), var_id);
-        }
+        // Add to target scope
+        // The duplicate check should be done before calling this function.
+        let scope = &mut self.program.scopes[target_scope_id];
+        scope.variables.insert(name.to_string(), var_id);
 
         // Store type information
         self.program.var_types.insert(var_id, ty);

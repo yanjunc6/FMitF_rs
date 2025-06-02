@@ -25,7 +25,6 @@ pub enum AstError {
     DuplicateFunction(String),
     DuplicateTable(String),
     DuplicateNode(String),
-    GlobalVariableNotAllowed(String),
 
     // Type checking errors (for later use)
     TypeMismatch {
@@ -84,9 +83,6 @@ impl std::fmt::Display for AstError {
             Self::DuplicateFunction(name) => write!(f, "Duplicate function: {}", name),
             Self::DuplicateTable(name) => write!(f, "Duplicate table: {}", name),
             Self::DuplicateNode(name) => write!(f, "Duplicate node: {}", name),
-            Self::GlobalVariableNotAllowed(name) => {
-                write!(f, "Global variables are not allowed: {}", name)
-            }
             Self::TypeMismatch { expected, found } => write!(
                 f,
                 "Type mismatch: expected {:?}, found {:?}",
