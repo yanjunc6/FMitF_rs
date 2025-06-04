@@ -4,6 +4,7 @@ pub mod dataflow;
 pub mod pretty;
 pub mod sc_graph;
 pub mod verification;
+// pub mod optimization;
 
 // Re-export AST functionality
 pub use ast::{parse_and_analyze, Program as AstProgram, Span as AstSpan};

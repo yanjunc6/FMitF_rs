@@ -79,8 +79,8 @@ statement = {
   | while_statement
   | return_statement
   | abort_statement
-  | break_statement // NEW: Add break statement
-  | continue_statement // NEW: Add continue statement
+  | break_statement
+  | continue_statement
   | empty_statement
 }
 
@@ -104,11 +104,11 @@ abort_statement = {
     "abort" ~ ";"
 }
 
-break_statement = { // NEW: Define break statement
+break_statement = {
     "break" ~ ";"
 }
 
-continue_statement = { // NEW: Define continue statement
+continue_statement = {
     "continue" ~ ";"
 }
 
@@ -174,8 +174,7 @@ unary = {
 unary_op = { "!" | "-" }
 
 primary = {
-    bool_literal // Put this FIRST
-
+    bool_literal
   | table_field_access
   | float_literal
   | integer_literal
@@ -189,4 +188,4 @@ table_field_access = {
 }
 
 // We skip whitespace and single-line comments globally:
-WHITESPACE_SL_COMMENT = _{ WHITESPACE | COMMENT }
+_WHITESPACE_SL_COMMENT = _{ WHITESPACE | COMMENT }

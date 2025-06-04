@@ -446,11 +446,11 @@ impl BoogieCodeGenerator {
     fn boogie_table_map_name(
         &self,
         table_id: TableId,
-        fieldId: FieldId,
+        field_id: FieldId,
         cfg: &CfgProgram,
     ) -> String {
         let table_info = &cfg.tables[table_id];
-        let field_info = &cfg.fields[fieldId];
+        let field_info = &cfg.fields[field_id];
         format!(
             "table_{}_{}_field_{}",
             table_info.name,

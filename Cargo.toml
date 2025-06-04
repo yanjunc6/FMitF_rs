@@ -10,3 +10,4 @@ petgraph = "0.8"
 clap = { version = "4", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 id-arena = "2.2"
+ordered-float = { version = "5.0", default-features = false }
