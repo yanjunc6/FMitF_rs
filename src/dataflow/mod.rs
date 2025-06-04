@@ -7,6 +7,12 @@ use std::hash::Hash;
 mod liveness;
 pub use liveness::analyze_live_variables;
 
+mod reaching_definitions;
+pub use reaching_definitions::{analyze_reaching_definitions, Definition as ReachingDefinition};
+
+mod available_expressions; // Add this line
+pub use available_expressions::analyze_available_expressions; // Add this line
+
 /// Direction of dataflow analysis
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {

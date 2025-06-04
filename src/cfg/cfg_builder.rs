@@ -596,7 +596,9 @@ impl<'a> FunctionContextBuilder<'a> {
                 Ok(Operand::Var(*var_id))
             }
             ast::ExpressionKind::IntLit(val) => Ok(Operand::Const(Constant::Int(*val))),
-            ast::ExpressionKind::FloatLit(val) => Ok(Operand::Const(Constant::Float(*val))),
+            ast::ExpressionKind::FloatLit(val) => Ok(Operand::Const(Constant::Float(
+                ordered_float::OrderedFloat::from(*val),
+            ))),
             ast::ExpressionKind::StringLit(val) => {
                 Ok(Operand::Const(Constant::String(val.clone())))
             }

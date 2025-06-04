@@ -198,6 +198,7 @@ impl Pipeline {
         self.sc_graph.as_ref().ok_or("SC-Graph stage not completed")
     }
 
+    #[allow(dead_code)]
     fn get_scgraph_mut(&mut self) -> Result<&mut SCGraph, &'static str> {
         self.sc_graph.as_mut().ok_or("SC-Graph stage not completed")
     }

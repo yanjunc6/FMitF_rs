@@ -110,7 +110,7 @@ pub enum Statement {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Rvalue {
     Use(Operand),
     TableAccess {
@@ -130,21 +130,21 @@ pub enum Rvalue {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Operand {
     Var(VarId),
     Const(Constant),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Constant {
     Int(i64),
-    Float(f64),
+    Float(ordered_float::OrderedFloat<f64>),
     Bool(bool),
     String(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Terminator {
     Goto(BasicBlockId),
     Branch {
