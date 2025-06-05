@@ -1,10 +1,12 @@
 use clap::{Parser, ValueEnum};
+use FMitF_rs::cfg;
 use std::fs;
 use std::io::{stdout, BufWriter, Write};
 use std::path::PathBuf;
 
 use FMitF_rs::{
     ast::parse_and_analyze,
+    optimization::CfgOptimizer,
     pretty::{
         print_cfg, print_program_to_writer, print_sc_graph, CfgFormat, CfgPrintOptions,
         PrintMode as AstPrintMode, PrintOptions as AstPrintOptions, SCGraphFormat,
@@ -54,6 +56,10 @@ struct Cli {
     /// Verification timeout in seconds (verify mode only)
     #[arg(long = "timeout", default_value = "30")]
     timeout: u32,
+
+    /// Skip optimization passes
+    #[arg(long = "no-optimize")]
+    no_optimize: bool,
 }
 
 #[derive(ValueEnum, Clone, PartialEq, Debug)]
@@ -62,7 +68,9 @@ enum Mode {
     Ast,
     /// Build Control Flow Graph (includes AST stage)
     Cfg,
-    /// Build Serializability Conflict Graph (includes AST + CFG stages)
+    /// Optimize Control Flow Graph (includes AST + CFG stages)
+    Optimize,
+    /// Build Serializability Conflict Graph (includes AST + CFG + Optimize stages)
     Scgraph,
     /// Run verification and pruning (includes all previous stages)
     Verify,
@@ -72,6 +80,7 @@ enum Mode {
 struct Pipeline {
     ast_program: Option<AstProgram>,
     cfg_program: Option<CfgProgram>,
+    optimization_completed: bool,
     sc_graph: Option<SCGraph>,
 }
 
@@ -80,6 +89,7 @@ impl Pipeline {
         Self {
             ast_program: None,
             cfg_program: None,
+            optimization_completed: false,
             sc_graph: None,
         }
     }
@@ -96,14 +106,21 @@ impl Pipeline {
             self.run_ast_stage(source_code, cli)?;
         }
 
-        // Stage 2: CFG (required for cfg, scgraph, verify)
-        if matches!(target_stage, Mode::Cfg | Mode::Scgraph | Mode::Verify)
+        // Stage 2: CFG (required for cfg, optimize, scgraph, verify)
+        if matches!(target_stage, Mode::Cfg | Mode::Optimize | Mode::Scgraph | Mode::Verify)
             && self.cfg_program.is_none()
         {
             self.run_cfg_stage(cli)?;
         }
 
-        // Stage 3: SCGraph (required for scgraph, verify)
+        // Stage 3: Optimization (required for optimize, scgraph, verify - unless disabled)
+        if matches!(target_stage, Mode::Optimize | Mode::Scgraph | Mode::Verify)
+            && !self.optimization_completed
+        {
+            self.run_optimize_stage(cli)?;
+        }
+
+        // Stage 4: SCGraph (required for scgraph, verify)
         if matches!(target_stage, Mode::Scgraph | Mode::Verify) && self.sc_graph.is_none() {
             self.run_scgraph_stage(cli)?;
         }
@@ -113,7 +130,7 @@ impl Pipeline {
 
     fn run_ast_stage(&mut self, source_code: &str, cli: &Cli) -> Result<(), String> {
         if !cli.quiet {
-            println!("⚙️ Stage 1/3: Frontend analysis (Parsing, Name Resolution, Semantics)...");
+            println!("⚙️ Stage 1/4: Frontend analysis (Parsing, Name Resolution, Semantics)...");
         }
 
         match parse_and_analyze(source_code) {
@@ -136,7 +153,7 @@ impl Pipeline {
 
     fn run_cfg_stage(&mut self, cli: &Cli) -> Result<(), String> {
         if !cli.quiet {
-            println!("⚙️ Stage 2/3: Building Control Flow Graph (CFG)...");
+            println!("⚙️ Stage 2/4: Building Control Flow Graph (CFG)...");
         }
 
         let ast_program = self
@@ -149,10 +166,6 @@ impl Pipeline {
                 if !cli.quiet {
                     println!("✅ CFG stage completed successfully");
                 }
-                // Extract the CfgProgram from CfgCtx
-                // Note: We can't move out of cfg_ctx.program directly, so we need to handle this
-                // For now, we'll store the entire context and access program through it
-                // This is a limitation of the current Arena-based design
                 self.cfg_program = Some(cfg_ctx.program);
                 Ok(())
             }
@@ -163,15 +176,54 @@ impl Pipeline {
         }
     }
 
-    fn run_scgraph_stage(&mut self, cli: &Cli) -> Result<(), String> {
-        if !cli.quiet {
-            println!("⚙️ Stage 3/3: Building Serializability Conflict Graph (SC-Graph)...");
-        }
-
+    fn run_optimize_stage(&mut self, cli: &Cli) -> Result<(), String> {
         let cfg_program = self
             .cfg_program
-            .as_ref()
-            .ok_or("CFG stage must be completed before SC-Graph stage")?;
+            .as_mut()
+            .ok_or("CFG stage must be completed before optimization stage")?;
+
+        if cli.no_optimize {
+            if !cli.quiet {
+                println!("⚙️ Stage 3/4: Optimization (skipped due to --no-optimize)");
+            }
+            self.optimization_completed = true;
+            return Ok(());
+        }
+
+        if !cli.quiet {
+            println!("⚙️ Stage 3/4: Optimizing Control Flow Graph...");
+        }
+
+        // Create optimizer and run optimization passes
+        let optimizer = CfgOptimizer::default_passes();
+        let opt_result = optimizer.optimize_program(cfg_program);
+
+        if !cli.quiet {
+            for (func_id, func_results) in &opt_result.function_results {
+                for func_result in func_results.pass_applications.clone() {
+                    println!(
+                        "Function {}: {} applications of pass '{}'",
+                        cfg_program.functions
+                            .get(*func_id)
+                            .map_or("Unknown", |f| f.name.as_str()),
+                        func_result.1,
+                        func_result.0
+                    );
+                }
+            }
+        }
+
+        self.optimization_completed = true;
+        Ok(())
+    }
+
+    fn run_scgraph_stage(&mut self, cli: &Cli) -> Result<(), String> {
+        if !cli.quiet {
+            println!("⚙️ Stage 4/4: Building Serializability Conflict Graph (SC-Graph)...");
+        }
+
+        // Use the CFG (which may have been optimized in-place)
+        let cfg_program = self.get_cfg()?;
 
         let sc_graph = SCGraph::new(cfg_program);
 
@@ -194,6 +246,19 @@ impl Pipeline {
         self.cfg_program.as_ref().ok_or("CFG stage not completed")
     }
 
+    fn get_optimized_cfg(&self) -> Result<&CfgProgram, &'static str> {
+        if self.optimization_completed {
+            self.cfg_program.as_ref().ok_or("CFG stage not completed")
+        } else {
+            Err("Optimization stage not completed")
+        }
+    }
+
+    /// Get the final CFG (same as get_cfg since optimization is done in-place)
+    fn get_final_cfg(&self) -> Result<&CfgProgram, &'static str> {
+        self.cfg_program.as_ref().ok_or("CFG stage not completed")
+    }
+
     fn get_scgraph(&self) -> Result<&SCGraph, &'static str> {
         self.sc_graph.as_ref().ok_or("SC-Graph stage not completed")
     }
@@ -208,11 +273,18 @@ impl Pipeline {
         &mut self,
         verifier: &mut AutoVerifier,
     ) -> Result<VerificationResults, String> {
-        let cfg_program = self.cfg_program.as_ref().ok_or("CFG stage not completed")?;
-        let sc_graph = self
-            .sc_graph
-            .as_mut()
-            .ok_or("SC-Graph stage not completed")?;
+        // Check that both CFG and SC-Graph stages are completed
+        if self.cfg_program.is_none() {
+            return Err("CFG stage not completed".to_string());
+        }
+        if self.sc_graph.is_none() {
+            return Err("SC-Graph stage not completed".to_string());
+        }
+
+        // Get references separately to avoid borrowing conflicts
+        let cfg_program = self.cfg_program.as_ref().unwrap();
+        let sc_graph = self.sc_graph.as_mut().unwrap();
+        
         verifier
             .verify_and_prune_c_edges(cfg_program, sc_graph)
             .map_err(|e| format!("Verification error: {}", e))
@@ -248,6 +320,7 @@ fn main() {
     let result = match cli.mode {
         Mode::Ast => output_ast(&pipeline, &cli),
         Mode::Cfg => output_cfg(&pipeline, &cli),
+        Mode::Optimize => output_optimized_cfg(&pipeline, &cli),
         Mode::Scgraph => output_scgraph(&pipeline, &cli),
         Mode::Verify => output_verify(&mut pipeline, &cli),
     };
@@ -354,8 +427,34 @@ fn output_cfg(pipeline: &Pipeline, cli: &Cli) -> Result<(), String> {
     Ok(())
 }
 
+fn output_optimized_cfg(pipeline: &Pipeline, cli: &Cli) -> Result<(), String> {
+    let cfg_program = pipeline.get_optimized_cfg()?;
+
+    let cfg_opts = CfgPrintOptions {
+        format: if cli.dot {
+            CfgFormat::Dot
+        } else if cli.verbose {
+            CfgFormat::Text
+        } else {
+            CfgFormat::Summary
+        },
+        verbose: cli.verbose,
+        quiet: cli.quiet,
+        show_spans: cli.show_spans,
+    };
+
+    let mut writer = get_writer(&cli.output, cli.quiet)?;
+    print_cfg(cfg_program, &cfg_opts, &mut writer)
+        .map_err(|e| format!("Failed to print optimized CFG: {}", e))?;
+    writer
+        .flush()
+        .map_err(|e| format!("Failed to flush output: {}", e))?;
+
+    Ok(())
+}
+
 fn output_scgraph(pipeline: &Pipeline, cli: &Cli) -> Result<(), String> {
-    let cfg_program = pipeline.get_cfg()?;
+    let cfg_program = pipeline.get_final_cfg()?;
     let sc_graph = pipeline.get_scgraph()?;
 
     let sc_opts = SCGraphPrintOptions {
