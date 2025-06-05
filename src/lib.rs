@@ -4,7 +4,7 @@ pub mod dataflow;
 pub mod pretty;
 pub mod sc_graph;
 pub mod verification;
-// pub mod optimization;
+pub mod optimization;
 
 // Re-export AST functionality
 pub use ast::{parse_and_analyze, Program as AstProgram, Span as AstSpan};
@@ -28,3 +28,4 @@ pub use sc_graph::{EdgeType as SCGraphEdgeType, SCGraph}; // Added
 
 // Re-export verification (currently commented out)
 // pub use verification::{AutoVerifier, VerificationError, VerificationOptions};
+pub use optimization::CfgOptimizer;
