@@ -1,4 +1,4 @@
-use crate::cfg::{Constant, FunctionCfg, Operand, Rvalue, Statement, VarId};
+use crate::cfg::{Constant, FunctionCfg, Operand, Rvalue, Statement};
 use crate::dataflow::{analyze_reaching_definitions, ReachingDefinition};
 use crate::optimization::OptimizationPass;
 use std::collections::HashMap;
@@ -6,7 +6,6 @@ use std::ptr::NonNull;
 
 /// Constant Propagation optimization pass
 pub struct ConstantPropagationPass;
-
 
 // Implement the OptimizationPass trait
 impl OptimizationPass for ConstantPropagationPass {
@@ -104,7 +103,6 @@ impl OptimizationPass for ConstantPropagationPass {
         changed
     }
 }
-
 
 impl ConstantPropagationPass {
     pub fn new() -> Self {
