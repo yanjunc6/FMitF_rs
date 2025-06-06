@@ -1,9 +1,8 @@
 use crate::cfg::{
-    BinaryOp, CfgProgram, Constant, FieldId, FunctionId as CfgFunctionId, HopId as CfgHopId,
-    Operand, Rvalue, Statement, TableId, TypeName, UnaryOp, VarId,
+    BinaryOp, CfgProgram, Constant, FunctionId as CfgFunctionId, HopId as CfgHopId, Operand,
+    Rvalue, Statement, Terminator, TypeName, UnaryOp,
 };
 use crate::verification::verification_logic::VerificationPlan;
-use std::collections::HashSet;
 use std::fmt::Write;
 
 /// Pure Boogie code generation - no verification logic
@@ -21,10 +20,7 @@ impl BoogieCodeGenerator {
         // Header comments
         self.write_header(&mut w, plan, cfg);
 
-        // Variable declarations
-        self.write_variable_declarations(&mut w, plan, cfg);
-
-        // Table declarations
+        // Table declarations (global variables)
         self.write_table_declarations(&mut w, plan, cfg);
 
         // Hop procedures
@@ -58,545 +54,525 @@ impl BoogieCodeGenerator {
         writeln!(w, "").unwrap();
     }
 
-    fn write_variable_declarations(
-        &self,
-        w: &mut String,
-        plan: &VerificationPlan,
-        cfg: &CfgProgram,
-    ) {
-        writeln!(w, "// Global Variable Declarations").unwrap();
-        for (var_id, (func_ctx_id, ty)) in &plan.global_vars {
-            let base_name = self.boogie_global_var_name(*var_id, *func_ctx_id, cfg);
-            let b_type = self.boogie_type_name(ty);
-            writeln!(w, "var {}: {};", base_name, b_type).unwrap();
-            writeln!(w, "var {}_init: {};", base_name, b_type).unwrap();
-            writeln!(w, "var {}_serial1: {};", base_name, b_type).unwrap();
-            writeln!(w, "var {}_serial2: {};", base_name, b_type).unwrap();
-        }
-        writeln!(w, "").unwrap();
-    }
-
     fn write_table_declarations(&self, w: &mut String, plan: &VerificationPlan, cfg: &CfgProgram) {
-        writeln!(w, "// Table Declarations").unwrap();
-        for table_id in &plan.relevant_tables {
-            let table_info = &cfg.tables[*table_id];
-            let pk_type = "int"; // Simplified
+        writeln!(w, "// Table declarations").unwrap();
 
-            for field_id in &table_info.fields {
-                if cfg.fields[*field_id].is_primary {
-                    continue;
+        for &table_id in &plan.relevant_tables {
+            let table = &cfg.tables[table_id];
+            let table_name = &table.name;
+
+            // Get primary key type
+            let pk_field = &cfg.fields[table.primary_key];
+            let pk_type = self.type_to_boogie(&pk_field.ty);
+
+            // Declare each non-primary field as a map from primary key
+            for &field_id in &table.fields {
+                if field_id != table.primary_key {
+                    let field = &cfg.fields[field_id];
+                    let field_type = self.type_to_boogie(&field.ty);
+                    writeln!(
+                        w,
+                        "var {}_{}: [{}]{};",
+                        table_name, field.name, pk_type, field_type
+                    )
+                    .unwrap();
                 }
-
-                let field_info = &cfg.fields[*field_id];
-                let map_name = self.boogie_table_map_name(*table_id, *field_id, cfg);
-                let value_type = self.boogie_type_name(&field_info.ty);
-
-                writeln!(w, "var {}: [{}]{};", map_name, pk_type, value_type).unwrap();
-                writeln!(w, "var {}_init: [{}]{};", map_name, pk_type, value_type).unwrap();
-                writeln!(w, "var {}_serial1: [{}]{};", map_name, pk_type, value_type).unwrap();
-                writeln!(w, "var {}_serial2: [{}]{};", map_name, pk_type, value_type).unwrap();
             }
         }
         writeln!(w, "").unwrap();
     }
 
     fn write_hop_procedures(&self, w: &mut String, plan: &VerificationPlan, cfg: &CfgProgram) {
-        self.write_function_hops(w, plan.func1_id, &plan.relevant_hops_f1, plan, cfg);
-        self.write_function_hops(w, plan.func2_id, &plan.relevant_hops_f2, plan, cfg);
+        writeln!(w, "// Hop procedures").unwrap();
+
+        // Generate procedures for function 1 hops
+        for &hop_id in &plan.relevant_hops_f1 {
+            self.write_hop_procedure(w, plan.func1_id, hop_id, cfg);
+        }
+
+        // Generate procedures for function 2 hops
+        for &hop_id in &plan.relevant_hops_f2 {
+            self.write_hop_procedure(w, plan.func2_id, hop_id, cfg);
+        }
+
+        writeln!(w, "").unwrap();
     }
 
-    fn write_function_hops(
+    fn write_hop_procedure(
         &self,
         w: &mut String,
         func_id: CfgFunctionId,
-        hop_ids: &[CfgHopId],
-        plan: &VerificationPlan,
+        hop_id: CfgHopId,
         cfg: &CfgProgram,
     ) {
-        let func_cfg = &cfg.functions[func_id];
+        let func = &cfg.functions[func_id];
+        let hop = &func.hops[hop_id];
 
-        for hop_id in hop_ids {
-            let hop_cfg = &func_cfg.hops[*hop_id];
-            writeln!(w, "procedure Hop_{}_{}()", func_id.index(), hop_id.index()).unwrap();
+        // Generate procedure name
+        let proc_name = format!("{}_Hop{}", func.name, hop_id.index());
 
-            // Generate modifies clause
-            let modifies = self.collect_modifies_for_hop(hop_cfg, func_cfg, plan, cfg);
-            if !modifies.is_empty() {
-                write!(w, "  modifies ").unwrap();
-                for (i, name) in modifies.iter().enumerate() {
-                    write!(w, "{}", name).unwrap();
-                    if i < modifies.len() - 1 {
-                        write!(w, ", ").unwrap();
+        // Collect parameters, return values, and modifies clauses
+        let mut params = Vec::new();
+        let mut returns = Vec::new();
+        let mut modifies = Vec::new();
+        let mut local_vars = Vec::new();
+
+        // Analyze what this hop does
+        for &block_id in &hop.blocks {
+            let block = &func.blocks[block_id];
+
+            // Check for return statements to determine return type
+            match &block.terminator {
+                Terminator::Return(Some(operand)) => {
+                    if let Operand::Var(var_id) = operand {
+                        let var_info = &func.variables[*var_id];
+                        let var_type = self.type_to_boogie(&var_info.ty);
+                        returns.push(format!("{}: {}", var_info.name, var_type));
                     }
                 }
-                writeln!(w, ";").unwrap();
+                _ => {}
             }
 
-            writeln!(w, "{{").unwrap();
-
-            // Generate procedure body
-            for block_id in &hop_cfg.blocks {
-                let block = &func_cfg.blocks[*block_id];
-                for stmt in &block.statements {
-                    self.write_statement(w, "  ", stmt, func_id, plan, cfg);
+            // Analyze statements for modifies and local variables
+            for stmt in &block.statements {
+                match stmt {
+                    Statement::Assign { var, .. } => {
+                        let var_info = &func.variables[*var];
+                        if var_info.is_parameter {
+                            // This is a parameter, add to params if not already there
+                            let param_str =
+                                format!("{}: {}", var_info.name, self.type_to_boogie(&var_info.ty));
+                            if !params.contains(&param_str) {
+                                params.push(param_str);
+                            }
+                        } else {
+                            // This is a local variable
+                            let local_str =
+                                format!("{}: {}", var_info.name, self.type_to_boogie(&var_info.ty));
+                            if !local_vars.contains(&local_str) {
+                                local_vars.push(local_str);
+                            }
+                        }
+                    }
+                    Statement::TableAssign { table, field, .. } => {
+                        let table_name = &cfg.tables[*table].name;
+                        let field_name = &cfg.fields[*field].name;
+                        let modify_str = format!("{}_{}", table_name, field_name);
+                        if !modifies.contains(&modify_str) {
+                            modifies.push(modify_str);
+                        }
+                    }
                 }
             }
+        }
 
-            writeln!(w, "}}").unwrap();
+        // Write procedure signature
+        write!(w, "procedure {}(", proc_name).unwrap();
+        if !params.is_empty() {
+            write!(w, "{}", params.join(", ")).unwrap();
+        }
+        write!(w, ")").unwrap();
+
+        if !returns.is_empty() {
+            write!(w, " returns ({})", returns.join(", ")).unwrap();
+        }
+        writeln!(w, "").unwrap();
+
+        if !modifies.is_empty() {
+            writeln!(w, "  modifies {};", modifies.join(", ")).unwrap();
+        }
+
+        writeln!(w, "{{").unwrap();
+
+        // Declare local variables
+        for local_var in &local_vars {
+            writeln!(w, "  var {};", local_var).unwrap();
+        }
+        if !local_vars.is_empty() {
             writeln!(w, "").unwrap();
         }
+
+        // Generate hop body
+        for &block_id in &hop.blocks {
+            let block = &func.blocks[block_id];
+            for stmt in &block.statements {
+                self.write_statement(w, stmt, func, cfg);
+            }
+        }
+
+        writeln!(w, "}}").unwrap();
+        writeln!(w, "").unwrap();
     }
 
     fn write_main_procedure(&self, w: &mut String, plan: &VerificationPlan, cfg: &CfgProgram) {
-        let indent = "  ";
+        writeln!(w, "procedure main()").unwrap();
 
-        // Collect modifies for main
-        let main_modifies = self.collect_modifies_for_main(plan, cfg);
+        // Collect all modifiable variables
+        let mut modifies = Vec::new();
 
-        write!(w, "procedure main()").unwrap();
-        if !main_modifies.is_empty() {
-            writeln!(w).unwrap(); // Newline before modifies if it exists
-            write!(w, "  modifies ").unwrap();
-            for (i, name) in main_modifies.iter().enumerate() {
-                write!(w, "{}", name).unwrap();
-                if i < main_modifies.len() - 1 {
-                    write!(w, ", ").unwrap();
+        // Add table variables
+        for &table_id in &plan.relevant_tables {
+            let table = &cfg.tables[table_id];
+            for &field_id in &table.fields {
+                if field_id != table.primary_key {
+                    let field = &cfg.fields[field_id];
+                    modifies.push(format!("{}_{}", table.name, field.name));
                 }
             }
-            writeln!(w, ";").unwrap(); // Add semicolon and newline at the end of the modifies clause
         }
+
+        if !modifies.is_empty() {
+            writeln!(w, "  modifies {};", modifies.join(", ")).unwrap();
+        }
+
         writeln!(w, "{{").unwrap();
 
+        // Local variables for storing intermediate results and function variables
+        self.write_main_locals(w, plan, cfg);
+
         // Havoc initial state
-        self.write_havoc_section(w, indent, plan, cfg);
+        self.write_initial_havoc(w, plan, cfg);
 
-        // Store initial state
-        self.write_store_initial_section(w, indent, plan, cfg);
+        // Save initial state
+        self.write_save_initial_state(w, plan, cfg);
 
-        // Serial executions
-        self.write_serial_executions(w, indent, plan, cfg);
+        // Execute serial orders
+        self.write_serial_executions(w, plan, cfg);
 
-        // Interleaved executions with assertions
-        self.write_interleaved_executions(w, indent, plan, cfg);
+        // Execute interleavings and assert equivalence
+        self.write_interleaving_executions(w, plan, cfg);
 
         writeln!(w, "}}").unwrap();
     }
 
-    fn collect_modifies_for_main(&self, plan: &VerificationPlan, cfg: &CfgProgram) -> Vec<String> {
-        let mut modifies_set = HashSet::new();
+    fn write_main_locals(&self, w: &mut String, plan: &VerificationPlan, cfg: &CfgProgram) {
+        writeln!(w, "  // Local variables for verification").unwrap();
 
-        // Global variables and their variants
-        for (var_id, (func_ctx_id, _)) in &plan.global_vars {
-            let base_name = self.boogie_global_var_name(*var_id, *func_ctx_id, cfg);
-            modifies_set.insert(base_name.clone());
-            modifies_set.insert(format!("{}_init", base_name));
-            modifies_set.insert(format!("{}_serial1", base_name));
-            modifies_set.insert(format!("{}_serial2", base_name));
-        }
+        // Variables to store initial and final states
+        for &table_id in &plan.relevant_tables {
+            let table = &cfg.tables[table_id];
+            let pk_type = self.type_to_boogie(&cfg.fields[table.primary_key].ty);
 
-        // Table maps and their variants
-        for table_id in &plan.relevant_tables {
-            let table_info = &cfg.tables[*table_id];
-            for field_id in &table_info.fields {
-                if cfg.fields[*field_id].is_primary {
-                    continue;
+            for &field_id in &table.fields {
+                if field_id != table.primary_key {
+                    let field = &cfg.fields[field_id];
+                    let field_type = self.type_to_boogie(&field.ty);
+                    let var_name = format!("{}_{}", table.name, field.name);
+
+                    writeln!(w, "  var {}_init: [{}]{};", var_name, pk_type, field_type).unwrap();
+                    writeln!(
+                        w,
+                        "  var {}_serial1: [{}]{};",
+                        var_name, pk_type, field_type
+                    )
+                    .unwrap();
+                    writeln!(
+                        w,
+                        "  var {}_serial2: [{}]{};",
+                        var_name, pk_type, field_type
+                    )
+                    .unwrap();
                 }
-                let map_name = self.boogie_table_map_name(*table_id, *field_id, cfg);
-                modifies_set.insert(map_name.clone());
-                modifies_set.insert(format!("{}_init", map_name));
-                modifies_set.insert(format!("{}_serial1", map_name));
-                modifies_set.insert(format!("{}_serial2", map_name));
             }
         }
-        // Sort for deterministic output, then collect into Vec
-        let mut sorted_modifies: Vec<String> = modifies_set.into_iter().collect();
-        sorted_modifies.sort();
-        sorted_modifies
-    }
 
-    fn write_havoc_section(
-        &self,
-        w: &mut String,
-        indent: &str,
-        plan: &VerificationPlan,
-        cfg: &CfgProgram,
-    ) {
-        writeln!(w, "{}// Havoc initial state", indent).unwrap();
-        for (var_id, (func_ctx_id, _)) in &plan.global_vars {
-            let var_name = self.boogie_global_var_name(*var_id, *func_ctx_id, cfg);
-            writeln!(w, "{}havoc {};", indent, var_name).unwrap();
-        }
-        for table_id in &plan.relevant_tables {
-            let table_info = &cfg.tables[*table_id];
-            for field_id in &table_info.fields {
-                if cfg.fields[*field_id].is_primary {
-                    continue;
-                }
-                let map_name = self.boogie_table_map_name(*table_id, *field_id, cfg);
-                writeln!(w, "{}havoc {};", indent, map_name).unwrap();
+        // Function variables (parameters and globals from the plan)
+        for (var_id, (func_id, type_name)) in &plan.global_vars {
+            let func = &cfg.functions[*func_id];
+            if let Some(var_info) = func.variables.get(*var_id) {
+                let var_type = self.type_to_boogie(type_name);
+                writeln!(w, "  var {}: {};", var_info.name, var_type).unwrap();
             }
         }
+
         writeln!(w, "").unwrap();
     }
 
-    fn write_store_initial_section(
-        &self,
-        w: &mut String,
-        indent: &str,
-        plan: &VerificationPlan,
-        cfg: &CfgProgram,
-    ) {
-        writeln!(w, "{}// Store initial state", indent).unwrap();
-        for (var_id, (func_ctx_id, _)) in &plan.global_vars {
-            let var_name = self.boogie_global_var_name(*var_id, *func_ctx_id, cfg);
-            writeln!(w, "{}{}_init := {};", indent, var_name, var_name).unwrap();
-        }
-        for table_id in &plan.relevant_tables {
-            let table_info = &cfg.tables[*table_id];
-            for field_id in &table_info.fields {
-                if cfg.fields[*field_id].is_primary {
-                    continue;
+    fn write_initial_havoc(&self, w: &mut String, plan: &VerificationPlan, cfg: &CfgProgram) {
+        writeln!(w, "  // Havoc initial state").unwrap();
+
+        // Havoc table variables
+        for &table_id in &plan.relevant_tables {
+            let table = &cfg.tables[table_id];
+            for &field_id in &table.fields {
+                if field_id != table.primary_key {
+                    let field = &cfg.fields[field_id];
+                    writeln!(w, "  havoc {}_{};", table.name, field.name).unwrap();
                 }
-                let map_name = self.boogie_table_map_name(*table_id, *field_id, cfg);
-                writeln!(w, "{}{}_init := {};", indent, map_name, map_name).unwrap();
             }
         }
+
+        // Havoc function variables
+        for (var_id, (func_id, _)) in &plan.global_vars {
+            let func = &cfg.functions[*func_id];
+            if let Some(var_info) = func.variables.get(*var_id) {
+                writeln!(w, "  havoc {};", var_info.name).unwrap();
+            }
+        }
+
         writeln!(w, "").unwrap();
     }
 
-    fn write_serial_executions(
-        &self,
-        w: &mut String,
-        indent: &str,
-        plan: &VerificationPlan,
-        cfg: &CfgProgram,
-    ) {
-        for (i, (func1_id, hops1, func2_id, hops2)) in plan.serial_orders.iter().enumerate() {
-            let suffix = if i == 0 { "serial1" } else { "serial2" };
-            writeln!(w, "{}// Serial Execution {}", indent, suffix).unwrap();
+    fn write_save_initial_state(&self, w: &mut String, plan: &VerificationPlan, cfg: &CfgProgram) {
+        writeln!(w, "  // Save initial state").unwrap();
 
-            self.write_reset_to_initial(w, indent, plan, cfg);
-
-            // Execute first function's hops
-            for hop_id in hops1 {
-                writeln!(
-                    w,
-                    "{}call Hop_{}_{}();",
-                    indent,
-                    func1_id.index(),
-                    hop_id.index()
-                )
-                .unwrap();
+        for &table_id in &plan.relevant_tables {
+            let table = &cfg.tables[table_id];
+            for &field_id in &table.fields {
+                if field_id != table.primary_key {
+                    let field = &cfg.fields[field_id];
+                    let var_name = format!("{}_{}", table.name, field.name);
+                    writeln!(w, "  {}_init := {};", var_name, var_name).unwrap();
+                }
             }
-
-            // Execute second function's hops
-            for hop_id in hops2 {
-                writeln!(
-                    w,
-                    "{}call Hop_{}_{}();",
-                    indent,
-                    func2_id.index(),
-                    hop_id.index()
-                )
-                .unwrap();
-            }
-
-            // Store final state
-            self.write_store_final_state(w, indent, suffix, plan, cfg);
         }
+
+        writeln!(w, "").unwrap();
     }
 
-    fn write_interleaved_executions(
+    fn write_serial_executions(&self, w: &mut String, plan: &VerificationPlan, cfg: &CfgProgram) {
+        let func1_name = &cfg.functions[plan.func1_id].name;
+        let func2_name = &cfg.functions[plan.func2_id].name;
+
+        writeln!(
+            w,
+            "  // Serial execution 1: {} then {}",
+            func1_name, func2_name
+        )
+        .unwrap();
+        self.write_reset_state(w, plan, cfg);
+        self.write_execute_function_hops(w, plan.func1_id, &plan.relevant_hops_f1, cfg);
+        self.write_execute_function_hops(w, plan.func2_id, &plan.relevant_hops_f2, cfg);
+        self.write_save_serial_state(w, plan, cfg, "serial1");
+
+        writeln!(
+            w,
+            "  // Serial execution 2: {} then {}",
+            func2_name, func1_name
+        )
+        .unwrap();
+        self.write_reset_state(w, plan, cfg);
+        self.write_execute_function_hops(w, plan.func2_id, &plan.relevant_hops_f2, cfg);
+        self.write_execute_function_hops(w, plan.func1_id, &plan.relevant_hops_f1, cfg);
+        self.write_save_serial_state(w, plan, cfg, "serial2");
+
+        writeln!(w, "").unwrap();
+    }
+
+    fn write_interleaving_executions(
         &self,
         w: &mut String,
-        indent: &str,
         plan: &VerificationPlan,
         cfg: &CfgProgram,
     ) {
-        writeln!(w, "{}// Interleaved Executions", indent).unwrap();
-
         for (i, interleaving) in plan.interleavings.iter().enumerate() {
-            writeln!(w, "{}// Interleaving {}", indent, i).unwrap();
+            writeln!(w, "  // Interleaving {}", i + 1).unwrap();
+            self.write_reset_state(w, plan, cfg);
 
-            self.write_reset_to_initial(w, indent, plan, cfg);
-
-            // Execute interleaved hops
-            for (func_id, hop_id) in interleaving {
-                writeln!(
-                    w,
-                    "{}call Hop_{}_{}();",
-                    indent,
-                    func_id.index(),
-                    hop_id.index()
-                )
-                .unwrap();
+            for &(func_id, hop_id) in interleaving {
+                let func_name = &cfg.functions[func_id].name;
+                let proc_name = format!("{}_Hop{}", func_name, hop_id.index());
+                writeln!(w, "  call {}();", proc_name).unwrap();
             }
 
-            // Assertions
-            self.write_serializability_assertions(w, indent, plan, cfg);
-            writeln!(w, "").unwrap();
+            // Assert equivalence to one of the serial executions
+            self.write_serializability_assertion(w, plan, cfg);
         }
     }
 
-    fn write_reset_to_initial(
+    fn write_reset_state(&self, w: &mut String, plan: &VerificationPlan, cfg: &CfgProgram) {
+        for &table_id in &plan.relevant_tables {
+            let table = &cfg.tables[table_id];
+            for &field_id in &table.fields {
+                if field_id != table.primary_key {
+                    let field = &cfg.fields[field_id];
+                    let var_name = format!("{}_{}", table.name, field.name);
+                    writeln!(w, "  {} := {}_init;", var_name, var_name).unwrap();
+                }
+            }
+        }
+    }
+
+    fn write_execute_function_hops(
         &self,
         w: &mut String,
-        indent: &str,
-        plan: &VerificationPlan,
+        func_id: CfgFunctionId,
+        hops: &[CfgHopId],
         cfg: &CfgProgram,
     ) {
-        for (var_id, (func_ctx_id, _)) in &plan.global_vars {
-            let var_name = self.boogie_global_var_name(*var_id, *func_ctx_id, cfg);
-            writeln!(w, "{}{} := {}_init;", indent, var_name, var_name).unwrap();
-        }
-        for table_id in &plan.relevant_tables {
-            let table_info = &cfg.tables[*table_id];
-            for field_id in &table_info.fields {
-                if cfg.fields[*field_id].is_primary {
-                    continue;
-                }
-                let map_name = self.boogie_table_map_name(*table_id, *field_id, cfg);
-                writeln!(w, "{}{} := {}_init;", indent, map_name, map_name).unwrap();
-            }
+        let func_name = &cfg.functions[func_id].name;
+        for &hop_id in hops {
+            let proc_name = format!("{}_Hop{}", func_name, hop_id.index());
+            writeln!(w, "  call {}();", proc_name).unwrap();
         }
     }
 
-    fn write_store_final_state(
+    fn write_save_serial_state(
         &self,
         w: &mut String,
-        indent: &str,
+        plan: &VerificationPlan,
+        cfg: &CfgProgram,
         suffix: &str,
-        plan: &VerificationPlan,
-        cfg: &CfgProgram,
     ) {
-        for (var_id, (func_ctx_id, _)) in &plan.global_vars {
-            let var_name = self.boogie_global_var_name(*var_id, *func_ctx_id, cfg);
-            writeln!(w, "{}{}_{} := {};", indent, var_name, suffix, var_name).unwrap();
-        }
-        for table_id in &plan.relevant_tables {
-            let table_info = &cfg.tables[*table_id];
-            for field_id in &table_info.fields {
-                if cfg.fields[*field_id].is_primary {
-                    continue;
+        for &table_id in &plan.relevant_tables {
+            let table = &cfg.tables[table_id];
+            for &field_id in &table.fields {
+                if field_id != table.primary_key {
+                    let field = &cfg.fields[field_id];
+                    let var_name = format!("{}_{}", table.name, field.name);
+                    writeln!(w, "  {}_{} := {};", var_name, suffix, var_name).unwrap();
                 }
-                let map_name = self.boogie_table_map_name(*table_id, *field_id, cfg);
-                writeln!(w, "{}{}_{} := {};", indent, map_name, suffix, map_name).unwrap();
             }
         }
         writeln!(w, "").unwrap();
     }
 
-    fn write_serializability_assertions(
+    fn write_serializability_assertion(
         &self,
         w: &mut String,
-        indent: &str,
         plan: &VerificationPlan,
         cfg: &CfgProgram,
     ) {
-        // Variable assertions
-        for (var_id, (func_ctx_id, _)) in &plan.global_vars {
-            let var_name = self.boogie_global_var_name(*var_id, *func_ctx_id, cfg);
-            writeln!(
-                w,
-                "{}assert ({} == {}_serial1) || ({} == {}_serial2);",
-                indent, var_name, var_name, var_name, var_name
-            )
-            .unwrap();
-        }
+        writeln!(w, "  // Assert serializability").unwrap();
 
-        // Table assertions
-        for table_id in &plan.relevant_tables {
-            let table_info = &cfg.tables[*table_id];
-            for field_id in &table_info.fields {
-                if cfg.fields[*field_id].is_primary {
-                    continue;
-                }
-                let map_name = self.boogie_table_map_name(*table_id, *field_id, cfg);
-                writeln!(w, "{}assert (forall pk : int :: ({}[pk] == {}_serial1[pk]) || ({}[pk] == {}_serial2[pk]));",
-                    indent, map_name, map_name, map_name, map_name).unwrap();
-            }
-        }
-    }
+        for &table_id in &plan.relevant_tables {
+            let table = &cfg.tables[table_id];
+            let pk_type = self.type_to_boogie(&cfg.fields[table.primary_key].ty);
 
-    // Helper methods for naming and type conversion
-    fn boogie_type_name(&self, ty: &TypeName) -> &'static str {
-        match ty {
-            TypeName::Int => "int",
-            TypeName::Bool => "bool",
-            TypeName::Float => "real",
-            TypeName::String => "int",
-        }
-    }
+            for &field_id in &table.fields {
+                if field_id != table.primary_key {
+                    let field = &cfg.fields[field_id];
+                    let var_name = format!("{}_{}", table.name, field.name);
 
-    fn boogie_global_var_name(
-        &self,
-        var_id: VarId,
-        func_id: CfgFunctionId,
-        cfg: &CfgProgram,
-    ) -> String {
-        let var_info = &cfg.functions[func_id].variables[var_id];
-        format!(
-            "shared_f{}_{}_{}",
-            func_id.index(),
-            var_info.name,
-            var_id.index()
-        )
-    }
-
-    fn boogie_table_map_name(
-        &self,
-        table_id: TableId,
-        field_id: FieldId,
-        cfg: &CfgProgram,
-    ) -> String {
-        let table_info = &cfg.tables[table_id];
-        let field_info = &cfg.fields[field_id];
-        format!(
-            "table_{}_{}_field_{}",
-            table_info.name,
-            table_id.index(),
-            field_info.name
-        )
-    }
-
-    fn collect_modifies_for_hop(
-        &self,
-        hop_cfg: &crate::cfg::HopCfg,
-        func_cfg: &crate::cfg::FunctionCfg,
-        plan: &VerificationPlan,
-        cfg: &CfgProgram,
-    ) -> Vec<String> {
-        let mut modifies_set = HashSet::new();
-
-        for block_id in &hop_cfg.blocks {
-            let block = &func_cfg.blocks[*block_id];
-            for stmt in &block.statements {
-                match stmt {
-                    Statement::Assign { var, .. } => {
-                        if let Some((func_ctx_id, _)) = plan.global_vars.get(var) {
-                            modifies_set.insert(self.boogie_global_var_name(
-                                *var,
-                                *func_ctx_id,
-                                cfg,
-                            ));
-                        }
-                    }
-                    Statement::TableAssign { table, field, .. } => {
-                        modifies_set.insert(self.boogie_table_map_name(*table, *field, cfg));
-                    }
+                    writeln!(
+                        w,
+                        "  assert (forall k: {} :: {}[k] == {}_serial1[k] || {}[k] == {}_serial2[k]);",
+                        pk_type, var_name, var_name, var_name, var_name
+                    ).unwrap();
                 }
             }
         }
-
-        modifies_set.into_iter().collect()
+        writeln!(w, "").unwrap();
     }
 
     fn write_statement(
         &self,
         w: &mut String,
-        indent: &str,
         stmt: &Statement,
-        func_id: CfgFunctionId,
-        plan: &VerificationPlan,
+        func: &crate::cfg::FunctionCfg,
         cfg: &CfgProgram,
     ) {
         match stmt {
             Statement::Assign { var, rvalue, .. } => {
-                let var_name = if let Some((ctx_func_id, _)) = plan.global_vars.get(var) {
-                    self.boogie_global_var_name(*var, *ctx_func_id, cfg)
-                } else {
-                    format!("local_var_{}_{}", var.index(), func_id.index()) // fallback
-                };
-                let rhs = self.model_rvalue(rvalue, func_id, plan, cfg);
-                writeln!(w, "{}{} := {};", indent, var_name, rhs).unwrap();
+                let var_name = &func.variables[*var].name;
+                let rvalue_str = self.rvalue_to_boogie(rvalue, func, cfg);
+                writeln!(w, "  {} := {};", var_name, rvalue_str).unwrap();
             }
             Statement::TableAssign {
                 table,
-                pk_value,
                 field,
+                pk_value,
                 value,
                 ..
             } => {
-                let map_name = self.boogie_table_map_name(*table, *field, cfg);
-                let pk_str = self.model_operand(pk_value, func_id, plan, cfg);
-                let val_str = self.model_operand(value, func_id, plan, cfg);
-                writeln!(w, "{}{}[{}] := {};", indent, map_name, pk_str, val_str).unwrap();
+                let table_name = &cfg.tables[*table].name;
+                let field_name = &cfg.fields[*field].name;
+                let pk_str = self.operand_to_boogie(pk_value, func, cfg);
+                let value_str = self.operand_to_boogie(value, func, cfg);
+                writeln!(
+                    w,
+                    "  {}_{}[{}] := {};",
+                    table_name, field_name, pk_str, value_str
+                )
+                .unwrap();
             }
         }
     }
 
-    fn model_rvalue(
+    fn rvalue_to_boogie(
         &self,
         rvalue: &Rvalue,
-        func_id: CfgFunctionId,
-        plan: &VerificationPlan,
+        func: &crate::cfg::FunctionCfg,
         cfg: &CfgProgram,
     ) -> String {
         match rvalue {
-            Rvalue::Use(op) => self.model_operand(op, func_id, plan, cfg),
+            Rvalue::Use(operand) => self.operand_to_boogie(operand, func, cfg),
             Rvalue::TableAccess {
                 table,
-                pk_value,
                 field,
+                pk_value,
                 ..
             } => {
-                let map_name = self.boogie_table_map_name(*table, *field, cfg);
-                let pk_str = self.model_operand(pk_value, func_id, plan, cfg);
-                format!("{}[{}]", map_name, pk_str)
+                let table_name = &cfg.tables[*table].name;
+                let field_name = &cfg.fields[*field].name;
+                let pk_str = self.operand_to_boogie(pk_value, func, cfg);
+                format!("{}_{}[{}]", table_name, field_name, pk_str)
             }
             Rvalue::UnaryOp { op, operand } => {
-                let e_str = self.model_operand(operand, func_id, plan, cfg);
-                match op {
-                    UnaryOp::Not => format!("(!{})", e_str),
-                    UnaryOp::Neg => format!("(-{})", e_str),
-                }
+                let op_str = self.unary_op_to_boogie(op);
+                let operand_str = self.operand_to_boogie(operand, func, cfg);
+                format!("{}{}", op_str, operand_str)
             }
-            Rvalue::BinaryOp { left, op, right } => {
-                let l_str = self.model_operand(left, func_id, plan, cfg);
-                let r_str = self.model_operand(right, func_id, plan, cfg);
-                let op_str = match op {
-                    BinaryOp::Add => "+",
-                    BinaryOp::Sub => "-",
-                    BinaryOp::Mul => "*",
-                    BinaryOp::Div => "/",
-                    BinaryOp::Eq => "==",
-                    BinaryOp::Neq => "!=",
-                    BinaryOp::Lt => "<",
-                    BinaryOp::Lte => "<=",
-                    BinaryOp::Gt => ">",
-                    BinaryOp::Gte => ">=",
-                    BinaryOp::And => "&&",
-                    BinaryOp::Or => "||",
-                };
-                format!("({} {} {})", l_str, op_str, r_str)
+            Rvalue::BinaryOp { op, left, right } => {
+                let left_str = self.operand_to_boogie(left, func, cfg);
+                let right_str = self.operand_to_boogie(right, func, cfg);
+                let op_str = self.binary_op_to_boogie(op);
+                format!("({} {} {})", left_str, op_str, right_str)
             }
         }
     }
 
-    fn model_operand(
+    fn operand_to_boogie(
         &self,
         operand: &Operand,
-        func_id: CfgFunctionId,
-        plan: &VerificationPlan,
-        cfg: &CfgProgram,
+        func: &crate::cfg::FunctionCfg,
+        _cfg: &CfgProgram,
     ) -> String {
         match operand {
-            Operand::Var(var_id) => {
-                if let Some((ctx_func_id, _)) = plan.global_vars.get(var_id) {
-                    self.boogie_global_var_name(*var_id, *ctx_func_id, cfg)
-                } else {
-                    format!("local_var_{}_{}", var_id.index(), func_id.index()) // fallback
-                }
-            }
-            Operand::Const(c) => match c {
-                Constant::Int(i) => i.to_string(),
-                Constant::Bool(b) => b.to_string(),
-                Constant::Float(f) => f.to_string(),
-                Constant::String(s) => {
-                    let hash = s.chars().fold(0u32, |acc, c| acc.wrapping_add(c as u32));
-                    hash.to_string()
-                }
-            },
+            Operand::Var(var_id) => func.variables[*var_id].name.clone(),
+            Operand::Const(constant) => self.constant_to_boogie(constant),
+        }
+    }
+
+    fn constant_to_boogie(&self, constant: &Constant) -> String {
+        match constant {
+            Constant::Int(i) => i.to_string(),
+            Constant::Float(f) => f.to_string(),
+            Constant::Bool(b) => b.to_string(),
+            Constant::String(s) => format!("\"{}\"", s),
+        }
+    }
+
+    fn type_to_boogie(&self, ty: &TypeName) -> String {
+        match ty {
+            TypeName::Int => "int".to_string(),
+            TypeName::Float => "real".to_string(),
+            TypeName::Bool => "bool".to_string(),
+            TypeName::String => "string".to_string(),
+        }
+    }
+
+    fn unary_op_to_boogie(&self, op: &UnaryOp) -> &'static str {
+        match op {
+            UnaryOp::Not => "!",
+            UnaryOp::Neg => "-",
+        }
+    }
+
+    fn binary_op_to_boogie(&self, op: &BinaryOp) -> &'static str {
+        match op {
+            BinaryOp::Add => "+",
+            BinaryOp::Sub => "-",
+            BinaryOp::Mul => "*",
+            BinaryOp::Div => "/",
+            BinaryOp::Eq => "==",
+            BinaryOp::Neq => "!=",
+            BinaryOp::Lt => "<",
+            BinaryOp::Lte => "<=",
+            BinaryOp::Gt => ">",
+            BinaryOp::Gte => ">=",
+            BinaryOp::And => "&&",
+            BinaryOp::Or => "||",
         }
     }
 }

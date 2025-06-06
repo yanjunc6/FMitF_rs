@@ -1,5 +1,5 @@
-use crate::cfg::{FunctionCfg, Operand, Rvalue, Statement, VarId, Variable};
-use crate::dataflow::{analyze_available_expressions, DataflowResults, SetLattice};
+use crate::cfg::{FunctionCfg, Operand, Rvalue, Statement, VarId};
+use crate::dataflow::analyze_available_expressions;
 use crate::optimization::OptimizationPass;
 use std::collections::HashMap;
 

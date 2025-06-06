@@ -14,7 +14,7 @@ pub type HopId = Id<HopCfg>;
 pub type BasicBlockId = Id<BasicBlock>;
 pub type VarId = Id<Variable>;
 
-/// Core CFG Program structure
+/// Core CFG Program structure, never clone this structure
 #[derive(Debug)]
 pub struct CfgProgram {
     // Arena for storing various components
@@ -58,7 +58,7 @@ pub struct Variable {
     pub is_parameter: bool,
 }
 
-/// Function CFG
+/// Function CFG, never clone it
 #[derive(Debug)]
 pub struct FunctionCfg {
     pub name: String,
