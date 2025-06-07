@@ -1,9 +1,8 @@
 use crate::cfg::{
-    BinaryOp, CfgProgram, Constant, FunctionId as CfgFunctionId, HopId as CfgHopId, Operand,
-    Rvalue, Statement, Terminator, TypeName, UnaryOp,
-};
+    BinaryOp, CfgProgram, Constant, FunctionId as CfgFunctionId, HopId as CfgHopId, Operand, Rvalue, Statement, Terminator, TypeName, UnaryOp, VarId};
 use crate::verification::verification_logic::VerificationPlan;
 use std::fmt::Write;
+use std::collections::{BTreeMap, HashSet};
 
 /// Pure Boogie code generation - no verification logic
 pub struct BoogieCodeGenerator;
@@ -108,87 +107,91 @@ impl BoogieCodeGenerator {
         let func = &cfg.functions[func_id];
         let hop = &func.hops[hop_id];
 
-        // Generate procedure name
         let proc_name = format!("{}_Hop{}", func.name, hop_id.index());
 
-        // Collect parameters, return values, and modifies clauses
-        let mut params = Vec::new();
-        let mut returns = Vec::new();
-        let mut modifies = Vec::new();
-        let mut local_vars = Vec::new();
+        // --- MODIFIED PARAMETER LOGIC ---
+        let mut input_params: BTreeMap<VarId, (String, String)> = BTreeMap::new();
+        for param_var_id in &func.parameters { // Iterate over VarIds in parameters
+            let var_info = &func.variables[*param_var_id];
+            // The type of the parameter is var_info.ty
+            input_params.insert(*param_var_id, (var_info.name.clone(), self.type_to_boogie(&var_info.ty)));
+        }
 
-        // Analyze what this hop does
+        // --- LOCAL VARIABLE LOGIC (Revised) ---
+        let mut local_vars_to_declare: BTreeMap<VarId, (String, String)> = BTreeMap::new();
+        let mut defined_in_hop: HashSet<VarId> = HashSet::new();
+
+        // First pass: find all defined vars in this hop
         for &block_id in &hop.blocks {
             let block = &func.blocks[block_id];
-
-            // Check for return statements to determine return type
-            match &block.terminator {
-                Terminator::Return(Some(operand)) => {
-                    if let Operand::Var(var_id) = operand {
-                        let var_info = &func.variables[*var_id];
-                        let var_type = self.type_to_boogie(&var_info.ty);
-                        returns.push(format!("{}: {}", var_info.name, var_type));
-                    }
-                }
-                _ => {}
-            }
-
-            // Analyze statements for modifies and local variables
             for stmt in &block.statements {
-                match stmt {
-                    Statement::Assign { var, .. } => {
-                        let var_info = &func.variables[*var];
-                        if var_info.is_parameter {
-                            // This is a parameter, add to params if not already there
-                            let param_str =
-                                format!("{}: {}", var_info.name, self.type_to_boogie(&var_info.ty));
-                            if !params.contains(&param_str) {
-                                params.push(param_str);
-                            }
-                        } else {
-                            // This is a local variable
-                            let local_str =
-                                format!("{}: {}", var_info.name, self.type_to_boogie(&var_info.ty));
-                            if !local_vars.contains(&local_str) {
-                                local_vars.push(local_str);
-                            }
-                        }
-                    }
-                    Statement::TableAssign { table, field, .. } => {
-                        let table_name = &cfg.tables[*table].name;
-                        let field_name = &cfg.fields[*field].name;
-                        let modify_str = format!("{}_{}", table_name, field_name);
-                        if !modifies.contains(&modify_str) {
-                            modifies.push(modify_str);
-                        }
-                    }
+                if let Statement::Assign { var, .. } = stmt {
+                    defined_in_hop.insert(*var);
                 }
             }
         }
+
+        // Determine local variables to declare
+        for &var_id in &defined_in_hop {
+            if !input_params.contains_key(&var_id) { // If it's defined in hop AND not a function parameter
+                let var_info = &func.variables[var_id];
+                local_vars_to_declare.entry(var_id).or_insert_with(|| (var_info.name.clone(), self.type_to_boogie(&var_info.ty)));
+            }
+        }
+        // --- END OF MODIFIED LOGIC ---
+        
+        let params_str_vec: Vec<String> = input_params.values().map(|(name, ty)| format!("{}: {}", name, ty)).collect();
+        let local_vars_decl_str_vec: Vec<String> = local_vars_to_declare.values().map(|(name, ty)| format!("{}: {}", name, ty)).collect();
+
+        // Collect return values
+        let mut returns_str_vec = Vec::new();
+        for &block_id in &hop.blocks {
+            let block = &func.blocks[block_id];
+            if let Terminator::Return(Some(Operand::Var(var_id))) = &block.terminator {
+                let var_info = &func.variables[*var_id]; // Corrected: Access variable info using VarId as index
+                returns_str_vec.push(format!("{}: {}", var_info.name, self.type_to_boogie(&var_info.ty)));
+                break; 
+            }
+        }
+
+        // Collect modifies clauses
+        let mut modifies_set = HashSet::new();
+        for &block_id in &hop.blocks {
+            let block = &func.blocks[block_id];
+            for stmt in &block.statements {
+                if let Statement::TableAssign { table, field, .. } = stmt {
+                    let table_name = &cfg.tables[*table].name;
+                    let field_name = &cfg.fields[*field].name;
+                    modifies_set.insert(format!("{}_{}", table_name, field_name));
+                }
+            }
+        }
+        let modifies_str_vec: Vec<String> = modifies_set.into_iter().collect();
+
 
         // Write procedure signature
         write!(w, "procedure {}(", proc_name).unwrap();
-        if !params.is_empty() {
-            write!(w, "{}", params.join(", ")).unwrap();
+        if !params_str_vec.is_empty() {
+            write!(w, "{}", params_str_vec.join(", ")).unwrap();
         }
         write!(w, ")").unwrap();
 
-        if !returns.is_empty() {
-            write!(w, " returns ({})", returns.join(", ")).unwrap();
+        if !returns_str_vec.is_empty() {
+            write!(w, " returns ({})", returns_str_vec.join(", ")).unwrap();
         }
         writeln!(w, "").unwrap();
 
-        if !modifies.is_empty() {
-            writeln!(w, "  modifies {};", modifies.join(", ")).unwrap();
+        if !modifies_str_vec.is_empty() {
+            writeln!(w, "  modifies {};", modifies_str_vec.join(", ")).unwrap();
         }
 
         writeln!(w, "{{").unwrap();
 
         // Declare local variables
-        for local_var in &local_vars {
-            writeln!(w, "  var {};", local_var).unwrap();
+        for local_var_decl in &local_vars_decl_str_vec {
+            writeln!(w, "  var {};", local_var_decl).unwrap();
         }
-        if !local_vars.is_empty() {
+        if !local_vars_decl_str_vec.is_empty() {
             writeln!(w, "").unwrap();
         }
 
@@ -206,32 +209,89 @@ impl BoogieCodeGenerator {
 
     fn write_main_procedure(&self, w: &mut String, plan: &VerificationPlan, cfg: &CfgProgram) {
         writeln!(w, "procedure main()").unwrap();
-
-        // Collect all modifiable variables
-        let mut modifies = Vec::new();
-
-        // Add table variables
+        
+        let mut modifies_vars = Vec::new();
+        // Iterate over relevant tables specified in the plan for modifies clauses
         for &table_id in &plan.relevant_tables {
-            let table = &cfg.tables[table_id];
-            for &field_id in &table.fields {
-                if field_id != table.primary_key {
-                    let field = &cfg.fields[field_id];
-                    modifies.push(format!("{}_{}", table.name, field.name));
+            let table_info = &cfg.tables[table_id];
+            // Each field of the table is a separate global variable in Boogie
+            for &field_id in &table_info.fields {
+                if field_id != table_info.primary_key { // Primary key itself is not a map, but its type is used in map keys
+                    let field_info = &cfg.fields[field_id];
+                    modifies_vars.push(format!("{}_{}", table_info.name, field_info.name));
                 }
             }
         }
 
-        if !modifies.is_empty() {
-            writeln!(w, "  modifies {};", modifies.join(", ")).unwrap();
+        if !modifies_vars.is_empty() {
+            writeln!(w, "  modifies {};", modifies_vars.join(", ")).unwrap();
         }
-
         writeln!(w, "{{").unwrap();
 
-        // Local variables for storing intermediate results and function variables
-        self.write_main_locals(w, plan, cfg);
+        // --- Local variable declarations ---
+        writeln!(w, "  // Local variables for verification").unwrap();
+        let mut local_vars: BTreeMap<String, String> = BTreeMap::new(); // name -> type_str
 
-        // Havoc initial state
-        self.write_initial_havoc(w, plan, cfg);
+        // 1. State-saving variables for global table fields
+        for &table_id in &plan.relevant_tables {
+            let table_info = &cfg.tables[table_id];
+            let pk_field_info = &cfg.fields[table_info.primary_key];
+            let pk_boogie_type = self.type_to_boogie(&pk_field_info.ty);
+
+            for &field_id in &table_info.fields {
+                if field_id != table_info.primary_key {
+                    let field_info = &cfg.fields[field_id];
+                    let field_boogie_type = self.type_to_boogie(&field_info.ty);
+                    let map_var_name = format!("{}_{}", table_info.name, field_info.name);
+                    let boogie_map_type = format!("[{}] {}", pk_boogie_type, field_boogie_type);
+
+                    local_vars.insert(format!("{}_init", map_var_name), boogie_map_type.clone());
+                    local_vars.insert(format!("{}_serial1", map_var_name), boogie_map_type.clone());
+                    local_vars.insert(format!("{}_serial2", map_var_name), boogie_map_type.clone());
+                }
+            }
+        }
+
+        // 2. Collect all functions involved in the plan to get their parameters.
+        let mut involved_func_ids: HashSet<CfgFunctionId> = HashSet::new();
+        involved_func_ids.insert(plan.func1_id);
+        involved_func_ids.insert(plan.func2_id);
+        // Interleavings in the plan use these functions too.
+
+        // Add parameters of these functions to local_vars.
+        let mut param_names_for_havoc: HashSet<String> = HashSet::new();
+        for func_id in involved_func_ids {
+            let func_cfg = &cfg.functions[func_id];
+            for param_var_id in &func_cfg.parameters {
+                let var_info = &func_cfg.variables[*param_var_id];
+                local_vars.insert(var_info.name.clone(), self.type_to_boogie(&var_info.ty));
+                param_names_for_havoc.insert(var_info.name.clone());
+            }
+        }
+
+        // Write out the declarations for main's local variables
+        for (name, ty) in &local_vars {
+            writeln!(w, "  var {}: {};", name, ty).unwrap();
+        }
+        writeln!(w).unwrap();
+
+        // --- Havoc initial state ---
+        writeln!(w, "  // Havoc initial state").unwrap();
+        // Havoc global table fields (which are Boogie global vars)
+        for &table_id in &plan.relevant_tables {
+            let table_info = &cfg.tables[table_id];
+            for &field_id in &table_info.fields {
+                if field_id != table_info.primary_key {
+                    let field_info = &cfg.fields[field_id];
+                    writeln!(w, "  havoc {}_{};", table_info.name, field_info.name).unwrap();
+                }
+            }
+        }
+        // Havoc only the collected parameters
+        for name in &param_names_for_havoc {
+            writeln!(w, "  havoc {};", name).unwrap();
+        }
+        writeln!(w).unwrap();
 
         // Save initial state
         self.write_save_initial_state(w, plan, cfg);
@@ -243,49 +303,6 @@ impl BoogieCodeGenerator {
         self.write_interleaving_executions(w, plan, cfg);
 
         writeln!(w, "}}").unwrap();
-    }
-
-    fn write_main_locals(&self, w: &mut String, plan: &VerificationPlan, cfg: &CfgProgram) {
-        writeln!(w, "  // Local variables for verification").unwrap();
-
-        // Variables to store initial and final states
-        for &table_id in &plan.relevant_tables {
-            let table = &cfg.tables[table_id];
-            let pk_type = self.type_to_boogie(&cfg.fields[table.primary_key].ty);
-
-            for &field_id in &table.fields {
-                if field_id != table.primary_key {
-                    let field = &cfg.fields[field_id];
-                    let field_type = self.type_to_boogie(&field.ty);
-                    let var_name = format!("{}_{}", table.name, field.name);
-
-                    writeln!(w, "  var {}_init: [{}]{};", var_name, pk_type, field_type).unwrap();
-                    writeln!(
-                        w,
-                        "  var {}_serial1: [{}]{};",
-                        var_name, pk_type, field_type
-                    )
-                    .unwrap();
-                    writeln!(
-                        w,
-                        "  var {}_serial2: [{}]{};",
-                        var_name, pk_type, field_type
-                    )
-                    .unwrap();
-                }
-            }
-        }
-
-        // Function variables (parameters and globals from the plan)
-        for (var_id, (func_id, type_name)) in &plan.global_vars {
-            let func = &cfg.functions[*func_id];
-            if let Some(var_info) = func.variables.get(*var_id) {
-                let var_type = self.type_to_boogie(type_name);
-                writeln!(w, "  var {}: {};", var_info.name, var_type).unwrap();
-            }
-        }
-
-        writeln!(w, "").unwrap();
     }
 
     fn write_initial_havoc(&self, w: &mut String, plan: &VerificationPlan, cfg: &CfgProgram) {
@@ -370,9 +387,19 @@ impl BoogieCodeGenerator {
             self.write_reset_state(w, plan, cfg);
 
             for &(func_id, hop_id) in interleaving {
-                let func_name = &cfg.functions[func_id].name;
-                let proc_name = format!("{}_Hop{}", func_name, hop_id.index());
-                writeln!(w, "  call {}();", proc_name).unwrap();
+                let hop_func_cfg = &cfg.functions[func_id];
+                let proc_name = format!("{}_Hop{}", hop_func_cfg.name, hop_id.index());
+
+                // --- MODIFIED ARGUMENT LOGIC ---
+                let mut call_arg_names: Vec<String> = Vec::new();
+                for param_var_id in &hop_func_cfg.parameters { // Iterate over VarIds in parameters
+                    let var_info = &hop_func_cfg.variables[*param_var_id];
+                    call_arg_names.push(var_info.name.clone());
+                }
+                let args_str = call_arg_names.join(", ");
+                // --- END OF MODIFIED ARGUMENT LOGIC ---
+
+                writeln!(w, "  call {}({});", proc_name, args_str).unwrap();
             }
 
             // Assert equivalence to one of the serial executions
@@ -400,10 +427,20 @@ impl BoogieCodeGenerator {
         hops: &[CfgHopId],
         cfg: &CfgProgram,
     ) {
-        let func_name = &cfg.functions[func_id].name;
+        let func_cfg = &cfg.functions[func_id];
         for &hop_id in hops {
-            let proc_name = format!("{}_Hop{}", func_name, hop_id.index());
-            writeln!(w, "  call {}();", proc_name).unwrap();
+            let proc_name = format!("{}_Hop{}", func_cfg.name, hop_id.index());
+            
+            // --- MODIFIED ARGUMENT LOGIC ---
+            let mut call_arg_names: Vec<String> = Vec::new();
+            for param_var_id in &func_cfg.parameters { // Iterate over VarIds in parameters
+                let var_info = &func_cfg.variables[*param_var_id];
+                call_arg_names.push(var_info.name.clone());
+            }
+            let args_str = call_arg_names.join(", ");
+            // --- END OF MODIFIED ARGUMENT LOGIC ---
+
+            writeln!(w, "  call {}({});", proc_name, args_str).unwrap();
         }
     }
 
@@ -518,6 +555,20 @@ impl BoogieCodeGenerator {
                 let right_str = self.operand_to_boogie(right, func, cfg);
                 let op_str = self.binary_op_to_boogie(op);
                 format!("({} {} {})", left_str, op_str, right_str)
+            }
+        }
+    }
+
+    // Ensure this is the only definition of visit_rvalue_operands
+    fn visit_rvalue_operands<F>(&self, rvalue: &Rvalue, visitor: &mut F)
+    where F: FnMut(&Operand) {
+        match rvalue {
+            Rvalue::Use(op) => visitor(op),
+            Rvalue::TableAccess { pk_value, .. } => visitor(pk_value),
+            Rvalue::UnaryOp { operand, .. } => visitor(operand),
+            Rvalue::BinaryOp { left, right, .. } => {
+                visitor(left);
+                visitor(right);
             }
         }
     }

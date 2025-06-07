@@ -20,6 +20,7 @@ impl Pipeline {
             scgraph_stage: ScGraphStage,
             verification_stage: VerificationStage {
                 timeout: cli.timeout,
+                boogie_output_dir: cli.output_dir.clone().or_else(|| cli.output.clone()), // Pass the determined directory to the stage
             },
         }
     }

@@ -262,6 +262,7 @@ impl StageSummary for ScGraphStage {
 // Verification Stage
 pub struct VerificationStage {
     pub timeout: u32,
+    pub boogie_output_dir: Option<PathBuf>, // Added field to store Boogie output directory
 }
 
 impl PipelineStage for VerificationStage {
@@ -272,7 +273,13 @@ impl PipelineStage for VerificationStage {
     fn execute(&mut self, input: Self::Input) -> Result<Self::Output, Self::Error> {
         let (cfg_program, mut sc_graph) = input;
 
-        let verifier = AutoVerifier::new().with_timeout(self.timeout);
+        let mut verifier = AutoVerifier::new().with_timeout(self.timeout); // Create base verifier
+
+        if let Some(ref dir) = self.boogie_output_dir {
+            // If an output directory for Boogie files is specified, configure the verifier
+            verifier = verifier.with_output_dir(dir.clone());
+        }
+
         let results = verifier
             .verify_and_prune_c_edges(&cfg_program, &mut sc_graph)
             .map_err(|e| format!("Verification error: {}", e))?;
@@ -295,19 +302,29 @@ impl DirectoryOutput for VerificationStage {
     fn write_to_directory(
         &self,
         _data: &Self::Data,
-        dir: &PathBuf,
+        dir: &PathBuf, // General output directory for the stage, passed by the pipeline runner
         cli: &super::Cli,
     ) -> Result<(), String> {
-        // Create the directory if it doesn't exist
+        // Ensure the general output directory for this stage exists.
+        // AutoVerifier handles creation of self.boogie_output_dir internally if it's set.
         std::fs::create_dir_all(dir)
             .map_err(|e| format!("Failed to create output directory {:?}: {}", dir, e))?;
 
         if !cli.quiet {
-            println!("💾 Boogie files will be saved to: {}", dir.display());
+            if let Some(boogie_dir) = &self.boogie_output_dir {
+                println!("💾 Boogie files are configured to be saved to: {}", boogie_dir.display());
+                // Optionally, note if the general pipeline dir is different, though ideally they align for this stage's main output.
+                if boogie_dir != dir {
+                    println!("   (Note: General pipeline output directory for this stage is {})", dir.display());
+                }
+            } else {
+                println!("💾 Boogie file output directory not specified. Files will not be saved by the verifier.");
+            }
         }
 
-        // The AutoVerifier should have already written files to the directory
-        // This is just a placeholder for any additional output handling
+        // The AutoVerifier, if configured with an output directory,
+        // should have already written files. This method primarily handles
+        // messages and ensures the pipeline's designated 'dir' exists.
         Ok(())
     }
 }
