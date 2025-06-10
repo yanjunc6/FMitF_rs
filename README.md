@@ -1,152 +1,331 @@
-# README: Chopped Transaction Verification Project
+# FMitF: Formal Methods in Transaction Framework
+
+A comprehensive framework for verifying *serializability* in distributed transaction systems where transactions are "chopped" into multiple *hops* across different nodes. This tool provides formal verification capabilities using Boogie to ensure that chopped transactions maintain ACID properties under concurrent execution.
 
 ## Overview
-This project aims to verify *serializability* in a system where each transaction is “chopped” into multiple *hops*. Each hop executes on a designated node under a lock, releasing the lock at the end of the hop before moving on. By encoding these multi-hop transactions in a minimal domain-specific language (DSL) and then translating them into a verification tool like Boogie, we can check whether all possible interleavings of these hops preserve serializability.
 
-## Concurrency Model and Assumptions
-1. **Hop-Level Locking**:  
-   - Each hop acquires a lock on its target node for the duration of the hop.  
-   - No other hops can access that node while the lock is held.  
-   - The lock is released upon completion of the hop.
+This project addresses the challenge of verifying serializability in distributed systems where:
+- **Transactions are decomposed** into sequential hops executing on different nodes
+- **Each hop runs atomically** on its designated node under a lock-based concurrency control
+- **Multiple transactions** can execute concurrently, with hops potentially interleaving
 
-2. **Transaction Flow**:  
-   - A transaction is an ordered sequence of hops (e.g., Hop1 → Node1, Hop2 → Node2, …).  
-   - Each node’s lock operates independently of locks on other nodes.  
-   - After one hop finishes (and the lock is released), the transaction proceeds to the next hop on the next node, and so on.
+The framework includes a domain-specific language (DSL) for expressing chopped transactions, static analysis tools for conflict detection, and formal verification using the Boogie verification engine.
 
-3. **Distributed System Simplifications**:
-   - We do not address network failures, latency, or advanced distributed consensus.  
-   - We assume that if a node is reachable, its lock works correctly.  
-   - Liveness concerns (e.g., ensuring forward progress) are out of scope; we only verify serializability for all valid schedules.
+## Key Features
 
-4. **No Complex Control Flow**:  
-   - For verification simplicity, each hop has a bounded set of read/write operations (e.g., read row X, write row Y).  
-   - Unbounded loops or recursion are avoided to keep the state space tractable.
+- 🔍 **Multi-stage Analysis Pipeline**: AST parsing → CFG construction → Optimization → Conflict analysis <-> Formal verification
+- 🌐 **Distributed Transaction Modeling**: Support for multi-node, hop-based transaction definitions
+- 🔒 **Concurrency Analysis**: Automated detection of read-write, write-write conflicts between transaction hops
+- ✅ **Formal Verification**: Translation to Boogie for automated serializability proofs
+- 📊 **Visualization**: DOT format output for conflict graphs and control flow visualization
+- 🛠️ **Developer Tools**: Comprehensive CLI with multiple output formats and debugging capabilities
 
-## What We Want to Prove
-Our primary objective is to prove **serializability**:  
-> For every possible interleaving of chopped transactions in this system, the resulting final database state is equivalent to some serial (one-at-a-time) ordering of those same transactions.
+## Concurrency Model
 
-To achieve this, our verification process will check that no interleaving of hops violates transaction isolation or produces anomalies (e.g., lost updates, dirty reads).
+### Hop-Level Locking
+- Each hop acquires an exclusive lock on its target node
+- Locks are held for the duration of the hop execution
+- Locks are released upon hop completion before proceeding to the next hop
 
-## DSL and Verification Flow
-1.  **Domain-Specific Language (DSL)**:
-    *   We define a language to specify transactions, the nodes they run on, and the table schemas. Key constructs include:
-        *   Node definitions (e.g., `nodes { node1, node2 }`).
-        *   Table schemas with typed fields (e.g., `table TableX on node1 { int fieldA; string fieldB; }`).
-        *   Transactions (defined as functions) composed of sequential hops, each targeting a specific node.
-        *   Basic data types (`int`, `float`, `string`, `bool`) and operations.
-        *   Statements within hops for variable declaration, assignment, table access (read/write), and basic control flow (`if`, `while`, `break`, `continue`).
-    *   Example transaction snippet (based on the grammar):
-        ```fmitf
-        // Define nodes
-        nodes { n1, n2 }
+### Transaction Execution Model
+- Transactions consist of ordered sequences of hops: `Hop₁ → Node₁, Hop₂ → Node₂, ...`
+- Node locks operate independently (no global coordination)
+- Concurrent transactions can interleave at hop boundaries
 
-        // Define tables
-        table Account on n1 {
-            int balance;
-            string owner;
-        }
+### Verification Guarantees
+Our verification proves **conflict serializability**: for any concurrent execution of chopped transactions, the final database state is equivalent to some serial execution of the same transactions.
 
-        table Ledger on n2 {
-            int amount;
-            string description;
-        }
+## Installation
 
-        // Transaction to transfer funds
-        void transfer(int from_id, int to_id, int transfer_amount) {
-            hop on n1 {
-                // Read current balance from Account table
-                int current_from_balance = Account[id:from_id].balance;
-                int new_from_balance = current_from_balance - transfer_amount;
-                Account[id:from_id].balance = new_from_balance; // Write updated balance
-            }
-            hop on n2 {
-                // Log the transfer in Ledger table
-                Ledger[tx_id:from_id].amount = transfer_amount; // Example write
-                // Assume some unique tx_id generation or passing
-            }
-            hop on n1 {
-                 // Read current balance for the recipient
-                int current_to_balance = Account[id:to_id].balance;
-                int new_to_balance = current_to_balance + transfer_amount;
-                Account[id:to_id].balance = new_to_balance; // Write updated balance
-            }
-        }
-        ```
-    *   Each hop's operations are considered atomic with respect to its designated node.
+### Prerequisites
 
-2.  **Intermediate Representation & Analysis**:
-    *   The DSL source code is first parsed into an Abstract Syntax Tree (AST).
-    *   Semantic analysis is performed on the AST to check for type errors, scope issues, and other language-specific rules.
-    *   A key intermediate representation is the **Serializability Conflict Graph (SCGraph)**. This graph captures:
-        *   Vertices: Individual hops from all transactions.
-        *   Sequential (S) Edges: Representing the order of hops within the same transaction.
-        *   Conflict (C) Edges: Representing potential conflicts between hops of different transactions (e.g., read-write, write-write conflicts on the same data item at the same node).
-    *   The tool can output the SCGraph, including a DOT format for visualization, to help understand potential conflicts.
+- **Rust** (1.70 or later): [Install Rust](https://rustup.rs/)
+- **Boogie** (for verification): [Install Boogie](https://github.com/boogie-org/boogie)
+  ```bash
+  # Example installation via .NET
+  dotnet tool install --global Boogie
+  ```
 
-3.  **Verification (using a Model Checker like Boogie)**:
-    *   The transaction specifications and the SCGraph information are translated into a formal model suitable for a verification engine like Boogie.
-    *   This involves encoding:
-        *   The state of the database (abstractly).
-        *   The operational semantics of read and write operations.
-        *   Node-level locking: A hop acquires a lock on its node, performs its operations, and releases the lock.
-        *   The possible interleavings of hops from different transactions, constrained by the locks and sequential dependencies.
-    *   The `verify` mode in the tool automates parts of this process. It attempts to prove that certain C-edges in the SCGraph do not actually lead to serializability violations under the locking protocol. Verified C-edges can then be "pruned" from the SCGraph.
-    *   The verification engine explores reachable states to check if any execution could lead to a non-serializable outcome (e.g., by detecting mixed S/C cycles in the SCGraph that cannot be resolved).
+### Building from Source
 
-4.  **Constraints and Outputs**:
-    *   The verification can be performed under certain assumptions or constraints (e.g., "at most `n` concurrent instances of TxA can run").
-    *   **Output**:
-        *   If all potential conflicts (mixed S/C cycles) are resolved or proven safe, the system is deemed serializable under the given conditions.
-        *   If the verification identifies irresolvable conflicts (persistent mixed S/C cycles after pruning), it indicates a potential serializability violation. The tool will report these remaining cycles.
-        *   Boogie files generated during the `verify` mode can be saved for inspection.
-    *   Based on the output, developers may need to refine the transaction logic, the chopping strategy, or concurrency control mechanisms.
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/yanjunc6/FMitF_rs.git
+   cd FMitF_rs
+   ```
 
-## Usage
-The tool is invoked via the `fmitf` command-line interface.
+2. **Build the project:**
+   ```bash
+   cargo build
+   ```
+
+3. **Install system-wide (optional):**
+   ```bash
+   cargo install --path .
+   ```
+
+### Verify Installation
 
 ```bash
+# Run with cargo
+cargo run -- --help
+
+# Or if installed system-wide
+fmitf --help
+```
+
+## DSL Language Reference
+
+The framework uses a custom DSL for defining chopped transactions. Here's the basic syntax:
+
+### Node and Table Definitions
+
+```rust
+// Define distributed nodes
+nodes {
+    NodeA, NodeB, NodeC
+}
+
+// Define tables with schemas
+table Account on NodeA {
+    primary int id;      // Primary key (one primary key only)
+    int balance;
+    string owner;
+}
+
+table AuditLog on NodeB {
+    primary int transaction_id;
+    string description;
+    int amount;
+}
+```
+
+### Transaction Functions
+
+```rust
+// Transaction function with multiple hops
+void transfer(int from_id, int to_id, int amount) {
+    // Hop 1: Debit source account
+    hop on NodeA {
+        int current_balance = Account[id: from_id].balance;
+        Account[id: from_id].balance = current_balance - amount;
+    }
+    
+    // Hop 2: Log transaction
+    hop on NodeB {
+        AuditLog[transaction_id: from_id].amount = amount;
+        AuditLog[transaction_id: from_id].description = "transfer";
+    }
+    
+    // Hop 3: Credit destination account
+    hop on NodeA {
+        int current_balance = Account[id: to_id].balance;
+        Account[id: to_id].balance = current_balance + amount;
+    }
+}
+```
+
+### Supported Data Types
+
+- `int`: Integer values
+- `float`: Floating-point numbers
+- `string`: Text strings
+- `bool`: Boolean values (`true`/`false`)
+- `void`: Function return type (no return value)
+
+### Control Flow
+
+```rust
+void conditional_update(int account_id, int threshold) {
+    hop on NodeA {
+        int balance = Account[id: account_id].balance;
+        
+        if (balance > threshold) {
+            Account[id: account_id].balance = balance * 2;
+        }
+        
+        while (balance > 0) {
+            balance = balance - 1;
+            // Some operation
+        }
+    }
+}
+```
+
+## Usage
+
+### Command Line Interface
+
+The tool is invoked via the command-line interface:
+
+```bash
+# Basic syntax
+cargo run -- <input_file> [options]
+
+# Or if installed
 fmitf <input_file> [options]
 ```
 
-**Key Arguments & Options:**
+### Processing Modes
 
-*   `<input_file>`: Path to the input source file containing transaction definitions in the DSL.
-*   `-m, --mode <MODE>`: Specifies the operation mode.
-    *   `ast`: Parses the input and prints the Abstract Syntax Tree.
-    *   `scgraph`: (Default) Parses, analyzes, and prints the Serializability Conflict Graph.
-        *   Use `--dot` to output the graph in DOT format (e.g., for Graphviz).
-    *   `verify`: Parses, analyzes, builds the SCGraph, and then attempts to verify and prune conflict edges using Boogie.
-        *   If an output path is provided with `-o`, Boogie (`.bpl`) files generated during verification will be saved to that directory.
-*   `-o, --output <PATH>`: Specifies the output file or directory.
-    *   For `ast` and `scgraph` (non-DOT) modes: path to the output file. If not provided, output goes to stdout.
-    *   For `scgraph --dot` mode: path to the output `.dot` file. If not provided, output goes to stdout.
-    *   For `verify` mode: path to a directory where Boogie (`.bpl`) files will be saved. Textual summary still goes to stdout.
-*   `-v, --verbose`: Enables verbose output, providing more detailed information during processing (e.g., detailed SCGraph structure, initial/final states in verify mode).
-*   `-q, --quiet`: Suppresses non-essential output, showing only critical messages or final results.
-*   `--show-spans`: (For `ast` mode) Includes source code span information in the AST output.
+The tool supports multiple analysis modes, each building on the previous stages:
 
-**Examples:**
+#### 1. AST Mode
+Parse source code and display the Abstract Syntax Tree:
 
-1.  **Parse a file and show the AST:**
-    ```bash
-    fmitf examples/my_transactions.fmitf --mode ast
-    ```
+```bash
+# Parse and show AST
+cargo run -- examples/number_commute.transact --mode ast
 
-2.  **Analyze SCGraph and print summary:**
-    ```bash
-    fmitf examples/my_transactions.fmitf --mode scgraph
-    ```
+# Save AST to file
+cargo run -- examples/bank.transact --mode ast --output ast_output.txt
 
-3.  **Generate SCGraph in DOT format and save to a file:**
-    ```bash
-    fmitf examples/my_transactions.fmitf --mode scgraph --dot --output graphs/scgraph.dot
-    ```
-    You can then visualize `scgraph.dot` using Graphviz: `dot -Tpng graphs/scgraph.dot -o graphs/scgraph.png`
+# Include source code spans
+cargo run -- examples/transfer.transact --mode ast --show-spans
+```
 
-4.  **Run verification and save Boogie files:**
-    ```bash
-    fmitf examples/my_transactions.fmitf --mode verify --output boogie_files/ --verbose
-    ```
-    This will print a summary to stdout and save `.bpl` files in the `boogie_files/` directory
+#### 2. CFG Mode
+Build Control Flow Graphs for transaction functions:
+
+```bash
+# Generate CFG
+cargo run -- examples/transfer.transact --mode cfg
+
+# Export CFG as DOT format for visualization
+cargo run -- examples/bank.transact --mode cfg --dot --output cfg.dot
+
+# Visualize with Graphviz
+dot -Tpng cfg.dot -o cfg.png
+```
+
+#### 3. Optimize Mode
+Apply optimization passes to the control flow graphs:
+
+```bash
+# Run optimization passes
+cargo run -- examples/warehouse.transact --mode optimize
+
+# Skip optimizations
+cargo run -- examples/simple.transact --mode optimize --no-optimize
+```
+
+#### 4. SCGraph Mode
+Build and analyze Serializability Conflict Graphs:
+
+```bash
+# Generate conflict graph analysis
+cargo run -- examples/conflict.transact --mode scgraph
+
+# Export as DOT for visualization
+cargo run -- examples/number_conflict.transact --mode scgraph --dot --output conflict.dot
+
+# Verbose output with detailed conflict information
+cargo run -- examples/bank.transact --mode scgraph --verbose
+```
+
+#### 5. Verify Mode (Default)
+Run formal verification using Boogie:
+
+```bash
+# Run verification
+cargo run -- examples/number_commute.transact --mode verify
+
+# Save generated Boogie files for inspection
+cargo run -- examples/transfer.transact --mode verify --output-dir ./boogie_files/
+
+# Verbose verification with detailed output
+cargo run -- examples/bank.transact --mode verify --verbose --output-dir ./verification/
+
+# Custom verification timeout
+cargo run -- examples/complex.transact --mode verify --timeout 60
+```
+
+### Common Options
+
+- `-v, --verbose`: Enable detailed output and debugging information
+- `-q, --quiet`: Suppress non-essential output
+- `-o, --output <PATH>`: Specify output file or directory
+- `--output-dir <DIR>`: Directory for Boogie files (verify mode only)
+- `--dot`: Generate DOT format output for graph visualization
+- `--timeout <SECONDS>`: Verification timeout (default: 30 seconds)
+- `--no-optimize`: Skip optimization passes
+- `--show-spans`: Include source code location information
+
+### Example Workflows
+
+#### Basic Verification Workflow
+
+```bash
+cargo run -- examples/transfer.transact --mode verify --output-dir ./results/
+
+# Examine generated Boogie files (if needed)
+ls ./results/
+cat ./results/edge_*.bpl
+```
+
+#### Visualization Workflow
+
+```bash
+# Generate all visualizations
+mkdir -p visualizations
+
+# CFG visualization
+cargo run -- examples/bank.transact --mode cfg --dot --output visualizations/cfg.dot
+dot -Tpng visualizations/cfg.dot -o visualizations/cfg.png
+
+# Conflict SC-graph visualization  
+cargo run -- examples/bank.transact --mode scgraph --dot --output visualizations/conflicts.dot
+dot -Tpng visualizations/conflicts.dot -o visualizations/conflicts.png
+
+# View results
+open visualizations/*.png  # macOS
+xdg-open visualizations/*.png  # Linux
+```
+
+## Examples
+
+The `examples/` directory contains several transaction scenarios:
+
+- **`number_commute.transact`**: Simple commutative operations (increment counters)
+- **`number_conflict.transact`**: Non-commutative operations showing conflicts
+- **`bank.transact`**: Banking operations with account transfers
+- **`transfer.transact`**: Multi-hop money transfer with audit logging
+- **`warehouse.transact`**: Inventory management transactions
+- **`simple.transact`**: Basic single-hop transactions
+- **`conflict.transact`**: Example demonstrating conflict detection
+
+## Output Formats
+
+### AST Output
+Human-readable program structure showing parsed syntax tree.
+
+### CFG Output
+Control flow information for each transaction function.
+
+### SCGraph Output
+Conflict analysis showing:
+- **S-edges**: Sequential dependencies within transactions
+- **C-edges**: Conflict dependencies between transactions
+- **Mixed cycles**: Potential serializability violations
+
+### Verification Output
+- Verification results (pass/fail)
+- Performance metrics
+- Generated Boogie files (`.bpl` format)
+- Detailed conflict resolution information
+
+## Development
+
+### Project Structure
+
+```
+src/
+├── ast/           # Abstract Syntax Tree and parsing
+├── cfg/           # Control Flow Graph construction
+├── cli/           # Command-line interface
+├── dataflow/      # Dataflow analysis algorithms
+├── optimization/  # CFG optimization passes
+├── pretty/        # Output formatting and printing
+├── sc_graph/      # Serializability Conflict Graph
+└── verification/  # Boogie code generation and verification
+```
