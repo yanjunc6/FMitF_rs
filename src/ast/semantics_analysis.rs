@@ -208,35 +208,58 @@ impl<'p> SemanticAnalyzer<'p> {
                 }
             }
 
-            // Use resolved field IDs
-            if let (Some(pk_field_id), Some(field_id)) =
-                (assign.resolved_pk_field, assign.resolved_field)
-            {
-                // Validate primary key field
-                if pk_field_id != table.primary_key {
-                    let pk_field = &self.program.fields[pk_field_id];
-                    self.error_at(
-                        span,
-                        AstError::InvalidPrimaryKey {
-                            table: table.name.clone(),
-                            column: pk_field.field_name.clone(),
-                        },
-                    );
-                    return;
+            // Check that we have all primary key fields resolved
+            let all_pk_fields_resolved = assign.resolved_pk_fields.iter().all(|opt| opt.is_some());
+            
+            if all_pk_fields_resolved && assign.resolved_field.is_some() {
+                let field_id = assign.resolved_field.unwrap();
+                
+                // Validate each primary key field
+                for (i, resolved_pk_field_opt) in assign.resolved_pk_fields.iter().enumerate() {
+                    if let Some(pk_field_id) = resolved_pk_field_opt {
+                        // Check that this field is actually a primary key of this table
+                        if !table.primary_keys.contains(pk_field_id) {
+                            let pk_field = &self.program.fields[*pk_field_id];
+                            self.error_at(
+                                span,
+                                AstError::InvalidPrimaryKey {
+                                    table: table.name.clone(),
+                                    column: pk_field.field_name.clone(),
+                                },
+                            );
+                            return;
+                        }
+
+                        // Check primary key expression type
+                        if i < assign.pk_exprs.len() {
+                            if let Some(pk_type) = self.check_expression(assign.pk_exprs[i]) {
+                                let primary_key_field = &self.program.fields[*pk_field_id];
+                                if !self.types_compatible(&primary_key_field.field_type, &pk_type) {
+                                    self.error_at(
+                                        span,
+                                        AstError::TypeMismatch {
+                                            expected: primary_key_field.field_type.clone(),
+                                            found: pk_type,
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
 
-                // Check primary key expression type
-                if let Some(pk_type) = self.check_expression(assign.pk_expr) {
-                    let primary_key_field = &self.program.fields[table.primary_key];
-                    if !self.types_compatible(&primary_key_field.field_type, &pk_type) {
-                        self.error_at(
-                            span,
-                            AstError::TypeMismatch {
-                                expected: primary_key_field.field_type.clone(),
-                                found: pk_type,
-                            },
-                        );
-                    }
+                // Check that all table primary keys are provided
+                if table.primary_keys.len() != assign.resolved_pk_fields.len() {
+                    self.error_at(
+                        span,
+                        AstError::ParseError(format!(
+                            "Table {} requires {} primary key values, but {} were provided",
+                            table.name,
+                            table.primary_keys.len(),
+                            assign.resolved_pk_fields.len()
+                        )),
+                    );
+                    return;
                 }
 
                 // Check RHS type
@@ -338,15 +361,17 @@ impl<'p> SemanticAnalyzer<'p> {
             ExpressionKind::BoolLit(_) => Some(TypeName::Bool),
             ExpressionKind::TableFieldAccess {
                 resolved_table,
-                resolved_pk_field,
-                pk_expr,
+                resolved_pk_fields,
+                pk_exprs,
                 resolved_field,
                 table_name,
-                pk_field_name,
+                pk_fields: _,
                 field_name,
             } => {
-                // Check primary key expression
-                self.check_expression(*pk_expr);
+                // Check all primary key expressions
+                for pk_expr in pk_exprs {
+                    self.check_expression(*pk_expr);
+                }
 
                 let table_id = resolved_table
                     .ok_or_else(|| {
@@ -375,29 +400,44 @@ impl<'p> SemanticAnalyzer<'p> {
                     }
                 }
 
-                // Check primary key field
-                let pk_field_id = resolved_pk_field
-                    .ok_or_else(|| {
-                        let expr_span = expr.span.clone();
-                        self.error_at(
-                            &expr_span,
-                            AstError::UndeclaredField {
-                                table: table_name.clone(),
-                                field: pk_field_name.clone(),
-                            },
-                        );
-                    })
-                    .ok()?;
+                // Check that all primary key fields are resolved
+                let all_pk_fields_resolved = resolved_pk_fields.iter().all(|opt| opt.is_some());
+                
+                if !all_pk_fields_resolved {
+                    // Some primary key fields are not resolved, return None
+                    return None;
+                }
 
-                if pk_field_id != table_obj.primary_key {
-                    let pk_field_obj = &self.program.fields[pk_field_id];
+                // Validate each primary key field
+                for (_, resolved_pk_field_opt) in resolved_pk_fields.iter().enumerate() {
+                    if let Some(pk_field_id) = resolved_pk_field_opt {
+                        // Check that this field is actually a primary key of this table
+                        if !table_obj.primary_keys.contains(pk_field_id) {
+                            let pk_field_obj = &self.program.fields[*pk_field_id];
+                            let expr_span = expr.span.clone();
+                            self.error_at(
+                                &expr_span,
+                                AstError::InvalidPrimaryKey {
+                                    table: table_obj.name.clone(),
+                                    column: pk_field_obj.field_name.clone(),
+                                },
+                            );
+                            return None;
+                        }
+                    }
+                }
+
+                // Check that all table primary keys are provided
+                if table_obj.primary_keys.len() != resolved_pk_fields.len() {
                     let expr_span = expr.span.clone();
                     self.error_at(
                         &expr_span,
-                        AstError::InvalidPrimaryKey {
-                            table: table_obj.name.clone(),
-                            column: pk_field_obj.field_name.clone(),
-                        },
+                        AstError::ParseError(format!(
+                            "Table {} requires {} primary key values, but {} were provided",
+                            table_obj.name,
+                            table_obj.primary_keys.len(),
+                            resolved_pk_fields.len()
+                        )),
                     );
                     return None;
                 }

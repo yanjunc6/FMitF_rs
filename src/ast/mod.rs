@@ -103,7 +103,7 @@ pub struct TableDeclaration {
     pub name: String,
     pub node: NodeId,
     pub fields: Vec<FieldId>,
-    pub primary_key: FieldId,
+    pub primary_keys: Vec<FieldId>,  // Changed from single primary_key to multiple primary_keys
     pub span: Span,
 }
 
@@ -177,12 +177,12 @@ pub struct VarAssignmentStatement {
 #[derive(Debug, Clone)]
 pub struct AssignmentStatement {
     pub table_name: String,
-    pub pk_field_name: String,
-    pub pk_expr: ExpressionId,
+    pub pk_fields: Vec<String>,        // Changed from single pk_field_name to multiple pk_fields
+    pub pk_exprs: Vec<ExpressionId>,   // Changed from single pk_expr to multiple pk_exprs  
     pub field_name: String,
     pub rhs: ExpressionId,
     pub resolved_table: Option<TableId>,
-    pub resolved_pk_field: Option<FieldId>,
+    pub resolved_pk_fields: Vec<Option<FieldId>>,  // Changed from single to multiple
     pub resolved_field: Option<FieldId>,
 }
 
@@ -229,11 +229,11 @@ pub enum ExpressionKind {
     BoolLit(bool),
     TableFieldAccess {
         table_name: String,
-        pk_field_name: String,
-        pk_expr: ExpressionId,
+        pk_fields: Vec<String>,        // Changed from single pk_field_name to multiple pk_fields
+        pk_exprs: Vec<ExpressionId>,   // Changed from single pk_expr to multiple pk_exprs
         field_name: String,
         resolved_table: Option<TableId>,
-        resolved_pk_field: Option<FieldId>,
+        resolved_pk_fields: Vec<Option<FieldId>>,  // Changed from single to multiple
         resolved_field: Option<FieldId>,
     },
     UnaryOp {

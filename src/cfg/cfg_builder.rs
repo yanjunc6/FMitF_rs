@@ -101,7 +101,7 @@ impl CfgBuilder {
 
             // Build fields first
             let mut field_ids = Vec::new();
-            let mut primary_key_id = None;
+            let mut primary_key_ids = Vec::new();  // Changed to collect multiple primary keys
 
             for &field_ast_id in &table_ast.fields {
                 let field_ast = &program.fields[field_ast_id];
@@ -119,19 +119,21 @@ impl CfgBuilder {
                     .insert(field_ast.field_name.clone(), cfg_field_id);
 
                 if field_ast.is_primary {
-                    primary_key_id = Some(cfg_field_id);
+                    primary_key_ids.push(cfg_field_id);  // Add to list instead of overwriting
                 }
             }
 
-            let primary_key = primary_key_id
-                .ok_or_else(|| format!("Table {} has no primary key", table_ast.name))?;
+            // Verify that we have at least one primary key
+            if primary_key_ids.is_empty() {
+                return Err(format!("Table {} has no primary key", table_ast.name));
+            }
 
-            // Build table
+            // Build table with composite primary keys
             let cfg_table = TableInfo {
                 name: table_ast.name.clone(),
                 node_id: *node_id,
                 fields: field_ids.clone(),
-                primary_key,
+                primary_keys: primary_key_ids,  // Use the list of primary keys
             };
 
             let cfg_table_id = ctx.program.tables.alloc(cfg_table);
@@ -381,23 +383,25 @@ impl<'a> FunctionContextBuilder<'a> {
                     return Err(format!("Table {} not resolved", assign.table_name));
                 };
 
-                let pk_field_id = if let Some(resolved_pk_field) = assign.resolved_pk_field {
-                    let field_ast = &program.fields[resolved_pk_field];
-                    *self
-                        .ctx
-                        .field_map
-                        .get(&field_ast.field_name)
-                        .ok_or_else(|| {
-                            format!(
-                                "Primary key field {} not found in CFG",
-                                field_ast.field_name
-                            )
-                        })?
+                // For now, use the first primary key field for compatibility with existing CFG structure
+                let pk_field_id = if !assign.resolved_pk_fields.is_empty() {
+                    if let Some(first_pk_field) = assign.resolved_pk_fields[0] {
+                        let field_ast = &program.fields[first_pk_field];
+                        *self
+                            .ctx
+                            .field_map
+                            .get(&field_ast.field_name)
+                            .ok_or_else(|| {
+                                format!(
+                                    "Primary key field {} not found in CFG",
+                                    field_ast.field_name
+                                )
+                            })?
+                    } else {
+                        return Err(format!("First primary key field not resolved"));
+                    }
                 } else {
-                    return Err(format!(
-                        "Primary key field {} not resolved",
-                        assign.pk_field_name
-                    ));
+                    return Err(format!("No primary key fields provided"));
                 };
 
                 let field_id = if let Some(resolved_field) = assign.resolved_field {
@@ -411,7 +415,12 @@ impl<'a> FunctionContextBuilder<'a> {
                     return Err(format!("Field {} not resolved", assign.field_name));
                 };
 
-                let pk_operand = self.build_expression(program, assign.pk_expr)?;
+                // Use the first primary key expression for compatibility
+                let pk_operand = if !assign.pk_exprs.is_empty() {
+                    self.build_expression(program, assign.pk_exprs[0])?
+                } else {
+                    return Err(format!("No primary key expressions provided"));
+                };
                 let value_operand = self.build_expression(program, assign.rhs)?;
 
                 self.add_statement(
@@ -605,8 +614,8 @@ impl<'a> FunctionContextBuilder<'a> {
             ast::ExpressionKind::BoolLit(val) => Ok(Operand::Const(Constant::Bool(*val))),
             ast::ExpressionKind::TableFieldAccess {
                 resolved_table,
-                resolved_pk_field,
-                pk_expr,
+                resolved_pk_fields,
+                pk_exprs,
                 resolved_field,
                 table_name,
                 field_name,
@@ -624,20 +633,25 @@ impl<'a> FunctionContextBuilder<'a> {
                     return Err(format!("Table {} not resolved", table_name));
                 };
 
-                let pk_field_id = if let Some(resolved_pk_field) = resolved_pk_field {
-                    let field_ast = &program.fields[*resolved_pk_field];
-                    *self
-                        .ctx
-                        .field_map
-                        .get(&field_ast.field_name)
-                        .ok_or_else(|| {
-                            format!(
-                                "Primary key field {} not found in CFG",
-                                field_ast.field_name
-                            )
-                        })?
+                // For now, use the first primary key field for compatibility with existing CFG structure
+                let pk_field_id = if !resolved_pk_fields.is_empty() {
+                    if let Some(first_pk_field) = resolved_pk_fields[0] {
+                        let field_ast = &program.fields[first_pk_field];
+                        *self
+                            .ctx
+                            .field_map
+                            .get(&field_ast.field_name)
+                            .ok_or_else(|| {
+                                format!(
+                                    "Primary key field {} not found in CFG",
+                                    field_ast.field_name
+                                )
+                            })?
+                    } else {
+                        return Err(format!("First primary key field not resolved"));
+                    }
                 } else {
-                    return Err(format!("Primary key field not resolved"));
+                    return Err(format!("No primary key fields provided"));
                 };
 
                 let field_id = if let Some(resolved_field) = resolved_field {
@@ -651,7 +665,12 @@ impl<'a> FunctionContextBuilder<'a> {
                     return Err(format!("Field {} not resolved", field_name));
                 };
 
-                let pk_operand = self.build_expression(program, *pk_expr)?;
+                // Use the first primary key expression for compatibility
+                let pk_operand = if !pk_exprs.is_empty() {
+                    self.build_expression(program, pk_exprs[0])?
+                } else {
+                    return Err(format!("No primary key expressions provided"));
+                };
 
                 // Get field type for temp variable
                 let field_type = self.ctx.program.fields[field_id].ty.clone();

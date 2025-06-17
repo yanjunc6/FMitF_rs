@@ -1,0 +1,24 @@
+nodes {
+    NodeA
+}
+
+table Orders on NodeA {
+    primary int orderID;
+    primary int customerID;
+    int amount;
+    string status;
+}
+
+void processOrder() {
+    hop on NodeA {
+        Orders[orderID: 1, customerID: 100].amount = 500;
+        Orders[customerID: 100, orderID: 1].status = "processed";
+    }
+}
+
+void updateOrder() {
+    hop on NodeA {
+        int newAmount = Orders[orderID: 1, customerID: 100].amount + 50;
+        Orders[orderID: 1, customerID: 100].amount = newAmount;
+    }
+}

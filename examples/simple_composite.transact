@@ -1,0 +1,16 @@
+nodes {
+    NodeA
+}
+
+table Orders on NodeA {
+    primary int orderID;
+    primary int customerID;
+    int amount;
+}
+
+void test() {
+    hop on NodeA {
+        // Test composite key access
+        int value = Orders[orderID: 123, customerID: 456].amount;
+    }
+}

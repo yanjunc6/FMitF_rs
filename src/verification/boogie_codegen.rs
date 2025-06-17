@@ -60,13 +60,15 @@ impl BoogieCodeGenerator {
             let table = &cfg.tables[table_id];
             let table_name = &table.name;
 
-            // Get primary key type
-            let pk_field = &cfg.fields[table.primary_key];
+            // Get primary key type - use first primary key for compatibility
+            let first_pk_field_id = table.primary_keys.get(0)
+                .expect("Table should have at least one primary key");
+            let pk_field = &cfg.fields[*first_pk_field_id];
             let pk_type = self.type_to_boogie(&pk_field.ty);
 
             // Declare each non-primary field as a map from primary key
             for &field_id in &table.fields {
-                if field_id != table.primary_key {
+                if !table.primary_keys.contains(&field_id) {
                     let field = &cfg.fields[field_id];
                     let field_type = self.type_to_boogie(&field.ty);
                     writeln!(
@@ -216,7 +218,7 @@ impl BoogieCodeGenerator {
             let table_info = &cfg.tables[table_id];
             // Each field of the table is a separate global variable in Boogie
             for &field_id in &table_info.fields {
-                if field_id != table_info.primary_key { // Primary key itself is not a map, but its type is used in map keys
+                if !table_info.primary_keys.contains(&field_id) { // Primary key fields themselves are not maps, but their types are used in map keys
                     let field_info = &cfg.fields[field_id];
                     modifies_vars.push(format!("{}_{}", table_info.name, field_info.name));
                 }
@@ -235,11 +237,13 @@ impl BoogieCodeGenerator {
         // 1. State-saving variables for global table fields
         for &table_id in &plan.relevant_tables {
             let table_info = &cfg.tables[table_id];
-            let pk_field_info = &cfg.fields[table_info.primary_key];
+            let first_pk_field_id = table_info.primary_keys.get(0)
+                .expect("Table should have at least one primary key");
+            let pk_field_info = &cfg.fields[*first_pk_field_id];
             let pk_boogie_type = self.type_to_boogie(&pk_field_info.ty);
 
             for &field_id in &table_info.fields {
-                if field_id != table_info.primary_key {
+                if !table_info.primary_keys.contains(&field_id) {
                     let field_info = &cfg.fields[field_id];
                     let field_boogie_type = self.type_to_boogie(&field_info.ty);
                     let map_var_name = format!("{}_{}", table_info.name, field_info.name);
@@ -281,7 +285,7 @@ impl BoogieCodeGenerator {
         for &table_id in &plan.relevant_tables {
             let table_info = &cfg.tables[table_id];
             for &field_id in &table_info.fields {
-                if field_id != table_info.primary_key {
+                if !table_info.primary_keys.contains(&field_id) {
                     let field_info = &cfg.fields[field_id];
                     writeln!(w, "  havoc {}_{};", table_info.name, field_info.name).unwrap();
                 }
@@ -311,7 +315,7 @@ impl BoogieCodeGenerator {
         for &table_id in &plan.relevant_tables {
             let table = &cfg.tables[table_id];
             for &field_id in &table.fields {
-                if field_id != table.primary_key {
+                if !table.primary_keys.contains(&field_id) {
                     let field = &cfg.fields[field_id];
                     let var_name = format!("{}_{}", table.name, field.name);
                     writeln!(w, "  {}_init := {};", var_name, var_name).unwrap();
@@ -386,7 +390,7 @@ impl BoogieCodeGenerator {
         for &table_id in &plan.relevant_tables {
             let table = &cfg.tables[table_id];
             for &field_id in &table.fields {
-                if field_id != table.primary_key {
+                if !table.primary_keys.contains(&field_id) {
                     let field = &cfg.fields[field_id];
                     let var_name = format!("{}_{}", table.name, field.name);
                     writeln!(w, "  {} := {}_init;", var_name, var_name).unwrap();
@@ -429,7 +433,7 @@ impl BoogieCodeGenerator {
         for &table_id in &plan.relevant_tables {
             let table = &cfg.tables[table_id];
             for &field_id in &table.fields {
-                if field_id != table.primary_key {
+                if !table.primary_keys.contains(&field_id) {
                     let field = &cfg.fields[field_id];
                     let var_name = format!("{}_{}", table.name, field.name);
                     writeln!(w, "  {}_{} := {};", var_name, suffix, var_name).unwrap();
@@ -445,17 +449,16 @@ impl BoogieCodeGenerator {
         plan: &VerificationPlan,
         cfg: &CfgProgram,
     ) {
-        writeln!(w, "  // Assert serializability").unwrap();
-
-        for &table_id in &plan.relevant_tables {
+        writeln!(w, "  // Assert serializability").unwrap();        for &table_id in &plan.relevant_tables {
             let table = &cfg.tables[table_id];
-            let pk_type = self.type_to_boogie(&cfg.fields[table.primary_key].ty);
+            let first_pk_field_id = table.primary_keys.get(0)
+                .expect("Table should have at least one primary key");
+            let pk_type = self.type_to_boogie(&cfg.fields[*first_pk_field_id].ty);
 
             for &field_id in &table.fields {
-                if field_id != table.primary_key {
+                if !table.primary_keys.contains(&field_id) {
                     let field = &cfg.fields[field_id];
                     let var_name = format!("{}_{}", table.name, field.name);
-
                     writeln!(
                         w,
                         "  assert (forall k: {} :: {}[k] == {}_serial1[k] || {}[k] == {}_serial2[k]);",

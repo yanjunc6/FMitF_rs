@@ -1,0 +1,16 @@
+nodes {
+    NodeA
+}
+
+table Orders on NodeA {
+    primary int orderID;
+    primary int customerID;
+    int amount;
+}
+
+void test_missing_key() {
+    hop on NodeA {
+        // This should cause an error - missing customerID
+        int value = Orders[orderID: 123].amount;
+    }
+}

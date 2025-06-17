@@ -157,8 +157,10 @@ impl<'p> NameResolver<'p> {
                 }
             }
             StatementKind::Assignment(assign) => {
-                // First resolve expressions to avoid borrowing conflicts
-                self.resolve_expression(assign.pk_expr);
+                // First resolve all primary key expressions and RHS
+                for &pk_expr in &assign.pk_exprs {
+                    self.resolve_expression(pk_expr);
+                }
                 self.resolve_expression(assign.rhs);
 
                 // Clone the assign to avoid borrowing issues
@@ -172,60 +174,67 @@ impl<'p> NameResolver<'p> {
                     Some(table_id) => {
                         assign_copy.resolved_table = Some(table_id);
 
-                        // Collect field information without holding borrows
-                        let (pk_field_result, field_result) = {
-                            let table = &self.program.tables[table_id];
-
+                        // Resolve each primary key field
+                        let table = &self.program.tables[table_id];
+                        let mut missing_pk_fields = Vec::new();
+                        let mut missing_target_field = None;
+                        
+                        for (i, pk_field_name) in assign_copy.pk_fields.iter().enumerate() {
                             let pk_field_id = table
                                 .fields
                                 .iter()
                                 .find(|&&field_id| {
-                                    self.program.fields[field_id].field_name
-                                        == assign_copy.pk_field_name
+                                    self.program.fields[field_id].field_name == *pk_field_name
                                 })
                                 .copied();
 
-                            let field_id = table
-                                .fields
-                                .iter()
-                                .find(|&&field_id| {
-                                    self.program.fields[field_id].field_name
-                                        == assign_copy.field_name
-                                })
-                                .copied();
-
-                            (pk_field_id, field_id)
-                        };
-
-                        // Now handle results and report errors
-                        match pk_field_result {
-                            Some(pk_field_id) => {
-                                assign_copy.resolved_pk_field = Some(pk_field_id);
-                            }
-                            None => {
-                                self.error_at(
-                                    &stmt_span,
-                                    AstError::UndeclaredField {
-                                        table: assign_copy.table_name.clone(),
-                                        field: assign_copy.pk_field_name.clone(),
-                                    },
-                                );
+                            match pk_field_id {
+                                Some(field_id) => {
+                                    assign_copy.resolved_pk_fields[i] = Some(field_id);
+                                }
+                                None => {
+                                    missing_pk_fields.push((i, pk_field_name.clone()));
+                                }
                             }
                         }
 
-                        match field_result {
+                        // Resolve the target field
+                        let field_id = table
+                            .fields
+                            .iter()
+                            .find(|&&field_id| {
+                                self.program.fields[field_id].field_name == assign_copy.field_name
+                            })
+                            .copied();
+
+                        match field_id {
                             Some(field_id) => {
                                 assign_copy.resolved_field = Some(field_id);
                             }
                             None => {
-                                self.error_at(
-                                    &stmt_span,
-                                    AstError::UndeclaredField {
-                                        table: assign_copy.table_name.clone(),
-                                        field: assign_copy.field_name.clone(),
-                                    },
-                                );
+                                missing_target_field = Some(assign_copy.field_name.clone());
                             }
+                        }
+
+                        // Now report all errors after borrowing
+                        for (_, field_name) in missing_pk_fields {
+                            self.error_at(
+                                &stmt_span,
+                                AstError::UndeclaredField {
+                                    table: assign_copy.table_name.clone(),
+                                    field: field_name,
+                                },
+                            );
+                        }
+
+                        if let Some(field_name) = missing_target_field {
+                            self.error_at(
+                                &stmt_span,
+                                AstError::UndeclaredField {
+                                    table: assign_copy.table_name.clone(),
+                                    field: field_name,
+                                },
+                            );
                         }
 
                         // Update the statement with resolved assignment
@@ -303,51 +312,73 @@ impl<'p> NameResolver<'p> {
             }
             ExpressionKind::TableFieldAccess {
                 table_name,
-                pk_field_name,
-                pk_expr,
+                pk_fields,
+                pk_exprs,
                 field_name,
                 ..
             } => {
+                // First resolve all primary key expressions
+                for &pk_expr in &pk_exprs {
+                    self.resolve_expression(pk_expr);
+                }
+
                 // Resolve table name
                 if let Some(&table_id) = self.program.table_map.get(&table_name) {
-                    let table = &self.program.tables[table_id];
+                    let (resolved_pk_field_ids, missing_pk_fields, field_id) = {
+                        let table = &self.program.tables[table_id];
 
-                    // Find fields and update the expression
-                    let pk_field_id = table
-                        .fields
-                        .iter()
-                        .find(|&&field_id| {
-                            self.program.fields[field_id].field_name == pk_field_name
-                        })
-                        .copied();
+                        // Resolve each primary key field
+                        let mut resolved_pk_field_ids = vec![None; pk_fields.len()];
+                        let mut missing_pk_fields = Vec::new();
+                        
+                        for (i, pk_field_name) in pk_fields.iter().enumerate() {
+                            let pk_field_id = table
+                                .fields
+                                .iter()
+                                .find(|&&field_id| {
+                                    self.program.fields[field_id].field_name == *pk_field_name
+                                })
+                                .copied();
 
-                    let field_id = table
-                        .fields
-                        .iter()
-                        .find(|&&field_id| self.program.fields[field_id].field_name == field_name)
-                        .copied();
+                            resolved_pk_field_ids[i] = pk_field_id;
+
+                            if pk_field_id.is_none() {
+                                missing_pk_fields.push(pk_field_name.clone());
+                            }
+                        }
+
+                        // Resolve the target field
+                        let field_id = table
+                            .fields
+                            .iter()
+                            .find(|&&field_id| self.program.fields[field_id].field_name == field_name)
+                            .copied();
+
+                        (resolved_pk_field_ids, missing_pk_fields, field_id)
+                    };
+
+                    // Report missing primary key fields after borrowing
+                    for field_name in missing_pk_fields {
+                        self.error_at(
+                            &expr_span,
+                            AstError::UndeclaredField {
+                                table: table_name.clone(),
+                                field: field_name,
+                            },
+                        );
+                    }
 
                     // Update the expression with resolved IDs
                     if let ExpressionKind::TableFieldAccess {
                         ref mut resolved_table,
-                        ref mut resolved_pk_field,
+                        ref mut resolved_pk_fields,
                         ref mut resolved_field,
                         ..
                     } = &mut self.program.expressions[expr_id].node
                     {
                         *resolved_table = Some(table_id);
-                        *resolved_pk_field = pk_field_id;
+                        *resolved_pk_fields = resolved_pk_field_ids;
                         *resolved_field = field_id;
-                    }
-
-                    if pk_field_id.is_none() {
-                        self.error_at(
-                            &expr_span,
-                            AstError::UndeclaredField {
-                                table: table_name.clone(),
-                                field: pk_field_name,
-                            },
-                        );
                     }
 
                     if field_id.is_none() {
@@ -362,8 +393,6 @@ impl<'p> NameResolver<'p> {
                 } else {
                     self.error_at(&expr_span, AstError::UndeclaredTable(table_name));
                 }
-
-                self.resolve_expression(pk_expr);
             }
             ExpressionKind::UnaryOp { expr, .. } => {
                 self.resolve_expression(expr);

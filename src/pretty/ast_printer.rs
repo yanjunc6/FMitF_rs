@@ -153,8 +153,7 @@ impl<'a> Printer<'a> {
         for (i, &table_id) in program.root_tables.iter().enumerate() {
             let table = &program.tables[table_id];
             let node = &program.nodes[table.node];
-            let primary_key_field = &program.fields[table.primary_key];
-
+            
             println!(
                 "{}[{}] TableDeclaration{}",
                 self.with_depth(self.depth + 1).indent(),
@@ -171,11 +170,19 @@ impl<'a> Printer<'a> {
                 self.with_depth(self.depth + 2).indent(),
                 node.name
             );
-            println!(
-                "{}primary_key: {}",
-                self.with_depth(self.depth + 2).indent(),
-                primary_key_field.field_name
+            
+            // Print all primary key fields
+            print!(
+                "{}primary_keys: [",
+                self.with_depth(self.depth + 2).indent()
             );
+            for (j, &pk_field_id) in table.primary_keys.iter().enumerate() {
+                let pk_field = &program.fields[pk_field_id];
+                if j > 0 { print!(", "); }
+                print!("{}", pk_field.field_name);
+            }
+            println!("]");
+            
             self.with_depth(self.depth + 2)
                 .print_fields(program, &table.fields);
         }
@@ -377,11 +384,15 @@ impl<'a> Printer<'a> {
                     self.with_depth(self.depth + 1).indent(),
                     a.table_name
                 );
-                println!(
-                    "{}pk_field_name: {}",
-                    self.with_depth(self.depth + 1).indent(),
-                    a.pk_field_name
-                );
+                
+                // Print primary key fields
+                print!("{}pk_fields: [", self.with_depth(self.depth + 1).indent());
+                for (i, pk_field) in a.pk_fields.iter().enumerate() {
+                    if i > 0 { print!(", "); }
+                    print!("{}", pk_field);
+                }
+                println!("]");
+                
                 println!(
                     "{}field_name: {}",
                     self.with_depth(self.depth + 1).indent(),
@@ -403,20 +414,18 @@ impl<'a> Printer<'a> {
                     );
                 }
 
-                if let Some(resolved_pk_field) = a.resolved_pk_field {
-                    let pk_field = &program.fields[resolved_pk_field];
-                    println!(
-                        "{}resolved_pk_field: {} ({})",
-                        self.with_depth(self.depth + 1).indent(),
-                        pk_field.field_name,
-                        resolved_pk_field.index()
-                    );
-                } else {
-                    println!(
-                        "{}resolved_pk_field: None",
-                        self.with_depth(self.depth + 1).indent()
-                    );
+                // Print resolved primary key fields
+                print!("{}resolved_pk_fields: [", self.with_depth(self.depth + 1).indent());
+                for (i, resolved_pk_field) in a.resolved_pk_fields.iter().enumerate() {
+                    if i > 0 { print!(", "); }
+                    if let Some(pk_field_id) = resolved_pk_field {
+                        let pk_field = &program.fields[*pk_field_id];
+                        print!("{} ({})", pk_field.field_name, pk_field_id.index());
+                    } else {
+                        print!("None");
+                    }
                 }
+                println!("]");
 
                 if let Some(resolved_field) = a.resolved_field {
                     let field = &program.fields[resolved_field];
@@ -433,9 +442,13 @@ impl<'a> Printer<'a> {
                     );
                 }
 
-                println!("{}pk_expr:", self.with_depth(self.depth + 1).indent());
-                self.with_depth(self.depth + 2)
-                    .print_expression(program, a.pk_expr);
+                // Print primary key expressions
+                println!("{}pk_exprs:", self.with_depth(self.depth + 1).indent());
+                for (i, &pk_expr) in a.pk_exprs.iter().enumerate() {
+                    println!("{}[{}]:", self.with_depth(self.depth + 2).indent(), i);
+                    self.with_depth(self.depth + 3).print_expression(program, pk_expr);
+                }
+                
                 println!("{}rhs:", self.with_depth(self.depth + 1).indent());
                 self.with_depth(self.depth + 2)
                     .print_expression(program, a.rhs);
@@ -551,11 +564,11 @@ impl<'a> Printer<'a> {
             }
             ExpressionKind::TableFieldAccess {
                 table_name,
-                pk_field_name,
-                pk_expr,
+                pk_fields,
+                pk_exprs,
                 field_name,
                 resolved_table,
-                resolved_pk_field,
+                resolved_pk_fields,
                 resolved_field,
             } => {
                 println!("{}TableFieldAccess", self.indent());
@@ -564,11 +577,15 @@ impl<'a> Printer<'a> {
                     self.with_depth(self.depth + 1).indent(),
                     table_name
                 );
-                println!(
-                    "{}pk_field_name: {}",
-                    self.with_depth(self.depth + 1).indent(),
-                    pk_field_name
-                );
+                
+                // Print primary key fields
+                print!("{}pk_fields: [", self.with_depth(self.depth + 1).indent());
+                for (i, pk_field) in pk_fields.iter().enumerate() {
+                    if i > 0 { print!(", "); }
+                    print!("{}", pk_field);
+                }
+                println!("]");
+                
                 println!(
                     "{}field_name: {}",
                     self.with_depth(self.depth + 1).indent(),
@@ -590,20 +607,18 @@ impl<'a> Printer<'a> {
                     );
                 }
 
-                if let Some(resolved_pk_field_id) = resolved_pk_field {
-                    let pk_field = &program.fields[*resolved_pk_field_id];
-                    println!(
-                        "{}resolved_pk_field: {} ({})",
-                        self.with_depth(self.depth + 1).indent(),
-                        pk_field.field_name,
-                        resolved_pk_field_id.index()
-                    );
-                } else {
-                    println!(
-                        "{}resolved_pk_field: None",
-                        self.with_depth(self.depth + 1).indent()
-                    );
+                // Print resolved primary key fields
+                print!("{}resolved_pk_fields: [", self.with_depth(self.depth + 1).indent());
+                for (i, resolved_pk_field) in resolved_pk_fields.iter().enumerate() {
+                    if i > 0 { print!(", "); }
+                    if let Some(pk_field_id) = resolved_pk_field {
+                        let pk_field = &program.fields[*pk_field_id];
+                        print!("{} ({})", pk_field.field_name, pk_field_id.index());
+                    } else {
+                        print!("None");
+                    }
                 }
+                println!("]");
 
                 if let Some(resolved_field_id) = resolved_field {
                     let field = &program.fields[*resolved_field_id];
@@ -620,9 +635,12 @@ impl<'a> Printer<'a> {
                     );
                 }
 
-                println!("{}pk_expr:", self.with_depth(self.depth + 1).indent());
-                self.with_depth(self.depth + 2)
-                    .print_expression(program, *pk_expr);
+                // Print primary key expressions
+                println!("{}pk_exprs:", self.with_depth(self.depth + 1).indent());
+                for (i, &pk_expr) in pk_exprs.iter().enumerate() {
+                    println!("{}[{}]:", self.with_depth(self.depth + 2).indent(), i);
+                    self.with_depth(self.depth + 3).print_expression(program, pk_expr);
+                }
             }
             ExpressionKind::UnaryOp { op, expr } => {
                 println!("{}UnaryOp", self.indent());
@@ -783,7 +801,6 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
         for (i, &table_id) in program.root_tables.iter().enumerate() {
             let table = &program.tables[table_id];
             let node = &program.nodes[table.node];
-            let primary_key_field = &program.fields[table.primary_key];
 
             let indent1 = "  ".repeat(self.depth + 1);
             let indent2 = "  ".repeat(self.depth + 2);
@@ -797,11 +814,16 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
             )?;
             writeln!(self.writer, "{}name: {}", indent2, table.name)?;
             writeln!(self.writer, "{}node: {}", indent2, node.name)?;
-            writeln!(
-                self.writer,
-                "{}primary_key: {}",
-                indent2, primary_key_field.field_name
-            )?;
+            
+            // Write all primary key fields
+            write!(self.writer, "{}primary_keys: [", indent2)?;
+            for (j, &pk_field_id) in table.primary_keys.iter().enumerate() {
+                let pk_field = &program.fields[pk_field_id];
+                if j > 0 { write!(self.writer, ", ")?; }
+                write!(self.writer, "{}", pk_field.field_name)?;
+            }
+            writeln!(self.writer, "]")?;
+            
             self.depth += 2;
             self.print_fields(program, &table.fields)?;
             self.depth -= 2;
@@ -1017,7 +1039,15 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                     self.span(&stmt.span)
                 )?;
                 writeln!(self.writer, "{}table_name: {}", indent1, a.table_name)?;
-                writeln!(self.writer, "{}pk_field_name: {}", indent1, a.pk_field_name)?;
+                
+                // Write primary key fields
+                write!(self.writer, "{}pk_fields: [", indent1)?;
+                for (i, pk_field) in a.pk_fields.iter().enumerate() {
+                    if i > 0 { write!(self.writer, ", ")?; }
+                    write!(self.writer, "{}", pk_field)?;
+                }
+                writeln!(self.writer, "]")?;
+                
                 writeln!(self.writer, "{}field_name: {}", indent1, a.field_name)?;
 
                 if let Some(resolved_table) = a.resolved_table {
@@ -1033,18 +1063,18 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                     writeln!(self.writer, "{}resolved_table: None", indent1)?;
                 }
 
-                if let Some(resolved_pk_field) = a.resolved_pk_field {
-                    let pk_field = &program.fields[resolved_pk_field];
-                    writeln!(
-                        self.writer,
-                        "{}resolved_pk_field: {} ({})",
-                        indent1,
-                        pk_field.field_name,
-                        resolved_pk_field.index()
-                    )?;
-                } else {
-                    writeln!(self.writer, "{}resolved_pk_field: None", indent1)?;
+                // Write resolved primary key fields
+                write!(self.writer, "{}resolved_pk_fields: [", indent1)?;
+                for (i, resolved_pk_field) in a.resolved_pk_fields.iter().enumerate() {
+                    if i > 0 { write!(self.writer, ", ")?; }
+                    if let Some(pk_field_id) = resolved_pk_field {
+                        let pk_field = &program.fields[*pk_field_id];
+                        write!(self.writer, "{} ({})", pk_field.field_name, pk_field_id.index())?;
+                    } else {
+                        write!(self.writer, "None")?;
+                    }
                 }
+                writeln!(self.writer, "]")?;
 
                 if let Some(resolved_field) = a.resolved_field {
                     let field = &program.fields[resolved_field];
@@ -1059,10 +1089,16 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                     writeln!(self.writer, "{}resolved_field: None", indent1)?;
                 }
 
-                writeln!(self.writer, "{}pk_expr:", indent1)?;
-                self.depth += 2;
-                self.print_expression(program, a.pk_expr)?;
-                self.depth -= 2;
+                // Write primary key expressions
+                writeln!(self.writer, "{}pk_exprs:", indent1)?;
+                for (i, &pk_expr) in a.pk_exprs.iter().enumerate() {
+                    let indent2 = "  ".repeat(self.depth + 2);
+                    writeln!(self.writer, "{}[{}]:", indent2, i)?;
+                    self.depth += 3;
+                    self.print_expression(program, pk_expr)?;
+                    self.depth -= 3;
+                }
+                
                 writeln!(self.writer, "{}rhs:", indent1)?;
                 self.depth += 2;
                 self.print_expression(program, a.rhs)?;
@@ -1211,16 +1247,24 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
             }
             ExpressionKind::TableFieldAccess {
                 table_name,
-                pk_field_name,
-                pk_expr,
+                pk_fields,
+                pk_exprs,
                 field_name,
                 resolved_table,
-                resolved_pk_field,
+                resolved_pk_fields,
                 resolved_field,
             } => {
                 writeln!(self.writer, "{}TableFieldAccess", indent)?;
                 writeln!(self.writer, "{}table_name: {}", indent1, table_name)?;
-                writeln!(self.writer, "{}pk_field_name: {}", indent1, pk_field_name)?;
+                
+                // Write primary key fields
+                write!(self.writer, "{}pk_fields: [", indent1)?;
+                for (i, pk_field) in pk_fields.iter().enumerate() {
+                    if i > 0 { write!(self.writer, ", ")?; }
+                    write!(self.writer, "{}", pk_field)?;
+                }
+                writeln!(self.writer, "]")?;
+                
                 writeln!(self.writer, "{}field_name: {}", indent1, field_name)?;
 
                 if let Some(resolved_table_id) = resolved_table {
@@ -1236,18 +1280,18 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                     writeln!(self.writer, "{}resolved_table: None", indent1)?;
                 }
 
-                if let Some(resolved_pk_field_id) = resolved_pk_field {
-                    let pk_field = &program.fields[*resolved_pk_field_id];
-                    writeln!(
-                        self.writer,
-                        "{}resolved_pk_field: {} ({})",
-                        indent1,
-                        pk_field.field_name,
-                        resolved_pk_field_id.index()
-                    )?;
-                } else {
-                    writeln!(self.writer, "{}resolved_pk_field: None", indent1)?;
+                // Write resolved primary key fields
+                write!(self.writer, "{}resolved_pk_fields: [", indent1)?;
+                for (i, resolved_pk_field) in resolved_pk_fields.iter().enumerate() {
+                    if i > 0 { write!(self.writer, ", ")?; }
+                    if let Some(pk_field_id) = resolved_pk_field {
+                        let pk_field = &program.fields[*pk_field_id];
+                        write!(self.writer, "{} ({})", pk_field.field_name, pk_field_id.index())?;
+                    } else {
+                        write!(self.writer, "None")?;
+                    }
                 }
+                writeln!(self.writer, "]")?;
 
                 if let Some(resolved_field_id) = resolved_field {
                     let field = &program.fields[*resolved_field_id];
@@ -1262,10 +1306,15 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                     writeln!(self.writer, "{}resolved_field: None", indent1)?;
                 }
 
-                writeln!(self.writer, "{}pk_expr:", indent1)?;
-                self.depth += 2;
-                self.print_expression(program, *pk_expr)?;
-                self.depth -= 2;
+                // Write primary key expressions
+                writeln!(self.writer, "{}pk_exprs:", indent1)?;
+                for (i, &pk_expr) in pk_exprs.iter().enumerate() {
+                    let indent2 = "  ".repeat(self.depth + 2);
+                    writeln!(self.writer, "{}[{}]:", indent2, i)?;
+                    self.depth += 3;
+                    self.print_expression(program, pk_expr)?;
+                    self.depth -= 3;
+                }
             }
             ExpressionKind::UnaryOp { op, expr } => {
                 writeln!(self.writer, "{}UnaryOp", indent)?;

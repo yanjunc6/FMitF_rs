@@ -1,0 +1,16 @@
+nodes {
+    NodeA
+}
+
+table Orders on NodeA {
+    primary int orderID;
+    primary int customerID;
+    int amount;
+}
+
+void test_reordered_keys() {
+    hop on NodeA {
+        // Test with keys in different order - this should work
+        int value = Orders[customerID: 456, orderID: 123].amount;
+    }
+}

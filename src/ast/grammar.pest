@@ -88,7 +88,7 @@ var_assignment_statement = {
 }
 
 assignment_statement = {
-    identifier ~ "[" ~ identifier ~ ":" ~ expression ~ "]" ~ "." ~ identifier ~ "=" ~ expression ~ ";"
+    identifier ~ "[" ~ primary_key_list ~ "]" ~ "." ~ identifier ~ "=" ~ expression ~ ";"
 }
 
 var_decl_statement = {
@@ -183,7 +183,15 @@ primary = {
 }
 
 table_field_access = {
-    identifier ~ "[" ~ identifier ~ ":" ~ expression ~ "]" ~ "." ~ identifier
+    identifier ~ "[" ~ primary_key_list ~ "]" ~ "." ~ identifier
+}
+
+primary_key_list = {
+    primary_key_pair ~ ("," ~ primary_key_pair)*
+}
+
+primary_key_pair = {
+    identifier ~ ":" ~ expression
 }
 
 // We skip whitespace and single-line comments globally:

@@ -134,7 +134,7 @@ impl AstBuilder {
             })?;
 
         let mut field_ids = Vec::new();
-        let mut primary_key_id = None;
+        let mut primary_key_ids = Vec::new();  // Changed to collect multiple primary keys
 
         for field_pair in inner {
             if field_pair.as_rule() == Rule::field_declaration {
@@ -142,35 +142,27 @@ impl AstBuilder {
                 field_ids.push(field_id);
 
                 if is_primary {
-                    if primary_key_id.is_some() {
-                        return Err(vec![SpannedError {
-                            error: AstError::ParseError(format!(
-                                "Table {} has multiple primary keys",
-                                table_name
-                            )),
-                            span: Some(span),
-                        }]);
-                    }
-                    primary_key_id = Some(field_id);
+                    primary_key_ids.push(field_id);  // Add to list instead of checking for duplicates
                 }
             }
         }
 
-        let primary_key_id = primary_key_id.ok_or_else(|| {
-            vec![SpannedError {
+        // Require at least one primary key
+        if primary_key_ids.is_empty() {
+            return Err(vec![SpannedError {
                 error: AstError::ParseError(format!(
-                    "Table {} must have exactly one primary key",
+                    "Table {} must have at least one primary key",
                     table_name
                 )),
                 span: Some(span.clone()),
-            }]
-        })?;
+            }]);
+        }
 
         let table = TableDeclaration {
             name: table_name.clone(),
             node: node_id,
             fields: field_ids,
-            primary_key: primary_key_id,
+            primary_keys: primary_key_ids,  // Use the list of primary keys
             span,
         };
 
@@ -388,21 +380,46 @@ impl AstBuilder {
     ) -> Result<AssignmentStatement, Vec<SpannedError>> {
         let mut inner = pair.into_inner();
         let table_name = inner.next().unwrap().as_str().to_string();
-        let pk_field_name = inner.next().unwrap().as_str().to_string();
-        let pk_expr = self.build_expression(inner.next().unwrap())?;
+        
+        // Parse the primary_key_list
+        let pk_list_pair = inner.next().unwrap();
+        let (pk_fields, pk_exprs) = self.build_primary_key_list(pk_list_pair)?;
+        let pk_count = pk_fields.len();  // Calculate length before moving
+        
         let field_name = inner.next().unwrap().as_str().to_string();
         let rhs = self.build_expression(inner.next().unwrap())?;
 
         Ok(AssignmentStatement {
             table_name,
-            pk_field_name,
-            pk_expr,
+            pk_fields,
+            pk_exprs,
             field_name,
             rhs,
             resolved_table: None,
-            resolved_pk_field: None,
+            resolved_pk_fields: vec![None; pk_count],  // Use the saved length
             resolved_field: None,
         })
+    }
+
+    fn build_primary_key_list(
+        &mut self,
+        pair: Pair<Rule>,
+    ) -> Result<(Vec<String>, Vec<ExpressionId>), Vec<SpannedError>> {
+        let mut pk_fields = Vec::new();
+        let mut pk_exprs = Vec::new();
+
+        for pk_pair in pair.into_inner() {
+            if pk_pair.as_rule() == Rule::primary_key_pair {
+                let mut inner = pk_pair.into_inner();
+                let field_name = inner.next().unwrap().as_str().to_string();
+                let expr = self.build_expression(inner.next().unwrap())?;
+                
+                pk_fields.push(field_name);
+                pk_exprs.push(expr);
+            }
+        }
+
+        Ok((pk_fields, pk_exprs))
     }
 
     fn build_if_statement(&mut self, pair: Pair<Rule>) -> Result<IfStatement, Vec<SpannedError>> {
@@ -691,18 +708,22 @@ impl AstBuilder {
         let mut inner = pair.into_inner();
 
         let table_name = inner.next().unwrap().as_str().to_string();
-        let pk_field_name = inner.next().unwrap().as_str().to_string();
-        let pk_expr = self.build_expression(inner.next().unwrap())?;
+        
+        // Parse the primary_key_list
+        let pk_list_pair = inner.next().unwrap();
+        let (pk_fields, pk_exprs) = self.build_primary_key_list(pk_list_pair)?;
+        let pk_count = pk_fields.len();  // Calculate length before moving
+        
         let field_name = inner.next().unwrap().as_str().to_string();
 
         let expr = Expression {
             node: ExpressionKind::TableFieldAccess {
                 table_name,
-                pk_field_name,
-                pk_expr,
+                pk_fields,
+                pk_exprs,
                 field_name,
                 resolved_table: None,
-                resolved_pk_field: None,
+                resolved_pk_fields: vec![None; pk_count],  // Use the saved length
                 resolved_field: None,
             },
             span,

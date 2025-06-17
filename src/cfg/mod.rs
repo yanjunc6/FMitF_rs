@@ -40,7 +40,7 @@ pub struct TableInfo {
     pub name: String,
     pub node_id: NodeId,
     pub fields: Vec<FieldId>,
-    pub primary_key: FieldId,
+    pub primary_keys: Vec<FieldId>,  // Changed from single primary_key to multiple primary_keys
 }
 
 #[derive(Debug, Clone)]
