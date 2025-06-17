@@ -1,0 +1,39 @@
+digraph SCGraph {
+  compound=true;
+  node [shape=box, style=rounded];
+
+  subgraph cluster_func_2 {
+    label="Function: checkStock";
+    style=filled;
+    color=lightgrey;
+    sc_node_5 [label="Hop 5 (CFG H0)
+Node: NodeA"];
+  }
+  subgraph cluster_func_1 {
+    label="Function: payment";
+    style=filled;
+    color=lightgrey;
+    sc_node_3 [label="Hop 3 (CFG H0)
+Node: NodeB"];
+    sc_node_4 [label="Hop 4 (CFG H1)
+Node: NodeC"];
+  }
+  subgraph cluster_func_0 {
+    label="Function: newOrder";
+    style=filled;
+    color=lightgrey;
+    sc_node_0 [label="Hop 0 (CFG H0)
+Node: NodeA"];
+    sc_node_1 [label="Hop 1 (CFG H1)
+Node: NodeB"];
+    sc_node_2 [label="Hop 2 (CFG H2)
+Node: NodeC"];
+  }
+
+  sc_node_0 -> sc_node_1 [color=blue, style=solid, label="S"];
+  sc_node_1 -> sc_node_2 [color=blue, style=solid, label="S"];
+  sc_node_3 -> sc_node_4 [color=blue, style=solid, label="S"];
+  sc_node_2 -> sc_node_4 [color=red, style=dashed, label="C"];
+  sc_node_0 -> sc_node_5 [color=red, style=dashed, label="C"];
+  sc_node_1 -> sc_node_3 [color=red, style=dashed, label="C"];
+}

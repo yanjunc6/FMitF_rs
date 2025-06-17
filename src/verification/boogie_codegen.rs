@@ -170,7 +170,7 @@ impl BoogieCodeGenerator {
 
 
         // Write procedure signature
-        write!(w, "procedure {}(", proc_name).unwrap();
+        write!(w, "procedure {{:inline 1}} {}(", proc_name).unwrap();
         if !params_str_vec.is_empty() {
             write!(w, "{}", params_str_vec.join(", ")).unwrap();
         }
