@@ -331,11 +331,6 @@ impl<'a> Printer<'a> {
                 println!("{}init_value:", self.with_depth(self.depth + 1).indent());
                 self.with_depth(self.depth + 2)
                     .print_expression(program, v.init_value);
-                println!(
-                    "{}is_global: {}",
-                    self.with_depth(self.depth + 1).indent(),
-                    v.is_global
-                );
             }
             StatementKind::VarAssignment(v) => {
                 println!(
@@ -983,7 +978,6 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                 self.depth += 2;
                 self.print_expression(program, v.init_value)?;
                 self.depth -= 2;
-                writeln!(self.writer, "{}is_global: {}", indent1, v.is_global)?;
             }
             StatementKind::VarAssignment(v) => {
                 writeln!(

@@ -1,0 +1,15 @@
+nodes {
+    NodeA
+}
+
+table Test on NodeA {
+    primary int id;
+    int value;
+}
+
+void testFunction() {
+    hop on NodeA {
+        int x = undeclaredVariable + 1;  // This should be an error
+        Test[id: 1].value = x;
+    }
+}

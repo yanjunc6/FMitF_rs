@@ -87,7 +87,6 @@ pub struct Program {
     pub function_map: HashMap<String, FunctionId>,
 
     // Resolution results - public for type checking access
-    pub global_scope: Option<ScopeId>,
     pub resolutions: HashMap<ExpressionId, VarId>,
     pub var_types: HashMap<VarId, TypeName>,
 }
@@ -205,7 +204,6 @@ pub struct VarDeclStatement {
     pub var_type: TypeName,
     pub var_name: String,
     pub init_value: ExpressionId,
-    pub is_global: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -289,16 +287,7 @@ pub enum VarKind {
 #[derive(Debug)]
 pub struct Scope {
     pub parent: Option<ScopeId>,
-    pub kind: ScopeKind,
     pub variables: HashMap<String, VarId>,
-}
-
-#[derive(Debug, Clone)]
-pub enum ScopeKind {
-    Global,
-    Function(FunctionId),
-    Block,
-    Hop(HopId),
 }
 
 /// Main public API - this is the only function users need to call

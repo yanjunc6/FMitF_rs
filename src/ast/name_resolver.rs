@@ -5,13 +5,9 @@ pub struct NameResolver<'p> {
     program: &'p mut Program,
     errors: Vec<SpannedError>,
 
-    // Current resolution context
-    current_function: Option<FunctionId>,
-    current_scope: Option<ScopeId>,
-    current_function_scope_id: Option<ScopeId>,
-
-    // Scope stack for nested blocks
+    // Symbol table - stack of scopes
     scope_stack: Vec<ScopeId>,
+    current_scope: Option<ScopeId>,
 }
 
 impl<'p> NameResolver<'p> {
@@ -19,24 +15,12 @@ impl<'p> NameResolver<'p> {
         Self {
             program,
             errors: Vec::new(),
-            current_function: None,
-            current_scope: None,
-            current_function_scope_id: None,
             scope_stack: Vec::new(),
+            current_scope: None,
         }
     }
 
     pub fn resolve(mut self) -> Results<()> {
-        // Create global scope first
-        let global_scope = self.program.scopes.alloc(Scope {
-            parent: None,
-            kind: ScopeKind::Global,
-            variables: HashMap::new(),
-        });
-        self.program.global_scope = Some(global_scope);
-        self.current_scope = Some(global_scope);
-        self.scope_stack.push(global_scope);
-
         // Resolve all functions
         let function_ids: Vec<_> = self.program.root_functions.iter().copied().collect();
         for func_id in function_ids {
@@ -51,15 +35,11 @@ impl<'p> NameResolver<'p> {
     }
 
     fn resolve_function(&mut self, func_id: FunctionId) {
-        self.current_function = Some(func_id);
-
-        // Create function scope
+        // Create function scope (top-level scope for this function)
         let func_scope = self.program.scopes.alloc(Scope {
-            parent: self.current_scope,
-            kind: ScopeKind::Function(func_id),
+            parent: None,
             variables: HashMap::new(),
         });
-        self.current_function_scope_id = Some(func_scope);
 
         self.push_scope(func_scope);
 
@@ -70,7 +50,7 @@ impl<'p> NameResolver<'p> {
             .copied()
             .collect();
 
-        // Collect parameter data (name, type, span) to avoid borrowing issues
+        // Collect parameter data to avoid borrowing issues
         let params_to_declare: Vec<(String, TypeName, Span)> = param_ids
             .iter()
             .map(|&param_id| {
@@ -85,10 +65,9 @@ impl<'p> NameResolver<'p> {
 
         for (name, ty, span) in params_to_declare {
             self.declare_variable(&name, ty, VarKind::Parameter, span, func_scope);
-            // Pass func_scope explicitly
         }
 
-        // Resolve each hop
+        // Resolve each hop (but don't create scope for hops)
         let hop_ids: Vec<_> = self.program.functions[func_id]
             .hops
             .iter()
@@ -99,8 +78,6 @@ impl<'p> NameResolver<'p> {
         }
 
         self.pop_scope();
-        self.current_function_scope_id = None; // Clear current function's scope ID
-        self.current_function = None;
     }
 
     fn resolve_hop(&mut self, hop_id: HopId) {
@@ -115,16 +92,7 @@ impl<'p> NameResolver<'p> {
             return;
         }
 
-        // Create hop scope and continue with existing logic
-        let hop_scope = self.program.scopes.alloc(Scope {
-            parent: self.current_scope,
-            kind: ScopeKind::Hop(hop_id),
-            variables: HashMap::new(),
-        });
-
-        self.push_scope(hop_scope);
-
-        // Resolve all statements in the hop
+        // Hops do NOT create their own scopes - resolve statements in current function scope
         let stmt_ids: Vec<_> = self.program.hops[hop_id]
             .statements
             .iter()
@@ -133,8 +101,6 @@ impl<'p> NameResolver<'p> {
         for stmt_id in stmt_ids {
             self.resolve_statement(stmt_id);
         }
-
-        self.pop_scope();
     }
 
     fn resolve_statement(&mut self, stmt_id: StatementId) {
@@ -148,30 +114,26 @@ impl<'p> NameResolver<'p> {
                 // Resolve initializer first
                 self.resolve_expression(var_decl.init_value);
 
-                let target_scope_id = if var_decl.is_global {
-                    self.current_function_scope_id.expect("Internal error: 'global' keyword used for a variable not inside a function, or function scope not set.")
-                } else {
-                    self.current_scope
-                        .expect("Internal error: Variable declared outside of any scope context.")
-                };
-
-                // Check for duplicate in the target scope
-                let target_scope_obj = &self.program.scopes[target_scope_id];
-                if target_scope_obj.variables.contains_key(&var_decl.var_name) {
-                    self.error_at(
-                        &stmt_span,
-                        AstError::DuplicateVariable(var_decl.var_name.clone()),
-                    );
-                    return;
+                // Check for duplicate in the current scope (no shadowing within same scope)
+                if let Some(current_scope_id) = self.current_scope {
+                    let current_scope = &self.program.scopes[current_scope_id];
+                    if current_scope.variables.contains_key(&var_decl.var_name) {
+                        self.error_at(
+                            &stmt_span,
+                            AstError::DuplicateVariable(var_decl.var_name.clone()),
+                        );
+                        return;
+                    }
                 }
 
-                // Declare the variable in the determined target scope
+                // Declare the variable in the current scope
+                let current_scope_id = self.current_scope.unwrap();
                 self.declare_variable(
                     &var_decl.var_name,
                     var_decl.var_type,
-                    VarKind::Local, // 'is_global' here means function-scoped local, not file-level global
+                    VarKind::Local,
                     stmt_span.clone(),
-                    target_scope_id,
+                    current_scope_id,
                 );
             }
             StatementKind::VarAssignment(var_assign) => {
@@ -310,7 +272,6 @@ impl<'p> NameResolver<'p> {
         // Create a new block scope
         let block_scope = self.program.scopes.alloc(Scope {
             parent: self.current_scope,
-            kind: ScopeKind::Block,
             variables: HashMap::new(),
         });
 

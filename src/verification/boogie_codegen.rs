@@ -305,31 +305,6 @@ impl BoogieCodeGenerator {
         writeln!(w, "}}").unwrap();
     }
 
-    fn write_initial_havoc(&self, w: &mut String, plan: &VerificationPlan, cfg: &CfgProgram) {
-        writeln!(w, "  // Havoc initial state").unwrap();
-
-        // Havoc table variables
-        for &table_id in &plan.relevant_tables {
-            let table = &cfg.tables[table_id];
-            for &field_id in &table.fields {
-                if field_id != table.primary_key {
-                    let field = &cfg.fields[field_id];
-                    writeln!(w, "  havoc {}_{};", table.name, field.name).unwrap();
-                }
-            }
-        }
-
-        // Havoc function variables
-        for (var_id, (func_id, _)) in &plan.global_vars {
-            let func = &cfg.functions[*func_id];
-            if let Some(var_info) = func.variables.get(*var_id) {
-                writeln!(w, "  havoc {};", var_info.name).unwrap();
-            }
-        }
-
-        writeln!(w, "").unwrap();
-    }
-
     fn write_save_initial_state(&self, w: &mut String, plan: &VerificationPlan, cfg: &CfgProgram) {
         writeln!(w, "  // Save initial state").unwrap();
 

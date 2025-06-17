@@ -1,0 +1,23 @@
+nodes {
+    NodeA, NodeB
+}
+
+table Test on NodeA {
+    primary int id;
+    int value;
+}
+
+table Test2 on NodeB {
+    primary int id;
+    int value;
+}
+
+void testCrossHop() {
+    hop on NodeA {
+        int price = Test[id: 1].value;
+    }
+    
+    hop on NodeB {
+        Test2[id: 1].value = price;
+    }
+}

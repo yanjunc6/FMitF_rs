@@ -16,7 +16,6 @@ bool_literal    = @{ "true" | "false" }
 type_name = { "int" | "float" | "string" | "bool" }
 // Add bool type
 ret_type        = { type_name | "void" }
-global_keyword  = { "global" }
 primary_keyword = { "primary" }
 
 // Grammar Start
@@ -93,7 +92,7 @@ assignment_statement = {
 }
 
 var_decl_statement = {
-    global_keyword? ~ type_name ~ identifier ~ "=" ~ expression ~ ";"
+    type_name ~ identifier ~ "=" ~ expression ~ ";"
 }
 
 return_statement = {

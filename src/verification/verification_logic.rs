@@ -1,6 +1,5 @@
-use crate::cfg::{CfgProgram, FunctionId, HopId, NodeId, TableId, TypeName, VarId};
+use crate::cfg::{CfgProgram, FunctionId, HopId, NodeId, TableId};
 use crate::verification::VerificationUnit;
-use std::collections::HashMap;
 
 /// Represents the logical structure of a verification scenario
 #[derive(Debug, Clone)]
@@ -9,7 +8,6 @@ pub struct VerificationPlan {
     pub func2_id: FunctionId,
     pub relevant_hops_f1: Vec<HopId>,
     pub relevant_hops_f2: Vec<HopId>,
-    pub global_vars: HashMap<VarId, (FunctionId, TypeName)>,
     pub relevant_tables: Vec<TableId>,
     pub interleavings: Vec<Vec<(FunctionId, HopId)>>,
     pub serial_orders: [(FunctionId, Vec<HopId>, FunctionId, Vec<HopId>); 2],
@@ -21,32 +19,7 @@ impl VerificationPlan {
         let func1_cfg = &cfg.functions[unit.func1_id];
         let func2_cfg = &cfg.functions[unit.func2_id];
 
-        // 1. Collect relevant variables
-        let mut global_vars = HashMap::new();
-
-        // Add all variables from both functions
-        for (var_id, variable) in func1_cfg.variables.iter() {
-            global_vars.insert(var_id, (unit.func1_id, variable.ty.clone()));
-        }
-        for (var_id, variable) in func2_cfg.variables.iter() {
-            global_vars
-                .entry(var_id)
-                .or_insert_with(|| (unit.func2_id, variable.ty.clone()));
-        }
-
-        // Add live variables from the unit
-        for var_id in &unit.live_vars_at_hop1_exit {
-            if let Some(var_info) = func1_cfg.variables.get(*var_id) {
-                global_vars.insert(*var_id, (unit.func1_id, var_info.ty.clone()));
-            }
-        }
-        for var_id in &unit.live_vars_at_hop2_exit {
-            if let Some(var_info) = func2_cfg.variables.get(*var_id) {
-                global_vars.insert(*var_id, (unit.func2_id, var_info.ty.clone()));
-            }
-        }
-
-        // 2. Get relevant hops
+        // Get relevant hops
         let relevant_hops_f1 =
             get_relevant_hops_on_node(func1_cfg, unit.hop1_id, unit.conflict_node);
         let relevant_hops_f2 =
@@ -84,7 +57,6 @@ impl VerificationPlan {
             func2_id: unit.func2_id,
             relevant_hops_f1,
             relevant_hops_f2,
-            global_vars,
             relevant_tables: unit.relevant_tables.clone(),
             interleavings,
             serial_orders,

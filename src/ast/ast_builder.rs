@@ -35,7 +35,6 @@ impl Program {
             expressions: Arena::new(),
             variables: Arena::new(),
             scopes: Arena::new(),
-            global_scope: None,
             resolutions: HashMap::new(),
             var_types: HashMap::new(),
         }
@@ -357,26 +356,14 @@ impl AstBuilder {
         pair: Pair<Rule>,
     ) -> Result<VarDeclStatement, Vec<SpannedError>> {
         let mut inner = pair.into_inner();
-        let first = inner.next().unwrap();
-
-        let (is_global, var_type, var_name, init_value) = if first.as_rule() == Rule::global_keyword
-        {
-            let var_type = self.parse_type_name(inner.next().unwrap())?;
-            let var_name = inner.next().unwrap().as_str().to_string();
-            let init_value = self.build_expression(inner.next().unwrap())?;
-            (true, var_type, var_name, init_value)
-        } else {
-            let var_type = self.parse_type_name(first)?;
-            let var_name = inner.next().unwrap().as_str().to_string();
-            let init_value = self.build_expression(inner.next().unwrap())?;
-            (false, var_type, var_name, init_value)
-        };
+        let var_type = self.parse_type_name(inner.next().unwrap())?;
+        let var_name = inner.next().unwrap().as_str().to_string();
+        let init_value = self.build_expression(inner.next().unwrap())?;
 
         Ok(VarDeclStatement {
             var_type,
             var_name,
             init_value,
-            is_global,
         })
     }
 
