@@ -80,12 +80,6 @@ impl RuntimeState {
         // Store CFG
         self.cfg_program = Some(cfg_program);
         
-        println!("{} Loaded optimized CFG with {} functions, {} tables", 
-            "SUCCESS:".green().bold(),
-            self.functions.len().to_string().bright_cyan(),
-            self.tables.len().to_string().bright_cyan()
-        );
-        
         Ok(())
     }
 

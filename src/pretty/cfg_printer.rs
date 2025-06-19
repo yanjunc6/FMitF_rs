@@ -413,17 +413,15 @@ pub fn format_cfg_text(program: &CfgProgram, options: &CfgPrintOptions) -> Strin
 pub fn print_cfg_summary(program: &CfgProgram) -> String {
     let mut s = String::new();
     s.push_str("CFG Summary:\n");
-    s.push_str("============\n\n");
 
-    s.push_str(&format!("Total Functions: {}\n", program.functions.len()));
-    s.push_str(&format!("Total Nodes: {}\n", program.nodes.len()));
-    s.push_str(&format!("Total Tables: {}\n", program.tables.len()));
-    s.push_str("\n");
+    s.push_str(&format!(" - Total Functions: {}\n", program.functions.len()));
+    s.push_str(&format!(" - Total Nodes: {}\n", program.nodes.len()));
+    s.push_str(&format!(" - Total Tables: {}\n", program.tables.len()));
 
     s.push_str("Functions:\n");
     for (func_id, function) in program.functions.iter() {
         s.push_str(&format!(
-            "  {}: {} ({} hops, {} blocks, {} variables)\n",
+            " - {}: {} ({} hops, {} blocks, {} variables)\n",
             func_id.index(),
             function.name,
             function.hops.len(),

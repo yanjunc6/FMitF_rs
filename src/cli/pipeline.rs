@@ -27,6 +27,18 @@ impl Pipeline {
         }
     }
 
+    /// Calculate the total number of stages for a given mode
+    fn total_stages_for_mode(mode: &Mode) -> usize {
+        match mode {
+            Mode::Ast => 1,
+            Mode::Cfg => 2,
+            Mode::Optimize => 3,
+            Mode::Runtime => 3,  // AST + CFG + Optimize
+            Mode::Scgraph => 4,  // AST + CFG + Optimize + SCGraph
+            Mode::Verify => 5,   // AST + CFG + Optimize + SCGraph + Verification
+        }
+    }
+
     pub fn execute(
         &mut self,
         source_code: String,
@@ -34,11 +46,12 @@ impl Pipeline {
         cli: &Cli,
     ) -> Result<(), String> {
         let ctx = StageContext::new(cli).with_source(&source_code);
+        let total_stages = Self::total_stages_for_mode(&target_mode);
 
         // Stage 1: AST
         self.logger.stage_start(
             self.ast_stage.stage_number(),
-            5,
+            total_stages,
             "Frontend Analysis"
         );
 
@@ -65,7 +78,7 @@ impl Pipeline {
         // Stage 2: CFG
         self.logger.stage_start(
             self.cfg_stage.stage_number(),
-            5,
+            total_stages,
             "Building Control Flow Graph"
         );
 
@@ -83,7 +96,7 @@ impl Pipeline {
         // Stage 3: Optimization
         self.logger.stage_start(
             self.optimize_stage.stage_number(),
-            5,
+            total_stages,
             "Optimizing Control Flow Graph"
         );
 
@@ -109,7 +122,7 @@ impl Pipeline {
         // Stage 4: SC-Graph
         self.logger.stage_start(
             self.scgraph_stage.stage_number(),
-            5,
+            total_stages,
             "Building Serializability Conflict Graph"
         );
 
@@ -133,7 +146,7 @@ impl Pipeline {
         self.logger.process_start("verification process");
         self.logger.stage_start(
             self.verification_stage.stage_number(),
-            5,
+            total_stages,
             "Verification & C-edge Pruning"
         );
 

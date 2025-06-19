@@ -71,16 +71,13 @@ impl<'a> Printer<'a> {
     }
 
     fn print_summary(&mut self, program: &Program) {
-        println!("Program Summary:");
+        println!("AST Summary:");
 
-        let nodes: Vec<&str> = program
-            .root_nodes
-            .iter()
-            .map(|&node_id| program.nodes[node_id].name.as_str())
-            .collect();
-        println!("  Nodes: {}", nodes.join(", "));
+        println!(" - Total Nodes: {}", program.root_nodes.len());
+        println!(" - Total Tables: {}", program.root_tables.len());
+        println!(" - Total Functions: {}", program.root_functions.len());
 
-        println!("  Tables:");
+        println!("Tables:");
         for &table_id in &program.root_tables {
             let table = &program.tables[table_id];
             let node_name = &program.nodes[table.node].name;
@@ -99,10 +96,10 @@ impl<'a> Printer<'a> {
                     )
                 })
                 .collect();
-            println!("    {} on {}: {}", table.name, node_name, fields.join(", "));
+            println!(" - {} on {}: {}", table.name, node_name, fields.join(", "));
         }
 
-        println!("  Functions:");
+        println!("Functions:");
         for &func_id in &program.root_functions {
             let func = &program.functions[func_id];
             let params: Vec<String> = func
@@ -115,7 +112,7 @@ impl<'a> Printer<'a> {
                 .collect();
 
             println!(
-                "    {}({}) -> {}",
+                " - {}({}) -> {}",
                 func.name,
                 params.join(", "),
                 return_type(&func.return_type)
@@ -699,16 +696,13 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
     }
 
     fn print_summary(&mut self, program: &Program) -> Result<()> {
-        writeln!(self.writer, "Program Summary:")?;
+        writeln!(self.writer, "AST Summary:")?;
 
-        let nodes: Vec<&str> = program
-            .root_nodes
-            .iter()
-            .map(|&node_id| program.nodes[node_id].name.as_str())
-            .collect();
-        writeln!(self.writer, "  Nodes: {}", nodes.join(", "))?;
+        writeln!(self.writer, " - Total Nodes: {}", program.root_nodes.len())?;
+        writeln!(self.writer, " - Total Tables: {}", program.root_tables.len())?;
+        writeln!(self.writer, " - Total Functions: {}", program.root_functions.len())?;
 
-        writeln!(self.writer, "  Tables:")?;
+        writeln!(self.writer, "Tables:")?;
         for &table_id in &program.root_tables {
             let table = &program.tables[table_id];
             let node_name = &program.nodes[table.node].name;
@@ -729,14 +723,14 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                 .collect();
             writeln!(
                 self.writer,
-                "    {} on {}: {}",
+                " - {} on {}: {}",
                 table.name,
                 node_name,
                 fields.join(", ")
             )?;
         }
 
-        writeln!(self.writer, "  Functions:")?;
+        writeln!(self.writer, "Functions:")?;
         for &func_id in &program.root_functions {
             let func = &program.functions[func_id];
             let params: Vec<String> = func
@@ -750,7 +744,7 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
 
             writeln!(
                 self.writer,
-                "    {}({}) -> {}",
+                " - {}({}) -> {}",
                 func.name,
                 params.join(", "),
                 return_type(&func.return_type)

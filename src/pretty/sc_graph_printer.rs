@@ -64,11 +64,10 @@ fn format_sc_graph_summary(sc_graph: &SCGraph, _cfg_program: &CfgProgram) -> Str
 
     format!(
         "SC-Graph Summary:\n\
-         =================\n\
-         Nodes (Hops): {}\n\
-         S-Edges: {}\n\
-         C-Edges: {}\n\
-         Mixed S/C Cycles Found: {}\n",
+         - Total Nodes (Hops): {}\n\
+         - Total S-Edges: {}\n\
+         - Total C-Edges: {}\n\
+         - Mixed S/C Cycles Found: {}\n",
         nodes_count,
         s_edges_count,
         c_edges_count,

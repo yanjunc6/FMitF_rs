@@ -3,7 +3,7 @@
 use super::{RuntimeState, ReplCommand, RuntimeError};
 use crate::cfg::CfgProgram;
 use clap_repl::{ClapEditor, ReadCommandOutput};
-use clap_repl::reedline::{Completer, Suggestion, Span};
+use clap_repl::reedline::{Completer, Suggestion, Span, Prompt, PromptEditMode, PromptHistorySearch};
 use std::sync::{Arc, Mutex};
 
 
@@ -109,6 +109,33 @@ impl Completer for TransActCompleter {
     }
 }
 
+struct FMitFPrompt;
+
+impl Prompt for FMitFPrompt {
+    fn render_prompt_left(&self) -> std::borrow::Cow<str> {
+        "FMitF> ".into()
+    }
+
+    fn render_prompt_right(&self) -> std::borrow::Cow<str> {
+        "".into()
+    }
+
+    fn render_prompt_indicator(&self, _edit_mode: PromptEditMode) -> std::borrow::Cow<str> {
+        "".into()
+    }
+
+    fn render_prompt_multiline_indicator(&self) -> std::borrow::Cow<str> {
+        "> ".into()
+    }
+
+    fn render_prompt_history_search_indicator(
+        &self,
+        _history_search: PromptHistorySearch,
+    ) -> std::borrow::Cow<str> {
+        "(search) ".into()
+    }
+}
+
 /// Start the interactive runtime REPL with auto-completion
 pub fn start_runtime_repl() -> Result<(), String> {
     use colored::*;
@@ -127,12 +154,13 @@ pub fn start_runtime_repl() -> Result<(), String> {
     let runtime_state = Arc::new(Mutex::new(RuntimeState::new()));
     let completer = TransActCompleter::new(runtime_state.clone());
     
-    // Create the clap-repl editor with custom auto-completion
+    // Create the clap-repl editor with custom auto-completion and prompt
     let mut editor = ClapEditor::<ReplCommand>::builder()
         .with_editor_hook(move |reedline| {
             // Add the custom completer
             reedline.with_completer(Box::new(completer))
         })
+        .with_prompt(Box::new(FMitFPrompt))
         .build();
     
     // Manual REPL loop with proper exit handling
@@ -183,20 +211,21 @@ pub fn start_runtime_repl() -> Result<(), String> {
 pub fn start_runtime_repl_with_cfg(cfg_program: CfgProgram) -> Result<(), String> {
     use colored::*;
     
-    println!("{}", "TransAct Interactive Runtime".bright_blue().bold());
+    print!("{}", "SUCCESS:".green().bold());    
     println!("Loaded optimized CFG with {} functions and {} tables", 
-             cfg_program.functions.len().to_string().bright_cyan(), 
-             cfg_program.tables.len().to_string().bright_cyan());
+             cfg_program.functions.len().to_string(), 
+             cfg_program.tables.len().to_string());
+    println!();
+    println!("{}", "TransAct Interactive Runtime".bold());
     println!("Type {} for commands, {} for completion, {} or {} to quit",
-        "'help'".bright_cyan(),
-        "TAB".bright_yellow(),
-        "Ctrl+C".bright_magenta(),
-        "'exit'".bright_cyan()
+        "'help'",
+        "TAB",
+        "Ctrl+C",
+        "'exit'",
     );
     println!("Available commands: {}", 
         "call, table, functions, tables, clear, exit, help".bright_white());
     println!("Note: Database starts empty - use functions to populate data, 'clear' to reset");
-    println!();
     
     let mut runtime_state = RuntimeState::new();
     
@@ -206,12 +235,13 @@ pub fn start_runtime_repl_with_cfg(cfg_program: CfgProgram) -> Result<(), String
     let runtime_state = Arc::new(Mutex::new(runtime_state));
     let completer = TransActCompleter::new(runtime_state.clone());
     
-    // Create the clap-repl editor with custom auto-completion
+    // Create the clap-repl editor with custom auto-completion and prompt
     let mut editor = ClapEditor::<ReplCommand>::builder()
         .with_editor_hook(move |reedline| {
             // Add the custom completer
             reedline.with_completer(Box::new(completer))
         })
+        .with_prompt(Box::new(FMitFPrompt))
         .build();
     
     // Manual REPL loop with proper exit handling
