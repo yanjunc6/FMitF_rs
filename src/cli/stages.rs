@@ -312,13 +312,13 @@ impl DirectoryOutput for VerificationStage {
 
         if !cli.quiet {
             if let Some(boogie_dir) = &self.boogie_output_dir {
-                println!("💾 Boogie files are configured to be saved to: {}", boogie_dir.display());
+                println!("Boogie files are configured to be saved to: {}", boogie_dir.display());
                 // Optionally, note if the general pipeline dir is different, though ideally they align for this stage's main output.
                 if boogie_dir != dir {
                     println!("   (Note: General pipeline output directory for this stage is {})", dir.display());
                 }
             } else {
-                println!("💾 Boogie file output directory not specified. Files will not be saved by the verifier.");
+                println!("Boogie file output directory not specified. Files will not be saved by the verifier.");
             }
         }
 
@@ -358,44 +358,43 @@ pub fn print_verification_results(results: &VerificationResults, cli: &super::Cl
         return;
     }
 
-    println!("✅ Verification completed");
-    println!("📊 Results Summary:");
-    println!("   Total C-edges analyzed: {}", results.total_c_edges);
+    println!("Verification Summary:");
+    println!(" - Total C-edges analyzed: {}", results.total_c_edges);
     println!(
-        "   Successfully verified (pruned): {}",
+        " - Successfully verified: {}",
         results.verified_count
     );
     println!(
-        "   Failed verification: {}",
+        " - Failed verification: {}",
         results.failed_verification.len()
     );
-    println!("   Errors encountered: {}", results.errors.len());
-    println!("   Success rate: {:.1}%", results.success_rate() * 100.0);
+    println!(" - Errors encountered: {}", results.errors.len());
+    println!(" - Success rate: {:.1}%", results.success_rate() * 100.0);
 
     if cli.verbose {
         if !results.verified_edges.is_empty() {
             println!(
-                "\n✅ Verified C-edges (pruned): {:?}",
+                "\nVerified C-edges (pruned): {:?}",
                 results.verified_edges
             );
         }
 
         if !results.failed_verification.is_empty() {
-            println!("\n❌ Failed verification:");
+            println!("\nFailed verification:");
             for (edge_idx, reason) in &results.failed_verification {
                 println!("   Edge {}: {}", edge_idx, reason);
             }
         }
 
         if !results.errors.is_empty() {
-            println!("\n⚠️ Errors encountered:");
+            println!("\nErrors encountered:");
             for (edge_idx, error) in &results.errors {
                 println!("   Edge {}: {}", edge_idx, error);
             }
         }
     } else if !results.errors.is_empty() {
         println!(
-            "\n⚠️ {} errors encountered (use --verbose for details)",
+            "\n{} errors encountered (use --verbose for details)",
             results.errors.len()
         );
     }
@@ -407,7 +406,7 @@ pub fn check_final_state(sc_graph: &SCGraph, cli: &super::Cli) {
 
     if !mixed_cycles.is_empty() {
         println!(
-            "\n⚠️ Warning: {} mixed S/C cycles remain after verification",
+            "\nWarning: {} mixed S/C cycles remain after verification",
             mixed_cycles.len()
         );
         if !cli.quiet {
@@ -424,6 +423,6 @@ pub fn check_final_state(sc_graph: &SCGraph, cli: &super::Cli) {
             }
         }
     } else if !cli.quiet {
-        println!("\n✅ No mixed S/C cycles detected - system appears serializable");
+        println!("No mixed S/C cycles detected – system appears serializable.");
     }
 }

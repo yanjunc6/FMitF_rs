@@ -111,9 +111,17 @@ impl Completer for TransActCompleter {
 
 /// Start the interactive runtime REPL with auto-completion
 pub fn start_runtime_repl() -> Result<(), String> {
-    println!("🚀 TransAct Testing REPL");
-    println!("Type 'help' for commands, TAB for completion, Ctrl+C or 'exit' to quit");
-    println!("Available commands: call, table, functions, tables, clear, exit, help");
+    use colored::*;
+    
+    println!("{}", "TransAct Testing REPL".bright_blue().bold());
+    println!("Type {} for commands, {} for completion, {} or {} to quit",
+        "'help'".bright_cyan(),
+        "TAB".bright_yellow(), 
+        "Ctrl+C".bright_magenta(),
+        "'exit'".bright_cyan()
+    );
+    println!("Available commands: {}", 
+        "call, table, functions, tables, clear, exit, help".bright_white());
     println!();
     
     let runtime_state = Arc::new(Mutex::new(RuntimeState::new()));
@@ -133,13 +141,13 @@ pub fn start_runtime_repl() -> Result<(), String> {
             ReadCommandOutput::Command(command) => {
                 match &command {
                     ReplCommand::Exit => {
-                        println!("👋 Goodbye!");
+                        println!("Goodbye!");
                         break;
                     }
                     _ => {
                         let mut state = runtime_state.lock().unwrap();
                         if let Err(e) = handle_command(command, &mut state) {
-                            eprintln!("❌ Error: {}", e);
+                            eprintln!("ERROR: {}", e);
                         }
                     }
                 }
@@ -151,18 +159,18 @@ pub fn start_runtime_repl() -> Result<(), String> {
                 println!("{}", err);
             }
             ReadCommandOutput::ShlexError => {
-                eprintln!("❌ Invalid input: unmatched quotes");
+                eprintln!("ERROR: Invalid input: unmatched quotes");
             }
             ReadCommandOutput::ReedlineError(err) => {
-                eprintln!("❌ Input error: {}", err);
+                eprintln!("ERROR: Input error: {}", err);
                 break;
             }
             ReadCommandOutput::CtrlC => {
-                println!("\n👋 Goodbye!");
+                println!("\nGoodbye!");
                 break;
             }
             ReadCommandOutput::CtrlD => {
-                println!("\n👋 Goodbye!");
+                println!("\nGoodbye!");
                 break;
             }
         }
@@ -173,11 +181,20 @@ pub fn start_runtime_repl() -> Result<(), String> {
 
 /// Start the interactive runtime REPL with a pre-loaded optimized CFG
 pub fn start_runtime_repl_with_cfg(cfg_program: CfgProgram) -> Result<(), String> {
-    println!("🚀 TransAct Interactive Runtime");
+    use colored::*;
+    
+    println!("{}", "TransAct Interactive Runtime".bright_blue().bold());
     println!("Loaded optimized CFG with {} functions and {} tables", 
-             cfg_program.functions.len(), cfg_program.tables.len());
-    println!("Type 'help' for commands, TAB for completion, Ctrl+C or 'exit' to quit");
-    println!("Available commands: call, table, functions, tables, clear, exit, help");
+             cfg_program.functions.len().to_string().bright_cyan(), 
+             cfg_program.tables.len().to_string().bright_cyan());
+    println!("Type {} for commands, {} for completion, {} or {} to quit",
+        "'help'".bright_cyan(),
+        "TAB".bright_yellow(),
+        "Ctrl+C".bright_magenta(),
+        "'exit'".bright_cyan()
+    );
+    println!("Available commands: {}", 
+        "call, table, functions, tables, clear, exit, help".bright_white());
     println!("Note: Database starts empty - use functions to populate data, 'clear' to reset");
     println!();
     
@@ -203,13 +220,13 @@ pub fn start_runtime_repl_with_cfg(cfg_program: CfgProgram) -> Result<(), String
             ReadCommandOutput::Command(command) => {
                 match &command {
                     ReplCommand::Exit => {
-                        println!("👋 Goodbye!");
+                        println!("Goodbye!");
                         break;
                     }
                     _ => {
                         let mut state = runtime_state.lock().unwrap();
                         if let Err(e) = handle_command(command, &mut state) {
-                            eprintln!("❌ Error: {}", e);
+                            eprintln!("ERROR: {}", e);
                         }
                     }
                 }
@@ -221,18 +238,18 @@ pub fn start_runtime_repl_with_cfg(cfg_program: CfgProgram) -> Result<(), String
                 println!("{}", err);
             }
             ReadCommandOutput::ShlexError => {
-                eprintln!("❌ Invalid input: unmatched quotes");
+                eprintln!("ERROR: Invalid input: unmatched quotes");
             }
             ReadCommandOutput::ReedlineError(err) => {
-                eprintln!("❌ Input error: {}", err);
+                eprintln!("ERROR: Input error: {}", err);
                 break;
             }
             ReadCommandOutput::CtrlC => {
-                println!("\n👋 Goodbye!");
+                println!("\nGoodbye!");
                 break;
             }
             ReadCommandOutput::CtrlD => {
-                println!("\n👋 Goodbye!");
+                println!("\nGoodbye!");
                 break;
             }
         }

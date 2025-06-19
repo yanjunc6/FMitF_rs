@@ -301,7 +301,7 @@ pub fn print_cfg_dot_format(
 pub fn format_cfg_text(program: &CfgProgram, options: &CfgPrintOptions) -> String {
     if options.quiet && options.format == CfgFormat::Text {
         // Only return quiet message for text format
-        return String::from("CFG generation complete (quiet mode).");
+        return String::from("CFG generation complete");
     }
 
     let mut s = String::new();

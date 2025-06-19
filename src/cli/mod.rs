@@ -6,11 +6,13 @@ mod output;
 mod pipeline;
 mod stages;
 mod traits;
+mod logger;
 
 pub use output::*;
 pub use pipeline::*;
 pub use stages::*;
 pub use traits::*;
+pub use logger::*;
 
 #[derive(Parser, Debug)]
 #[command(name = "fmitf")]
@@ -55,6 +57,10 @@ pub struct Cli {
     /// Skip optimization passes
     #[arg(long = "no-optimize")]
     pub no_optimize: bool,
+
+    /// Disable colored output
+    #[arg(long = "no-color")]
+    pub no_color: bool,
 }
 
 #[derive(ValueEnum, Clone, PartialEq, Debug)]

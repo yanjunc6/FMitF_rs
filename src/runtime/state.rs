@@ -1,5 +1,6 @@
 //! Runtime State - One struct with CFG + simple maps for everything
 
+use colored::*;
 use crate::{
     ast::parse_and_analyze,
     cfg::{CfgBuilder, CfgProgram, FunctionId, TableId, FieldId},
@@ -59,8 +60,11 @@ impl RuntimeState {
         // Store CFG
         self.cfg_program = Some(cfg_program);
         
-        println!("✅ Loaded program with {} functions, {} tables", 
-            self.functions.len(), self.tables.len());
+        println!("{} Loaded program with {} functions, {} tables", 
+            "SUCCESS:".green().bold(),
+            self.functions.len().to_string().bright_cyan(), 
+            self.tables.len().to_string().bright_cyan()
+        );
         
         Ok(())
     }
@@ -76,8 +80,11 @@ impl RuntimeState {
         // Store CFG
         self.cfg_program = Some(cfg_program);
         
-        println!("✅ Loaded optimized CFG with {} functions, {} tables", 
-            self.functions.len(), self.tables.len());
+        println!("{} Loaded optimized CFG with {} functions, {} tables", 
+            "SUCCESS:".green().bold(),
+            self.functions.len().to_string().bright_cyan(),
+            self.tables.len().to_string().bright_cyan()
+        );
         
         Ok(())
     }
@@ -127,7 +134,7 @@ impl RuntimeState {
             .ok_or_else(|| RuntimeError::NotFound(format!("Table data for '{}'", table_name)))?;
         
         if data.is_empty() {
-            println!("Table {} is empty.", table_name);
+            println!("Table {} is empty.", table_name.bright_white());
             return Ok(());
         }
         
@@ -307,7 +314,9 @@ impl RuntimeState {
             }
         }
         
-        println!("✅ Cleared all table data - database reset to empty state");
+        println!("{} Cleared all table data - database reset to empty state", 
+            "SUCCESS:".green().bold()
+        );
         Ok(())
     }
 }

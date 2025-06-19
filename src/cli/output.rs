@@ -10,15 +10,13 @@ impl OutputManager {
     /// Get a writer for file output
     pub fn get_file_writer(
         output_path: &Option<PathBuf>,
-        quiet: bool,
+        logger: &super::Logger,
     ) -> Result<BufWriter<Box<dyn Write>>, String> {
         match output_path {
             Some(path) => {
                 let file = fs::File::create(path)
                     .map_err(|e| format!("Failed to create file {:?}: {}", path, e))?;
-                if !quiet {
-                    println!("💾 Output will be written to: {}", path.display());
-                }
+                logger.file_output(path);
                 Ok(BufWriter::new(Box::new(file)))
             }
             None => Ok(BufWriter::new(Box::new(stdout()))),
@@ -30,7 +28,8 @@ impl OutputManager {
     where
         S: FileOutput<Data = T>,
     {
-        let mut writer = Self::get_file_writer(&cli.output, cli.quiet)?;
+        let logger = super::Logger::new(cli.verbose, cli.quiet);
+        let mut writer = Self::get_file_writer(&cli.output, &logger)?;
         stage.write_output(data, &mut writer, cli)?;
         writer
             .flush()
@@ -55,16 +54,31 @@ impl OutputManager {
 
 /// Error handling utilities
 pub fn print_spanned_error(spanned_error: &crate::AstSpannedError, source_code: &str) {
+    use colored::*;
+    
     if let Some(span_value) = &spanned_error.span {
         eprintln!(
-            "Error: {:?} at line {}, column {}",
-            spanned_error.error, span_value.line, span_value.column
+            "{}: {} at line {}, column {}",
+            spanned_error.error.error_type().red().bold(),
+            spanned_error.error.message(),
+            span_value.line.to_string().red(),
+            span_value.column.to_string().red()
         );
         if let Some(line_content) = source_code.lines().nth(span_value.line.saturating_sub(1)) {
-            eprintln!("  |\n{} | {}", span_value.line, line_content);
-            eprintln!("  | {}{}", " ".repeat(span_value.column), "^");
+            eprintln!("   |");
+            eprintln!("{} | {}", 
+                span_value.line.to_string().red(),
+                line_content
+            );
+            eprintln!("   | {}{}", 
+                " ".repeat(span_value.column), 
+                "^".red().bold()
+            );
         }
     } else {
-        eprintln!("Error: {:?}", spanned_error.error);
+        eprintln!("{}: {}", 
+            spanned_error.error.error_type().red().bold(),
+            spanned_error.error.message()
+        );
     }
 }

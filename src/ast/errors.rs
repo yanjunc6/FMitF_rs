@@ -71,68 +71,97 @@ pub enum AstError {
 
 impl std::fmt::Display for AstError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.error_type(), self.message())
+    }
+}
+
+impl std::error::Error for AstError {}
+
+impl AstError {
+    /// Get the error type name for display purposes
+    pub fn error_type(&self) -> &'static str {
         match self {
-            Self::ParseError(msg) => write!(f, "Parse error: {}", msg),
-            Self::UndeclaredVariable(name) => write!(f, "Undeclared variable: {}", name),
-            Self::UndeclaredTable(name) => write!(f, "Undeclared table: {}", name),
+            Self::ParseError(_) => "ParseError",
+            Self::UndeclaredVariable(_) => "UndeclaredVariable",
+            Self::UndeclaredTable(_) => "UndeclaredTable",
+            Self::UndeclaredField { .. } => "UndeclaredField",
+            Self::UndeclaredNode(_) => "UndeclaredNode",
+            Self::DuplicateVariable(_) => "DuplicateVariable",
+            Self::DuplicateFunction(_) => "DuplicateFunction",
+            Self::DuplicateTable(_) => "DuplicateTable",
+            Self::DuplicateNode(_) => "DuplicateNode",
+            Self::TypeMismatch { .. } => "TypeMismatch",
+            Self::InvalidUnaryOp { .. } => "InvalidUnaryOp",
+            Self::InvalidBinaryOp { .. } => "InvalidBinaryOp",
+            Self::InvalidCondition(_) => "InvalidCondition",
+            Self::BreakOutsideLoop => "BreakOutsideLoop",
+            Self::ContinueOutsideLoop => "ContinueOutsideLoop",
+            Self::MissingReturn(_) => "MissingReturn",
+            Self::UnexpectedReturnValue => "UnexpectedReturnValue",
+            Self::MissingReturnValue => "MissingReturnValue",
+            Self::CrossNodeAccess { .. } => "CrossNodeAccess",
+            Self::InvalidPrimaryKey { .. } => "InvalidPrimaryKey",
+            Self::AbortNotInFirstHop { .. } => "AbortNotInFirstHop",
+        }
+    }
+
+    /// Get the error message without the type prefix
+    pub fn message(&self) -> String {
+        match self {
+            Self::ParseError(msg) => msg.clone(),
+            Self::UndeclaredVariable(name) => format!("Variable '{}' is not declared", name),
+            Self::UndeclaredTable(name) => format!("Table '{}' is not declared", name),
             Self::UndeclaredField { table, field } => {
-                write!(f, "Field '{}' not found in table '{}'", field, table)
+                format!("Field '{}' does not exist in table '{}'", field, table)
             }
-            Self::UndeclaredNode(name) => write!(f, "Undeclared node: {}", name),
-            Self::DuplicateVariable(name) => write!(f, "Duplicate variable: {}", name),
-            Self::DuplicateFunction(name) => write!(f, "Duplicate function: {}", name),
-            Self::DuplicateTable(name) => write!(f, "Duplicate table: {}", name),
-            Self::DuplicateNode(name) => write!(f, "Duplicate node: {}", name),
-            Self::TypeMismatch { expected, found } => write!(
-                f,
-                "Type mismatch: expected {:?}, found {:?}",
+            Self::UndeclaredNode(name) => format!("Node '{}' is not declared", name),
+            Self::DuplicateVariable(name) => format!("Variable '{}' is already declared", name),
+            Self::DuplicateFunction(name) => format!("Function '{}' is already declared", name),
+            Self::DuplicateTable(name) => format!("Table '{}' is already declared", name),
+            Self::DuplicateNode(name) => format!("Node '{}' is already declared", name),
+            Self::TypeMismatch { expected, found } => format!(
+                "Expected type {:?} but found {:?}",
                 expected, found
             ),
             Self::InvalidUnaryOp { op, operand } => {
-                write!(f, "Invalid unary operation '{}' on type {:?}", op, operand)
+                format!("Cannot apply operator '{}' to type {:?}", op, operand)
             }
-            Self::InvalidBinaryOp { op, left, right } => write!(
-                f,
-                "Invalid binary operation '{}' between {:?} and {:?}",
+            Self::InvalidBinaryOp { op, left, right } => format!(
+                "Cannot apply operator '{}' between types {:?} and {:?}",
                 op, left, right
             ),
             Self::InvalidCondition(ty) => {
-                write!(f, "Invalid condition type: expected bool, found {:?}", ty)
+                format!("Condition must be boolean, found {:?}", ty)
             }
-            Self::BreakOutsideLoop => write!(f, "Break statement outside of loop"),
-            Self::ContinueOutsideLoop => write!(f, "Continue statement outside of loop"),
+            Self::BreakOutsideLoop => "Break statement can only be used inside a loop".to_string(),
+            Self::ContinueOutsideLoop => "Continue statement can only be used inside a loop".to_string(),
             Self::MissingReturn(func) => {
-                write!(f, "Missing return statement in function '{}'", func)
+                format!("Function '{}' must have a return statement", func)
             }
-            Self::UnexpectedReturnValue => write!(f, "Unexpected return value in void function"),
-            Self::MissingReturnValue => write!(f, "Missing return value in non-void function"),
+            Self::UnexpectedReturnValue => "Void function cannot return a value".to_string(),
+            Self::MissingReturnValue => "Non-void function must return a value".to_string(),
             Self::CrossNodeAccess {
                 table,
                 table_node,
                 current_node,
-            } => write!(
-                f,
-                "Cannot access table '{}' on node '{}' from node '{}'",
+            } => format!(
+                "Table '{}' belongs to node '{}' and cannot be accessed from node '{}'",
                 table, table_node, current_node
             ),
-            Self::InvalidPrimaryKey { table, column } => write!(
-                f,
+            Self::InvalidPrimaryKey { table, column } => format!(
                 "Column '{}' is not the primary key of table '{}'",
                 column, table
             ),
             Self::AbortNotInFirstHop {
                 function,
                 hop_index,
-            } => write!(
-                f,
-                "Abort statement not allowed in hop {} of function '{}' (only in first hop)",
-                hop_index, function
+            } => format!(
+                "Abort statement in function '{}' can only be used in the first hop, not hop {}",
+                function, hop_index
             ),
         }
     }
 }
-
-impl std::error::Error for AstError {}
 
 pub fn format_errors(errors: &[SpannedError]) -> String {
     errors
