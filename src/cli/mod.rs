@@ -65,6 +65,8 @@ pub enum Mode {
     Cfg,
     /// Optimize Control Flow Graph (includes AST + CFG stages)
     Optimize,
+    /// Start interactive runtime with optimized CFG (includes AST + CFG + Optimize stages)
+    Runtime,
     /// Build Serializability Conflict Graph (includes AST + CFG + Optimize stages)
     Scgraph,
     /// Run verification and pruning (includes all previous stages)
@@ -104,10 +106,17 @@ impl Cli {
             return Err("--timeout is only valid for verify mode".to_string());
         }
 
+        // Runtime mode doesn't need output files
+        if self.mode == Mode::Runtime {
+            if self.output.is_some() || self.output_dir.is_some() {
+                return Err("Runtime mode doesn't support output files - it's an interactive REPL".to_string());
+            }
+        }
+
         // No-optimize flag is only meaningful for modes that include optimization
-        if self.no_optimize && !matches!(self.mode, Mode::Optimize | Mode::Scgraph | Mode::Verify) {
+        if self.no_optimize && !matches!(self.mode, Mode::Optimize | Mode::Runtime | Mode::Scgraph | Mode::Verify) {
             return Err(
-                "--no-optimize is only valid for optimize, scgraph, and verify modes".to_string(),
+                "--no-optimize is only valid for optimize, runtime, scgraph, and verify modes".to_string(),
             );
         }
 

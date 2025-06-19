@@ -1,3 +1,5 @@
+#![allow(non_snake_case)]
+
 pub mod ast;
 pub mod cfg;
 pub mod cli;

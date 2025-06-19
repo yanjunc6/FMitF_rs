@@ -116,6 +116,15 @@ impl Pipeline {
             return OutputManager::handle_file_output(&self.optimize_stage, &optimized_cfg, cli);
         }
 
+        // Runtime mode: Start REPL with the optimized CFG
+        if target_mode == Mode::Runtime {
+            if !cli.quiet {
+                println!("🚀 Starting interactive runtime with optimized CFG...");
+            }
+            crate::runtime::start_runtime_repl_with_cfg(optimized_cfg)?;
+            return Ok(());
+        }
+
         // Stage 4: SC-Graph
         if !cli.quiet {
             println!(

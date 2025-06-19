@@ -6,10 +6,7 @@
 //! - Common subexpression elimination
 
 use crate::cfg::{
-    BasicBlockId, CfgProgram, Constant, FunctionCfg, FunctionId, Operand, Rvalue, Statement,
-};
-use crate::dataflow::{
-    analyze_available_expressions, analyze_live_variables, analyze_reaching_definitions,
+    CfgProgram, FunctionCfg, FunctionId,
 };
 use std::collections::HashMap;
 

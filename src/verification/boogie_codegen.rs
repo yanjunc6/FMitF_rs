@@ -553,24 +553,6 @@ impl BoogieCodeGenerator {
         }
     }
 
-    // Ensure this is the only definition of visit_rvalue_operands
-    fn visit_rvalue_operands<F>(&self, rvalue: &Rvalue, visitor: &mut F)
-    where F: FnMut(&Operand) {
-        match rvalue {
-            Rvalue::Use(op) => visitor(op),
-            Rvalue::TableAccess { pk_values, .. } => {
-                for pk_value in pk_values {
-                    visitor(pk_value);
-                }
-            },
-            Rvalue::UnaryOp { operand, .. } => visitor(operand),
-            Rvalue::BinaryOp { left, right, .. } => {
-                visitor(left);
-                visitor(right);
-            }
-        }
-    }
-
     fn operand_to_boogie(
         &self,
         operand: &Operand,

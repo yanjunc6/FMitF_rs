@@ -65,6 +65,23 @@ impl RuntimeState {
         Ok(())
     }
     
+    /// Load a pre-built CFG program (for runtime mode after optimization)
+    pub fn load_cfg(&mut self, cfg_program: CfgProgram) -> Result<(), RuntimeError> {
+        // Build string→ID lookup tables
+        self.build_symbol_tables(&cfg_program);
+        
+        // Initialize empty table storage
+        self.initialize_table_storage(&cfg_program);
+        
+        // Store CFG
+        self.cfg_program = Some(cfg_program);
+        
+        println!("✅ Loaded optimized CFG with {} functions, {} tables", 
+            self.functions.len(), self.tables.len());
+        
+        Ok(())
+    }
+
     /// Call a function by name with string arguments
     pub fn call_function(&mut self, function_name: &str, args: Vec<String>) -> Result<(), RuntimeError> {
         let func_id = self.functions.get(function_name)
@@ -272,5 +289,25 @@ impl RuntimeState {
         for (table_id, _table_info) in cfg.tables.iter() {
             self.table_data.insert(table_id, HashMap::new());
         }
+    }
+    
+    /// Clear all table data (reset database to empty state)
+    pub fn clear_data(&mut self) -> Result<(), RuntimeError> {
+        if self.cfg_program.is_none() {
+            return Err(RuntimeError::ExecutionError("No CFG loaded".to_string()));
+        }
+        
+        // Clear all table data
+        self.table_data.clear();
+        
+        // Re-initialize empty table storage for each table
+        if let Some(ref cfg) = self.cfg_program {
+            for (table_id, _) in cfg.tables.iter() {
+                self.table_data.insert(table_id, HashMap::new());
+            }
+        }
+        
+        println!("✅ Cleared all table data - database reset to empty state");
+        Ok(())
     }
 }
