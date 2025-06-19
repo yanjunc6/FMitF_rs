@@ -64,31 +64,40 @@ impl OptimizationPass for ConstantPropagationPass {
                     }
                     Statement::TableAssign {
                         table,
-                        pk_field,
-                        pk_value,
+                        pk_fields,
+                        pk_values,
                         field,
                         value,
                         span,
                     } => {
-                        let new_pk_value = self.propagate_in_operand(
-                            pk_value,
-                            reaching_defs_at_entry,
-                            &stmt_to_constant,
-                        );
+                        let new_pk_values: Vec<Operand> = pk_values
+                            .iter()
+                            .map(|pk_value| {
+                                self.propagate_in_operand(
+                                    pk_value,
+                                    reaching_defs_at_entry,
+                                    &stmt_to_constant,
+                                )
+                            })
+                            .collect();
                         let new_value = self.propagate_in_operand(
                             value,
                             reaching_defs_at_entry,
                             &stmt_to_constant,
                         );
 
-                        if new_pk_value != *pk_value || new_value != *value {
+                        // Check if any primary key values changed
+                        let pk_values_changed = new_pk_values.iter().zip(pk_values.iter())
+                            .any(|(new, old)| new != old);
+                        
+                        if pk_values_changed || new_value != *value {
                             changed = true;
                         }
 
                         new_statements.push(Statement::TableAssign {
                             table: *table,
-                            pk_field: *pk_field,
-                            pk_value: new_pk_value,
+                            pk_fields: pk_fields.clone(),
+                            pk_values: new_pk_values,
                             field: *field,
                             value: new_value,
                             span: span.clone(),
@@ -130,13 +139,16 @@ impl ConstantPropagationPass {
             }
             Rvalue::TableAccess {
                 table,
-                pk_field,
-                pk_value,
+                pk_fields,
+                pk_values,
                 field,
             } => Rvalue::TableAccess {
                 table: *table,
-                pk_field: *pk_field,
-                pk_value: self.propagate_in_operand(pk_value, reaching_defs, stmt_to_constant),
+                pk_fields: pk_fields.clone(),
+                pk_values: pk_values
+                    .iter()
+                    .map(|pk_value| self.propagate_in_operand(pk_value, reaching_defs, stmt_to_constant))
+                    .collect(),
                 field: *field,
             },
             Rvalue::UnaryOp { op, operand } => {

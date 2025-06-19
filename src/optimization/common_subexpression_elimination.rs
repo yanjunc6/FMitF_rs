@@ -77,8 +77,8 @@ impl OptimizationPass for CommonSubexpressionEliminationPass {
                     }
                     Statement::TableAssign {
                         table,
-                        pk_field: _,
-                        pk_value: _,
+                        pk_fields: _,
+                        pk_values: _,
                         field,
                         value: _,
                         span: _,
@@ -148,7 +148,9 @@ impl CommonSubexpressionEliminationPass {
     fn expr_uses_var(&self, rvalue: &Rvalue, var_id: VarId) -> bool {
         match rvalue {
             Rvalue::Use(operand) => self.operand_uses_var(operand, var_id),
-            Rvalue::TableAccess { pk_value, .. } => self.operand_uses_var(pk_value, var_id),
+            Rvalue::TableAccess { pk_values, .. } => {
+                pk_values.iter().any(|pk_value| self.operand_uses_var(pk_value, var_id))
+            }
             Rvalue::UnaryOp { operand, .. } => self.operand_uses_var(operand, var_id),
             Rvalue::BinaryOp { left, right, .. } => {
                 self.operand_uses_var(left, var_id) || self.operand_uses_var(right, var_id)

@@ -21,9 +21,11 @@ impl TransferFunction<SetLattice<VarId>> for LiveVariablesTransfer {
                             result.set.insert(*v);
                         }
                     }
-                    Rvalue::TableAccess { pk_value, .. } => {
-                        if let Operand::Var(v) = pk_value {
-                            result.set.insert(*v);
+                    Rvalue::TableAccess { pk_values, .. } => {
+                        for pk_value in pk_values {
+                            if let Operand::Var(v) = pk_value {
+                                result.set.insert(*v);
+                            }
                         }
                     }
                     Rvalue::UnaryOp { operand, .. } => {
@@ -42,11 +44,13 @@ impl TransferFunction<SetLattice<VarId>> for LiveVariablesTransfer {
                 }
             }
             Statement::TableAssign {
-                pk_value, value, ..
+                pk_values, value, ..
             } => {
                 // Add used variables
-                if let Operand::Var(v) = pk_value {
-                    result.set.insert(*v);
+                for pk_value in pk_values {
+                    if let Operand::Var(v) = pk_value {
+                        result.set.insert(*v);
+                    }
                 }
                 if let Operand::Var(v) = value {
                     result.set.insert(*v);

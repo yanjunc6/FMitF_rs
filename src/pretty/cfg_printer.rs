@@ -37,18 +37,25 @@ fn format_rvalue(rvalue: &Rvalue, function: &FunctionCfg, program: &CfgProgram) 
         Rvalue::Use(op) => format_operand(op, function),
         Rvalue::TableAccess {
             table,
-            pk_field,
-            pk_value,
+            pk_fields,
+            pk_values,
             field,
         } => {
             let table_info = &program.tables[*table];
-            // pk_field is used implicitly by the structure, but not directly in this format string
-            let _pk_field_info = &program.fields[*pk_field];
             let field_info = &program.fields[*field];
+            
+            // Format composite primary keys
+            let pk_parts: Vec<String> = pk_fields.iter().zip(pk_values.iter())
+                .map(|(pk_field_id, pk_value)| {
+                    let pk_field_info = &program.fields[*pk_field_id];
+                    format!("{}:{}", pk_field_info.name, format_operand(pk_value, function))
+                })
+                .collect();
+            
             format!(
-                "{}[pk:{}].{}",
+                "{}[{}].{}",
                 table_info.name,
-                format_operand(pk_value, function),
+                pk_parts.join(", "),
                 field_info.name
             )
         }
@@ -83,20 +90,27 @@ fn format_statement(
         }
         Statement::TableAssign {
             table,
-            pk_field,
-            pk_value,
+            pk_fields,
+            pk_values,
             field,
             value,
             ..
         } => {
             let table_info = &program.tables[*table];
-            // pk_field is used implicitly by the structure, but not directly in this format string
-            let _pk_field_info = &program.fields[*pk_field];
             let field_info = &program.fields[*field];
+            
+            // Format composite primary keys
+            let pk_parts: Vec<String> = pk_fields.iter().zip(pk_values.iter())
+                .map(|(pk_field_id, pk_value)| {
+                    let pk_field_info = &program.fields[*pk_field_id];
+                    format!("{}:{}", pk_field_info.name, format_operand(pk_value, function))
+                })
+                .collect();
+            
             format!(
-                "{}[pk:{}].{} = {}",
+                "{}[{}].{} = {}",
                 table_info.name,
-                format_operand(pk_value, function),
+                pk_parts.join(", "),
                 field_info.name,
                 format_operand(value, function)
             )

@@ -102,8 +102,8 @@ pub enum Statement {
     },
     TableAssign {
         table: TableId,
-        pk_field: FieldId,
-        pk_value: Operand,
+        pk_fields: Vec<FieldId>,
+        pk_values: Vec<Operand>,
         field: FieldId,
         value: Operand,
         span: Span,
@@ -115,8 +115,8 @@ pub enum Rvalue {
     Use(Operand),
     TableAccess {
         table: TableId,
-        pk_field: FieldId,
-        pk_value: Operand,
+        pk_fields: Vec<FieldId>,
+        pk_values: Vec<Operand>,
         field: FieldId,
     },
     UnaryOp {

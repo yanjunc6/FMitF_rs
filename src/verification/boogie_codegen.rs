@@ -486,13 +486,22 @@ impl BoogieCodeGenerator {
             Statement::TableAssign {
                 table,
                 field,
-                pk_value,
+                pk_fields: _,
+                pk_values,
                 value,
                 ..
             } => {
                 let table_name = &cfg.tables[*table].name;
                 let field_name = &cfg.fields[*field].name;
-                let pk_str = self.operand_to_boogie(pk_value, func, cfg);
+                
+                // For Boogie compatibility, we'll use the first primary key as the map key
+                // In the future, this could be extended to support composite keys properly
+                let pk_str = if !pk_values.is_empty() {
+                    self.operand_to_boogie(&pk_values[0], func, cfg)
+                } else {
+                    return; // Should not happen due to validation
+                };
+                
                 let value_str = self.operand_to_boogie(value, func, cfg);
                 writeln!(
                     w,
@@ -515,12 +524,19 @@ impl BoogieCodeGenerator {
             Rvalue::TableAccess {
                 table,
                 field,
-                pk_value,
+                pk_values,
                 ..
             } => {
                 let table_name = &cfg.tables[*table].name;
                 let field_name = &cfg.fields[*field].name;
-                let pk_str = self.operand_to_boogie(pk_value, func, cfg);
+                
+                // For Boogie compatibility, we'll use the first primary key as the map key
+                let pk_str = if !pk_values.is_empty() {
+                    self.operand_to_boogie(&pk_values[0], func, cfg)
+                } else {
+                    "0".to_string() // Should not happen due to validation
+                };
+                
                 format!("{}_{}[{}]", table_name, field_name, pk_str)
             }
             Rvalue::UnaryOp { op, operand } => {
@@ -542,7 +558,11 @@ impl BoogieCodeGenerator {
     where F: FnMut(&Operand) {
         match rvalue {
             Rvalue::Use(op) => visitor(op),
-            Rvalue::TableAccess { pk_value, .. } => visitor(pk_value),
+            Rvalue::TableAccess { pk_values, .. } => {
+                for pk_value in pk_values {
+                    visitor(pk_value);
+                }
+            },
             Rvalue::UnaryOp { operand, .. } => visitor(operand),
             Rvalue::BinaryOp { left, right, .. } => {
                 visitor(left);

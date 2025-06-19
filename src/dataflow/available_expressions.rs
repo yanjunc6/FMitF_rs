@@ -26,7 +26,9 @@ impl AvailableExpressionsTransfer {
     fn expr_uses_var(rvalue: &Rvalue, var_id: VarId) -> bool {
         match rvalue {
             Rvalue::Use(op) => Self::operand_uses_var(op, var_id),
-            Rvalue::TableAccess { pk_value, .. } => Self::operand_uses_var(pk_value, var_id),
+            Rvalue::TableAccess { pk_values, .. } => {
+                pk_values.iter().any(|pk_value| Self::operand_uses_var(pk_value, var_id))
+            }
             Rvalue::UnaryOp { operand, .. } => Self::operand_uses_var(operand, var_id),
             Rvalue::BinaryOp { left, right, .. } => {
                 Self::operand_uses_var(left, var_id) || Self::operand_uses_var(right, var_id)
@@ -97,8 +99,8 @@ impl TransferFunction<SetLattice<Rvalue>> for AvailableExpressionsTransfer {
             Statement::TableAssign {
                 table,
                 field,
-                pk_value: _, // Operand for PK
-                value: _,    // Operand for value
+                pk_values: _, // Operands for composite PK
+                value: _,     // Operand for value
                 ..
             } => {
                 // KILL: Any expression that reads from the specific table and field.

@@ -1,0 +1,27 @@
+// Test TransAct file with simple data for table formatting demo
+nodes {
+    TestNode
+}
+
+table Employee on TestNode {
+    primary int id;
+    string name;
+    int salary;
+    string dept;
+}
+
+void test_populate_data() {
+    hop on TestNode {
+        Employee[id: 1001].name = "John Doe";
+        Employee[id: 1001].salary = 75000;
+        Employee[id: 1001].dept = "Engineering";
+        
+        Employee[id: 1002].name = "Jane Smith";
+        Employee[id: 1002].salary = 82000;
+        Employee[id: 1002].dept = "Marketing";
+        
+        Employee[id: 1003].name = "Bob Johnson";
+        Employee[id: 1003].salary = 68000;
+        Employee[id: 1003].dept = "Sales";
+    }
+}

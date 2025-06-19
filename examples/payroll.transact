@@ -1,0 +1,223 @@
+// Payroll Management System
+// Demonstrates concurrent payroll processing with potential conflicts
+
+nodes {
+    PayrollServer, HRSystem, FinanceSystem
+}
+
+// Employee master data
+table Employee on PayrollServer {
+    primary int id;
+    string name;
+    int department_id;
+    int salary;
+    int overtime_hours;
+}
+
+// Employee copy for HR operations
+table EmployeeHR on HRSystem {
+    primary int id;
+    string name;
+    int department_id;
+    int salary;
+    int overtime_hours;
+}
+
+// Department budget tracking
+table Department on FinanceSystem {
+    primary int dept_id;
+    string name;
+    int budget;
+    int spent_this_month;
+}
+
+// Payroll transactions log
+table PayrollLog on PayrollServer {
+    primary int employee_id;
+    primary int pay_period;
+    int gross_pay;
+    int deductions;
+    int net_pay;
+    string status;
+}
+
+// Company-wide payroll summary
+table PayrollSummary on FinanceSystem {
+    primary int pay_period;
+    int total_employees;
+    int total_gross;
+    int total_deductions;
+    int total_net;
+}
+
+// Process regular salary for an employee
+void processRegularPay(int emp_id, int pay_period, int tax_rate) {
+    hop on PayrollServer {
+        // Get employee info
+        int base_salary = Employee[id: emp_id].salary;
+        int overtime_hrs = Employee[id: emp_id].overtime_hours;
+        int dept_id = Employee[id: emp_id].department_id;
+        
+        // Calculate gross pay (salary + overtime at 1.5x rate)
+        int hourly_rate = base_salary / 160; // Assume 160 hours per month
+        int overtime_pay = (overtime_hrs * hourly_rate * 3) / 2; // 1.5x overtime
+        int gross_pay = base_salary + overtime_pay;
+        
+        // Calculate deductions (tax + benefits)
+        int tax_deduction = (gross_pay * tax_rate) / 100;
+        int benefits_deduction = 200; // Fixed benefits cost
+        int total_deductions = tax_deduction + benefits_deduction;
+        
+        int net_pay = gross_pay - total_deductions;
+        
+        // Record payroll transaction
+        PayrollLog[employee_id: emp_id, pay_period: pay_period].gross_pay = gross_pay;
+        PayrollLog[employee_id: emp_id, pay_period: pay_period].deductions = total_deductions;
+        PayrollLog[employee_id: emp_id, pay_period: pay_period].net_pay = net_pay;
+        PayrollLog[employee_id: emp_id, pay_period: pay_period].status = "processed";
+        
+        // Reset overtime hours after processing
+        Employee[id: emp_id].overtime_hours = 0;
+    }
+    
+    hop on FinanceSystem {
+        // Update department spending (need to pass dept_id as parameter)
+        int current_spent = Department[dept_id: dept_id].spent_this_month;
+        Department[dept_id: dept_id].spent_this_month = current_spent + net_pay;
+        
+        // Update company-wide payroll summary
+        int current_employees = PayrollSummary[pay_period: pay_period].total_employees;
+        int current_gross = PayrollSummary[pay_period: pay_period].total_gross;
+        int current_deductions = PayrollSummary[pay_period: pay_period].total_deductions;
+        int current_net = PayrollSummary[pay_period: pay_period].total_net;
+        
+        PayrollSummary[pay_period: pay_period].total_employees = current_employees + 1;
+        PayrollSummary[pay_period: pay_period].total_gross = current_gross + gross_pay;
+        PayrollSummary[pay_period: pay_period].total_deductions = current_deductions + total_deductions;
+        PayrollSummary[pay_period: pay_period].total_net = current_net + net_pay;
+    }
+}
+
+// Process bonus payment (could conflict with regular payroll)
+void processBonusPayment(int emp_id, int bonus_amount, int pay_period, int emp_dept) {
+    hop on PayrollServer {
+        // Get current payroll record if exists
+        int existing_gross = PayrollLog[employee_id: emp_id, pay_period: pay_period].gross_pay;
+        int existing_deductions = PayrollLog[employee_id: emp_id, pay_period: pay_period].deductions;
+        
+        // Add bonus to gross pay
+        int new_gross = existing_gross + bonus_amount;
+        
+        // Calculate additional tax on bonus (higher rate)
+        int bonus_tax = (bonus_amount * 30) / 100; // 30% tax on bonus
+        int new_deductions = existing_deductions + bonus_tax;
+        
+        int new_net = new_gross - new_deductions;
+        
+        // Update payroll record
+        PayrollLog[employee_id: emp_id, pay_period: pay_period].gross_pay = new_gross;
+        PayrollLog[employee_id: emp_id, pay_period: pay_period].deductions = new_deductions;
+        PayrollLog[employee_id: emp_id, pay_period: pay_period].net_pay = new_net;
+        PayrollLog[employee_id: emp_id, pay_period: pay_period].status = "bonus_added";
+    }
+    
+    hop on FinanceSystem {
+        // Update department spending with bonus
+        int current_spent = Department[dept_id: emp_dept].spent_this_month;
+        Department[dept_id: emp_dept].spent_this_month = current_spent + bonus_amount;
+        
+        // Update payroll summary with bonus
+        int current_gross = PayrollSummary[pay_period: pay_period].total_gross;
+        int current_deductions = PayrollSummary[pay_period: pay_period].total_deductions;
+        int current_net = PayrollSummary[pay_period: pay_period].total_net;
+        
+        PayrollSummary[pay_period: pay_period].total_gross = current_gross + bonus_amount;
+        PayrollSummary[pay_period: pay_period].total_deductions = current_deductions + bonus_tax;
+        PayrollSummary[pay_period: pay_period].total_net = current_net + (bonus_amount - bonus_tax);
+    }
+}
+
+// Adjust salary and reprocess payroll (creates interesting conflicts)
+void adjustSalaryAndReprocess(int emp_id, int new_salary, int pay_period, int dept_id) {
+    hop on HRSystem {
+        // Update employee salary in HR system
+        EmployeeHR[id: emp_id].salary = new_salary;
+    }
+    
+    hop on PayrollServer {
+        // Update employee salary in payroll system (sync from HR)
+        Employee[id: emp_id].salary = new_salary;
+        
+        // Get current overtime hours for recalculation
+        int overtime_hrs = Employee[id: emp_id].overtime_hours;
+        
+        // Recalculate based on new salary
+        int hourly_rate = new_salary / 160;
+        int overtime_pay = (overtime_hrs * hourly_rate * 3) / 2;
+        int new_gross = new_salary + overtime_pay;
+        
+        // Keep existing deduction rate
+        int existing_deductions = PayrollLog[employee_id: emp_id, pay_period: pay_period].deductions;
+        int deduction_rate = (existing_deductions * 100) / PayrollLog[employee_id: emp_id, pay_period: pay_period].gross_pay;
+        int new_deductions = (new_gross * deduction_rate) / 100;
+        
+        int new_net = new_gross - new_deductions;
+        
+        // Update payroll record
+        PayrollLog[employee_id: emp_id, pay_period: pay_period].gross_pay = new_gross;
+        PayrollLog[employee_id: emp_id, pay_period: pay_period].deductions = new_deductions;
+        PayrollLog[employee_id: emp_id, pay_period: pay_period].net_pay = new_net;
+        PayrollLog[employee_id: emp_id, pay_period: pay_period].status = "salary_adjusted";
+    }
+    
+    hop on FinanceSystem {
+        // Update department budget impact (pass dept_id to avoid cross-node access)
+        int old_gross = new_gross - (new_salary + overtime_pay - new_salary); // Simplified calculation
+        int adjustment = new_gross - old_gross;
+        
+        int current_spent = Department[dept_id: dept_id].spent_this_month;
+        Department[dept_id: dept_id].spent_this_month = current_spent + adjustment;
+        
+        // Update payroll summary
+        int summary_gross = PayrollSummary[pay_period: pay_period].total_gross;
+        int summary_deductions = PayrollSummary[pay_period: pay_period].total_deductions;
+        int summary_net = PayrollSummary[pay_period: pay_period].total_net;
+        
+        PayrollSummary[pay_period: pay_period].total_gross = summary_gross + adjustment;
+        PayrollSummary[pay_period: pay_period].total_deductions = summary_deductions;
+        PayrollSummary[pay_period: pay_period].total_net = summary_net + adjustment;
+    }
+}
+
+// Add overtime hours (could conflict with payroll processing)
+void addOvertimeHours(int emp_id, int additional_hours) {
+    hop on HRSystem {
+        // Read current overtime hours from HR system
+        int current_overtime = EmployeeHR[id: emp_id].overtime_hours;
+        
+        // Add new overtime hours
+        EmployeeHR[id: emp_id].overtime_hours = current_overtime + additional_hours;
+    }
+    
+    hop on PayrollServer {
+        // Sync overtime hours to payroll system
+        int hr_overtime = additional_hours; // Passed as parameter to avoid cross-node access
+        int payroll_overtime = Employee[id: emp_id].overtime_hours;
+        Employee[id: emp_id].overtime_hours = payroll_overtime + hr_overtime;
+    }
+}
+
+// Department budget check and adjustment
+void checkDepartmentBudget(int dept_id, int pay_period) {
+    hop on FinanceSystem {
+        int budget = Department[dept_id: dept_id].budget;
+        int spent = Department[dept_id: dept_id].spent_this_month;
+        
+        // If over budget, reduce budget for next period
+        if (spent > budget) {
+            int overage = spent - budget;
+            int next_period_budget = budget - overage;
+            Department[dept_id: dept_id].budget = next_period_budget;
+        }
+    }
+}

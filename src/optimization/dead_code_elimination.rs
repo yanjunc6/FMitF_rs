@@ -60,14 +60,16 @@ impl OptimizationPass for DeadCodeEliminationPass {
                         }
                     }
                     Statement::TableAssign {
-                        pk_value, value, ..
+                        pk_values, value, ..
                     } => {
                         // Table assignments have side effects, always keep them
                         statements_to_keep.push(stmt.clone());
 
                         // Add used variables to live set
-                        if let Operand::Var(var_id) = pk_value {
-                            current_live.insert(*var_id);
+                        for pk_value in pk_values {
+                            if let Operand::Var(var_id) = pk_value {
+                                current_live.insert(*var_id);
+                            }
                         }
                         if let Operand::Var(var_id) = value {
                             current_live.insert(*var_id);
@@ -116,9 +118,11 @@ impl DeadCodeEliminationPass {
                     live_vars.insert(*var_id);
                 }
             }
-            Rvalue::TableAccess { pk_value, .. } => {
-                if let Operand::Var(var_id) = pk_value {
-                    live_vars.insert(*var_id);
+            Rvalue::TableAccess { pk_values, .. } => {
+                for pk_value in pk_values {
+                    if let Operand::Var(var_id) = pk_value {
+                        live_vars.insert(*var_id);
+                    }
                 }
             }
         }
