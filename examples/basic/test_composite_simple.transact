@@ -1,0 +1,22 @@
+nodes {
+    NodeA
+}
+
+table UserScore on NodeA {
+    primary int userID;
+    primary int gameID;
+    int score;
+}
+
+void setScore(int user, int game, int points) {
+    hop on NodeA {
+        UserScore[userID: user, gameID: game].score = points;
+    }
+}
+
+void addPoints(int user, int game, int bonus) {
+    hop on NodeA {
+        int current = UserScore[userID: user, gameID: game].score;
+        UserScore[userID: user, gameID: game].score = current + bonus;
+    }
+}

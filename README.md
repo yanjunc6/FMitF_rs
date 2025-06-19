@@ -209,7 +209,18 @@ cargo run -- examples/warehouse.transact --mode optimize
 cargo run -- examples/simple.transact --mode optimize --no-optimize
 ```
 
-#### 4. SCGraph Mode
+#### 4. Runtime Mode
+Start an interactive REPL for testing and experimentation:
+
+```bash
+# Start interactive runtime with optimized CFG
+cargo run -- examples/bank.transact --mode runtime
+
+# Test function execution and table inspection
+# See doc/runtime.md for detailed usage guide
+```
+
+#### 5. SCGraph Mode
 Build and analyze Serializability Conflict Graphs:
 
 ```bash
@@ -223,7 +234,7 @@ cargo run -- examples/number_conflict.transact --mode scgraph --dot --output con
 cargo run -- examples/bank.transact --mode scgraph --verbose
 ```
 
-#### 5. Verify Mode (Default)
+#### 6. Verify Mode (Default)
 Run formal verification using Boogie:
 
 ```bash
@@ -314,6 +325,11 @@ Conflict analysis showing:
 - Generated Boogie files (`.bpl` format)
 - Detailed conflict resolution information
 
+## Documentation
+
+- **[Runtime Mode Guide](doc/runtime.md)**: Interactive REPL for testing TransAct programs
+- **[Verification Details](doc/verification.md)**: In-depth verification methodology and Boogie translation
+
 ## Development
 
 ### Project Structure
@@ -327,5 +343,6 @@ src/
 ├── optimization/  # CFG optimization passes
 ├── pretty/        # Output formatting and printing
 ├── sc_graph/      # Serializability Conflict Graph
-└── verification/  # Boogie code generation and verification
+├── verification/  # Boogie code generation and verification
+└── runtime/       # Runtime environment
 ```
