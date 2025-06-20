@@ -11,7 +11,7 @@ use crate::ast::*;
 #[grammar = "ast/grammar.pest"]
 pub struct TransActParser;
 
-/// Builds arena-based AST from parsed Pest pairs
+/// Builds arena-based AST from parsed Pest pairs.
 pub struct AstBuilder {
     program: Program,
 }
@@ -42,13 +42,14 @@ impl Program {
 }
 
 impl AstBuilder {
+    /// Creates a new `AstBuilder` instance.
     pub fn new() -> Self {
         Self {
             program: Program::new(),
         }
     }
 
-    /// Build the program from a Pest program pair
+    /// Builds the program from a Pest program pair.
     pub fn build_program(&mut self, pair: Pair<Rule>) -> Results<Program> {
         let mut errors = Vec::new();
 
@@ -86,6 +87,7 @@ impl AstBuilder {
         }
     }
 
+    /// Builds nodes block from a Pest pair.
     fn build_nodes_block(&mut self, pair: Pair<Rule>) -> Results<()> {
         for item in pair.into_inner() {
             if item.as_rule() == Rule::node_list {
@@ -95,6 +97,7 @@ impl AstBuilder {
         Ok(())
     }
 
+    /// Builds a list of nodes from a Pest pair.
     fn build_node_list(&mut self, pair: Pair<Rule>) -> Results<()> {
         for node_pair in pair.into_inner() {
             if node_pair.as_rule() == Rule::identifier {
@@ -114,6 +117,7 @@ impl AstBuilder {
         Ok(())
     }
 
+    /// Builds a table declaration from a Pest pair.
     fn build_table_declaration(&mut self, pair: Pair<Rule>) -> Results<()> {
         let span = Span::from_pest(pair.as_span());
         let mut inner = pair.into_inner();
@@ -134,7 +138,7 @@ impl AstBuilder {
             })?;
 
         let mut field_ids = Vec::new();
-        let mut primary_key_ids = Vec::new();  // Changed to collect multiple primary keys
+        let mut primary_key_ids = Vec::new();
 
         for field_pair in inner {
             if field_pair.as_rule() == Rule::field_declaration {
@@ -142,12 +146,11 @@ impl AstBuilder {
                 field_ids.push(field_id);
 
                 if is_primary {
-                    primary_key_ids.push(field_id);  // Add to list instead of checking for duplicates
+                    primary_key_ids.push(field_id);
                 }
             }
         }
 
-        // Require at least one primary key
         if primary_key_ids.is_empty() {
             return Err(vec![SpannedError {
                 error: AstError::ParseError(format!(
@@ -162,7 +165,7 @@ impl AstBuilder {
             name: table_name.clone(),
             node: node_id,
             fields: field_ids,
-            primary_keys: primary_key_ids,  // Use the list of primary keys
+            primary_keys: primary_key_ids,
             span,
         };
 
@@ -173,6 +176,7 @@ impl AstBuilder {
         Ok(())
     }
 
+    /// Builds a field declaration from a Pest pair.
     fn build_field_declaration(
         &mut self,
         pair: Pair<Rule>,
@@ -180,7 +184,6 @@ impl AstBuilder {
         let span = Span::from_pest(pair.as_span());
         let mut inner = pair.into_inner();
 
-        // Check if first token is primary keyword
         let first = inner.next().unwrap();
         let (is_primary, field_type) = if first.as_rule() == Rule::primary_keyword {
             (true, self.parse_type_name(inner.next().unwrap())?)
@@ -201,6 +204,7 @@ impl AstBuilder {
         Ok((field_id, is_primary))
     }
 
+    /// Builds function declaration from a Pest pair.
     fn build_function_declaration(&mut self, pair: Pair<Rule>) -> Results<()> {
         let span = Span::from_pest(pair.as_span());
         let mut inner = pair.into_inner();
@@ -243,6 +247,7 @@ impl AstBuilder {
         Ok(())
     }
 
+    /// Builds a list of parameters from a Pest pair.
     fn build_parameter_list(
         &mut self,
         pair: Pair<Rule>,
@@ -257,6 +262,7 @@ impl AstBuilder {
         Ok(parameter_ids)
     }
 
+    /// Builds a parameter declaration from a Pest pair.
     fn build_parameter_decl(&mut self, pair: Pair<Rule>) -> Result<ParameterId, Vec<SpannedError>> {
         let span = Span::from_pest(pair.as_span());
         let mut inner = pair.into_inner();
@@ -273,6 +279,7 @@ impl AstBuilder {
         Ok(self.program.parameters.alloc(parameter))
     }
 
+    /// Builds hop block from a Pest pair.
     fn build_hop_block(&mut self, pair: Pair<Rule>) -> Result<HopId, Vec<SpannedError>> {
         let span = Span::from_pest(pair.as_span());
         let mut inner = pair.into_inner();
@@ -296,6 +303,7 @@ impl AstBuilder {
         Ok(self.program.hops.alloc(hop))
     }
 
+    /// Builds a block of statements from a Pest pair.
     fn build_block(&mut self, pair: Pair<Rule>) -> Result<Vec<StatementId>, Vec<SpannedError>> {
         let mut statement_ids = Vec::new();
         for stmt_pair in pair.into_inner() {
@@ -307,6 +315,7 @@ impl AstBuilder {
         Ok(statement_ids)
     }
 
+    /// Builds a statement from a Pest pair.
     fn build_statement(&mut self, pair: Pair<Rule>) -> Result<StatementId, Vec<SpannedError>> {
         let span = Span::from_pest(pair.as_span());
         let inner = pair.into_inner().next().unwrap();
@@ -343,6 +352,7 @@ impl AstBuilder {
         Ok(self.program.statements.alloc(statement))
     }
 
+    /// Builds a variable declaration statement from a Pest pair.
     fn build_var_decl_statement(
         &mut self,
         pair: Pair<Rule>,
@@ -359,6 +369,7 @@ impl AstBuilder {
         })
     }
 
+    /// Builds a variable assignment statement from a Pest pair.
     fn build_var_assignment_statement(
         &mut self,
         pair: Pair<Rule>,
@@ -374,18 +385,19 @@ impl AstBuilder {
         })
     }
 
+    /// Builds an assignment statement from a Pest pair.
     fn build_assignment_statement(
         &mut self,
         pair: Pair<Rule>,
     ) -> Result<AssignmentStatement, Vec<SpannedError>> {
         let mut inner = pair.into_inner();
         let table_name = inner.next().unwrap().as_str().to_string();
-        
+
         // Parse the primary_key_list
         let pk_list_pair = inner.next().unwrap();
         let (pk_fields, pk_exprs) = self.build_primary_key_list(pk_list_pair)?;
-        let pk_count = pk_fields.len();  // Calculate length before moving
-        
+        let pk_count = pk_fields.len(); // Calculate length before moving
+
         let field_name = inner.next().unwrap().as_str().to_string();
         let rhs = self.build_expression(inner.next().unwrap())?;
 
@@ -396,11 +408,12 @@ impl AstBuilder {
             field_name,
             rhs,
             resolved_table: None,
-            resolved_pk_fields: vec![None; pk_count],  // Use the saved length
+            resolved_pk_fields: vec![None; pk_count], // Use the saved length
             resolved_field: None,
         })
     }
 
+    /// Builds a list of primary keys from a Pest pair.
     fn build_primary_key_list(
         &mut self,
         pair: Pair<Rule>,
@@ -413,7 +426,7 @@ impl AstBuilder {
                 let mut inner = pk_pair.into_inner();
                 let field_name = inner.next().unwrap().as_str().to_string();
                 let expr = self.build_expression(inner.next().unwrap())?;
-                
+
                 pk_fields.push(field_name);
                 pk_exprs.push(expr);
             }
@@ -422,6 +435,7 @@ impl AstBuilder {
         Ok((pk_fields, pk_exprs))
     }
 
+    /// Builds an if statement from a Pest pair.
     fn build_if_statement(&mut self, pair: Pair<Rule>) -> Result<IfStatement, Vec<SpannedError>> {
         let mut inner = pair.into_inner();
         let condition = self.build_expression(inner.next().unwrap())?;
@@ -439,6 +453,7 @@ impl AstBuilder {
         })
     }
 
+    /// Builds a while statement from a Pest pair.
     fn build_while_statement(
         &mut self,
         pair: Pair<Rule>,
@@ -450,6 +465,7 @@ impl AstBuilder {
         Ok(WhileStatement { condition, body })
     }
 
+    /// Builds a return statement from a Pest pair.
     fn build_return_statement(
         &mut self,
         pair: Pair<Rule>,
@@ -464,6 +480,7 @@ impl AstBuilder {
         Ok(ReturnStatement { value })
     }
 
+    /// Builds an expression from a Pest pair.
     fn build_expression(&mut self, pair: Pair<Rule>) -> Result<ExpressionId, Vec<SpannedError>> {
         let span = Span::from_pest(pair.as_span());
 
@@ -708,12 +725,12 @@ impl AstBuilder {
         let mut inner = pair.into_inner();
 
         let table_name = inner.next().unwrap().as_str().to_string();
-        
+
         // Parse the primary_key_list
         let pk_list_pair = inner.next().unwrap();
         let (pk_fields, pk_exprs) = self.build_primary_key_list(pk_list_pair)?;
-        let pk_count = pk_fields.len();  // Calculate length before moving
-        
+        let pk_count = pk_fields.len(); // Calculate length before moving
+
         let field_name = inner.next().unwrap().as_str().to_string();
 
         let expr = Expression {
@@ -723,7 +740,7 @@ impl AstBuilder {
                 pk_exprs,
                 field_name,
                 resolved_table: None,
-                resolved_pk_fields: vec![None; pk_count],  // Use the saved length
+                resolved_pk_fields: vec![None; pk_count], // Use the saved length
                 resolved_field: None,
             },
             span,
@@ -760,7 +777,15 @@ impl AstBuilder {
         Ok(left)
     }
 
-    // Helper functions
+    /// Parses a return type from a Pest pair.
+    fn parse_ret_type(&self, pair: Pair<Rule>) -> Result<ReturnType, Vec<SpannedError>> {
+        match pair.as_str() {
+            "void" => Ok(ReturnType::Void),
+            _ => self.parse_type_name(pair).map(ReturnType::Type),
+        }
+    }
+
+    /// Parses a type name from a Pest pair.
     fn parse_type_name(&self, pair: Pair<Rule>) -> Result<TypeName, Vec<SpannedError>> {
         match pair.as_str() {
             "int" => Ok(TypeName::Int),
@@ -773,13 +798,6 @@ impl AstBuilder {
             }]),
         }
     }
-
-    fn parse_ret_type(&self, pair: Pair<Rule>) -> Result<ReturnType, Vec<SpannedError>> {
-        match pair.as_str() {
-            "void" => Ok(ReturnType::Void),
-            _ => Ok(ReturnType::Type(self.parse_type_name(pair)?)),
-        }
-    }
 }
 
 pub fn build_program_from_pair(pair: Pair<Rule>) -> Results<Program> {
@@ -787,6 +805,7 @@ pub fn build_program_from_pair(pair: Pair<Rule>) -> Results<Program> {
     builder.build_program(pair)
 }
 
+/// Parses and builds a program from source code.
 pub fn parse_and_build(source: &str) -> Results<Program> {
     // Parse using Pest
     let pairs = TransActParser::parse(Rule::program, source).map_err(|e| {

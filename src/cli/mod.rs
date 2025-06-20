@@ -2,17 +2,17 @@
 use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
 
+mod logger;
 mod output;
 mod pipeline;
 mod stages;
 mod traits;
-mod logger;
 
+pub use logger::*;
 pub use output::*;
 pub use pipeline::*;
 pub use stages::*;
 pub use traits::*;
-pub use logger::*;
 
 #[derive(Parser, Debug)]
 #[command(name = "fmitf")]
@@ -115,14 +115,23 @@ impl Cli {
         // Runtime mode doesn't need output files
         if self.mode == Mode::Runtime {
             if self.output.is_some() || self.output_dir.is_some() {
-                return Err("Runtime mode doesn't support output files - it's an interactive REPL".to_string());
+                return Err(
+                    "Runtime mode doesn't support output files - it's an interactive REPL"
+                        .to_string(),
+                );
             }
         }
 
         // No-optimize flag is only meaningful for modes that include optimization
-        if self.no_optimize && !matches!(self.mode, Mode::Optimize | Mode::Runtime | Mode::Scgraph | Mode::Verify) {
+        if self.no_optimize
+            && !matches!(
+                self.mode,
+                Mode::Optimize | Mode::Runtime | Mode::Scgraph | Mode::Verify
+            )
+        {
             return Err(
-                "--no-optimize is only valid for optimize, runtime, scgraph, and verify modes".to_string(),
+                "--no-optimize is only valid for optimize, runtime, scgraph, and verify modes"
+                    .to_string(),
             );
         }
 

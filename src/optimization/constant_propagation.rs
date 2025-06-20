@@ -87,9 +87,11 @@ impl OptimizationPass for ConstantPropagationPass {
                         );
 
                         // Check if any primary key values changed
-                        let pk_values_changed = new_pk_values.iter().zip(pk_values.iter())
+                        let pk_values_changed = new_pk_values
+                            .iter()
+                            .zip(pk_values.iter())
                             .any(|(new, old)| new != old);
-                        
+
                         if pk_values_changed || new_value != *value {
                             changed = true;
                         }
@@ -147,7 +149,9 @@ impl ConstantPropagationPass {
                 pk_fields: pk_fields.clone(),
                 pk_values: pk_values
                     .iter()
-                    .map(|pk_value| self.propagate_in_operand(pk_value, reaching_defs, stmt_to_constant))
+                    .map(|pk_value| {
+                        self.propagate_in_operand(pk_value, reaching_defs, stmt_to_constant)
+                    })
                     .collect(),
                 field: *field,
             },

@@ -1,8 +1,10 @@
 use crate::cfg::{
-    BinaryOp, CfgProgram, Constant, FunctionId as CfgFunctionId, HopId as CfgHopId, Operand, Rvalue, Statement, Terminator, TypeName, UnaryOp, VarId};
+    BinaryOp, CfgProgram, Constant, FunctionId as CfgFunctionId, HopId as CfgHopId, Operand,
+    Rvalue, Statement, Terminator, TypeName, UnaryOp, VarId,
+};
 use crate::verification::verification_logic::VerificationPlan;
-use std::fmt::Write;
 use std::collections::{BTreeMap, HashSet};
+use std::fmt::Write;
 
 /// Pure Boogie code generation - no verification logic
 pub struct BoogieCodeGenerator;
@@ -61,7 +63,9 @@ impl BoogieCodeGenerator {
             let table_name = &table.name;
 
             // Get primary key type - use first primary key for compatibility
-            let first_pk_field_id = table.primary_keys.get(0)
+            let first_pk_field_id = table
+                .primary_keys
+                .get(0)
                 .expect("Table should have at least one primary key");
             let pk_field = &cfg.fields[*first_pk_field_id];
             let pk_type = self.type_to_boogie(&pk_field.ty);
@@ -113,10 +117,14 @@ impl BoogieCodeGenerator {
 
         // --- MODIFIED PARAMETER LOGIC ---
         let mut input_params: BTreeMap<VarId, (String, String)> = BTreeMap::new();
-        for param_var_id in &func.parameters { // Iterate over VarIds in parameters
+        for param_var_id in &func.parameters {
+            // Iterate over VarIds in parameters
             let var_info = &func.variables[*param_var_id];
             // The type of the parameter is var_info.ty
-            input_params.insert(*param_var_id, (var_info.name.clone(), self.type_to_boogie(&var_info.ty)));
+            input_params.insert(
+                *param_var_id,
+                (var_info.name.clone(), self.type_to_boogie(&var_info.ty)),
+            );
         }
 
         // --- LOCAL VARIABLE LOGIC (Revised) ---
@@ -135,15 +143,24 @@ impl BoogieCodeGenerator {
 
         // Determine local variables to declare
         for &var_id in &defined_in_hop {
-            if !input_params.contains_key(&var_id) { // If it's defined in hop AND not a function parameter
+            if !input_params.contains_key(&var_id) {
+                // If it's defined in hop AND not a function parameter
                 let var_info = &func.variables[var_id];
-                local_vars_to_declare.entry(var_id).or_insert_with(|| (var_info.name.clone(), self.type_to_boogie(&var_info.ty)));
+                local_vars_to_declare
+                    .entry(var_id)
+                    .or_insert_with(|| (var_info.name.clone(), self.type_to_boogie(&var_info.ty)));
             }
         }
         // --- END OF MODIFIED LOGIC ---
-        
-        let params_str_vec: Vec<String> = input_params.values().map(|(name, ty)| format!("{}: {}", name, ty)).collect();
-        let local_vars_decl_str_vec: Vec<String> = local_vars_to_declare.values().map(|(name, ty)| format!("{}: {}", name, ty)).collect();
+
+        let params_str_vec: Vec<String> = input_params
+            .values()
+            .map(|(name, ty)| format!("{}: {}", name, ty))
+            .collect();
+        let local_vars_decl_str_vec: Vec<String> = local_vars_to_declare
+            .values()
+            .map(|(name, ty)| format!("{}: {}", name, ty))
+            .collect();
 
         // Collect return values
         let mut returns_str_vec = Vec::new();
@@ -151,8 +168,12 @@ impl BoogieCodeGenerator {
             let block = &func.blocks[block_id];
             if let Terminator::Return(Some(Operand::Var(var_id))) = &block.terminator {
                 let var_info = &func.variables[*var_id]; // Corrected: Access variable info using VarId as index
-                returns_str_vec.push(format!("{}: {}", var_info.name, self.type_to_boogie(&var_info.ty)));
-                break; 
+                returns_str_vec.push(format!(
+                    "{}: {}",
+                    var_info.name,
+                    self.type_to_boogie(&var_info.ty)
+                ));
+                break;
             }
         }
 
@@ -169,7 +190,6 @@ impl BoogieCodeGenerator {
             }
         }
         let modifies_str_vec: Vec<String> = modifies_set.into_iter().collect();
-
 
         // Write procedure signature
         write!(w, "procedure {{:inline 1}} {}(", proc_name).unwrap();
@@ -211,14 +231,15 @@ impl BoogieCodeGenerator {
 
     fn write_main_procedure(&self, w: &mut String, plan: &VerificationPlan, cfg: &CfgProgram) {
         writeln!(w, "procedure main()").unwrap();
-        
+
         let mut modifies_vars = Vec::new();
         // Iterate over relevant tables specified in the plan for modifies clauses
         for &table_id in &plan.relevant_tables {
             let table_info = &cfg.tables[table_id];
             // Each field of the table is a separate global variable in Boogie
             for &field_id in &table_info.fields {
-                if !table_info.primary_keys.contains(&field_id) { // Primary key fields themselves are not maps, but their types are used in map keys
+                if !table_info.primary_keys.contains(&field_id) {
+                    // Primary key fields themselves are not maps, but their types are used in map keys
                     let field_info = &cfg.fields[field_id];
                     modifies_vars.push(format!("{}_{}", table_info.name, field_info.name));
                 }
@@ -237,7 +258,9 @@ impl BoogieCodeGenerator {
         // 1. State-saving variables for global table fields
         for &table_id in &plan.relevant_tables {
             let table_info = &cfg.tables[table_id];
-            let first_pk_field_id = table_info.primary_keys.get(0)
+            let first_pk_field_id = table_info
+                .primary_keys
+                .get(0)
                 .expect("Table should have at least one primary key");
             let pk_field_info = &cfg.fields[*first_pk_field_id];
             let pk_boogie_type = self.type_to_boogie(&pk_field_info.ty);
@@ -371,7 +394,8 @@ impl BoogieCodeGenerator {
 
                 // --- MODIFIED ARGUMENT LOGIC ---
                 let mut call_arg_names: Vec<String> = Vec::new();
-                for param_var_id in &hop_func_cfg.parameters { // Iterate over VarIds in parameters
+                for param_var_id in &hop_func_cfg.parameters {
+                    // Iterate over VarIds in parameters
                     let var_info = &hop_func_cfg.variables[*param_var_id];
                     call_arg_names.push(var_info.name.clone());
                 }
@@ -409,10 +433,11 @@ impl BoogieCodeGenerator {
         let func_cfg = &cfg.functions[func_id];
         for &hop_id in hops {
             let proc_name = format!("{}_Hop{}", func_cfg.name, hop_id.index());
-            
+
             // --- MODIFIED ARGUMENT LOGIC ---
             let mut call_arg_names: Vec<String> = Vec::new();
-            for param_var_id in &func_cfg.parameters { // Iterate over VarIds in parameters
+            for param_var_id in &func_cfg.parameters {
+                // Iterate over VarIds in parameters
                 let var_info = &func_cfg.variables[*param_var_id];
                 call_arg_names.push(var_info.name.clone());
             }
@@ -449,9 +474,12 @@ impl BoogieCodeGenerator {
         plan: &VerificationPlan,
         cfg: &CfgProgram,
     ) {
-        writeln!(w, "  // Assert serializability").unwrap();        for &table_id in &plan.relevant_tables {
+        writeln!(w, "  // Assert serializability").unwrap();
+        for &table_id in &plan.relevant_tables {
             let table = &cfg.tables[table_id];
-            let first_pk_field_id = table.primary_keys.get(0)
+            let first_pk_field_id = table
+                .primary_keys
+                .get(0)
                 .expect("Table should have at least one primary key");
             let pk_type = self.type_to_boogie(&cfg.fields[*first_pk_field_id].ty);
 
@@ -493,7 +521,7 @@ impl BoogieCodeGenerator {
             } => {
                 let table_name = &cfg.tables[*table].name;
                 let field_name = &cfg.fields[*field].name;
-                
+
                 // For Boogie compatibility, we'll use the first primary key as the map key
                 // In the future, this could be extended to support composite keys properly
                 let pk_str = if !pk_values.is_empty() {
@@ -501,7 +529,7 @@ impl BoogieCodeGenerator {
                 } else {
                     return; // Should not happen due to validation
                 };
-                
+
                 let value_str = self.operand_to_boogie(value, func, cfg);
                 writeln!(
                     w,
@@ -529,14 +557,14 @@ impl BoogieCodeGenerator {
             } => {
                 let table_name = &cfg.tables[*table].name;
                 let field_name = &cfg.fields[*field].name;
-                
+
                 // For Boogie compatibility, we'll use the first primary key as the map key
                 let pk_str = if !pk_values.is_empty() {
                     self.operand_to_boogie(&pk_values[0], func, cfg)
                 } else {
                     "0".to_string() // Should not happen due to validation
                 };
-                
+
                 format!("{}_{}[{}]", table_name, field_name, pk_str)
             }
             Rvalue::UnaryOp { op, operand } => {

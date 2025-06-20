@@ -43,15 +43,21 @@ fn format_rvalue(rvalue: &Rvalue, function: &FunctionCfg, program: &CfgProgram) 
         } => {
             let table_info = &program.tables[*table];
             let field_info = &program.fields[*field];
-            
+
             // Format composite primary keys
-            let pk_parts: Vec<String> = pk_fields.iter().zip(pk_values.iter())
+            let pk_parts: Vec<String> = pk_fields
+                .iter()
+                .zip(pk_values.iter())
                 .map(|(pk_field_id, pk_value)| {
                     let pk_field_info = &program.fields[*pk_field_id];
-                    format!("{}:{}", pk_field_info.name, format_operand(pk_value, function))
+                    format!(
+                        "{}:{}",
+                        pk_field_info.name,
+                        format_operand(pk_value, function)
+                    )
                 })
                 .collect();
-            
+
             format!(
                 "{}[{}].{}",
                 table_info.name,
@@ -98,15 +104,21 @@ fn format_statement(
         } => {
             let table_info = &program.tables[*table];
             let field_info = &program.fields[*field];
-            
+
             // Format composite primary keys
-            let pk_parts: Vec<String> = pk_fields.iter().zip(pk_values.iter())
+            let pk_parts: Vec<String> = pk_fields
+                .iter()
+                .zip(pk_values.iter())
                 .map(|(pk_field_id, pk_value)| {
                     let pk_field_info = &program.fields[*pk_field_id];
-                    format!("{}:{}", pk_field_info.name, format_operand(pk_value, function))
+                    format!(
+                        "{}:{}",
+                        pk_field_info.name,
+                        format_operand(pk_value, function)
+                    )
                 })
                 .collect();
-            
+
             format!(
                 "{}[{}].{} = {}",
                 table_info.name,
@@ -414,7 +426,10 @@ pub fn print_cfg_summary(program: &CfgProgram) -> String {
     let mut s = String::new();
     s.push_str("CFG Summary:\n");
 
-    s.push_str(&format!(" - Total Functions: {}\n", program.functions.len()));
+    s.push_str(&format!(
+        " - Total Functions: {}\n",
+        program.functions.len()
+    ));
     s.push_str(&format!(" - Total Nodes: {}\n", program.nodes.len()));
     s.push_str(&format!(" - Total Tables: {}\n", program.tables.len()));
 

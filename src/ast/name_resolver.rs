@@ -1,3 +1,30 @@
+//! The `name_resolver` module handles name resolution within the AST.
+//! It ensures that all identifiers (variables, tables, nodes, etc.) are properly declared
+//! and resolves their references within the program.
+//!
+//! # Overview
+//!
+//! - **NameResolver**: The main struct responsible for resolving names and managing scopes.
+//! - **resolve_names**: Public interface for performing name resolution on a `Program`.
+//!
+//! # Features
+//!
+//! - Scope management for variables and functions.
+//! - Error reporting for undeclared identifiers and duplicate declarations.
+//! - Resolution of cross-node references and primary key fields.
+//!
+//! # Usage
+//!
+//! Use the `resolve_names` function to perform name resolution:
+//!
+//! ```rust
+//! use crate::ast::name_resolver::resolve_names;
+//! use crate::ast::Program;
+//!
+//! let mut program = Program::new();
+//! resolve_names(&mut program).expect("Name resolution failed");
+//! ```
+
 use crate::ast::*;
 use std::collections::HashMap;
 
@@ -11,6 +38,7 @@ pub struct NameResolver<'p> {
 }
 
 impl<'p> NameResolver<'p> {
+    /// Creates a new `NameResolver` instance.
     pub fn new(program: &'p mut Program) -> Self {
         Self {
             program,
@@ -20,6 +48,10 @@ impl<'p> NameResolver<'p> {
         }
     }
 
+    /// Resolves all names in the program.
+    ///
+    /// This function iterates over all root functions and resolves their names,
+    /// including parameters, hops, and statements.
     pub fn resolve(mut self) -> Results<()> {
         // Resolve all functions
         let function_ids: Vec<_> = self.program.root_functions.iter().copied().collect();
@@ -34,6 +66,10 @@ impl<'p> NameResolver<'p> {
         }
     }
 
+    /// Resolves names within a function.
+    ///
+    /// This includes creating a scope for the function, resolving parameters,
+    /// and resolving hops and statements within the function.
     fn resolve_function(&mut self, func_id: FunctionId) {
         // Create function scope (top-level scope for this function)
         let func_scope = self.program.scopes.alloc(Scope {
@@ -80,6 +116,9 @@ impl<'p> NameResolver<'p> {
         self.pop_scope();
     }
 
+    /// Resolves names within a hop block.
+    ///
+    /// This includes resolving the node name and statements within the hop.
     fn resolve_hop(&mut self, hop_id: HopId) {
         // Resolve the node name to node ID
         let node_name = self.program.hops[hop_id].node_name.clone();
@@ -103,6 +142,9 @@ impl<'p> NameResolver<'p> {
         }
     }
 
+    /// Resolves names within a statement.
+    ///
+    /// This includes resolving variables, assignments, and expressions.
     fn resolve_statement(&mut self, stmt_id: StatementId) {
         let (stmt_kind, stmt_span) = {
             let stmt = &self.program.statements[stmt_id];
@@ -178,7 +220,7 @@ impl<'p> NameResolver<'p> {
                         let table = &self.program.tables[table_id];
                         let mut missing_pk_fields = Vec::new();
                         let mut missing_target_field = None;
-                        
+
                         for (i, pk_field_name) in assign_copy.pk_fields.iter().enumerate() {
                             let pk_field_id = table
                                 .fields
@@ -277,6 +319,7 @@ impl<'p> NameResolver<'p> {
         }
     }
 
+    /// Resolves names within a block of statements.
     fn resolve_block(&mut self, statements: &[StatementId]) {
         // Create a new block scope
         let block_scope = self.program.scopes.alloc(Scope {
@@ -295,6 +338,7 @@ impl<'p> NameResolver<'p> {
         self.pop_scope();
     }
 
+    /// Resolves names within an expression.
     fn resolve_expression(&mut self, expr_id: ExpressionId) {
         let (expr_kind, expr_span) = {
             let expr = &self.program.expressions[expr_id];
@@ -330,7 +374,7 @@ impl<'p> NameResolver<'p> {
                         // Resolve each primary key field
                         let mut resolved_pk_field_ids = vec![None; pk_fields.len()];
                         let mut missing_pk_fields = Vec::new();
-                        
+
                         for (i, pk_field_name) in pk_fields.iter().enumerate() {
                             let pk_field_id = table
                                 .fields
@@ -351,7 +395,9 @@ impl<'p> NameResolver<'p> {
                         let field_id = table
                             .fields
                             .iter()
-                            .find(|&&field_id| self.program.fields[field_id].field_name == field_name)
+                            .find(|&&field_id| {
+                                self.program.fields[field_id].field_name == field_name
+                            })
                             .copied();
 
                         (resolved_pk_field_ids, missing_pk_fields, field_id)
@@ -410,6 +456,7 @@ impl<'p> NameResolver<'p> {
         }
     }
 
+    /// Declares a variable in the current scope.
     fn declare_variable(
         &mut self,
         name: &str,
@@ -435,6 +482,7 @@ impl<'p> NameResolver<'p> {
         self.program.var_types.insert(var_id, ty);
     }
 
+    /// Looks up a variable in the current scope stack.
     fn lookup_variable(&self, name: &str) -> Option<VarId> {
         // Search through scope stack from current to global
         for &scope_id in self.scope_stack.iter().rev() {
@@ -446,16 +494,19 @@ impl<'p> NameResolver<'p> {
         None
     }
 
+    /// Pushes a new scope onto the stack.
     fn push_scope(&mut self, scope_id: ScopeId) {
         self.current_scope = Some(scope_id);
         self.scope_stack.push(scope_id);
     }
 
+    /// Pops the current scope from the stack.
     fn pop_scope(&mut self) {
         self.scope_stack.pop();
         self.current_scope = self.scope_stack.last().copied();
     }
 
+    /// Records an error at a specific span.
     fn error_at(&mut self, span: &Span, error: AstError) {
         self.errors.push(SpannedError {
             error,
@@ -464,7 +515,7 @@ impl<'p> NameResolver<'p> {
     }
 }
 
-/// Public interface for name resolution
+/// Public interface for name resolution.
 pub fn resolve_names(program: &mut Program) -> Results<()> {
     let resolver = NameResolver::new(program);
     resolver.resolve()

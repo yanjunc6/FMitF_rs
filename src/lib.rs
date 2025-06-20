@@ -6,9 +6,9 @@ pub mod cli;
 pub mod dataflow;
 pub mod optimization;
 pub mod pretty;
+pub mod runtime;
 pub mod sc_graph;
 pub mod verification;
-pub mod runtime;
 // Re-export AST functionality
 pub use ast::{parse_and_analyze, Program as AstProgram, Span as AstSpan};
 pub use ast::{AstError, Results as AstResults, SpannedError as AstSpannedError};

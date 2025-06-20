@@ -37,14 +37,15 @@ impl Logger {
         } else {
             LogLevel::Normal
         };
-        
+
         Self { level }
     }
 
     // Stage progress messages (Normal level)
     pub fn stage_start(&self, stage_num: usize, total: usize, name: &str) {
         if self.level.should_show(LogLevel::Normal) {
-            print!("{} {}: ", 
+            print!(
+                "{} {}: ",
                 "Stage".bright_blue().bold(),
                 format!("{}/{}", stage_num, total).bright_blue().bold()
             );
@@ -60,7 +61,8 @@ impl Logger {
 
     pub fn stage_error(&self, error_count: usize) {
         if self.level.should_show(LogLevel::Normal) {
-            println!("{} – {} error{} found.", 
+            println!(
+                "{} – {} error{} found.",
                 "ERROR".red().bold(),
                 error_count,
                 if error_count == 1 { "" } else { "s" }
@@ -70,17 +72,15 @@ impl Logger {
 
     pub fn stage_skipped(&self, reason: &str) {
         if self.level.should_show(LogLevel::Normal) {
-            println!("{} ({})", 
-                "OK".green().bold(),
-                reason.italic()
-            );
+            println!("{} ({})", "OK".green().bold(), reason.italic());
         }
     }
 
     // Process status (Normal level)
     pub fn process_start(&self, description: &str) {
         if self.level.should_show(LogLevel::Normal) {
-            println!("{} {}...", 
+            println!(
+                "{} {}...",
                 "Starting".blue().bold(),
                 description.bright_white()
             );
@@ -90,7 +90,8 @@ impl Logger {
     // File operations (Normal level)
     pub fn file_output(&self, path: &std::path::Path) {
         if self.level.should_show(LogLevel::Normal) {
-            println!("{} {}", 
+            println!(
+                "{} {}",
                 "Writing".blue().bold(),
                 path.display().to_string().bright_blue().underline()
             );
@@ -100,33 +101,25 @@ impl Logger {
     // Success messages (Normal level)
     pub fn success(&self, message: &str) {
         if self.level.should_show(LogLevel::Normal) {
-            println!("{} {}", 
-                "SUCCESS:".green().bold(),
-                message.green()
-            );
+            println!("{} {}", "SUCCESS:".green().bold(), message.green());
         }
     }
 
     // Warning messages (Quiet level - always shown except in true quiet)
     pub fn warn(&self, message: &str) {
         if self.level.should_show(LogLevel::Normal) {
-            println!("{} {}", 
-                "Warning:".yellow().bold(),
-                message.bright_yellow()
-            );
+            println!("{} {}", "Warning:".yellow().bold(), message.bright_yellow());
         }
     }
 
     // Error messages (Quiet level - always shown)
     pub fn error(&self, message: &str) {
-        eprintln!("{} {}", 
-            "ERROR:".red().bold(),
-            message.bright_red()
-        );
+        eprintln!("{} {}", "ERROR:".red().bold(), message.bright_red());
     }
 
     pub fn error_with_count(&self, message: &str, count: usize) {
-        eprintln!("{} {} ({} error{})", 
+        eprintln!(
+            "{} {} ({} error{})",
             "ERROR:".red().bold(),
             message.bright_red(),
             count.to_string().red(),
@@ -165,7 +158,7 @@ impl Logger {
         if self.level.should_show(LogLevel::Normal) {
             let formatted_value = match success {
                 Some(true) => value.green(),
-                Some(false) => value.red(), 
+                Some(false) => value.red(),
                 None => value.normal(),
             };
             println!(" - {}: {}", label, formatted_value);
@@ -182,7 +175,8 @@ impl Logger {
     // Special case: mixed cycles warning (always shown unless truly quiet)
     pub fn cycles_warning(&self, count: usize) {
         if self.level.should_show(LogLevel::Normal) {
-            println!("\n{} {} mixed S/C cycles remain after verification", 
+            println!(
+                "\n{} {} mixed S/C cycles remain after verification",
                 "Warning:".yellow().bold(),
                 count.to_string().bright_yellow()
             );
@@ -198,14 +192,25 @@ impl Logger {
     // Special formatting for verification results
     pub fn verification_result(&self, verified: usize, total: usize, success_rate: f64) {
         if self.level == LogLevel::Quiet {
-            println!("Verification: {}/{} C-edges verified ({:.1}%)", 
-                verified, total, success_rate);
+            println!(
+                "Verification: {}/{} C-edges verified ({:.1}%)",
+                verified, total, success_rate
+            );
         } else if self.level.should_show(LogLevel::Normal) {
             self.result_summary("Verification Results");
             self.result_item("Total C-edges analyzed", &total.to_string(), None);
             self.result_item("Successfully verified", &verified.to_string(), Some(true));
-            self.result_item("Success rate", &format!("{:.1}%", success_rate), 
-                if success_rate > 80.0 { Some(true) } else if success_rate < 50.0 { Some(false) } else { None });
+            self.result_item(
+                "Success rate",
+                &format!("{:.1}%", success_rate),
+                if success_rate > 80.0 {
+                    Some(true)
+                } else if success_rate < 50.0 {
+                    Some(false)
+                } else {
+                    None
+                },
+            );
         }
     }
 

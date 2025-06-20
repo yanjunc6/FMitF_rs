@@ -55,7 +55,7 @@ impl OutputManager {
 /// Error handling utilities
 pub fn print_spanned_error(spanned_error: &crate::AstSpannedError, source_code: &str) {
     use colored::*;
-    
+
     if let Some(span_value) = &spanned_error.span {
         eprintln!(
             "{}: {} at line {}, column {}",
@@ -66,17 +66,12 @@ pub fn print_spanned_error(spanned_error: &crate::AstSpannedError, source_code: 
         );
         if let Some(line_content) = source_code.lines().nth(span_value.line.saturating_sub(1)) {
             eprintln!("   |");
-            eprintln!("{} | {}", 
-                span_value.line.to_string().red(),
-                line_content
-            );
-            eprintln!("   | {}{}", 
-                " ".repeat(span_value.column), 
-                "^".red().bold()
-            );
+            eprintln!("{} | {}", span_value.line.to_string().red(), line_content);
+            eprintln!("   | {}{}", " ".repeat(span_value.column), "^".red().bold());
         }
     } else {
-        eprintln!("{}: {}", 
+        eprintln!(
+            "{}: {}",
             spanned_error.error.error_type().red().bold(),
             spanned_error.error.message()
         );

@@ -312,10 +312,16 @@ impl DirectoryOutput for VerificationStage {
 
         if !cli.quiet {
             if let Some(boogie_dir) = &self.boogie_output_dir {
-                println!("Boogie files are configured to be saved to: {}", boogie_dir.display());
+                println!(
+                    "Boogie files are configured to be saved to: {}",
+                    boogie_dir.display()
+                );
                 // Optionally, note if the general pipeline dir is different, though ideally they align for this stage's main output.
                 if boogie_dir != dir {
-                    println!("   (Note: General pipeline output directory for this stage is {})", dir.display());
+                    println!(
+                        "   (Note: General pipeline output directory for this stage is {})",
+                        dir.display()
+                    );
                 }
             } else {
                 println!("Boogie file output directory not specified. Files will not be saved by the verifier.");
@@ -360,10 +366,7 @@ pub fn print_verification_results(results: &VerificationResults, cli: &super::Cl
 
     println!("Verification Summary:");
     println!(" - Total C-edges analyzed: {}", results.total_c_edges);
-    println!(
-        " - Successfully verified: {}",
-        results.verified_count
-    );
+    println!(" - Successfully verified: {}", results.verified_count);
     println!(
         " - Failed verification: {}",
         results.failed_verification.len()
@@ -373,10 +376,7 @@ pub fn print_verification_results(results: &VerificationResults, cli: &super::Cl
 
     if cli.verbose {
         if !results.verified_edges.is_empty() {
-            println!(
-                "\nVerified C-edges (pruned): {:?}",
-                results.verified_edges
-            );
+            println!("\nVerified C-edges (pruned): {:?}", results.verified_edges);
         }
 
         if !results.failed_verification.is_empty() {

@@ -5,9 +5,7 @@
 //! - Dead code elimination  
 //! - Common subexpression elimination
 
-use crate::cfg::{
-    CfgProgram, FunctionCfg, FunctionId,
-};
+use crate::cfg::{CfgProgram, FunctionCfg, FunctionId};
 use std::collections::HashMap;
 
 mod common_subexpression_elimination;

@@ -22,9 +22,10 @@ fn main() {
     let source_code = match fs::read_to_string(&cli.input) {
         Ok(content) => content,
         Err(e) => {
-            eprintln!("{} Failed to read file {:?}: {}", 
-                "ERROR:".red().bold(), 
-                cli.input, 
+            eprintln!(
+                "{} Failed to read file {:?}: {}",
+                "ERROR:".red().bold(),
+                cli.input,
                 e.to_string().bright_red()
             );
             std::process::exit(1);
@@ -34,8 +35,9 @@ fn main() {
     // Create and execute pipeline
     let mut pipeline = Pipeline::new(&cli);
     if let Err(e) = pipeline.execute(source_code, cli.mode.clone(), &cli) {
-        eprintln!("{} Pipeline execution failed: {}", 
-            "ERROR:".red().bold(), 
+        eprintln!(
+            "{} Pipeline execution failed: {}",
+            "ERROR:".red().bold(),
             e.bright_red()
         );
         std::process::exit(1);

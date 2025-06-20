@@ -1,5 +1,35 @@
+//! The `semantics_analysis` module performs semantic analysis on the AST.
+//! It checks for type correctness, control flow validity, and cross-node access rules.
+//!
+//! # Overview
+//!
+//! - **SemanticAnalyzer**: The main struct responsible for semantic checks and error reporting.
+//! - **analyze_program**: Public interface for running semantic analysis on a `Program`.
+//!
+//! # Features
+//!
+//! - Type checking for expressions and assignments.
+//! - Validation of control flow constructs (loops, returns, aborts).
+//! - Cross-node access and primary key validation for table operations.
+//!
+//! # Usage
+//!
+//! Use the `analyze_program` function to perform semantic analysis:
+//!
+//! ```rust
+//! use crate::ast::semantics_analysis::analyze_program;
+//! use crate::ast::Program;
+//!
+//! let program = ...; // Constructed AST
+//! analyze_program(&program).expect("Semantic analysis failed");
+//! ```
+
 use crate::ast::*;
 
+/// The `SemanticAnalyzer` struct performs semantic analysis on a given program.
+///
+/// It checks for various semantic errors, such as type mismatches, invalid control flow,
+/// and incorrect table access patterns.
 pub struct SemanticAnalyzer<'p> {
     program: &'p Program,
     errors: Vec<SpannedError>,
@@ -14,6 +44,7 @@ pub struct SemanticAnalyzer<'p> {
 }
 
 impl<'p> SemanticAnalyzer<'p> {
+    /// Create a new `SemanticAnalyzer` for the given program.
     pub fn new(program: &'p Program) -> Self {
         Self {
             program,
@@ -27,6 +58,9 @@ impl<'p> SemanticAnalyzer<'p> {
         }
     }
 
+    /// Run semantic analysis on the program.
+    ///
+    /// This checks all functions, hops, statements, and expressions for semantic errors.
     pub fn analyze(mut self) -> Results<()> {
         self.check_functions();
 
@@ -37,12 +71,14 @@ impl<'p> SemanticAnalyzer<'p> {
         }
     }
 
+    /// Checks all root functions in the program.
     fn check_functions(&mut self) {
         for func_id in &self.program.root_functions {
             self.check_function(*func_id);
         }
     }
 
+    /// Checks a single function, including all hops and return requirements.
     fn check_function(&mut self, func_id: FunctionId) {
         let func = &self.program.functions[func_id];
 
@@ -63,6 +99,7 @@ impl<'p> SemanticAnalyzer<'p> {
         self.current_function = None;
     }
 
+    /// Checks a hop block, including all statements within it.
     fn check_hop_block(&mut self, hop_id: HopId, hop_index: usize, function_name: &str) {
         let hop = &self.program.hops[hop_id];
 
@@ -79,6 +116,9 @@ impl<'p> SemanticAnalyzer<'p> {
         self.current_node = None;
     }
 
+    /// Checks a statement for semantic correctness.
+    ///
+    /// This dispatches to the appropriate check based on statement kind.
     fn check_statement(&mut self, stmt_id: StatementId, hop_index: usize, function_name: &str) {
         let stmt = &self.program.statements[stmt_id];
 
@@ -210,10 +250,10 @@ impl<'p> SemanticAnalyzer<'p> {
 
             // Check that we have all primary key fields resolved
             let all_pk_fields_resolved = assign.resolved_pk_fields.iter().all(|opt| opt.is_some());
-            
+
             if all_pk_fields_resolved && assign.resolved_field.is_some() {
                 let field_id = assign.resolved_field.unwrap();
-                
+
                 // Validate each primary key field
                 for (i, resolved_pk_field_opt) in assign.resolved_pk_fields.iter().enumerate() {
                     if let Some(pk_field_id) = resolved_pk_field_opt {
@@ -402,7 +442,7 @@ impl<'p> SemanticAnalyzer<'p> {
 
                 // Check that all primary key fields are resolved
                 let all_pk_fields_resolved = resolved_pk_fields.iter().all(|opt| opt.is_some());
-                
+
                 if !all_pk_fields_resolved {
                     // Some primary key fields are not resolved, return None
                     return None;
@@ -600,7 +640,7 @@ impl<'p> SemanticAnalyzer<'p> {
     }
 }
 
-/// Public interface for semantic analysis
+/// Public interface for semantic analysis.
 pub fn analyze_program(program: &Program) -> Results<()> {
     let analyzer = SemanticAnalyzer::new(program);
     analyzer.analyze()

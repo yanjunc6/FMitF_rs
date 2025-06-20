@@ -1,5 +1,5 @@
 //! TransAct Interactive Runtime
-//! 
+//!
 //! This module provides a simple REPL environment for testing TransAct programs.
 //! It's designed for quick testing and experimentation, not production use.
 
@@ -45,34 +45,34 @@ impl fmt::Display for RuntimeValue {
 #[derive(clap::Parser, Debug, Clone)]
 pub enum ReplCommand {
     /// Call function: call transfer 1 2 100  
-    Call { 
+    Call {
         function: String,
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
     },
-    
+
     /// Show table: table Account
     Table { name: String },
-    
+
     /// List functions
     Functions,
-    
+
     /// List tables  
     Tables,
-    
+
     /// Clear all table data (reset database)
     Clear,
-    
+
     /// Exit REPL
     Exit,
 }
 
 // Module declarations
-mod state;
-mod executor; 
+mod executor;
 mod repl;
+mod state;
 
 // Re-exports
-pub use state::RuntimeState;
 pub use executor::execute_function;
 pub use repl::{start_runtime_repl, start_runtime_repl_with_cfg};
+pub use state::RuntimeState;

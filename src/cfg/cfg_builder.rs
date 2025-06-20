@@ -101,7 +101,7 @@ impl CfgBuilder {
 
             // Build fields first
             let mut field_ids = Vec::new();
-            let mut primary_key_ids = Vec::new();  // Changed to collect multiple primary keys
+            let mut primary_key_ids = Vec::new(); // Changed to collect multiple primary keys
 
             for &field_ast_id in &table_ast.fields {
                 let field_ast = &program.fields[field_ast_id];
@@ -119,7 +119,7 @@ impl CfgBuilder {
                     .insert(field_ast.field_name.clone(), cfg_field_id);
 
                 if field_ast.is_primary {
-                    primary_key_ids.push(cfg_field_id);  // Add to list instead of overwriting
+                    primary_key_ids.push(cfg_field_id); // Add to list instead of overwriting
                 }
             }
 
@@ -133,7 +133,7 @@ impl CfgBuilder {
                 name: table_ast.name.clone(),
                 node_id: *node_id,
                 fields: field_ids.clone(),
-                primary_keys: primary_key_ids,  // Use the list of primary keys
+                primary_keys: primary_key_ids, // Use the list of primary keys
             };
 
             let cfg_table_id = ctx.program.tables.alloc(cfg_table);
@@ -400,9 +400,9 @@ impl<'a> FunctionContextBuilder<'a> {
                                     field_ast.field_name
                                 )
                             })?;
-                        
+
                         let pk_operand = self.build_expression(program, pk_expr)?;
-                        
+
                         pk_field_ids.push(pk_field_id);
                         pk_operands.push(pk_operand);
                     } else {
@@ -654,9 +654,9 @@ impl<'a> FunctionContextBuilder<'a> {
                                     field_ast.field_name
                                 )
                             })?;
-                        
+
                         let pk_operand = self.build_expression(program, pk_expr)?;
-                        
+
                         pk_field_ids.push(pk_field_id);
                         pk_operands.push(pk_operand);
                     } else {

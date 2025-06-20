@@ -1,5 +1,5 @@
 // src/cli/pipeline.rs
-use super::{output::*, stages::*, traits::*, Cli, Mode, StageContext, Logger};
+use super::{output::*, stages::*, traits::*, Cli, Logger, Mode, StageContext};
 
 pub struct Pipeline {
     pub ast_stage: AstStage,
@@ -33,9 +33,9 @@ impl Pipeline {
             Mode::Ast => 1,
             Mode::Cfg => 2,
             Mode::Optimize => 3,
-            Mode::Runtime => 3,  // AST + CFG + Optimize
-            Mode::Scgraph => 4,  // AST + CFG + Optimize + SCGraph
-            Mode::Verify => 5,   // AST + CFG + Optimize + SCGraph + Verification
+            Mode::Runtime => 3, // AST + CFG + Optimize
+            Mode::Scgraph => 4, // AST + CFG + Optimize + SCGraph
+            Mode::Verify => 5,  // AST + CFG + Optimize + SCGraph + Verification
         }
     }
 
@@ -52,7 +52,7 @@ impl Pipeline {
         self.logger.stage_start(
             self.ast_stage.stage_number(),
             total_stages,
-            "Frontend Analysis"
+            "Frontend Analysis",
         );
 
         let ast_program = self
@@ -79,7 +79,7 @@ impl Pipeline {
         self.logger.stage_start(
             self.cfg_stage.stage_number(),
             total_stages,
-            "Building Control Flow Graph"
+            "Building Control Flow Graph",
         );
 
         let cfg_program = self.cfg_stage.execute(ast_program).map_err(|e| {
@@ -97,7 +97,7 @@ impl Pipeline {
         self.logger.stage_start(
             self.optimize_stage.stage_number(),
             total_stages,
-            "Optimizing Control Flow Graph"
+            "Optimizing Control Flow Graph",
         );
 
         let optimized_cfg = self.optimize_stage.execute(cfg_program)?;
@@ -114,7 +114,8 @@ impl Pipeline {
 
         // Runtime mode: Start REPL with the optimized CFG
         if target_mode == Mode::Runtime {
-            self.logger.process_start("interactive runtime with optimized CFG");
+            self.logger
+                .process_start("interactive runtime with optimized CFG");
             crate::runtime::start_runtime_repl_with_cfg(optimized_cfg)?;
             return Ok(());
         }
@@ -123,7 +124,7 @@ impl Pipeline {
         self.logger.stage_start(
             self.scgraph_stage.stage_number(),
             total_stages,
-            "Building Serializability Conflict Graph"
+            "Building Serializability Conflict Graph",
         );
 
         let (cfg_program, sc_graph) = self.scgraph_stage.execute(optimized_cfg)?;
@@ -147,7 +148,7 @@ impl Pipeline {
         self.logger.stage_start(
             self.verification_stage.stage_number(),
             total_stages,
-            "Verification & C-edge Pruning"
+            "Verification & C-edge Pruning",
         );
 
         let verification_result = self.verification_stage.execute((cfg_program, sc_graph))?;

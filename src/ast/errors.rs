@@ -1,3 +1,29 @@
+//! The `errors` module defines error types and utilities for handling errors in the AST.
+//! It provides comprehensive error reporting with spans for precise localization of issues.
+//!
+//! # Overview
+//!
+//! - **AstError**: Represents various types of errors that can occur during parsing, name resolution,
+//!   and semantic analysis.
+//! - **SpannedError**: Combines an `AstError` with an optional `Span` for detailed error reporting.
+//! - **Results**: A type alias for `Result` with a vector of `SpannedError`.
+//!
+//! # Features
+//!
+//! - Detailed error messages for debugging and user feedback.
+//! - Support for complex error types such as cross-node access violations and type mismatches.
+//!
+//! # Usage
+//!
+//! Use the `format_errors` function to format a list of errors for display:
+//!
+//! ```rust
+//! use crate::ast::errors::{format_errors, SpannedError};
+//!
+//! let errors: Vec<SpannedError> = vec![]; // Populate with errors
+//! println!("{}", format_errors(&errors));
+//! ```
+
 use crate::ast::{Span, TypeName};
 
 pub type Results<T> = Result<T, Vec<SpannedError>>;
@@ -78,7 +104,7 @@ impl std::fmt::Display for AstError {
 impl std::error::Error for AstError {}
 
 impl AstError {
-    /// Get the error type name for display purposes
+    /// Get the error type name for display purposes.
     pub fn error_type(&self) -> &'static str {
         match self {
             Self::ParseError(_) => "ParseError",
@@ -105,7 +131,7 @@ impl AstError {
         }
     }
 
-    /// Get the error message without the type prefix
+    /// Get the error message without the type prefix.
     pub fn message(&self) -> String {
         match self {
             Self::ParseError(msg) => msg.clone(),
@@ -119,10 +145,9 @@ impl AstError {
             Self::DuplicateFunction(name) => format!("Function '{}' is already declared", name),
             Self::DuplicateTable(name) => format!("Table '{}' is already declared", name),
             Self::DuplicateNode(name) => format!("Node '{}' is already declared", name),
-            Self::TypeMismatch { expected, found } => format!(
-                "Expected type {:?} but found {:?}",
-                expected, found
-            ),
+            Self::TypeMismatch { expected, found } => {
+                format!("Expected type {:?} but found {:?}", expected, found)
+            }
             Self::InvalidUnaryOp { op, operand } => {
                 format!("Cannot apply operator '{}' to type {:?}", op, operand)
             }
@@ -134,7 +159,9 @@ impl AstError {
                 format!("Condition must be boolean, found {:?}", ty)
             }
             Self::BreakOutsideLoop => "Break statement can only be used inside a loop".to_string(),
-            Self::ContinueOutsideLoop => "Continue statement can only be used inside a loop".to_string(),
+            Self::ContinueOutsideLoop => {
+                "Continue statement can only be used inside a loop".to_string()
+            }
             Self::MissingReturn(func) => {
                 format!("Function '{}' must have a return statement", func)
             }
@@ -163,6 +190,7 @@ impl AstError {
     }
 }
 
+/// Formats a list of errors for display.
 pub fn format_errors(errors: &[SpannedError]) -> String {
     errors
         .iter()
