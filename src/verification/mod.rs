@@ -1,18 +1,25 @@
 use crate::cfg::CfgProgram;
 use crate::sc_graph::{SCGraph, EdgeType, Edge};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+
+pub mod boogie_file_manager;
 pub mod commutativity_check;
 pub mod code_generation;
 pub mod interleaving;
 pub mod execution;
 pub use execution::{VerificationExecution, VerificationResult};
 
+
+use boogie_file_manager::{BoogieFile, BoogieFileManager};
+
+
 /// The main verification interface - handles all verification operations
 pub struct VerificationManager {
-    pub boogie_codes: HashMap<Edge, String>, // Store generated Boogie code for potential file output
+    pub boogie_files: Vec<BoogieFile>, // Store generated Boogie files with their names
     pub results: HashMap<Edge, VerificationResult>, // Store results of verification
+    pub temp_file_paths: Vec<PathBuf>, // Track temporary files for cleanup
 }
 
 impl VerificationManager {
@@ -20,8 +27,9 @@ impl VerificationManager {
 
     ) -> Self {       
         Self { 
-            boogie_codes: HashMap::new(),
+            boogie_files: Vec::new(),
             results: HashMap::new(),
+            temp_file_paths: Vec::new(),
         }
     }
 
@@ -46,31 +54,56 @@ impl VerificationManager {
             // 2) Generate Boogie code for this unit
             let boogie_code = code_generation::generate_boogie_for_unit(&verification_unit);
             
-            // Store the Boogie code for potential file output
-            self.boogie_codes.insert(edge.clone(), boogie_code.clone());
+            // 3) Generate filename using the unit (better naming)
+            let filename = BoogieFileManager::generate_filename(&verification_unit, cfg);
             
-            // 3) Execute the Boogie verification and store the result
-            execution.execute_boogie(edge.clone(), boogie_code);
+            // 4) Create BoogieFile entry
+            let boogie_file = BoogieFile {
+                filename,
+                code: boogie_code,
+            };
+            
+            // Store the Boogie file for potential output
+            self.boogie_files.push(boogie_file.clone());
+            
+            // 5) Write temporary file for verification
+            match BoogieFileManager::write_temp_file(&boogie_file) {
+                Ok(temp_path) => {
+                    // Track temporary file for cleanup
+                    self.temp_file_paths.push(temp_path.clone());
+                    
+                    // 6) Execute the Boogie verification
+                    let result = execution.execute_boogie(&temp_path);
+                    self.results.insert(edge.clone(), result);
+                }
+                Err(e) => {
+                    let result = VerificationResult::Failure(e);
+                    self.results.insert(edge.clone(), result);
+                }
+            }
         }
+        
+        // 7) Clean up temporary files
+        self.cleanup_temp_files();
+    }
+    
+    /// Clean up temporary files
+    fn cleanup_temp_files(&mut self) {
+        BoogieFileManager::cleanup_files(&self.temp_file_paths);
+        self.temp_file_paths.clear();
     }
 
     /// Save Boogie files to a directory
     pub fn save_boogie_files(&self, output_dir: &Path) -> Result<(), String> {
-        // Create the output directory if it doesn't exist
-        if let Err(e) = std::fs::create_dir_all(output_dir) {
-            return Err(format!("Failed to create output directory: {}", e));
-        }
-        
-        // Save each Boogie file
-        for (edge, boogie_code) in &self.boogie_codes {
-            let filename = format!("edge_{}_{}.bpl", edge.source.index(), edge.target.index());
-            let file_path = output_dir.join(filename);
-            
-            std::fs::write(&file_path, boogie_code)
-                .map_err(|e| format!("Failed to write Boogie file {}: {}", file_path.display(), e))?;
-        }
-        
+        BoogieFileManager::write_files(&self.boogie_files, output_dir)?;
         println!("Boogie files saved to: {}", output_dir.display());
         Ok(())
+    }
+}
+
+impl Drop for VerificationManager {
+    fn drop(&mut self) {
+        // Ensure cleanup happens even if the user doesn't call cleanup_temp_files explicitly
+        self.cleanup_temp_files();
     }
 }

@@ -1,6 +1,5 @@
-use std::fs;
 use std::process::Command;
-use crate::sc_graph::Edge;
+use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub enum VerificationResult {
@@ -13,30 +12,14 @@ pub enum VerificationResult {
 pub struct VerificationExecution;
 
 impl VerificationExecution {
-    pub fn execute_boogie(
+    pub fn execute_boogie<P: AsRef<Path>>(
         &self,
-        edge: Edge,
-        boogie_code: String,
+        file_path: P,
     ) -> VerificationResult {
-        // 1) Write boogie code to a temporary file
-        let temp_file_name = format!("tmp/edge_{}_{}.bpl", edge.source.index(), edge.target.index());
-        
-        // Create tmp directory if it doesn't exist
-        if let Err(e) = fs::create_dir_all("tmp") {
-            let error_msg = format!("Failed to create tmp directory: {}", e);
-            return VerificationResult::Failure(error_msg);
-        }
-        
-        
-        // Write the Boogie code to the file
-        if let Err(e) = fs::write(&temp_file_name, &boogie_code) {
-            let error_msg = format!("Failed to write Boogie file {}: {}", temp_file_name, e);
-            return VerificationResult::Failure(error_msg);
-        }
 
-        // 2) Run the boogie verifier with /quiet flag
+        // Run the boogie verifier with /quiet flag
         let output = Command::new("boogie")
-            .arg(&temp_file_name)
+            .arg(file_path.as_ref())
             .arg("/quiet")
             .output();
         
