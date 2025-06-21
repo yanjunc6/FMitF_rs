@@ -22,7 +22,7 @@ pub fn generate_boogie_for_unit(unit: &VerificationUnit) -> String {
     code.push_str("procedure main() {\n");
 
     // Example pseudocode:
-    for (i, merge) in unit.merges.iter().enumerate() {
+    for (i, _merge) in unit.merges.iter().enumerate() {
         // We might produce:
         // 1) havoc tables/globals
         // 2) execute prefix in order
@@ -39,7 +39,7 @@ pub fn generate_boogie_for_unit(unit: &VerificationUnit) -> String {
     code
 }
 
-pub fn run_boogie(boogie_code: String) -> SolverResult {
+pub fn run_boogie(_boogie_code: String) -> SolverResult {
     // Hypothetical function that either
     //  - writes code to a temp .bpl file & runs Boogie
     //  - or calls a library if there's an API

@@ -9,7 +9,7 @@ use crate::{
         SCGraphPrintOptions,
     },
     sc_graph::SCGraph,
-    verification::{VerificationManager, VerificationExecution},
+    verification::{VerificationManager, VerificationResult},
     AstProgram, AstSpannedError, CfgBuilder, CfgProgram,
 };
 use std::io::Write;
@@ -267,28 +267,25 @@ pub struct VerificationStage {
 
 impl PipelineStage for VerificationStage {
     type Input = (CfgProgram, SCGraph);
-    type Output = (CfgProgram, SCGraph, VerificationExecution);
+    type Output = (CfgProgram, SCGraph, VerificationManager);
     type Error = String;
 
     fn execute(&mut self, input: Self::Input) -> Result<Self::Output, Self::Error> {
         let (cfg_program, sc_graph) = input;
         
         // Create verification manager using our new verification module
-        let verification_manager = VerificationManager::new(&cfg_program, &sc_graph);
+        let mut verification_manager = VerificationManager::new();
         
         // Run the commutativity pipeline
-        let mut execution = verification_manager.run_commutativity_pipeline();
+        verification_manager.run_commutativity_pipeline(&cfg_program, &sc_graph);
         
         // If Boogie output directory is specified, save the Boogie files
         if let Some(ref dir) = self.boogie_output_dir {
-            execution.save_boogie_files(dir)
+            verification_manager.save_boogie_files(dir)
                 .map_err(|e| format!("Failed to save Boogie files: {}", e))?;
         }
-        
-        // Create results structure compatible with CLI expectations
-        let results = execution;
-        
-        Ok((cfg_program, sc_graph, results))
+
+        Ok((cfg_program, sc_graph, verification_manager))
     }
 
     fn name(&self) -> &'static str {
@@ -301,7 +298,7 @@ impl PipelineStage for VerificationStage {
 }
 
 impl DirectoryOutput for VerificationStage {
-    type Data = (CfgProgram, SCGraph, VerificationExecution);
+    type Data = (CfgProgram, SCGraph, VerificationManager);
 
     fn write_to_directory(
         &self,
@@ -335,54 +332,48 @@ impl DirectoryOutput for VerificationStage {
 }
 
 impl StageSummary for VerificationStage {
-    type Data = (CfgProgram, SCGraph, VerificationExecution);
+    type Data = (CfgProgram, SCGraph, VerificationManager);
 
     fn get_summary(&self, data: &Self::Data) -> String {
-        let (_, _sc_graph, results) = data;
-        
+        let (_, _, manager) = data;
+        let results = &manager.results;
         format!(
-            "{}/{} C-edges processed, {} successful",
-            results.total_count(),
-            results.original_c_edge_count(),
-            results.success_count()
+            "{} C-edges processed, {} successful",
+            results.len(),
+            results.values().filter(|r| matches!(r, VerificationResult::Success)).count()
         )
     }
 }
 
 /// Print detailed verification results
-pub fn print_verification_results(results: &VerificationExecution, cli: &super::Cli) {
+pub fn print_verification_results(manager: &VerificationManager, cli: &super::Cli) {
     if cli.quiet {
-        println!(
-            "Verification: {}/{} C-edges processed, {} successful",
-            results.total_count(),
-            results.original_c_edge_count(),
-            results.success_count()
-        );
         return;
     }
 
-    println!("Verification Summary:");
-    println!(" - Total C-edges analyzed: {}", results.original_c_edge_count());
-    println!(" - C-edges processed: {}", results.total_count());
-    println!(" - Successfully verified: {}", results.success_count());
-    println!(" - Failed verification: {}", results.failure_count());
+    println!(
+        "Verification: {} C-edges processed, {} successful",
+        manager.results.len(),
+        manager.results.values().filter(|r| matches!(r, VerificationResult::Success)).count()
+    );
+
 
     if cli.verbose {
         println!("\nDetailed results:");
-        for (edge, result) in results.get_all_results() {
+        for (edge, result) in &manager.results {
             let edge_info = format!("Edge {}→{}", edge.source.index(), edge.target.index());
             match result {
                 crate::verification::execution::VerificationResult::Success => {
-                    println!("   ✓ {}: Verified (commutative)", edge_info);
+                    println!("{}: Verified (commutative)", edge_info);
                 }
                 crate::verification::execution::VerificationResult::Failure(msg) => {
-                    println!("   ✗ {}: Failed - {}", edge_info, msg);
+                    println!("{}: Failed - {}", edge_info, msg);
                 }
             }
         }
     }
 
-    if results.all_successful() && !cli.quiet {
+    if manager.results.values().all(|r| matches!(r, VerificationResult::Success)) && !cli.quiet {
         println!("All C-edges verified successfully!");
     }
 }
