@@ -1,17 +1,11 @@
-// src/verify/mod.rs
+use crate::cfg::CfgProgram;
+use crate::sc_graph::{SCGraph, EdgeType};
 
 pub mod commutativity_check;
 pub mod code_generation;
 pub mod interleaving;
 pub mod execution;
-pub mod results;
-
-use crate::cfg::CfgProgram;
-use crate::sc_graph::{SCGraph, EdgeType};
-use execution::VerificationExecution;
-
-// Re-export key types for CLI
-pub use self::results::VerificationResults;
+pub use self::execution::VerificationExecution;
 
 pub struct VerificationManager<'a> {
     pub cfg: &'a CfgProgram,
@@ -31,12 +25,13 @@ impl<'a> VerificationManager<'a> {
     ///     1.2) Run the solver (execute_boogie)
     /// 2) return a VerificationExecution object
     pub fn run_commutativity_pipeline(&self) -> VerificationExecution {
-        let mut execution = VerificationExecution::new();
-        
         // Get all C-edges (commutativity edges) from the SC graph
         let c_edges: Vec<_> = self.sc_graph.edges.iter()
             .filter(|edge| edge.edge_type == EdgeType::C)
             .collect();
+        
+        let original_c_edge_count = c_edges.len();
+        let mut execution = VerificationExecution::new(original_c_edge_count);
         
         // Process each C-edge
         for edge in c_edges {

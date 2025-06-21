@@ -13,12 +13,14 @@ pub enum VerificationResult {
 #[derive(Debug)]
 pub struct VerificationExecution {
     results: HashMap<Edge, VerificationResult>,
+    original_c_edge_count: usize,
 }
 
 impl VerificationExecution {
-    pub fn new() -> Self {
+    pub fn new(original_c_edge_count: usize) -> Self {
         VerificationExecution {
             results: HashMap::new(),
+            original_c_edge_count,
         }
     }
 
@@ -114,6 +116,11 @@ impl VerificationExecution {
     /// Get total number of verifications attempted
     pub fn total_count(&self) -> usize {
         self.results.len()
+    }
+
+    /// Get the original C-edge count before verification
+    pub fn original_c_edge_count(&self) -> usize {
+        self.original_c_edge_count
     }
 
     /// Save Boogie files to a specific directory for testing

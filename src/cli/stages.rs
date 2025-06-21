@@ -9,6 +9,7 @@ use crate::{
         SCGraphPrintOptions,
     },
     sc_graph::SCGraph,
+    verification::{VerificationManager, VerificationExecution},
     AstProgram, AstSpannedError, CfgBuilder, CfgProgram,
 };
 use std::io::Write;
@@ -266,23 +267,27 @@ pub struct VerificationStage {
 
 impl PipelineStage for VerificationStage {
     type Input = (CfgProgram, SCGraph);
-    type Output = (CfgProgram, SCGraph, VerificationResults);
+    type Output = (CfgProgram, SCGraph, VerificationExecution);
     type Error = String;
 
     fn execute(&mut self, input: Self::Input) -> Result<Self::Output, Self::Error> {
-        let (cfg_program, mut sc_graph) = input;
-
-        let mut verifier = AutoVerifier::new().with_timeout(self.timeout); // Create base verifier
-
+        let (cfg_program, sc_graph) = input;
+        
+        // Create verification manager using our new verification module
+        let verification_manager = VerificationManager::new(&cfg_program, &sc_graph);
+        
+        // Run the commutativity pipeline
+        let mut execution = verification_manager.run_commutativity_pipeline();
+        
+        // If Boogie output directory is specified, save the Boogie files
         if let Some(ref dir) = self.boogie_output_dir {
-            // If an output directory for Boogie files is specified, configure the verifier
-            verifier = verifier.with_output_dir(dir.clone());
+            execution.save_boogie_files(dir)
+                .map_err(|e| format!("Failed to save Boogie files: {}", e))?;
         }
-
-        let results = verifier
-            .verify_and_prune_c_edges(&cfg_program, &mut sc_graph)
-            .map_err(|e| format!("Verification error: {}", e))?;
-
+        
+        // Create results structure compatible with CLI expectations
+        let results = execution;
+        
         Ok((cfg_program, sc_graph, results))
     }
 
@@ -296,16 +301,15 @@ impl PipelineStage for VerificationStage {
 }
 
 impl DirectoryOutput for VerificationStage {
-    type Data = (CfgProgram, SCGraph, VerificationResults);
+    type Data = (CfgProgram, SCGraph, VerificationExecution);
 
     fn write_to_directory(
         &self,
         _data: &Self::Data,
-        dir: &PathBuf, // General output directory for the stage, passed by the pipeline runner
+        dir: &PathBuf,
         cli: &super::Cli,
     ) -> Result<(), String> {
-        // Ensure the general output directory for this stage exists.
-        // AutoVerifier handles creation of self.boogie_output_dir internally if it's set.
+        // Ensure the general output directory for this stage exists
         std::fs::create_dir_all(dir)
             .map_err(|e| format!("Failed to create output directory {:?}: {}", dir, e))?;
 
@@ -315,7 +319,6 @@ impl DirectoryOutput for VerificationStage {
                     "Boogie files are configured to be saved to: {}",
                     boogie_dir.display()
                 );
-                // Optionally, note if the general pipeline dir is different, though ideally they align for this stage's main output.
                 if boogie_dir != dir {
                     println!(
                         "   (Note: General pipeline output directory for this stage is {})",
@@ -323,79 +326,64 @@ impl DirectoryOutput for VerificationStage {
                     );
                 }
             } else {
-                println!("Boogie file output directory not specified. Files will not be saved by the verifier.");
+                println!("Boogie file output directory not specified. Files will not be saved.");
             }
         }
 
-        // The AutoVerifier, if configured with an output directory,
-        // should have already written files. This method primarily handles
-        // messages and ensures the pipeline's designated 'dir' exists.
         Ok(())
     }
 }
 
 impl StageSummary for VerificationStage {
-    type Data = (CfgProgram, SCGraph, VerificationResults);
+    type Data = (CfgProgram, SCGraph, VerificationExecution);
 
     fn get_summary(&self, data: &Self::Data) -> String {
-        let (_, sc_graph, results) = data;
-        let mixed_cycles = sc_graph.find_mixed_cycles();
-
+        let (_, _sc_graph, results) = data;
+        
         format!(
-            "{}/{} C-edges verified ({:.1}%), {} mixed cycles remain",
-            results.verified_count,
-            results.total_c_edges,
-            results.success_rate() * 100.0,
-            mixed_cycles.len()
+            "{}/{} C-edges processed, {} successful",
+            results.total_count(),
+            results.original_c_edge_count(),
+            results.success_count()
         )
     }
 }
 
 /// Print detailed verification results
-pub fn print_verification_results(results: &VerificationResults, cli: &super::Cli) {
+pub fn print_verification_results(results: &VerificationExecution, cli: &super::Cli) {
     if cli.quiet {
         println!(
-            "Verification: {}/{} C-edges verified ({:.1}%)",
-            results.verified_count,
-            results.total_c_edges,
-            results.success_rate() * 100.0
+            "Verification: {}/{} C-edges processed, {} successful",
+            results.total_count(),
+            results.original_c_edge_count(),
+            results.success_count()
         );
         return;
     }
 
     println!("Verification Summary:");
-    println!(" - Total C-edges analyzed: {}", results.total_c_edges);
-    println!(" - Successfully verified: {}", results.verified_count);
-    println!(
-        " - Failed verification: {}",
-        results.failed_verification.len()
-    );
-    println!(" - Errors encountered: {}", results.errors.len());
-    println!(" - Success rate: {:.1}%", results.success_rate() * 100.0);
+    println!(" - Total C-edges analyzed: {}", results.original_c_edge_count());
+    println!(" - C-edges processed: {}", results.total_count());
+    println!(" - Successfully verified: {}", results.success_count());
+    println!(" - Failed verification: {}", results.failure_count());
 
     if cli.verbose {
-        if !results.verified_edges.is_empty() {
-            println!("\nVerified C-edges (pruned): {:?}", results.verified_edges);
-        }
-
-        if !results.failed_verification.is_empty() {
-            println!("\nFailed verification:");
-            for (edge_idx, reason) in &results.failed_verification {
-                println!("   Edge {}: {}", edge_idx, reason);
+        println!("\nDetailed results:");
+        for (edge, result) in results.get_all_results() {
+            let edge_info = format!("Edge {}→{}", edge.source.index(), edge.target.index());
+            match result {
+                crate::verification::execution::VerificationResult::Success => {
+                    println!("   ✓ {}: Verified (commutative)", edge_info);
+                }
+                crate::verification::execution::VerificationResult::Failure(msg) => {
+                    println!("   ✗ {}: Failed - {}", edge_info, msg);
+                }
             }
         }
+    }
 
-        if !results.errors.is_empty() {
-            println!("\nErrors encountered:");
-            for (edge_idx, error) in &results.errors {
-                println!("   Edge {}: {}", edge_idx, error);
-            }
-        }
-    } else if !results.errors.is_empty() {
-        println!(
-            "\n{} errors encountered (use --verbose for details)",
-            results.errors.len()
-        );
+    if results.all_successful() && !cli.quiet {
+        println!("All C-edges verified successfully!");
     }
 }
 
@@ -415,7 +403,7 @@ pub fn check_final_state(sc_graph: &SCGraph, cli: &super::Cli) {
                 for (i, cycle) in mixed_cycles.iter().enumerate() {
                     let cycle_str: Vec<String> = cycle
                         .iter()
-                        .map(|node_id| format!("N{}", node_id.index()))
+                        .map(|hop_id| format!("H{}", hop_id.index()))
                         .collect();
                     println!("     Cycle {}: {}", i + 1, cycle_str.join(" -> "));
                 }
