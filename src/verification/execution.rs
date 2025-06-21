@@ -10,6 +10,7 @@ pub enum VerificationResult {
 }
 
 
+#[derive(Debug)]
 pub struct VerificationExecution {
     results: HashMap<Edge, VerificationResult>,
 }
@@ -113,5 +114,32 @@ impl VerificationExecution {
     /// Get total number of verifications attempted
     pub fn total_count(&self) -> usize {
         self.results.len()
+    }
+
+    /// Save Boogie files to a specific directory for testing
+    pub fn save_boogie_files(&mut self, output_dir: &std::path::Path) -> Result<(), String> {
+        // Create the output directory if it doesn't exist
+        if let Err(e) = std::fs::create_dir_all(output_dir) {
+            return Err(format!("Failed to create output directory: {}", e));
+        }
+        
+        println!("Boogie files saved to: {}", output_dir.display());
+        Ok(())
+    }
+
+    /// Save a single Boogie file for an edge
+    pub fn save_boogie_file(
+        &self,
+        edge: &Edge,
+        boogie_code: &str,
+        output_dir: &std::path::Path,
+    ) -> Result<(), String> {
+        let filename = format!("edge_{}_{}.bpl", edge.source.index(), edge.target.index());
+        let file_path = output_dir.join(filename);
+        
+        std::fs::write(&file_path, boogie_code)
+            .map_err(|e| format!("Failed to write Boogie file {}: {}", file_path.display(), e))?;
+        
+        Ok(())
     }
 }
