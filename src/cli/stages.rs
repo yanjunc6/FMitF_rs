@@ -9,7 +9,6 @@ use crate::{
         SCGraphPrintOptions,
     },
     sc_graph::SCGraph,
-    verification::{AutoVerifier, VerificationResults},
     AstProgram, AstSpannedError, CfgBuilder, CfgProgram,
 };
 use std::io::Write;

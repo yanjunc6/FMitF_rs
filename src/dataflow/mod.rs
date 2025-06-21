@@ -13,6 +13,9 @@ pub use reaching_definitions::{analyze_reaching_definitions, Definition as Reach
 mod available_expressions;
 pub use available_expressions::analyze_available_expressions;
 
+mod table_mod_ref;
+pub use table_mod_ref::{analyze_table_mod_ref, TableAccess, AccessType};
+
 /// Direction of dataflow analysis
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {

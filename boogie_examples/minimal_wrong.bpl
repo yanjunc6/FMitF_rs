@@ -53,5 +53,5 @@ procedure main()
   final3 := T_val;
 
   // Assert serializability: Each interleaving is equivalent to a serial order
-  assert true;
+  assert final1 != final2 || final2 != final3;
 }

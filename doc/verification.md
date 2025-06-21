@@ -1,145 +1,134 @@
-Absolutely! Here’s a detailed and systematic summary of the **verification pattern** for your concurrency/serializability checking, suitable for implementation—in particular, for automatic code generation from your Rust AST and SC-graph.
+# **Revised Concurrency Checking: "Commutativity" Approach**
+
+Below is a concise description of the verification strategy for checking whether two hops—in separate functions/transactions—commute.
 
 ---
 
-# **Summary of the Serializability Verification Pattern**
+## **1. Goal**
+
+We have two functions (transactions), each with a sequence of hops:
+- **A** = [A₁, A₂, …, Aₐ]  
+- **B** = [B₁, B₂, …, B_b]
+
+We focus on checking whether a particular pair of hops (Aₘ, Bₖ) commutes. Specifically, we look at the partial sequences:
+- **PrefixA** = [A₁, …, Aₘ],  
+- **PrefixB** = [B₁, …, Bₖ].
+
+If, for *all* ways of interleaving those prefixes while preserving the internal order of each list, running (Aₘ, Bₖ) in either order **always** yields the same final state, we say they commute. We can then safely remove their conflict edge (C-edge).
 
 ---
 
-## **I. Construction of the Verification Unit**
+## **2. Constructing the Verification Unit**
 
-**Given:**
-- Program AST (tables, globals, functions/hops)
-- SC-Graph (nodes, hops, edges)
-- Specific **C-edge** between two hops (from different transactions/functions)
+1. **Relevant State**  
+   Gather the tables, columns, and global variables accessed by (A₁..Aₘ) and (B₁..Bₖ).
 
-**Build:**
-1. **Identify the conflict node:** Node where the C-edge hops both occur.
-2. **For each transaction/function (e.g., F, G):**
-    - Collect the **prefix sequence of hops** *on the conflict node* required by the C-edge, including the conflicting hop.
-3. **Verification Unit:** Contains
-    - The node in question
-    - 2 functions and their hops’ sequence up to the C-edge
-    - All relevant tables (those read or written by the above hops)
-    - All global variables read or written (in all these hops)
-    - (Optionally: all function parameters for both functions)
+2. **Partial AST**  
+   Only keep the hops up to Aₘ and Bₖ.
+
+3. **Parameters/Locals**  
+   Include any function parameters or local variables that may be read or written by these hops.
 
 ---
 
-## **II. Enumeration of Interleavings**
+## **3. Enumerating Prefix Interleavings**
 
-**Goal:**  
-List all possible interleavings of the two hop sequences, **preserving the order of each sequence**.
-
-**Algorithm:**
-- Given `A = [a1, a2, ..., an]`, `B = [b1, b2, ..., bm]`
-- Output all possible lists containing all hops of `A` and `B`, with `A` hops in original order and `B` hops in original order.
-
-**Implementation:**  
-Standard recursive merge/interleavings algorithm.
+1. **PrefixA** = [A₁, …, Aₘ₋₁], **PrefixB** = [B₁, …, Bₖ₋₁].  
+2. List **all merges** of PrefixA and PrefixB that preserve the original order within each.  
+   - Example: If PrefixA = [A₁, A₂] and PrefixB = [B₁], the merges are:  
+     1. [A₁, A₂, B₁]  
+     2. [A₁, B₁, A₂]  
+     3. [B₁, A₁, A₂]
 
 ---
 
-## **III. Modeling Tables and Globals**
+## **4. Appending the Final Pair**
 
-**For Each Table:**
-- Declare in Boogie: For each column (non-primary)  
-  ```boogie
-  var <TableName>_<Field>: [<PKType>]<FieldType>;
-  ```
-- Use primary key as map index.
+For each prefix interleaving **P**, we then append either:
+1. `[Aₘ, Bₖ]`, or  
+2. `[Bₖ, Aₘ]`.
 
-**For Each Global:**
-- Declare as  
-  ```boogie
-  var <Name>: <Type>;
-  ```
+We want to see if these two final orders always produce the same final state when starting from the same initial state.
 
 ---
 
-## **IV. Initial State "Havoc"**
+## **5. Commutativity Check**
 
-**At the start of verification:**
-- All relevant tables and global variables are **havoced** (unconstrained).
-    - This means all initial values are arbitrary (modeling unknown database state and variables).
-- Also, **havoc** input parameters for the functions involved.
+For each prefix interleaving **P**:
 
----
+1. **Compute Final State for “Aₘ, Bₖ”**  
+   - Start at the same (havoced) initial state.  
+   - Execute **P**.  
+   - Then run **Aₘ** followed by **Bₖ**.  
+   - Call the result (tables/globals) **State_AB**.
 
-## **V. Modeling Each Hop**
+2. **Compute Final State for “Bₖ, Aₘ”**  
+   - Reset to the same initial havoced state.  
+   - Execute **P** (identical prefix as above).  
+   - Then run **Bₖ** followed by **Aₘ**.  
+   - Call the result (tables/globals) **State_BA**.
 
-**Each hop is modeled as a Boogie procedure/block**:
-- Takes necessary arguments (including all needed parameters/locals/globals)
-- Modifies state as described in AST
+3. **Compare**  
+   - Check that **State_AB** = **State_BA** for all tables/globals of interest.  
 
----
-
-## **VI. Main Harness Procedure Generation**
-
-**In the Boogie `main`:**
-
-1. **For each interleaving:**
-    - Reset all relevant state (tables, globals, inputs) to the same havoced initial state.
-    - Execute the corresponding sequence of Boogie calls for hops.
-    - At the end, **save the state** of all relevant tables and globals, e.g., as `Users_balance_i1`, `balance_i1`.
-
-2. **Serial executions (references):**
-    - Do the same for the two serial orders (all F hops then all G hops, all G hops then all F hops), saving as `..._serial1`, `..._serial2`.
-
-3. **Assertions:**
-    - For each interleaving, assert that **the final state (tables + globals) matches at least one of the serial executions**:
-      ```boogie
-      assert (forall k: PKType :: Table_i[k] == Table_serial1[k] || Table_i[k] == Table_serial2[k]);
-      assert Global_i == Global_serial1 || Global_i == Global_serial2;
-      ```
-    - If you have multiple globals/tables, repeat for each.
+If **State_AB** = **State_BA** for *every* prefix interleaving **P**, then (Aₘ, Bₖ) commute and we can delete that edge.
 
 ---
 
-## **VII. Summary Pseudocode**
+## **6. Example**
 
-```pseudocode
-for each relevant table and global:
-    declare a Boogie variable
+### **Transactions A and B**
 
-for each function parameter/global relevant:
-    havoc (assign arbitrarily)
-save initial copies of each relevant table/global
+- **A**: [A₁, A₂]  
+- **B**: [B₁, B₂]
 
-for each SERIAL order in {FG, GF}:
-    reset state to saved initial
-    execute all hops for that serial
-    save serial final state
+We want to verify whether **(A₂, B₂)** commute:
 
-for each INTERLEAVING order:
-    reset state to saved initial
-    execute all hops for that interleaving
-    save interleaving final state
-    for all tables/globals:
-        assert state matches at least one serial execution
-```
+- **PrefixA** = [A₁, A₂]  
+- **PrefixB** = [B₁, B₂]
 
----
+But for the *interleaving*, we only use [A₁] and [B₁] as the prefix (since A₂ and B₂ are the final hops). So:
 
-## **VIII. Implementation Considerations**
+- **PrefixA** = [A₁],  
+- **PrefixB** = [B₁].
 
-- **Locals vs Globals:**  
-  Track any local variables that are assigned in one hop and used in another. For verification, treat persistent variables as “globals” unless they are re-declared.
-- **Return values and aliasing:**  
-  Make sure each assignment and result is mapped correctly to its Boogie variable; rename variables per interleaving/serial as needed.
-- **Multiple Tables/Globals:**  
-  Extend the snapshot and assert mechanism to cover any table/global touched by the relevant hops (directly or indirectly).
-- **Transactions with more hops:**  
-  The above pattern generalizes to longer hop sequences or more complicated C-edges.
+**Possible merges** of (A₁) and (B₁):  
+1. [A₁, B₁]  
+2. [B₁, A₁]
+
+Then we **append** either `[A₂, B₂]` or `[B₂, A₂]`. For each prefix, we:
+
+1. Execute the prefix, then [A₂, B₂], record **State_AB**.  
+2. Reset to the initial state, execute the same prefix, then [B₂, A₂], record **State_BA**.  
+3. Check **State_AB** = **State_BA**.
+
+If equal for both prefix merges, then (A₂, B₂) commute.
 
 ---
 
-## **IX. What does it verify?**
+## **7. Boogie Implementation Sketch**
 
-It checks that, no matter how the relevant hops are interleaved while respecting their program order, **the outcome for all relevant shared state (tables, globals) is indistinguishable from some serial execution**.  
-If this is true, the C-edge can be deleted (the operations commute with respect to the observed state).
+1. **Declare** all relevant tables/globals as maps or variables.  
+2. **Havoc** them (and any parameters) to represent an arbitrary initial state.  
+3. **Translate** each hop (Aᵢ, Bⱼ) into a Boogie procedure that updates the tables/globals.  
+4. **For each prefix interleaving**:  
+   - (a) Reset to the initial (havoced) state.  
+   - (b) Execute the prefix hops.  
+   - (c) Execute [Aₘ, Bₖ], record State_AB.  
+   - (d) Reset to the initial (havoced) state.  
+   - (e) Execute the prefix hops again.  
+   - (f) Execute [Bₖ, Aₘ], record State_BA.  
+   - (g) **Assert** State_AB = State_BA.
 
 ---
 
-**This is the pattern you want to implement and automate in Rust, driven by your AST and SC-graph.**  
-If you’d like, I can help provide skeleton code for code generation, or help with interpreting your AST to generate Boogie!
+## **8. Conclusion**
+
+To test whether two hops (Aₘ, Bₖ) commute:
+
+1. **Take prefixes** [A₁..Aₘ], [B₁..Bₖ].  
+2. **Interleave** [A₁..Aₘ₋₁] and [B₁..Bₖ₋₁].  
+3. **Append** (Aₘ, Bₖ) or (Bₖ, Aₘ).  
+4. **Compare** final states for each interleaving + final-order combination.  
+
+If these match in all cases, the hops commute; otherwise, they do not. This framework—particularly when encoded in Boogie or any formal verification tool—lets you systematically check commutativity and prune redundant concurrency edges.

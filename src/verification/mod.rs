@@ -1,29 +1,32 @@
-use crate::cfg::{FunctionId, HopId, NodeId, TableId, VarId};
-use std::collections::HashSet;
+// src/verify/mod.rs
 
-#[derive(Debug, Clone)]
-pub struct VerificationUnit {
-    pub conflict_node: NodeId,
-    pub func1_id: FunctionId,
-    pub hop1_id: HopId,
-    pub func2_id: FunctionId,
-    pub hop2_id: HopId,
-    pub relevant_tables: Vec<TableId>,
-    pub live_vars_at_hop1_exit: HashSet<VarId>,
-    pub live_vars_at_hop2_exit: HashSet<VarId>,
+pub mod commutativity_check;
+pub mod code_generation;
+pub mod interleaving;
+pub mod execution;
+
+use crate::cfg::CfgProgram;
+use crate::sc_graph::{SCGraph, EdgeType};
+use execution::{VerificationResult};
+
+pub struct VerificationManager<'a> {
+    pub cfg: &'a CfgProgram,
+    pub sc_graph: &'a SCGraph,
 }
 
-mod verification_unit_builder;
-pub use verification_unit_builder::VerificationUnitBuilder;
+impl<'a> VerificationManager<'a> {
+    pub fn new(
+        cfg: &'a CfgProgram,
+        sc_graph: &'a SCGraph,
+    ) -> Self {
+        Self { cfg, sc_graph }
+    }
 
-mod verification_logic;
-pub use verification_logic::VerificationPlan;
-
-mod boogie_codegen;
-pub use boogie_codegen::BoogieCodeGenerator;
-
-mod boogie;
-pub use boogie::generate_verification_boogie_code;
-
-mod auto_verifier;
-pub use auto_verifier::{AutoVerifier, VerificationError, VerificationResults};
+    /// 1) For each C-edge, build a VerificationUnit
+    ///     1.1) Generate Boogie (generate_boogie_for_unit)
+    ///     1.2) Run the solver (execute_boogie)
+    /// 2) return a VerificationExecution object
+    pub fn run_commutativity_pipeline(&self) -> VerificationExecution {
+        // TODO
+    }
+}
