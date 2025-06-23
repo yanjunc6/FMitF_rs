@@ -1,5 +1,5 @@
-use std::process::Command;
 use std::path::Path;
+use std::process::Command;
 
 #[derive(Debug, Clone)]
 pub enum VerificationResult {
@@ -7,22 +7,17 @@ pub enum VerificationResult {
     Failure(String),
 }
 
-
 #[derive(Debug)]
 pub struct VerificationExecution;
 
 impl VerificationExecution {
-    pub fn execute_boogie<P: AsRef<Path>>(
-        &self,
-        file_path: P,
-    ) -> VerificationResult {
-
+    pub fn execute_boogie<P: AsRef<Path>>(&self, file_path: P) -> VerificationResult {
         // Run the boogie verifier with /quiet flag
         let output = Command::new("boogie")
             .arg(file_path.as_ref())
             .arg("/quiet")
             .output();
-        
+
         let result = match output {
             Ok(output) => {
                 if output.status.success() && output.stdout.is_empty() && output.stderr.is_empty() {
@@ -37,17 +32,17 @@ impl VerificationExecution {
                     } else if !stderr.is_empty() {
                         stderr.to_string()
                     } else {
-                        format!("Boogie verification failed with exit code: {}", 
-                               output.status.code().unwrap_or(-1))
+                        format!(
+                            "Boogie verification failed with exit code: {}",
+                            output.status.code().unwrap_or(-1)
+                        )
                     };
                     VerificationResult::Failure(error_msg)
                 }
             }
-            Err(e) => {
-                VerificationResult::Failure(format!("Failed to run Boogie: {}", e))
-            }
+            Err(e) => VerificationResult::Failure(format!("Failed to run Boogie: {}", e)),
         };
-        
+
         result
     }
 }

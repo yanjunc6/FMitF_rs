@@ -1,0 +1,29 @@
+nodes {
+    NodeA,
+    NodeB
+}
+
+table TableA on NodeA {
+    primary int id;
+    int value;
+}
+
+table TableB on NodeB {
+    primary int id;
+    int value;
+}
+
+void test1(int x) {
+    hop on NodeA {
+        int temp = TableA[id: x].value;
+    }
+    hop on NodeB {
+        TableB[id: x].value = temp;
+    }
+}
+
+void test2(int y) {
+    hop on NodeB {
+        TableB[id: y].value = 42;
+    }
+}

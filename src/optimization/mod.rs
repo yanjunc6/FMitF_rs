@@ -48,9 +48,9 @@ impl CfgOptimizer {
     /// Create a default optimizer with standard passes
     pub fn default_passes() -> Self {
         Self::new()
-            .add_pass(Box::new(ConstantPropagationPass::new()))
-            .add_pass(Box::new(DeadCodeEliminationPass::new()))
-            .add_pass(Box::new(CommonSubexpressionEliminationPass::new()))
+        // .add_pass(Box::new(ConstantPropagationPass::new()))
+        // .add_pass(Box::new(CommonSubexpressionEliminationPass::new()))
+        // .add_pass(Box::new(DeadCodeEliminationPass::new()))
     }
 
     /// Optimize an entire CFG program

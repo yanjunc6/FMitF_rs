@@ -1,8 +1,10 @@
 //! Table modification-reference analysis for tracking table reads and writes per hop.
 //! This analysis determines which tables are read from and written to by each hop.
 
-use crate::cfg::{Rvalue, Statement, TableId, Terminator, FunctionCfg};
-use crate::dataflow::{DataflowAnalysis, DataflowResults, Direction, Lattice, TransferFunction, SetLattice};
+use crate::cfg::{FunctionCfg, Rvalue, Statement, TableId, Terminator};
+use crate::dataflow::{
+    DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice, TransferFunction,
+};
 
 /// Represents table access information (reads and writes) using SetLattice
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -21,7 +23,11 @@ pub enum AccessType {
 pub struct TableModRefTransfer;
 
 impl TransferFunction<SetLattice<TableAccess>> for TableModRefTransfer {
-    fn transfer_statement(&self, stmt: &Statement, state: &SetLattice<TableAccess>) -> SetLattice<TableAccess> {
+    fn transfer_statement(
+        &self,
+        stmt: &Statement,
+        state: &SetLattice<TableAccess>,
+    ) -> SetLattice<TableAccess> {
         let mut result = state.clone();
 
         match stmt {
@@ -44,7 +50,11 @@ impl TransferFunction<SetLattice<TableAccess>> for TableModRefTransfer {
         result
     }
 
-    fn transfer_terminator(&self, _term: &Terminator, state: &SetLattice<TableAccess>) -> SetLattice<TableAccess> {
+    fn transfer_terminator(
+        &self,
+        _term: &Terminator,
+        state: &SetLattice<TableAccess>,
+    ) -> SetLattice<TableAccess> {
         state.clone() // No table accesses in terminators for now
     }
 
@@ -62,4 +72,3 @@ pub fn analyze_table_mod_ref(func: &FunctionCfg) -> DataflowResults<SetLattice<T
     let analysis = DataflowAnalysis::new(Direction::Forward, TableModRefTransfer);
     analysis.analyze(func)
 }
-

@@ -272,16 +272,17 @@ impl PipelineStage for VerificationStage {
 
     fn execute(&mut self, input: Self::Input) -> Result<Self::Output, Self::Error> {
         let (cfg_program, sc_graph) = input;
-        
+
         // Create verification manager using our new verification module
         let mut verification_manager = VerificationManager::new();
-        
+
         // Run the commutativity pipeline
         verification_manager.run_commutativity_pipeline(&cfg_program, &sc_graph);
-        
+
         // If Boogie output directory is specified, save the Boogie files
         if let Some(ref dir) = self.boogie_output_dir {
-            verification_manager.save_boogie_files(dir)
+            verification_manager
+                .save_boogie_files(dir)
                 .map_err(|e| format!("Failed to save Boogie files: {}", e))?;
         }
 
@@ -340,7 +341,10 @@ impl StageSummary for VerificationStage {
         format!(
             "{} C-edges processed, {} successful",
             results.len(),
-            results.values().filter(|r| matches!(r, VerificationResult::Success)).count()
+            results
+                .values()
+                .filter(|r| matches!(r, VerificationResult::Success))
+                .count()
         )
     }
 }
@@ -354,9 +358,12 @@ pub fn print_verification_results(manager: &VerificationManager, cli: &super::Cl
     println!(
         "Verification: {} C-edges processed, {} successful",
         manager.results.len(),
-        manager.results.values().filter(|r| matches!(r, VerificationResult::Success)).count()
+        manager
+            .results
+            .values()
+            .filter(|r| matches!(r, VerificationResult::Success))
+            .count()
     );
-
 
     if cli.verbose {
         println!("\nDetailed results:");
@@ -373,7 +380,12 @@ pub fn print_verification_results(manager: &VerificationManager, cli: &super::Cl
         }
     }
 
-    if manager.results.values().all(|r| matches!(r, VerificationResult::Success)) && !cli.quiet {
+    if manager
+        .results
+        .values()
+        .all(|r| matches!(r, VerificationResult::Success))
+        && !cli.quiet
+    {
         println!("All C-edges verified successfully!");
     }
 }
@@ -401,6 +413,6 @@ pub fn check_final_state(sc_graph: &SCGraph, cli: &super::Cli) {
             }
         }
     } else if !cli.quiet {
-        println!("No mixed S/C cycles detected – system appears serializable.");
+        println!("No mixed S/C cycles detected - system appears serializable.");
     }
 }

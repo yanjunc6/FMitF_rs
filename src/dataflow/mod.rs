@@ -14,7 +14,7 @@ mod available_expressions;
 pub use available_expressions::analyze_available_expressions;
 
 mod table_mod_ref;
-pub use table_mod_ref::{analyze_table_mod_ref, TableAccess, AccessType};
+pub use table_mod_ref::{analyze_table_mod_ref, AccessType, TableAccess};
 
 /// Direction of dataflow analysis
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
