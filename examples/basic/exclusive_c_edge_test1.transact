@@ -1,0 +1,41 @@
+// collaborative typing
+// If user hop conflicts, then text hop cannot operate on the same position since user.cursor is strictly increasing
+// If text hop conflicts, then it cannot be operated by the same user
+nodes {
+    UserNode,
+    TextNode
+}
+
+table User on UserNode {
+    primary int id;
+    int cursor;
+}
+
+table Text on TextNode {
+    primary int pos;
+    string text;
+}
+
+// Transaction 1: Type
+void type(int userId, string input) {
+    hop on UserNode {
+        int cur = User[id: userId].cursor;
+        User[id: userId].cursor = cur + 1;
+    }
+    
+    hop on TextNode {
+        Text[pos: cur].text = input;
+    }
+}
+
+// Transaction 2: Clear
+void clear(int userId) {
+    hop on UserNode {
+        int cur = User[id: userId].cursor;
+        User[id: userId].cursor = cur + 1;
+    }
+    
+    hop on TextNode {
+        Text[pos: cur].text = "";
+    }
+}
