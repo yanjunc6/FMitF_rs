@@ -91,7 +91,6 @@ impl VerificationManager {
     /// Save Boogie files to a directory
     pub fn save_boogie_files(&self, output_dir: &Path) -> Result<(), String> {
         BoogieFileManager::write_files(&self.boogie_files, output_dir)?;
-        println!("Boogie files saved to: {}", output_dir.display());
         Ok(())
     }
 }

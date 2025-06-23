@@ -2,6 +2,7 @@
 //! Centralized output system with structured verbosity levels and selective color usage
 
 use colored::*;
+use std::io::{self, Write};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
@@ -50,6 +51,7 @@ impl Logger {
                 format!("{}/{}", stage_num, total).bright_blue().bold()
             );
             print!("({}): ", name.bright_blue());
+            io::stdout().flush().unwrap();
         }
     }
 
@@ -93,6 +95,16 @@ impl Logger {
             println!(
                 "{} {}",
                 "Writing".blue().bold(),
+                path.display().to_string().bright_blue().underline()
+            );
+        }
+    }
+
+    pub fn boogie_files_saved(&self, path: &std::path::Path) {
+        if self.level.should_show(LogLevel::Normal) {
+            println!(
+                "{} {}",
+                "Boogie files saved to:".bright_blue().bold(),
                 path.display().to_string().bright_blue().underline()
             );
         }
@@ -176,7 +188,7 @@ impl Logger {
     pub fn cycles_warning(&self, count: usize) {
         if self.level.should_show(LogLevel::Normal) {
             println!(
-                "\n{} {} mixed S/C cycles remain after verification",
+                "\n{} {} mixed S/C cycles remain after verification.",
                 "Warning:".yellow().bold(),
                 count.to_string().bright_yellow()
             );
@@ -185,7 +197,10 @@ impl Logger {
 
     pub fn no_cycles(&self) {
         if self.level.should_show(LogLevel::Normal) {
-            println!("No mixed S/C cycles detected – system appears serializable.");
+            println!(
+                "No mixed S/C cycles detected - system appears {}.",
+                "serializable".green().bold()
+            );
         }
     }
 
@@ -197,20 +212,46 @@ impl Logger {
                 verified, total, success_rate
             );
         } else if self.level.should_show(LogLevel::Normal) {
-            self.result_summary("Verification Results");
-            self.result_item("Total C-edges analyzed", &total.to_string(), None);
-            self.result_item("Successfully verified", &verified.to_string(), Some(true));
-            self.result_item(
-                "Success rate",
-                &format!("{:.1}%", success_rate),
-                if success_rate > 80.0 {
-                    Some(true)
-                } else if success_rate < 50.0 {
-                    Some(false)
-                } else {
-                    None
-                },
-            );
+            println!("Verification Results");
+            println!(" - Total C-edges analyzed: {}", total);
+            println!(" - Successfully verified: {}", verified);
+            println!(" - Success rate: {:.1}%", success_rate);
+        }
+    }
+
+    // Print detailed verification results
+    pub fn verification_details<F>(&self, get_results: F)
+    where
+        F: Fn() -> Vec<(String, bool, Option<String>)>,
+    {
+        if self.level.should_show(LogLevel::Verbose) {
+            println!("Detailed Results");
+            for (edge_info, success, failure_msg) in get_results() {
+                if success {
+                    println!(" - {}: Verified (commutative)", edge_info);
+                } else if let Some(msg) = failure_msg {
+                    println!(" - {}: Failed", edge_info);
+                    println!("   {}", msg);
+                }
+            }
+        }
+    }
+
+    // Handle mixed cycles with appropriate colors
+    pub fn mixed_cycles_status(&self, cycle_count: usize, cycles: Option<Vec<String>>) {
+        if cycle_count > 0 {
+            self.cycles_warning(cycle_count);
+
+            if self.level.should_show(LogLevel::Verbose) {
+                if let Some(cycle_strings) = cycles {
+                    println!("   Remaining cycles:");
+                    for (i, cycle_str) in cycle_strings.iter().enumerate() {
+                        println!("     Cycle {}: {}", i + 1, cycle_str);
+                    }
+                }
+            }
+        } else {
+            self.no_cycles();
         }
     }
 

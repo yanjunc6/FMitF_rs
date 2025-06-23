@@ -311,21 +311,9 @@ impl DirectoryOutput for VerificationStage {
         std::fs::create_dir_all(dir)
             .map_err(|e| format!("Failed to create output directory {:?}: {}", dir, e))?;
 
-        if !cli.quiet {
-            if let Some(boogie_dir) = &self.boogie_output_dir {
-                println!(
-                    "Boogie files are configured to be saved to: {}",
-                    boogie_dir.display()
-                );
-                if boogie_dir != dir {
-                    println!(
-                        "   (Note: General pipeline output directory for this stage is {})",
-                        dir.display()
-                    );
-                }
-            } else {
-                println!("Boogie file output directory not specified. Files will not be saved.");
-            }
+        if let Some(boogie_dir) = &self.boogie_output_dir {
+            let logger = super::Logger::new(cli.verbose, cli.quiet);
+            logger.boogie_files_saved(boogie_dir);
         }
 
         Ok(())
@@ -350,69 +338,61 @@ impl StageSummary for VerificationStage {
 }
 
 /// Print detailed verification results
-pub fn print_verification_results(manager: &VerificationManager, cli: &super::Cli) {
-    if cli.quiet {
+pub fn print_verification_results(manager: &VerificationManager, logger: &super::Logger) {
+    let total = manager.results.len();
+    let successful = manager
+        .results
+        .values()
+        .filter(|r| matches!(r, VerificationResult::Success))
+        .count();
+
+    if total == 0 {
+        logger.info_positive("No C-edges found for verification.");
         return;
     }
 
-    println!(
-        "Verification: {} C-edges processed, {} successful",
-        manager.results.len(),
+    let success_rate = (successful as f64 / total as f64) * 100.0;
+    logger.verification_result(successful, total, success_rate);
+
+    // Use the logger's verification_details method for verbose output
+    logger.verification_details(|| {
         manager
             .results
-            .values()
-            .filter(|r| matches!(r, VerificationResult::Success))
-            .count()
-    );
-
-    if cli.verbose {
-        println!("\nDetailed results:");
-        for (edge, result) in &manager.results {
-            let edge_info = format!("Edge {}→{}", edge.source.index(), edge.target.index());
-            match result {
-                crate::verification::execution::VerificationResult::Success => {
-                    println!("{}: Verified (commutative)", edge_info);
+            .iter()
+            .map(|(edge, result)| {
+                let edge_info = format!("Edge {}→{}", edge.source.index(), edge.target.index());
+                match result {
+                    crate::verification::execution::VerificationResult::Success => {
+                        (edge_info, true, None)
+                    }
+                    crate::verification::execution::VerificationResult::Failure(msg) => {
+                        (edge_info, false, Some(msg.clone()))
+                    }
                 }
-                crate::verification::execution::VerificationResult::Failure(msg) => {
-                    println!("{}: Failed - {}", edge_info, msg);
-                }
-            }
-        }
-    }
-
-    if manager
-        .results
-        .values()
-        .all(|r| matches!(r, VerificationResult::Success))
-        && !cli.quiet
-    {
-        println!("All C-edges verified successfully!");
-    }
+            })
+            .collect()
+    });
 }
 
 /// Check final state after verification
-pub fn check_final_state(sc_graph: &SCGraph, cli: &super::Cli) {
+pub fn check_final_state(sc_graph: &SCGraph, logger: &super::Logger) {
     let mixed_cycles = sc_graph.find_mixed_cycles();
 
     if !mixed_cycles.is_empty() {
-        println!(
-            "\nWarning: {} mixed S/C cycles remain after verification",
-            mixed_cycles.len()
-        );
-        if !cli.quiet {
-            println!("   This may indicate potential serializability violations");
-            if cli.verbose {
-                println!("   Remaining cycles:");
-                for (i, cycle) in mixed_cycles.iter().enumerate() {
-                    let cycle_str: Vec<String> = cycle
-                        .iter()
-                        .map(|hop_id| format!("H{}", hop_id.index()))
-                        .collect();
-                    println!("     Cycle {}: {}", i + 1, cycle_str.join(" -> "));
-                }
-            }
-        }
-    } else if !cli.quiet {
-        println!("No mixed S/C cycles detected - system appears serializable.");
+        let cycle_strings: Vec<String> = mixed_cycles
+            .iter()
+            .enumerate()
+            .map(|(i, cycle)| {
+                let cycle_str: Vec<String> = cycle
+                    .iter()
+                    .map(|hop_id| format!("H{}", hop_id.index()))
+                    .collect();
+                format!("Cycle {}: {}", i + 1, cycle_str.join(" -> "))
+            })
+            .collect();
+
+        logger.mixed_cycles_status(mixed_cycles.len(), Some(cycle_strings));
+    } else {
+        logger.mixed_cycles_status(0, None);
     }
 }

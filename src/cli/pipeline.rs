@@ -144,7 +144,6 @@ impl Pipeline {
         }
 
         // Stage 5: Verification
-        self.logger.process_start("verification process");
         self.logger.stage_start(
             self.verification_stage.stage_number(),
             total_stages,
@@ -166,8 +165,8 @@ impl Pipeline {
         }
 
         // Print detailed results and final state
-        print_verification_results(results, cli);
-        check_final_state(final_scgraph, cli);
+        print_verification_results(results, &self.logger);
+        check_final_state(final_scgraph, &self.logger);
 
         Ok(())
     }
