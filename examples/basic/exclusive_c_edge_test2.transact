@@ -1,0 +1,59 @@
+// If the user hop conflicts, only one of the transactions can execute the second hop
+// If the second hop conflicts, then they cannot be the same user -- first hops don't conflict
+nodes {
+    UserNode,
+    MachineNode
+}
+
+table User on UserNode {
+    primary int id;
+    int last_op;
+}
+
+// Log the operation per (user, machine)
+// Each row can only perform one operation
+table Log on UserNode {
+    primary int userId;
+    primary int machineId;
+    int status;
+}
+
+table Machine on MachineNode {
+    primary int id;
+    int operate_time;
+}
+
+// Transaction 1: Operate type1
+void op1(int userId, int machineId, int time) {
+    hop on UserNode {
+        int status = Log[userId: userId, machineId: machineId].status;
+        if (status == 0) {
+            User[id: userId].last_op = 1;
+            Log[userId: userId, machineId: machineId].status = 1;
+        }
+        
+    }
+    
+    hop on MachineNode {
+        if (status == 0) {
+            Machine[id: machineId].operate_time = time;
+        }
+    }
+}
+
+// Transaction 2: Operate type2
+void op2(int userId, int machineId, int time) {
+    hop on UserNode {
+        int status = Log[userId: userId, machineId: machineId].status;
+        if (status == 0) {
+            User[id: userId].last_op = 2;
+            Log[userId: userId, machineId: machineId].status = 1;
+        }
+    }
+    
+    hop on MachineNode {
+        if (status == 0) {
+            Machine[id: machineId].operate_time = time;
+        }
+    }
+}
