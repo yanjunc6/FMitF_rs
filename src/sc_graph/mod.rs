@@ -115,9 +115,14 @@ impl SCGraph {
                     if nodes_arena[sc_node1_id].cfg_function_id
                         != nodes_arena[sc_node2_id].cfg_function_id
                     {
-                        edges.push(Edge::new(sc_node1_id, sc_node2_id, EdgeType::C));
-                        // Optionally, add the reverse edge if C-edges are strictly undirected
-                        // edges.push(Edge::new(sc_node2_id, sc_node1_id, EdgeType::C));
+                        // For undirected graph, store only one edge per pair with consistent ordering
+                        // Always store with smaller node ID first to avoid duplicates
+                        let (source, target) = if sc_node1_id.index() < sc_node2_id.index() {
+                            (sc_node1_id, sc_node2_id)
+                        } else {
+                            (sc_node2_id, sc_node1_id)
+                        };
+                        edges.push(Edge::new(source, target, EdgeType::C));
                     }
                 }
             }
@@ -144,6 +149,7 @@ impl SCGraph {
             self.dfs_find_cycles(
                 start_sc_node_id, // current_sc_node_id
                 start_sc_node_id, // start_sc_node_id_for_cycle
+                None, // parent_sc_node_id (to prevent immediate backtrack in undirected graph)
                 &mut path,
                 &mut visited_in_dfs,
                 &mut mixed_cycles,
@@ -159,7 +165,8 @@ impl SCGraph {
         &self,
         current_sc_node_id: SCGraphNodeId,
         start_sc_node_id_for_cycle: SCGraphNodeId,
-        path: &mut Vec<SCGraphNodeId>, // Path of SCGraphNodeIds
+        parent_sc_node_id: Option<SCGraphNodeId>, // Parent to avoid immediate backtrack
+        path: &mut Vec<SCGraphNodeId>,            // Path of SCGraphNodeIds
         visited_in_dfs: &mut HashSet<SCGraphNodeId>,
         mixed_cycles: &mut Vec<Vec<CfgHopId>>,
         visited_paths_for_cycle_detection: &mut HashSet<Vec<CfgHopId>>,
@@ -167,8 +174,21 @@ impl SCGraph {
         c_edges_count: usize,
     ) {
         for edge in &self.edges {
-            if edge.source == current_sc_node_id {
-                let neighbor_sc_node_id = edge.target;
+            // For undirected graph, check both directions of each edge
+            let neighbor_sc_node_id = if edge.source == current_sc_node_id {
+                Some(edge.target)
+            } else if edge.target == current_sc_node_id {
+                Some(edge.source)
+            } else {
+                None
+            };
+
+            if let Some(neighbor_sc_node_id) = neighbor_sc_node_id {
+                // Skip if this would be immediate backtrack to parent
+                if Some(neighbor_sc_node_id) == parent_sc_node_id {
+                    continue;
+                }
+
                 let mut next_s_edges_count = s_edges_count;
                 let mut next_c_edges_count = c_edges_count;
 
@@ -198,6 +218,7 @@ impl SCGraph {
                     self.dfs_find_cycles(
                         neighbor_sc_node_id,
                         start_sc_node_id_for_cycle,
+                        Some(current_sc_node_id), // Current node becomes parent
                         path,
                         visited_in_dfs,
                         mixed_cycles,
@@ -218,6 +239,7 @@ impl SCGraph {
         if cycle_cfg_hops.is_empty() {
             return Vec::new();
         }
+
         // Find the CfgHopId with the smallest index value to start the canonical form
         let min_hop_id_val = cycle_cfg_hops.iter().min_by_key(|h| h.index()).unwrap();
         let min_pos = cycle_cfg_hops
@@ -225,11 +247,23 @@ impl SCGraph {
             .position(|&h| h == *min_hop_id_val)
             .unwrap();
 
-        let mut canonical = Vec::with_capacity(cycle_cfg_hops.len());
+        // Create two possible canonical forms (forward and reverse from min position)
+        let mut forward_canonical = Vec::with_capacity(cycle_cfg_hops.len());
+        let mut reverse_canonical = Vec::with_capacity(cycle_cfg_hops.len());
+
         for i in 0..cycle_cfg_hops.len() {
-            canonical.push(cycle_cfg_hops[(min_pos + i) % cycle_cfg_hops.len()]);
+            forward_canonical.push(cycle_cfg_hops[(min_pos + i) % cycle_cfg_hops.len()]);
+            reverse_canonical
+                .push(cycle_cfg_hops[(min_pos + cycle_cfg_hops.len() - i) % cycle_cfg_hops.len()]);
         }
-        canonical
+
+        // Return the lexicographically smaller one to ensure unique representation
+        // for undirected cycles that can be traversed in both directions
+        if forward_canonical <= reverse_canonical {
+            forward_canonical
+        } else {
+            reverse_canonical
+        }
     }
 
     /// Returns the number of nodes (hops), S-edges, and C-edges in the graph.

@@ -189,7 +189,7 @@ impl Logger {
         if self.level.should_show(LogLevel::Normal) {
             println!(
                 "\n{} {} mixed S/C cycles remain after verification.",
-                "Warning:".yellow().bold(),
+                "Error:".red().bold(),
                 count.to_string().bright_yellow()
             );
         }

@@ -84,7 +84,6 @@ fn format_sc_graph_text(
     let (nodes_count, s_edges_count, c_edges_count) = sc_graph.stats();
 
     s.push_str("Serializability Conflict Graph (SC-Graph):\n");
-    s.push_str("==========================================\n\n");
     s.push_str(&format!(
         "Stats: {} Nodes (Hops), {} S-Edges, {} C-Edges\n\n",
         nodes_count, s_edges_count, c_edges_count
@@ -108,9 +107,18 @@ fn format_sc_graph_text(
             // Fix: edge.source and edge.target are already SCGraphNodeId, use them directly
             let source_sc_node = &sc_graph.nodes[edge.source];
             let target_sc_node = &sc_graph.nodes[edge.target];
+
+            let source_func_name = &cfg_program.functions[source_sc_node.cfg_function_id].name;
+            let target_func_name = &cfg_program.functions[target_sc_node.cfg_function_id].name;
+
+            // All edges are treated as undirected in display
             s.push_str(&format!(
-                "  CFGHop {} -> CFGHop {} (Type: {:?})\n",
+                "  SC{} ({}:H{}) -- SC{} ({}:H{}) (Type: {:?})\n",
+                edge.source.index(),
+                source_func_name,
                 source_sc_node.cfg_hop_id.index(),
+                edge.target.index(),
+                target_func_name,
                 target_sc_node.cfg_hop_id.index(),
                 edge.edge_type
             ));
@@ -125,9 +133,18 @@ fn format_sc_graph_text(
         for (i, cycle) in mixed_cycles.iter().enumerate() {
             let cycle_str: Vec<String> = cycle
                 .iter()
-                .map(|h_id| format!("H{}", h_id.index()))
+                .map(|&h_id| {
+                    // Find the SC node that corresponds to this CFG hop
+                    if let Some(sc_node_id) = sc_graph.get_sc_node_id(h_id) {
+                        let sc_node = &sc_graph.nodes[sc_node_id];
+                        let func_name = &cfg_program.functions[sc_node.cfg_function_id].name;
+                        format!("SC{}({}:H{})", sc_node_id.index(), func_name, h_id.index())
+                    } else {
+                        format!("H{}", h_id.index())
+                    }
+                })
                 .collect();
-            s.push_str(&format!("  Cycle {}: {}\n", i + 1, cycle_str.join(" -> ")));
+            s.push_str(&format!("  Cycle {}: {}\n", i + 1, cycle_str.join(" -- ")));
         }
     }
 
@@ -139,7 +156,7 @@ fn format_sc_graph_dot(
     cfg_program: &CfgProgram,
     writer: &mut impl Write,
 ) -> Result<()> {
-    writeln!(writer, "digraph SCGraph {{")?;
+    writeln!(writer, "graph SCGraph {{")?; // Changed from "digraph" to "graph" for undirected
     writeln!(writer, "  compound=true;")?;
     writeln!(writer, "  node [shape=box, style=rounded];")?;
     writeln!(writer, "")?;
@@ -193,7 +210,7 @@ fn format_sc_graph_dot(
         };
         writeln!(
             writer,
-            "  sc_node_{} -> sc_node_{} [color={}, style={}, label=\"{:?}\"];",
+            "  sc_node_{} -- sc_node_{} [color={}, style={}, label=\"{:?}\"];",
             edge.source.index(),
             edge.target.index(),
             color,

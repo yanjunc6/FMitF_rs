@@ -28,16 +28,18 @@ impl VerificationManager {
         }
     }
 
-    /// Run the verification pipeline and return owned results
-    pub fn run_commutativity_pipeline(&mut self, cfg: &CfgProgram, sc_graph: &SCGraph) {
+    /// Run the verification pipeline and remove successful C-edges
+    pub fn run_commutativity_pipeline(&mut self, cfg: &CfgProgram, sc_graph: &mut SCGraph) {
         // Get all C-edges (commutativity edges) from the SC graph
         let c_edges: Vec<_> = sc_graph
             .edges
             .iter()
             .filter(|edge| edge.edge_type == EdgeType::C)
+            .cloned()
             .collect();
 
         let execution = VerificationExecution;
+        let mut successful_edges = Vec::new();
 
         // Process each C-edge
         for edge in c_edges {
@@ -69,6 +71,12 @@ impl VerificationManager {
 
                     // 6) Execute the Boogie verification
                     let result = execution.execute_boogie(&temp_path);
+
+                    // If verification is successful, mark edge for removal
+                    if matches!(result, VerificationResult::Success) {
+                        successful_edges.push(edge.clone());
+                    }
+
                     self.results.insert(edge.clone(), result);
                 }
                 Err(e) => {
@@ -77,6 +85,11 @@ impl VerificationManager {
                 }
             }
         }
+
+        // Remove successful C-edges from the SC graph
+        sc_graph
+            .edges
+            .retain(|edge| !(edge.edge_type == EdgeType::C && successful_edges.contains(edge)));
 
         // 7) Clean up temporary files
         self.cleanup_temp_files();

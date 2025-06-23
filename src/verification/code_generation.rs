@@ -663,27 +663,6 @@ impl<'a> BoogieCodeGenerator<'a> {
     }
 }
 
-/// Main entry point for Boogie code generation
-pub fn generate_boogie_for_unit(unit: &VerificationUnit) -> String {
-    // Placeholder implementation - should not be used anymore
-    format!(
-        "// Generated Boogie code for verification unit\n\
-         // Function A: {} (hop {})\n\
-         // Function B: {} (hop {})\n\
-         // Prefix interleavings: {}\n\
-         // TODO: Use generate_boogie_for_unit_with_cfg instead\n\n\
-         procedure main() {{\n\
-         \t// Placeholder implementation\n\
-         \tassert false; // This will fail until proper implementation\n\
-         }}",
-        unit.function_a.index(),
-        unit.final_a.index(),
-        unit.function_b.index(),
-        unit.final_b.index(),
-        unit.merges.len()
-    )
-}
-
 /// Generate Boogie code with CFG access
 pub fn generate_boogie_for_unit_with_cfg(unit: &VerificationUnit, cfg: &CfgProgram) -> String {
     let mut generator = BoogieCodeGenerator::new(unit, cfg);

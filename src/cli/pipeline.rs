@@ -21,7 +21,7 @@ impl Pipeline {
             scgraph_stage: ScGraphStage,
             verification_stage: VerificationStage {
                 timeout: cli.timeout,
-                boogie_output_dir: cli.output_dir.clone().or_else(|| cli.output.clone()), // Pass the determined directory to the stage
+                boogie_output_dir: cli.output_dir.clone(), // Only use output_dir for Boogie files
             },
             logger: Logger::new(cli.verbose, cli.quiet),
         }
@@ -155,13 +155,17 @@ impl Pipeline {
 
         self.logger.stage_success();
 
-        // Handle verification output
-        if cli.output_dir.is_some() || cli.output.is_some() {
+        // Handle verification output based on flags
+        if cli.output_dir.is_some() {
+            // Directory output mode - save Boogie files and optionally DOT file
             OutputManager::handle_directory_output(
                 &self.verification_stage,
                 &verification_result,
                 cli,
             )?;
+        } else if cli.dot {
+            // DOT output mode - either to file (if --output specified) or console
+            OutputManager::handle_file_output(&self.verification_stage, &verification_result, cli)?;
         }
 
         // Print detailed results and final state

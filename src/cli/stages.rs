@@ -271,13 +271,13 @@ impl PipelineStage for VerificationStage {
     type Error = String;
 
     fn execute(&mut self, input: Self::Input) -> Result<Self::Output, Self::Error> {
-        let (cfg_program, sc_graph) = input;
+        let (cfg_program, mut sc_graph) = input;
 
         // Create verification manager using our new verification module
         let mut verification_manager = VerificationManager::new();
 
-        // Run the commutativity pipeline
-        verification_manager.run_commutativity_pipeline(&cfg_program, &sc_graph);
+        // Run the commutativity pipeline (this will modify sc_graph by removing successful C-edges)
+        verification_manager.run_commutativity_pipeline(&cfg_program, &mut sc_graph);
 
         // If Boogie output directory is specified, save the Boogie files
         if let Some(ref dir) = self.boogie_output_dir {
@@ -298,12 +298,39 @@ impl PipelineStage for VerificationStage {
     }
 }
 
+impl FileOutput for VerificationStage {
+    type Data = (CfgProgram, SCGraph, VerificationManager);
+
+    fn write_output(
+        &self,
+        data: &Self::Data,
+        writer: &mut dyn Write,
+        cli: &super::Cli,
+    ) -> Result<(), String> {
+        let (cfg_program, sc_graph, _) = data;
+
+        // Only output DOT file when --dot flag is specified
+        if cli.dot {
+            let sc_opts = SCGraphPrintOptions {
+                format: SCGraphFormat::Dot,
+                verbose: cli.verbose,
+                show_spans: cli.show_spans,
+            };
+
+            write_sc_graph_data(sc_graph, cfg_program, &sc_opts, writer)
+                .map_err(|e| format!("Failed to write SC-Graph DOT: {}", e))
+        } else {
+            Err("FileOutput for VerificationStage is only supported with --dot flag".to_string())
+        }
+    }
+}
+
 impl DirectoryOutput for VerificationStage {
     type Data = (CfgProgram, SCGraph, VerificationManager);
 
     fn write_to_directory(
         &self,
-        _data: &Self::Data,
+        data: &Self::Data,
         dir: &PathBuf,
         cli: &super::Cli,
     ) -> Result<(), String> {
@@ -311,9 +338,37 @@ impl DirectoryOutput for VerificationStage {
         std::fs::create_dir_all(dir)
             .map_err(|e| format!("Failed to create output directory {:?}: {}", dir, e))?;
 
-        if let Some(boogie_dir) = &self.boogie_output_dir {
+        let (cfg_program, sc_graph, _) = data;
+
+        // If --dot flag is specified with --output-dir, create a.dot in the directory
+        if cli.dot {
+            let sc_dot_path = dir.join("a.dot");
+            let sc_opts = SCGraphPrintOptions {
+                format: SCGraphFormat::Dot,
+                verbose: cli.verbose,
+                show_spans: cli.show_spans,
+            };
+
+            let mut file = std::fs::File::create(&sc_dot_path).map_err(|e| {
+                format!(
+                    "Failed to create SC-Graph DOT file {:?}: {}",
+                    sc_dot_path, e
+                )
+            })?;
+
+            write_sc_graph_data(sc_graph, cfg_program, &sc_opts, &mut file)
+                .map_err(|e| format!("Failed to write SC-Graph DOT file: {}", e))?;
+
             let logger = super::Logger::new(cli.verbose, cli.quiet);
-            logger.boogie_files_saved(boogie_dir);
+            logger.file_output(&sc_dot_path);
+        }
+
+        // Only output Boogie files when --output-dir is specified (not --output)
+        if cli.output_dir.is_some() {
+            if let Some(boogie_dir) = &self.boogie_output_dir {
+                let logger = super::Logger::new(cli.verbose, cli.quiet);
+                logger.boogie_files_saved(boogie_dir);
+            }
         }
 
         Ok(())

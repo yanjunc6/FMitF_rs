@@ -81,11 +81,14 @@ pub enum Mode {
 
 impl Cli {
     pub fn validate(&self) -> Result<(), String> {
-        // For verify mode, prefer --output-dir over --output for Boogie files
+        // For verify mode, handle output options
         if self.mode == Mode::Verify {
             if self.output.is_some() && self.output_dir.is_some() {
-                return Err("Cannot specify both --output and --output-dir for verify mode. Use --output-dir for Boogie files.".to_string());
+                return Err(
+                    "Cannot specify both --output and --output-dir for verify mode".to_string(),
+                );
             }
+            // For verify mode with --dot, output is optional (can output to console)
         } else {
             // For non-verify modes, --output-dir doesn't make sense
             if self.output_dir.is_some() {
@@ -93,10 +96,15 @@ impl Cli {
             }
         }
 
-        // DOT output is only valid for CFG and SC-Graph modes
-        if self.dot && !matches!(self.mode, Mode::Cfg | Mode::Optimize | Mode::Scgraph) {
+        // DOT output is only valid for CFG, Optimize, SC-Graph, and Verify modes
+        if self.dot
+            && !matches!(
+                self.mode,
+                Mode::Cfg | Mode::Optimize | Mode::Scgraph | Mode::Verify
+            )
+        {
             return Err(
-                "--dot flag is only valid for cfg, optimize, and scgraph modes".to_string(),
+                "--dot flag is only valid for cfg, optimize, scgraph, and verify modes".to_string(),
             );
         }
 
