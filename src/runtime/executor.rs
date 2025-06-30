@@ -1,15 +1,12 @@
-//! Function Executor - Simple CFG walker for testing
+//! Function Executor - CFG interpreter with proper control flow
 
 use super::{RuntimeError, RuntimeState, RuntimeValue};
-use crate::cfg::{BinaryOp, Constant, FunctionId, Operand, Rvalue, Statement, UnaryOp};
+use crate::cfg::{BasicBlockId, BinaryOp, Constant, FunctionId, HopId, Operand, Rvalue, Statement, Terminator, UnaryOp};
 use std::collections::HashMap;
 
-/// Execute a function by walking CFG blocks
+/// Execute a function by properly following CFG control flow
 /// 
-/// NOTE: This is a simplified executor for testing purposes only.
-/// It executes all statements from all blocks linearly without respecting
-/// control flow (branches, conditions, loops, etc.). For a proper implementation,
-/// this should be replaced with a CFG interpreter that:
+/// This executor respects the CFG structure:
 /// 1. Starts from the entry hop
 /// 2. Follows terminators (branches, gotos, returns) properly
 /// 3. Evaluates conditions for branch decisions
@@ -19,53 +16,113 @@ pub fn execute_function(
     state: &mut RuntimeState,
     func_id: FunctionId,
     args: Vec<RuntimeValue>,
-) -> Result<(), RuntimeError> {
-    // Get function info first
-    let (statements_to_execute, parameters) = {
-        let cfg = state
-            .cfg_program
-            .as_ref()
-            .ok_or_else(|| RuntimeError::ExecutionError("No program loaded".to_string()))?;
+) -> Result<Option<RuntimeValue>, RuntimeError> {
+    let cfg = state
+        .cfg_program
+        .as_ref()
+        .ok_or_else(|| RuntimeError::ExecutionError("No program loaded".to_string()))?;
 
-        let func = &cfg.functions[func_id];
-        let parameters = func.parameters.clone();
-
-        // Collect all statements first to avoid borrowing issues
-        let mut statements_to_execute = Vec::new();
-        for (_hop_id, hop) in func.hops.iter() {
-            // Execute all blocks in the hop
-            for &block_id in &hop.blocks {
-                let block = &func.blocks[block_id];
-
-                // Collect statements
-                for stmt in &block.statements {
-                    statements_to_execute.push(stmt.clone());
-                }
-            }
+    let func = &cfg.functions[func_id];
+    
+    // Set up parameter bindings
+    let mut local_vars: HashMap<String, RuntimeValue> = HashMap::new();
+    for (i, &param_var_id) in func.parameters.iter().enumerate() {
+        if i < args.len() {
+            let param_name = &func.variables[param_var_id].name;
+            local_vars.insert(param_name.clone(), args[i].clone());
         }
+    }
 
-        (statements_to_execute, parameters)
+    // Start execution from entry hop
+    let entry_hop = func.entry_hop.ok_or_else(|| {
+        RuntimeError::ExecutionError("Function has no entry hop".to_string())
+    })?;
+
+    execute_hop(state, func_id, entry_hop, &mut local_vars)
+}
+
+/// Execute a hop starting from its entry block
+fn execute_hop(
+    state: &mut RuntimeState,
+    func_id: FunctionId,
+    hop_id: HopId,
+    local_vars: &mut HashMap<String, RuntimeValue>,
+) -> Result<Option<RuntimeValue>, RuntimeError> {
+    let cfg = state.cfg_program.as_ref().unwrap();
+    let func = &cfg.functions[func_id];
+    let hop = &func.hops[hop_id];
+
+    let entry_block = hop.entry_block.ok_or_else(|| {
+        RuntimeError::ExecutionError("Hop has no entry block".to_string())
+    })?;
+
+    execute_block(state, func_id, entry_block, local_vars)
+}
+
+/// Execute a basic block and handle its terminator
+fn execute_block(
+    state: &mut RuntimeState,
+    func_id: FunctionId,
+    block_id: BasicBlockId,
+    local_vars: &mut HashMap<String, RuntimeValue>,
+) -> Result<Option<RuntimeValue>, RuntimeError> {
+    // Get the statements and terminator first to avoid borrowing issues
+    let (statements, terminator) = {
+        let cfg = state.cfg_program.as_ref().unwrap();
+        let func = &cfg.functions[func_id];
+        let block = &func.blocks[block_id];
+        (block.statements.clone(), block.terminator.clone())
     };
 
-    // Set up parameter bindings (very simple)
-    let mut local_vars: HashMap<String, RuntimeValue> = HashMap::new();
+    // Execute all statements in the block
+    for stmt in &statements {
+        execute_statement_isolated(state, stmt, local_vars, func_id)?;
+    }
 
-    // Bind arguments to parameters
-    for (i, &param_var_id) in parameters.iter().enumerate() {
-        if i < args.len() {
-            // Get parameter name
-            if let Some(cfg) = &state.cfg_program {
-                let param_name = &cfg.functions[func_id].variables[param_var_id].name;
-                local_vars.insert(param_name.clone(), args[i].clone());
+    // Handle the terminator
+    match terminator {
+        Terminator::Goto(next_block) => {
+            execute_block(state, func_id, next_block, local_vars)
+        }
+        
+        Terminator::Branch {
+            condition,
+            then_block,
+            else_block,
+        } => {
+            let condition_value = evaluate_operand_isolated(&condition, local_vars, state, func_id)?;
+            let next_block = match condition_value {
+                RuntimeValue::Bool(true) => then_block,
+                RuntimeValue::Bool(false) => else_block,
+                _ => return Err(RuntimeError::ExecutionError(
+                    "Branch condition must be boolean".to_string()
+                )),
+            };
+            execute_block(state, func_id, next_block, local_vars)
+        }
+        
+        Terminator::Return(operand) => {
+            if let Some(operand) = operand {
+                let return_value = evaluate_operand_isolated(&operand, local_vars, state, func_id)?;
+                Ok(Some(return_value))
+            } else {
+                Ok(None)
+            }
+        }
+        
+        Terminator::Abort => {
+            Err(RuntimeError::ExecutionError("Function aborted".to_string()))
+        }
+        
+        Terminator::HopExit { next_hop } => {
+            if let Some(next_hop_id) = next_hop {
+                execute_hop(state, func_id, next_hop_id, local_vars)
+            } else {
+                // End of function
+                Ok(None)
             }
         }
     }
-
-    // Execute all collected statements
-    for stmt in &statements_to_execute {
-        execute_statement_isolated(state, &stmt, &mut local_vars, func_id)?;
-    }
-    Ok(())
 }
 
 /// Execute a single statement
