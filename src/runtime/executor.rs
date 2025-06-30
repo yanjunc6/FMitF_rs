@@ -5,6 +5,16 @@ use crate::cfg::{BinaryOp, Constant, FunctionId, Operand, Rvalue, Statement, Una
 use std::collections::HashMap;
 
 /// Execute a function by walking CFG blocks
+/// 
+/// NOTE: This is a simplified executor for testing purposes only.
+/// It executes all statements from all blocks linearly without respecting
+/// control flow (branches, conditions, loops, etc.). For a proper implementation,
+/// this should be replaced with a CFG interpreter that:
+/// 1. Starts from the entry hop
+/// 2. Follows terminators (branches, gotos, returns) properly
+/// 3. Evaluates conditions for branch decisions
+/// 4. Handles hop transitions correctly
+/// 5. Maintains proper execution state between blocks
 pub fn execute_function(
     state: &mut RuntimeState,
     func_id: FunctionId,
@@ -131,7 +141,10 @@ fn evaluate_rvalue_isolated(
         Rvalue::Use(operand) => evaluate_operand_isolated(operand, local_vars, state, func_id),
 
         Rvalue::TableAccess {
-            pk_values, field, ..
+            table,
+            pk_values, 
+            field, 
+            ..
         } => {
             // Get primary key values
             let mut pk_vals = Vec::new();
@@ -140,17 +153,31 @@ fn evaluate_rvalue_isolated(
                 pk_vals.push(val);
             }
 
-            // Read from table (simplified - assumes first table for now)
-            if let Some((_, table_data)) = state.table_data.iter().next() {
-                let value = table_data
-                    .get(&pk_vals)
-                    .and_then(|record| record.get(field))
-                    .cloned()
-                    .unwrap_or(RuntimeValue::Int(0)); // Default value
-                Ok(value)
-            } else {
-                Ok(RuntimeValue::Int(0)) // Default if no tables
-            }
+            // Read from the specific table
+            let table_data = state.table_data.get(table).ok_or_else(|| {
+                RuntimeError::ExecutionError(format!("Table {:?} not found", table))
+            })?;
+            
+            let value = table_data
+                .get(&pk_vals)
+                .and_then(|record| record.get(field))
+                .cloned()
+                .or_else(|| {
+                    // Get default value based on field type
+                    if let Some(cfg) = &state.cfg_program {
+                        let field_info = &cfg.fields[*field];
+                        Some(match field_info.ty {
+                            crate::ast::TypeName::Int => RuntimeValue::Int(0),
+                            crate::ast::TypeName::Bool => RuntimeValue::Bool(false),
+                            crate::ast::TypeName::String => RuntimeValue::String(String::new()),
+                            crate::ast::TypeName::Float => RuntimeValue::Int(0), // Convert to int for simplicity
+                        })
+                    } else {
+                        Some(RuntimeValue::Int(0)) // Fallback
+                    }
+                })
+                .unwrap(); // Safe to unwrap because we always provide a default above
+            Ok(value)
         }
 
         Rvalue::BinaryOp { op, left, right } => {
