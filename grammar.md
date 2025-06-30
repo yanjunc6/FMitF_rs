@@ -30,6 +30,8 @@ StringLiteral =
     '"'
 ;
 
+BooleanLiteral = "true" | "false" ;
+
 Comment          = "//", { ANY_CHARACTER_EXCEPT_NEWLINE } ;
 Whitespace       = { " " | "\t" | "\r" | "\n" } ;
 
@@ -67,23 +69,23 @@ TableDeclaration =
     Identifier,
     "{",
         { FieldDeclaration },
-    "}",
-    ";"
+    "}"
 ;
 
 FieldDeclaration =
+    [ "primary" ],
     Type,
     Identifier,
     ";"
 ;
 
-Type = "int" | "float" | "string" ;
+Type = "int" | "float" | "string" | "bool" ;
 
 (* ------------------------------------------------- *)
 (* Functions *)
 (* ------------------------------------------------- *)
 FunctionDeclaration =
-    "void",
+    ReturnType,
     Identifier,
     "(",
         [ ParameterList ],
@@ -92,6 +94,8 @@ FunctionDeclaration =
         { FunctionBodyItem },
     "}"
 ;
+
+ReturnType = Type | "void" ;
 
 ParameterList =
     ParameterDecl,
@@ -105,8 +109,6 @@ ParameterDecl =
 
 FunctionBodyItem =
     HopBlock
-  | IfStatement
-  | ";"
 ;
 
 (* ------------------------------------------------- *)
@@ -125,17 +127,37 @@ HopBlock =
 (* Statements *)
 (* ------------------------------------------------- *)
 Statement =
-    AssignmentStatement
+    VarDeclStatement
+  | VarAssignmentStatement
+  | AssignmentStatement
   | IfStatement
-  | ";"
+  | WhileStatement
+  | ReturnStatement
+  | AbortStatement
+  | BreakStatement
+  | ContinueStatement
+  | EmptyStatement
+;
+
+VarDeclStatement =
+    Type,
+    Identifier,
+    "=",
+    Expression,
+    ";"
+;
+
+VarAssignmentStatement =
+    Identifier,
+    "=",
+    Expression,
+    ";"
 ;
 
 AssignmentStatement =
     Identifier,
     "[",
-        Identifier, 
-        ":",
-        Expression,
+        PrimaryKeyList,
     "]",
     ".",
     Identifier,
@@ -144,43 +166,121 @@ AssignmentStatement =
     ";"
 ;
 
+PrimaryKeyList =
+    PrimaryKeyPair,
+    { ",", PrimaryKeyPair }
+;
+
+PrimaryKeyPair =
+    Identifier,
+    ":",
+    Expression
+;
+
 IfStatement =
     "if",
     "(",
-        BooleanExpression,
+        Expression,
     ")",
+    Block,
+    [ "else", Block ]
+;
+
+WhileStatement =
+    "while",
+    "(",
+        Expression,
+    ")",
+    Block
+;
+
+ReturnStatement =
+    "return",
+    [ Expression ],
+    ";"
+;
+
+AbortStatement =
+    "abort",
+    ";"
+;
+
+BreakStatement =
+    "break",
+    ";"
+;
+
+ContinueStatement =
+    "continue",
+    ";"
+;
+
+EmptyStatement = ";" ;
+
+Block =
     "{",
         { Statement },
-    "}",
-    [ "else", "{", { Statement }, "}" ]
+    "}"
 ;
 
 (* ------------------------------------------------- *)
 (* Expressions *)
 (* ------------------------------------------------- *)
-Expression =
-    Identifier
-  | IntegerLiteral
-  | FloatLiteral
-  | StringLiteral
-  | "(", Expression, ")"
-  | Expression, BinaryOp, Expression
+(* Expressions follow operator precedence from lowest to highest *)
+
+Expression = LogicOr ;
+
+LogicOr =
+    LogicAnd,
+    { "||", LogicAnd }
 ;
 
-BooleanExpression = Expression ;
+LogicAnd =
+    Equality,
+    { "&&", Equality }
+;
 
-BinaryOp =
-      "+"
-    | "-"
-    | "*"
-    | "/"
-    | "=="
-    | "!="
-    | "<"
-    | "<="
-    | ">"
-    | ">="
-    | "&&"
-    | "||"
+Equality =
+    Comparison,
+    { ( "==" | "!=" ), Comparison }
+;
+
+Comparison =
+    Addition,
+    { ( "<=" | ">=" | "<" | ">" ), Addition }
+;
+
+Addition =
+    Multiplication,
+    { ( "+" | "-" ), Multiplication }
+;
+
+Multiplication =
+    Unary,
+    { ( "*" | "/" ), Unary }
+;
+
+Unary =
+    Primary
+  | ( "!" | "-" ), Unary
+;
+
+Primary =
+    BooleanLiteral
+  | TableFieldAccess
+  | FloatLiteral
+  | IntegerLiteral
+  | StringLiteral
+  | Identifier
+  | "(", Expression, ")"
+;
+
+TableFieldAccess =
+    Identifier,
+    "[",
+        PrimaryKeyList,
+    "]",
+    ".",
+    Identifier
 ;
 ```
