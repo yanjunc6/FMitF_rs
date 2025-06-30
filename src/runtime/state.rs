@@ -113,7 +113,8 @@ impl RuntimeState {
             .collect();
 
         // Execute function (call executor)
-        super::executor::execute_function(self, func_id, parsed_args)
+        let _return_value = super::executor::execute_function(self, func_id, parsed_args)?;
+        Ok(())
     }
 
     /// Get table data for display
