@@ -133,21 +133,28 @@ impl<'a> BoogieCodeGenerator<'a> {
 
     /// Generate declaration for a table as a Boogie map
     fn generate_table_declaration(&mut self, _table_id: TableId, table: &crate::cfg::TableInfo) {
-        // For simplicity, assume single primary key for now
-        // TODO: Handle composite primary keys
-        let primary_field = &self.cfg.fields[table.primary_keys[0]];
+        // Generate nested map type for primary keys
+        let primary_key_types: Vec<String> = table
+            .primary_keys
+            .iter()
+            .map(|&pk_id| {
+                let primary_field = &self.cfg.fields[pk_id];
+                self.type_to_boogie(&primary_field.ty)
+            })
+            .collect();
 
         // Generate map for each non-primary field
         for &field_id in &table.fields {
             let field = &self.cfg.fields[field_id];
             if !field.is_primary {
-                self.writeln(&format!(
-                    "var {}_{}: [{}]{};",
-                    table.name,
-                    field.name,
-                    self.type_to_boogie(&primary_field.ty),
-                    self.type_to_boogie(&field.ty)
-                ));
+                // Build nested map type: [type1][type2]...[typeN]field_type
+                let mut map_type = String::new();
+                for key_type in &primary_key_types {
+                    map_type.push_str(&format!("[{}]", key_type));
+                }
+                map_type.push_str(&self.type_to_boogie(&field.ty));
+
+                self.writeln(&format!("var {}_{}: {};", table.name, field.name, map_type));
             }
         }
     }
@@ -158,17 +165,29 @@ impl<'a> BoogieCodeGenerator<'a> {
         _table_id: TableId,
         table: &crate::cfg::TableInfo,
     ) {
-        let primary_field = &self.cfg.fields[table.primary_keys[0]];
+        // Generate nested map type for primary keys
+        let primary_key_types: Vec<String> = table
+            .primary_keys
+            .iter()
+            .map(|&pk_id| {
+                let primary_field = &self.cfg.fields[pk_id];
+                self.type_to_boogie(&primary_field.ty)
+            })
+            .collect();
 
         for &field_id in &table.fields {
             let field = &self.cfg.fields[field_id];
             if !field.is_primary {
+                // Build nested map type: [type1][type2]...[typeN]field_type
+                let mut map_type = String::new();
+                for key_type in &primary_key_types {
+                    map_type.push_str(&format!("[{}]", key_type));
+                }
+                map_type.push_str(&self.type_to_boogie(&field.ty));
+
                 self.writeln(&format!(
-                    "var init_{}_{}: [{}]{};",
-                    table.name,
-                    field.name,
-                    self.type_to_boogie(&primary_field.ty),
-                    self.type_to_boogie(&field.ty)
+                    "var init_{}_{}: {};",
+                    table.name, field.name, map_type
                 ));
             }
         }
@@ -180,25 +199,34 @@ impl<'a> BoogieCodeGenerator<'a> {
         _table_id: TableId,
         table: &crate::cfg::TableInfo,
     ) {
-        let primary_field = &self.cfg.fields[table.primary_keys[0]];
+        // Generate nested map type for primary keys
+        let primary_key_types: Vec<String> = table
+            .primary_keys
+            .iter()
+            .map(|&pk_id| {
+                let primary_field = &self.cfg.fields[pk_id];
+                self.type_to_boogie(&primary_field.ty)
+            })
+            .collect();
 
         for &field_id in &table.fields {
             let field = &self.cfg.fields[field_id];
             if !field.is_primary {
+                // Build nested map type: [type1][type2]...[typeN]field_type
+                let mut map_type = String::new();
+                for key_type in &primary_key_types {
+                    map_type.push_str(&format!("[{}]", key_type));
+                }
+                map_type.push_str(&self.type_to_boogie(&field.ty));
+
                 // Declare variables for both AB and BA final states
                 self.writeln(&format!(
-                    "var final_AB_{}_{}: [{}]{};",
-                    table.name,
-                    field.name,
-                    self.type_to_boogie(&primary_field.ty),
-                    self.type_to_boogie(&field.ty)
+                    "var final_AB_{}_{}: {};",
+                    table.name, field.name, map_type
                 ));
                 self.writeln(&format!(
-                    "var final_BA_{}_{}: [{}]{};",
-                    table.name,
-                    field.name,
-                    self.type_to_boogie(&primary_field.ty),
-                    self.type_to_boogie(&field.ty)
+                    "var final_BA_{}_{}: {};",
+                    table.name, field.name, map_type
                 ));
             }
         }
@@ -432,24 +460,132 @@ impl<'a> BoogieCodeGenerator<'a> {
             node.name
         ));
 
-        // Execute all basic blocks in the hop
-        for &block_id in &hop.blocks {
-            self.generate_basic_block_execution(block_id, function_id);
+        // Generate unique execution context identifier for this hop execution
+        let exec_id = self.get_next_execution_id();
+
+        // Start execution at the entry block
+        if let Some(entry_block) = hop.entry_block {
+            self.writeln(&format!(
+                "goto bb_{}_{}_{};",
+                exec_id,
+                function_id.index(),
+                entry_block.index()
+            ));
         }
+
+        // Generate all basic block labels first
+        for &block_id in &hop.blocks {
+            self.generate_basic_block_with_unique_label(block_id, function_id, exec_id);
+        }
+
+        // Add end label for end of this hop
+        self.writeln(&format!("hop_end_{}:", exec_id));
     }
 
-    /// Generate Boogie code for executing a basic block
-    fn generate_basic_block_execution(&mut self, block_id: BasicBlockId, function_id: FunctionId) {
+    /// Generate a basic block with unique label and goto-based control flow
+    fn generate_basic_block_with_unique_label(
+        &mut self,
+        block_id: BasicBlockId,
+        function_id: FunctionId,
+        exec_id: usize,
+    ) {
         let function = &self.cfg.functions[function_id];
         let block = &function.blocks[block_id];
+
+        // Generate unique label for this basic block execution
+        self.writeln(&format!(
+            "bb_{}_{}_{} :",
+            exec_id,
+            function_id.index(),
+            block_id.index()
+        ));
+        self.indent();
 
         // Execute all statements in the block
         for statement in &block.statements {
             self.generate_statement_execution(statement, function_id);
         }
 
-        // Handle block terminator (for simplicity, we'll ignore control flow in this version)
-        // In a full implementation, we'd need to handle branches, returns, etc.
+        // Handle terminator with goto using unique labels
+        self.generate_terminator_with_unique_goto(&block.terminator, function_id, exec_id);
+
+        self.dedent();
+        self.writeln("");
+    }
+
+    /// Generate terminator using goto statements with unique labels
+    fn generate_terminator_with_unique_goto(
+        &mut self,
+        terminator: &crate::cfg::Terminator,
+        function_id: FunctionId,
+        exec_id: usize,
+    ) {
+        match terminator {
+            crate::cfg::Terminator::Goto(target_block) => {
+                self.writeln(&format!(
+                    "goto bb_{}_{}_{};",
+                    exec_id,
+                    function_id.index(),
+                    target_block.index()
+                ));
+            }
+            crate::cfg::Terminator::Branch {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                let condition_code = self.generate_operand(condition, function_id);
+                self.writeln(&format!("if ({}) {{", condition_code));
+                self.indent();
+                self.writeln(&format!(
+                    "goto bb_{}_{}_{};",
+                    exec_id,
+                    function_id.index(),
+                    then_block.index()
+                ));
+                self.dedent();
+                self.writeln("} else {");
+                self.indent();
+                self.writeln(&format!(
+                    "goto bb_{}_{}_{};",
+                    exec_id,
+                    function_id.index(),
+                    else_block.index()
+                ));
+                self.dedent();
+                self.writeln("}");
+            }
+            crate::cfg::Terminator::Return(return_value) => {
+                match return_value {
+                    Some(operand) => {
+                        let return_code = self.generate_operand(operand, function_id);
+                        self.writeln(&format!("// Return value: {}", return_code));
+                    }
+                    None => {
+                        self.writeln("// Return (void)");
+                    }
+                }
+                // Treat return as goto to hop end
+                self.writeln(&format!("goto hop_end_{};", exec_id));
+            }
+            crate::cfg::Terminator::Abort => {
+                self.writeln("// Abort");
+                // Treat abort as goto to hop end
+                self.writeln(&format!("goto hop_end_{};", exec_id));
+            }
+            crate::cfg::Terminator::HopExit { .. } => {
+                self.writeln("// Hop exit");
+                // Treat hop exit as goto to hop end
+                self.writeln(&format!("goto hop_end_{};", exec_id));
+            }
+        }
+    }
+
+    /// Get next unique execution ID for generating unique labels
+    fn get_next_execution_id(&mut self) -> usize {
+        // Use the current length of the code as a simple way to generate unique IDs
+        // This works because each hop execution adds code, making the length unique
+        self.code.lines().count()
     }
 
     /// Generate Boogie code for executing a statement
@@ -470,13 +606,46 @@ impl<'a> BoogieCodeGenerator<'a> {
             } => {
                 let table_info = &self.cfg.tables[*table];
                 let field_info = &self.cfg.fields[*field];
-                let pk_value_code = self.generate_operand(&pk_values[0], function_id); // Simplified for single PK
                 let value_code = self.generate_operand(value, function_id);
+                let table_field_name = format!("{}_{}", table_info.name, field_info.name);
 
-                self.writeln(&format!(
-                    "{}_{}[{}] := {};",
-                    table_info.name, field_info.name, pk_value_code, value_code
-                ));
+                if pk_values.len() == 1 {
+                    // Single key case: table_field := table_field[k1 := value]
+                    let pk_value_code = self.generate_operand(&pk_values[0], function_id);
+                    self.writeln(&format!(
+                        "{} := {}[{} := {}];",
+                        table_field_name, table_field_name, pk_value_code, value_code
+                    ));
+                } else {
+                    // Multi-key case: nested map update
+                    // For keys [k1, k2, ..., kn], the pattern is:
+                    // table[k1] := table[k1][k2 := table[k1][k2][k3 := ... table[k1][k2]...[kn-1][kn := value]...]]
+
+                    // Build from the innermost to outermost
+                    let mut inner_expr = value_code;
+
+                    // Work backwards through the keys
+                    for i in (1..pk_values.len()).rev() {
+                        let key_code = self.generate_operand(&pk_values[i], function_id);
+
+                        // Build the access path up to this level: table[k1][k2]...[ki-1]
+                        let mut access_path = table_field_name.clone();
+                        for j in 0..i {
+                            let access_key_code = self.generate_operand(&pk_values[j], function_id);
+                            access_path.push_str(&format!("[{}]", access_key_code));
+                        }
+
+                        // Update: access_path[ki := inner_expr]
+                        inner_expr = format!("{}[{} := {}]", access_path, key_code, inner_expr);
+                    }
+
+                    // Finally, update the outermost level
+                    let first_key_code = self.generate_operand(&pk_values[0], function_id);
+                    self.writeln(&format!(
+                        "{} := {}[{} := {}];",
+                        table_field_name, table_field_name, first_key_code, inner_expr
+                    ));
+                }
             }
         }
     }
@@ -493,11 +662,14 @@ impl<'a> BoogieCodeGenerator<'a> {
             } => {
                 let table_info = &self.cfg.tables[*table];
                 let field_info = &self.cfg.fields[*field];
-                let pk_value_code = self.generate_operand(&pk_values[0], function_id); // Simplified for single PK
-                format!(
-                    "{}_{} [{}]",
-                    table_info.name, field_info.name, pk_value_code
-                )
+
+                // Generate nested map access: table_field[key1][key2]...[keyN]
+                let mut access_code = format!("{}_{}", table_info.name, field_info.name);
+                for pk_value in pk_values {
+                    let pk_value_code = self.generate_operand(pk_value, function_id);
+                    access_code.push_str(&format!("[{}]", pk_value_code));
+                }
+                access_code
             }
             Rvalue::UnaryOp { op, operand } => {
                 let operand_code = self.generate_operand(operand, function_id);
@@ -582,14 +754,48 @@ impl<'a> BoogieCodeGenerator<'a> {
             for &field_id in &table.fields {
                 let field = &self.cfg.fields[field_id];
                 if !field.is_primary {
-                    self.writeln(&format!(
-                        "assert (forall k: {} :: final_AB_{}_{} [k] == final_BA_{}_{} [k]);",
-                        self.type_to_boogie(&self.cfg.fields[table.primary_keys[0]].ty),
-                        table.name,
-                        field.name,
-                        table.name,
-                        field.name
-                    ));
+                    // Generate forall assertion for nested maps
+                    if table.primary_keys.len() == 1 {
+                        // Single key case
+                        self.writeln(&format!(
+                            "assert (forall k: {} :: final_AB_{}_{} [k] == final_BA_{}_{} [k]);",
+                            self.type_to_boogie(&self.cfg.fields[table.primary_keys[0]].ty),
+                            table.name,
+                            field.name,
+                            table.name,
+                            field.name
+                        ));
+                    } else {
+                        // Multi-key case: nested forall
+                        // For keys [k1, k2, ..., kn], generate:
+                        // assert (forall k1: type1, k2: type2, ..., kn: typen ::
+                        //         final_AB_table_field[k1][k2]...[kn] == final_BA_table_field[k1][k2]...[kn]);
+
+                        let mut forall_vars = Vec::new();
+                        let mut access_suffix = String::new();
+
+                        for (i, &pk_id) in table.primary_keys.iter().enumerate() {
+                            let pk_field = &self.cfg.fields[pk_id];
+                            let var_name = format!("k{}", i + 1);
+                            forall_vars.push(format!(
+                                "{}: {}",
+                                var_name,
+                                self.type_to_boogie(&pk_field.ty)
+                            ));
+                            access_suffix.push_str(&format!("[{}]", var_name));
+                        }
+
+                        self.writeln(&format!(
+                            "assert (forall {} :: final_AB_{}_{}{}  == final_BA_{}_{}{}  );",
+                            forall_vars.join(", "),
+                            table.name,
+                            field.name,
+                            access_suffix,
+                            table.name,
+                            field.name,
+                            access_suffix
+                        ));
+                    }
                 }
             }
         }

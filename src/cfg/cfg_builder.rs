@@ -167,6 +167,35 @@ impl CfgBuilder {
 }
 
 impl<'a> FunctionContextBuilder<'a> {
+    /// Infer the result type of a unary operation
+    fn infer_unary_result_type(&self, op: &ast::UnaryOp) -> ast::TypeName {
+        match op {
+            ast::UnaryOp::Not => ast::TypeName::Bool,
+            ast::UnaryOp::Neg => ast::TypeName::Int,
+        }
+    }
+
+    /// Infer the result type of a binary operation
+    fn infer_binary_result_type(&self, op: &ast::BinaryOp) -> ast::TypeName {
+        match op {
+            // Comparison operations return bool
+            ast::BinaryOp::Eq
+            | ast::BinaryOp::Neq
+            | ast::BinaryOp::Lt
+            | ast::BinaryOp::Lte
+            | ast::BinaryOp::Gt
+            | ast::BinaryOp::Gte => ast::TypeName::Bool,
+
+            // Logical operations return bool
+            ast::BinaryOp::And | ast::BinaryOp::Or => ast::TypeName::Bool,
+
+            // Arithmetic operations return numeric types (simplified to Int for now)
+            ast::BinaryOp::Add | ast::BinaryOp::Sub | ast::BinaryOp::Mul | ast::BinaryOp::Div => {
+                ast::TypeName::Int
+            }
+        }
+    }
+
     fn new(ctx: &'a mut CfgCtx, func_ast: &ast::FunctionDeclaration) -> Result<Self, String> {
         let function = FunctionCfg {
             name: func_ast.name.clone(),
@@ -719,9 +748,10 @@ impl<'a> FunctionContextBuilder<'a> {
                 let operand = self.build_expression(program, *inner_expr)?;
 
                 // Create temporary variable for result
+                let result_type = self.infer_unary_result_type(op);
                 let temp_var = Variable {
                     name: format!("_temp_{}", self.function.variables.len()),
-                    ty: ast::TypeName::Int, // Simplified - should be based on operation
+                    ty: result_type,
                     is_parameter: false,
                 };
 
@@ -750,9 +780,10 @@ impl<'a> FunctionContextBuilder<'a> {
                 let right_operand = self.build_expression(program, *right)?;
 
                 // Create temporary variable for result
+                let result_type = self.infer_binary_result_type(op);
                 let temp_var = Variable {
                     name: format!("_temp_{}", self.function.variables.len()),
-                    ty: ast::TypeName::Int, // Simplified - should be based on operation
+                    ty: result_type,
                     is_parameter: false,
                 };
 

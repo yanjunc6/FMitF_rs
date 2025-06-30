@@ -1,0 +1,56 @@
+nodes {
+    NodeA,
+    NodeB,
+    NodeC
+}
+
+table TableA on NodeA {
+    primary int id;
+    int value;
+}
+
+table TableB on NodeB {
+    primary int id;
+    int value;
+}
+
+table TableC on NodeC {
+    primary int id;
+    int value;
+}
+
+void transaction1(int id) {
+    hop on NodeA {
+        int temp = TableA[id: id].value;
+    }
+    hop on NodeB {
+        TableB[id: 6].value = temp;
+        int x = TableB[id: 5].value;
+    }
+    hop on NodeC { // live: x,
+        TableC[id: id].value = x;
+    }
+}
+
+void transaction2(int id, int value) {
+    hop on NodeB {
+        TableB[id: 6].value = value;
+        int y = TableB[id: 5].value;
+    }
+    hop on NodeC {
+        TableC[id: id].value = y;
+    }
+}
+
+void transaction3(int id) {
+    hop on NodeA {
+        int temp = TableA[id: id].value;
+    }
+    hop on NodeB {
+        TableB[id: 7].value = temp;
+        int x = TableB[id: 6].value;
+    }
+    hop on NodeC {
+        TableC[id: id].value = x;
+    }
+}
