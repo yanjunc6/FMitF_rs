@@ -773,17 +773,110 @@ impl<'p> TypeInferrer<'p> {
     fn new(program: &'p mut Program) -> Self {
         Self { program }
     }
+
+
+    /// Get the current resolved type of an expression, if available
+    fn get_expression_type(&self, expr_id: ExpressionId) -> Option<TypeName> {
+        let expr = &self.program.expressions[expr_id];
+        match &expr.node {
+            ExpressionKind::Ident(_name) => {
+                // Use name resolver's resolution to get the variable type
+                if let Some(var_id) = self.program.resolutions.get(&expr_id) {
+                    let var = &self.program.variables[*var_id];
+                    Some(var.ty.clone())
+                } else {
+                    None
+                }
+            }
+            ExpressionKind::IntLit(_) => Some(TypeName::Int),
+            ExpressionKind::FloatLit(_) => Some(TypeName::Float),
+            ExpressionKind::StringLit(_) => Some(TypeName::String),
+            ExpressionKind::BoolLit(_) => Some(TypeName::Bool),
+            ExpressionKind::TableFieldAccess { resolved_type, resolved_field, .. } => {
+                // Return resolved type if available, otherwise infer from field
+                if let Some(ty) = resolved_type {
+                    Some(ty.clone())
+                } else if let Some(field_id) = resolved_field {
+                    let field = &self.program.fields[*field_id];
+                    Some(field.field_type.clone())
+                } else {
+                    None
+                }
+            }
+            ExpressionKind::UnaryOp { resolved_type, .. } => resolved_type.clone(),
+            ExpressionKind::BinaryOp { resolved_type, .. } => resolved_type.clone(),
+        }
+    }
+
+    /// Infer the result type of a unary operation
+    fn infer_unary_result_type(&self, op: &UnaryOp, operand_type: Option<&TypeName>) -> TypeName {
+        match op {
+            UnaryOp::Not => TypeName::Bool,
+            UnaryOp::Neg => {
+                // If we know the operand type, preserve it (Int -> Int, Float -> Float)
+                // Otherwise default to Int
+                operand_type.cloned().unwrap_or(TypeName::Int)
+            }
+        }
+    }
+
+    /// Infer the result type of a binary operation
+    fn infer_binary_result_type(&self, op: &BinaryOp, left_type: Option<&TypeName>, right_type: Option<&TypeName>) -> TypeName {
+        match op {
+            // Comparison operations return bool
+            BinaryOp::Eq
+            | BinaryOp::Neq
+            | BinaryOp::Lt
+            | BinaryOp::Lte
+            | BinaryOp::Gt
+            | BinaryOp::Gte => TypeName::Bool,
+
+            // Logical operations return bool
+            BinaryOp::And | BinaryOp::Or => TypeName::Bool,
+
+            // Arithmetic operations return numeric types
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
+                // If either operand is Float, result is Float
+                // Otherwise result is Int
+                match (left_type, right_type) {
+                    (Some(TypeName::Float), _) | (_, Some(TypeName::Float)) => TypeName::Float,
+                    _ => TypeName::Int,
+                }
+            }
+        }
+    }
     
     fn infer_types(&mut self) {
         // We need to collect expression IDs first to avoid borrowing issues
         let expr_ids: Vec<ExpressionId> = self.program.expressions.iter().map(|(id, _)| id).collect();
         
-        for expr_id in expr_ids {
-            self.infer_expression_type(expr_id);
+        // Make multiple passes to handle dependencies between expressions
+        let max_passes = 3;
+        for _pass in 0..max_passes {
+            let mut changed = false;
+            for expr_id in &expr_ids {
+                let had_type_before = self.get_expression_type(*expr_id).is_some();
+                self.infer_expression_type(*expr_id);
+                let has_type_after = self.get_expression_type(*expr_id).is_some();
+                
+                if !had_type_before && has_type_after {
+                    changed = true;
+                }
+            }
+            
+            // If no new types were inferred in this pass, we're done
+            if !changed {
+                break;
+            }
         }
     }
     
     fn infer_expression_type(&mut self, expr_id: ExpressionId) -> Option<TypeName> {
+        // Check if we already have a type for this expression
+        if let Some(existing_type) = self.get_expression_type(expr_id) {
+            return Some(existing_type);
+        }
+        
         // We need to clone the expression to avoid borrowing issues
         let expr_node = self.program.expressions[expr_id].node.clone();
         
@@ -810,15 +903,15 @@ impl<'p> TypeInferrer<'p> {
                 }
             }
             ExpressionKind::UnaryOp { op, expr: inner_expr, .. } => {
-                // First infer the inner expression type
-                self.infer_expression_type(*inner_expr);
-                Some(infer_unary_result_type(op))
+                // First try to infer the inner expression type
+                let operand_type = self.infer_expression_type(*inner_expr);
+                Some(self.infer_unary_result_type(op, operand_type.as_ref()))
             }
             ExpressionKind::BinaryOp { left, right, op, .. } => {
-                // First infer the operand types  
-                self.infer_expression_type(*left);
-                self.infer_expression_type(*right);
-                Some(infer_binary_result_type(op))
+                // First try to infer the operand types  
+                let left_type = self.infer_expression_type(*left);
+                let right_type = self.infer_expression_type(*right);
+                Some(self.infer_binary_result_type(op, left_type.as_ref(), right_type.as_ref()))
             }
         };
         
@@ -834,7 +927,10 @@ impl<'p> TypeInferrer<'p> {
                 ExpressionKind::BinaryOp { resolved_type, .. } => {
                     *resolved_type = Some(ty.clone());
                 }
-                _ => {}
+                _ => {
+                    // For literals and identifiers, the type is intrinsic or from name resolution
+                    // No need to store it in the AST node
+                }
             }
         }
         
