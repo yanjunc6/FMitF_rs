@@ -227,7 +227,7 @@ fn evaluate_rvalue_isolated(
                             crate::ast::TypeName::Int => RuntimeValue::Int(0),
                             crate::ast::TypeName::Bool => RuntimeValue::Bool(false),
                             crate::ast::TypeName::String => RuntimeValue::String(String::new()),
-                            crate::ast::TypeName::Float => RuntimeValue::Int(0), // Convert to int for simplicity
+                            crate::ast::TypeName::Float => RuntimeValue::Float(ordered_float::OrderedFloat(0.0)),
                         })
                     } else {
                         Some(RuntimeValue::Int(0)) // Fallback
@@ -242,6 +242,7 @@ fn evaluate_rvalue_isolated(
             let right_val = evaluate_operand_isolated(right, local_vars, state, func_id)?;
 
             match (op, &left_val, &right_val) {
+                // Integer operations
                 (BinaryOp::Add, RuntimeValue::Int(a), RuntimeValue::Int(b)) => {
                     Ok(RuntimeValue::Int(a + b))
                 }
@@ -258,8 +259,64 @@ fn evaluate_rvalue_isolated(
                         Ok(RuntimeValue::Int(a / b))
                     }
                 }
+                
+                // Float operations
+                (BinaryOp::Add, RuntimeValue::Float(a), RuntimeValue::Float(b)) => {
+                    Ok(RuntimeValue::Float(ordered_float::OrderedFloat(a.into_inner() + b.into_inner())))
+                }
+                (BinaryOp::Sub, RuntimeValue::Float(a), RuntimeValue::Float(b)) => {
+                    Ok(RuntimeValue::Float(ordered_float::OrderedFloat(a.into_inner() - b.into_inner())))
+                }
+                (BinaryOp::Mul, RuntimeValue::Float(a), RuntimeValue::Float(b)) => {
+                    Ok(RuntimeValue::Float(ordered_float::OrderedFloat(a.into_inner() * b.into_inner())))
+                }
+                (BinaryOp::Div, RuntimeValue::Float(a), RuntimeValue::Float(b)) => {
+                    if b.into_inner() == 0.0 {
+                        Err(RuntimeError::ExecutionError("Division by zero".to_string()))
+                    } else {
+                        Ok(RuntimeValue::Float(ordered_float::OrderedFloat(a.into_inner() / b.into_inner())))
+                    }
+                }
+                
+                // Mixed Int/Float operations (promote to Float)
+                (BinaryOp::Add, RuntimeValue::Int(a), RuntimeValue::Float(b)) => {
+                    Ok(RuntimeValue::Float(ordered_float::OrderedFloat(*a as f64 + b.into_inner())))
+                }
+                (BinaryOp::Add, RuntimeValue::Float(a), RuntimeValue::Int(b)) => {
+                    Ok(RuntimeValue::Float(ordered_float::OrderedFloat(a.into_inner() + *b as f64)))
+                }
+                (BinaryOp::Sub, RuntimeValue::Int(a), RuntimeValue::Float(b)) => {
+                    Ok(RuntimeValue::Float(ordered_float::OrderedFloat(*a as f64 - b.into_inner())))
+                }
+                (BinaryOp::Sub, RuntimeValue::Float(a), RuntimeValue::Int(b)) => {
+                    Ok(RuntimeValue::Float(ordered_float::OrderedFloat(a.into_inner() - *b as f64)))
+                }
+                (BinaryOp::Mul, RuntimeValue::Int(a), RuntimeValue::Float(b)) => {
+                    Ok(RuntimeValue::Float(ordered_float::OrderedFloat(*a as f64 * b.into_inner())))
+                }
+                (BinaryOp::Mul, RuntimeValue::Float(a), RuntimeValue::Int(b)) => {
+                    Ok(RuntimeValue::Float(ordered_float::OrderedFloat(a.into_inner() * *b as f64)))
+                }
+                (BinaryOp::Div, RuntimeValue::Int(a), RuntimeValue::Float(b)) => {
+                    if b.into_inner() == 0.0 {
+                        Err(RuntimeError::ExecutionError("Division by zero".to_string()))
+                    } else {
+                        Ok(RuntimeValue::Float(ordered_float::OrderedFloat(*a as f64 / b.into_inner())))
+                    }
+                }
+                (BinaryOp::Div, RuntimeValue::Float(a), RuntimeValue::Int(b)) => {
+                    if *b == 0 {
+                        Err(RuntimeError::ExecutionError("Division by zero".to_string()))
+                    } else {
+                        Ok(RuntimeValue::Float(ordered_float::OrderedFloat(a.into_inner() / *b as f64)))
+                    }
+                }
+                
+                // Equality operations (work with any type)
                 (BinaryOp::Eq, a, b) => Ok(RuntimeValue::Bool(a == b)),
                 (BinaryOp::Neq, a, b) => Ok(RuntimeValue::Bool(a != b)),
+                
+                // Comparison operations for integers
                 (BinaryOp::Lt, RuntimeValue::Int(a), RuntimeValue::Int(b)) => {
                     Ok(RuntimeValue::Bool(a < b))
                 }
@@ -271,6 +328,46 @@ fn evaluate_rvalue_isolated(
                 }
                 (BinaryOp::Gte, RuntimeValue::Int(a), RuntimeValue::Int(b)) => {
                     Ok(RuntimeValue::Bool(a >= b))
+                }
+                
+                // Comparison operations for floats
+                (BinaryOp::Lt, RuntimeValue::Float(a), RuntimeValue::Float(b)) => {
+                    Ok(RuntimeValue::Bool(a < b))
+                }
+                (BinaryOp::Lte, RuntimeValue::Float(a), RuntimeValue::Float(b)) => {
+                    Ok(RuntimeValue::Bool(a <= b))
+                }
+                (BinaryOp::Gt, RuntimeValue::Float(a), RuntimeValue::Float(b)) => {
+                    Ok(RuntimeValue::Bool(a > b))
+                }
+                (BinaryOp::Gte, RuntimeValue::Float(a), RuntimeValue::Float(b)) => {
+                    Ok(RuntimeValue::Bool(a >= b))
+                }
+                
+                // Mixed comparison operations
+                (BinaryOp::Lt, RuntimeValue::Int(a), RuntimeValue::Float(b)) => {
+                    Ok(RuntimeValue::Bool((*a as f64) < b.into_inner()))
+                }
+                (BinaryOp::Lt, RuntimeValue::Float(a), RuntimeValue::Int(b)) => {
+                    Ok(RuntimeValue::Bool(a.into_inner() < (*b as f64)))
+                }
+                (BinaryOp::Lte, RuntimeValue::Int(a), RuntimeValue::Float(b)) => {
+                    Ok(RuntimeValue::Bool((*a as f64) <= b.into_inner()))
+                }
+                (BinaryOp::Lte, RuntimeValue::Float(a), RuntimeValue::Int(b)) => {
+                    Ok(RuntimeValue::Bool(a.into_inner() <= (*b as f64)))
+                }
+                (BinaryOp::Gt, RuntimeValue::Int(a), RuntimeValue::Float(b)) => {
+                    Ok(RuntimeValue::Bool((*a as f64) > b.into_inner()))
+                }
+                (BinaryOp::Gt, RuntimeValue::Float(a), RuntimeValue::Int(b)) => {
+                    Ok(RuntimeValue::Bool(a.into_inner() > (*b as f64)))
+                }
+                (BinaryOp::Gte, RuntimeValue::Int(a), RuntimeValue::Float(b)) => {
+                    Ok(RuntimeValue::Bool((*a as f64) >= b.into_inner()))
+                }
+                (BinaryOp::Gte, RuntimeValue::Float(a), RuntimeValue::Int(b)) => {
+                    Ok(RuntimeValue::Bool(a.into_inner() >= (*b as f64)))
                 }
                 _ => Err(RuntimeError::ExecutionError(format!(
                     "Unsupported binary operation: {:?} {:?} {:?}",
@@ -284,6 +381,7 @@ fn evaluate_rvalue_isolated(
 
             match (op, &val) {
                 (UnaryOp::Neg, RuntimeValue::Int(a)) => Ok(RuntimeValue::Int(-a)),
+                (UnaryOp::Neg, RuntimeValue::Float(a)) => Ok(RuntimeValue::Float(ordered_float::OrderedFloat(-a.into_inner()))),
                 (UnaryOp::Not, RuntimeValue::Bool(a)) => Ok(RuntimeValue::Bool(!a)),
                 _ => Err(RuntimeError::ExecutionError(format!(
                     "Unsupported unary operation: {:?} {:?}",
@@ -307,7 +405,7 @@ fn evaluate_operand_isolated(
                 Constant::Int(val) => Ok(RuntimeValue::Int(*val)),
                 Constant::String(val) => Ok(RuntimeValue::String(val.clone())),
                 Constant::Bool(val) => Ok(RuntimeValue::Bool(*val)),
-                Constant::Float(val) => Ok(RuntimeValue::Int(val.into_inner() as i64)), // Convert float to int for simplicity
+                Constant::Float(val) => Ok(RuntimeValue::Float(ordered_float::OrderedFloat(val.into_inner()))),
             }
         }
 
