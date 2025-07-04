@@ -167,35 +167,6 @@ impl CfgBuilder {
 }
 
 impl<'a> FunctionContextBuilder<'a> {
-    /// Infer the result type of a unary operation
-    fn infer_unary_result_type(&self, op: &ast::UnaryOp) -> ast::TypeName {
-        match op {
-            ast::UnaryOp::Not => ast::TypeName::Bool,
-            ast::UnaryOp::Neg => ast::TypeName::Int,
-        }
-    }
-
-    /// Infer the result type of a binary operation
-    fn infer_binary_result_type(&self, op: &ast::BinaryOp) -> ast::TypeName {
-        match op {
-            // Comparison operations return bool
-            ast::BinaryOp::Eq
-            | ast::BinaryOp::Neq
-            | ast::BinaryOp::Lt
-            | ast::BinaryOp::Lte
-            | ast::BinaryOp::Gt
-            | ast::BinaryOp::Gte => ast::TypeName::Bool,
-
-            // Logical operations return bool
-            ast::BinaryOp::And | ast::BinaryOp::Or => ast::TypeName::Bool,
-
-            // Arithmetic operations return numeric types (simplified to Int for now)
-            ast::BinaryOp::Add | ast::BinaryOp::Sub | ast::BinaryOp::Mul | ast::BinaryOp::Div => {
-                ast::TypeName::Int
-            }
-        }
-    }
-
     fn new(ctx: &'a mut CfgCtx, func_ast: &ast::FunctionDeclaration) -> Result<Self, String> {
         let function = FunctionCfg {
             name: func_ast.name.clone(),
@@ -468,6 +439,80 @@ impl<'a> FunctionContextBuilder<'a> {
                     },
                 );
             }
+            ast::StatementKind::MultiAssignment(multi_assign) => {
+                // Expand multi-assignment into multiple single assignments
+                // This keeps the CFG unchanged while providing the grammar sugar
+
+                let table_id = if let Some(resolved_table) = multi_assign.resolved_table {
+                    let table_ast = &program.tables[resolved_table];
+                    *self
+                        .ctx
+                        .table_map
+                        .get(&table_ast.name)
+                        .ok_or_else(|| format!("Table {} not found in CFG", table_ast.name))?
+                } else {
+                    return Err(format!("Table {} not resolved", multi_assign.table_name));
+                };
+
+                // Build all primary key fields and values once (shared by all assignments)
+                let mut pk_field_ids = Vec::new();
+                let mut pk_operands = Vec::new();
+
+                for (i, &pk_expr) in multi_assign.pk_exprs.iter().enumerate() {
+                    if let Some(pk_field) = multi_assign.resolved_pk_fields.get(i).and_then(|&f| f) {
+                        let field_ast = &program.fields[pk_field];
+                        let pk_field_id = *self
+                            .ctx
+                            .field_map
+                            .get(&field_ast.field_name)
+                            .ok_or_else(|| {
+                                format!(
+                                    "Primary key field {} not found in CFG",
+                                    field_ast.field_name
+                                )
+                            })?;
+
+                        let pk_operand = self.build_expression(program, pk_expr)?;
+
+                        pk_field_ids.push(pk_field_id);
+                        pk_operands.push(pk_operand);
+                    } else {
+                        return Err(format!("Primary key field {} not resolved", i));
+                    }
+                }
+
+                if pk_field_ids.is_empty() {
+                    return Err(format!("No primary key fields provided"));
+                }
+
+                // Generate one TableAssign statement for each field assignment
+                for assignment in &multi_assign.assignments {
+                    let field_id = if let Some(resolved_field) = assignment.resolved_field {
+                        let field_ast = &program.fields[resolved_field];
+                        *self
+                            .ctx
+                            .field_map
+                            .get(&field_ast.field_name)
+                            .ok_or_else(|| format!("Field {} not found in CFG", field_ast.field_name))?
+                    } else {
+                        return Err(format!("Field {} not resolved", assignment.field_name));
+                    };
+
+                    let value_operand = self.build_expression(program, assignment.rhs)?;
+
+                    self.add_statement(
+                        current_block,
+                        Statement::TableAssign {
+                            table: table_id,
+                            pk_fields: pk_field_ids.clone(),
+                            pk_values: pk_operands.clone(),
+                            field: field_id,
+                            value: value_operand,
+                            span: stmt.span.clone(),
+                        },
+                    );
+                }
+            }
             ast::StatementKind::IfStmt(if_stmt) => {
                 self.build_if_statement(program, if_stmt)?;
             }
@@ -650,6 +695,7 @@ impl<'a> FunctionContextBuilder<'a> {
                 resolved_pk_fields,
                 pk_exprs,
                 resolved_field,
+                resolved_type,
                 table_name,
                 field_name,
                 ..
@@ -708,8 +754,8 @@ impl<'a> FunctionContextBuilder<'a> {
                     return Err(format!("Field {} not resolved", field_name));
                 };
 
-                // Get field type for temp variable
-                let field_type = self.ctx.program.fields[field_id].ty.clone();
+                // Get field type for temp variable - use resolved type if available, otherwise field type
+                let field_type = resolved_type.clone().unwrap_or_else(|| self.ctx.program.fields[field_id].ty.clone());
 
                 // Create temporary variable
                 let temp_var = Variable {
@@ -744,11 +790,13 @@ impl<'a> FunctionContextBuilder<'a> {
             ast::ExpressionKind::UnaryOp {
                 op,
                 expr: inner_expr,
+                resolved_type,
             } => {
                 let operand = self.build_expression(program, *inner_expr)?;
 
-                // Create temporary variable for result
-                let result_type = self.infer_unary_result_type(op);
+                // Use resolved type from semantic analysis if available, otherwise infer
+                let result_type = resolved_type.clone().unwrap_or_else(|| ast::infer_unary_result_type(op));
+                
                 let temp_var = Variable {
                     name: format!("_temp_{}", self.function.variables.len()),
                     ty: result_type,
@@ -775,12 +823,13 @@ impl<'a> FunctionContextBuilder<'a> {
 
                 Ok(Operand::Var(temp_var_id))
             }
-            ast::ExpressionKind::BinaryOp { left, op, right } => {
+            ast::ExpressionKind::BinaryOp { left, op, right, resolved_type } => {
                 let left_operand = self.build_expression(program, *left)?;
                 let right_operand = self.build_expression(program, *right)?;
 
-                // Create temporary variable for result
-                let result_type = self.infer_binary_result_type(op);
+                // Use resolved type from semantic analysis if available, otherwise infer
+                let result_type = resolved_type.clone().unwrap_or_else(|| ast::infer_binary_result_type(op));
+                
                 let temp_var = Variable {
                     name: format!("_temp_{}", self.function.variables.len()),
                     ty: result_type,

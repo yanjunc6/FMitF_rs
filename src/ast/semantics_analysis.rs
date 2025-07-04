@@ -124,6 +124,7 @@ impl<'p> SemanticAnalyzer<'p> {
 
         match &stmt.node {
             StatementKind::Assignment(a) => self.check_assignment(a, &stmt.span),
+            StatementKind::MultiAssignment(a) => self.check_multi_assignment(a, &stmt.span),
             StatementKind::VarAssignment(a) => self.check_var_assignment(a, &stmt.span),
             StatementKind::IfStmt(i) => {
                 self.check_if_statement(i, &stmt.span, hop_index, function_name)
@@ -319,6 +320,106 @@ impl<'p> SemanticAnalyzer<'p> {
         }
     }
 
+    fn check_multi_assignment(&mut self, multi_assign: &MultiAssignmentStatement, span: &Span) {
+        // Use resolved IDs if available
+        let table_id = multi_assign.resolved_table.ok_or_else(|| {
+            self.error_at(span, AstError::UndeclaredTable(multi_assign.table_name.clone()));
+        });
+
+        if let Ok(table_id) = table_id {
+            let table = &self.program.tables[table_id];
+
+            // Check cross-node access
+            if let Some(current_node_id) = self.current_node {
+                if table.node != current_node_id {
+                    let current_node_name = &self.program.nodes[current_node_id].name;
+                    let table_node_name = &self.program.nodes[table.node].name;
+                    self.error_at(
+                        span,
+                        AstError::CrossNodeAccess {
+                            table: table.name.clone(),
+                            table_node: table_node_name.clone(),
+                            current_node: current_node_name.clone(),
+                        },
+                    );
+                    return;
+                }
+            }
+
+            // Check that we have all primary key fields resolved
+            let all_pk_fields_resolved = multi_assign.resolved_pk_fields.iter().all(|opt| opt.is_some());
+            let all_assignment_fields_resolved = multi_assign.assignments.iter().all(|a| a.resolved_field.is_some());
+
+            if all_pk_fields_resolved && all_assignment_fields_resolved {
+                // Validate each primary key field
+                for (i, resolved_pk_field_opt) in multi_assign.resolved_pk_fields.iter().enumerate() {
+                    if let Some(pk_field_id) = resolved_pk_field_opt {
+                        // Check that this field is actually a primary key of this table
+                        if !table.primary_keys.contains(pk_field_id) {
+                            let pk_field = &self.program.fields[*pk_field_id];
+                            self.error_at(
+                                span,
+                                AstError::InvalidPrimaryKey {
+                                    table: table.name.clone(),
+                                    column: pk_field.field_name.clone(),
+                                },
+                            );
+                            return;
+                        }
+
+                        // Check primary key expression type
+                        if i < multi_assign.pk_exprs.len() {
+                            if let Some(pk_type) = self.check_expression(multi_assign.pk_exprs[i]) {
+                                let primary_key_field = &self.program.fields[*pk_field_id];
+                                if !self.types_compatible(&primary_key_field.field_type, &pk_type) {
+                                    self.error_at(
+                                        span,
+                                        AstError::TypeMismatch {
+                                            expected: primary_key_field.field_type.clone(),
+                                            found: pk_type,
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Check that all table primary keys are provided
+                if table.primary_keys.len() != multi_assign.resolved_pk_fields.len() {
+                    self.error_at(
+                        span,
+                        AstError::ParseError(format!(
+                            "Table {} requires {} primary key values, but {} were provided",
+                            table.name,
+                            table.primary_keys.len(),
+                            multi_assign.resolved_pk_fields.len()
+                        )),
+                    );
+                    return;
+                }
+
+                // Check each assignment field and RHS type
+                for assignment in &multi_assign.assignments {
+                    if let Some(field_id) = assignment.resolved_field {
+                        if let Some(rhs_type) = self.check_expression(assignment.rhs) {
+                            let assigned_field = &self.program.fields[field_id];
+                            if !self.types_compatible(&assigned_field.field_type, &rhs_type) {
+                                self.error_at(
+                                    span,
+                                    AstError::TypeMismatch {
+                                        expected: assigned_field.field_type.clone(),
+                                        found: rhs_type,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn check_var_assignment(&mut self, var_assign: &VarAssignmentStatement, _span: &Span) {
         // The name resolver should have already checked if the variable exists
         // We can use the resolutions to get the variable type directly
@@ -407,6 +508,7 @@ impl<'p> SemanticAnalyzer<'p> {
                 table_name,
                 pk_fields: _,
                 field_name,
+                ..
             } => {
                 // Check all primary key expressions
                 for pk_expr in pk_exprs {
@@ -502,6 +604,7 @@ impl<'p> SemanticAnalyzer<'p> {
             ExpressionKind::UnaryOp {
                 op,
                 expr: inner_expr,
+                ..
             } => {
                 let Some(operand_type) = self.check_expression(*inner_expr) else {
                     return None;
@@ -540,7 +643,7 @@ impl<'p> SemanticAnalyzer<'p> {
                     }
                 }
             }
-            ExpressionKind::BinaryOp { left, op, right } => {
+            ExpressionKind::BinaryOp { left, op, right, .. } => {
                 let left_type = self.check_expression(*left)?;
                 let right_type = self.check_expression(*right)?;
                 let expr_span = expr.span.clone();
@@ -644,4 +747,97 @@ impl<'p> SemanticAnalyzer<'p> {
 pub fn analyze_program(program: &Program) -> Results<()> {
     let analyzer = SemanticAnalyzer::new(program);
     analyzer.analyze()
+}
+
+/// Analyze program and infer types, updating the AST with resolved types
+pub fn analyze_program_with_types(program: &mut Program) -> Results<()> {
+    // First do the regular analysis without mutation
+    {
+        let analyzer = SemanticAnalyzer::new(program);
+        analyzer.analyze()?;
+    }
+    
+    // Then perform type inference and update the AST
+    let mut type_inferrer = TypeInferrer::new(program);
+    type_inferrer.infer_types();
+    
+    Ok(())
+}
+
+/// Type inferrer that updates expression types in the AST
+struct TypeInferrer<'p> {
+    program: &'p mut Program,
+}
+
+impl<'p> TypeInferrer<'p> {
+    fn new(program: &'p mut Program) -> Self {
+        Self { program }
+    }
+    
+    fn infer_types(&mut self) {
+        // We need to collect expression IDs first to avoid borrowing issues
+        let expr_ids: Vec<ExpressionId> = self.program.expressions.iter().map(|(id, _)| id).collect();
+        
+        for expr_id in expr_ids {
+            self.infer_expression_type(expr_id);
+        }
+    }
+    
+    fn infer_expression_type(&mut self, expr_id: ExpressionId) -> Option<TypeName> {
+        // We need to clone the expression to avoid borrowing issues
+        let expr_node = self.program.expressions[expr_id].node.clone();
+        
+        let inferred_type = match &expr_node {
+            ExpressionKind::Ident(_name) => {
+                // Use name resolver's resolution to get the variable type
+                if let Some(var_id) = self.program.resolutions.get(&expr_id) {
+                    let var = &self.program.variables[*var_id];
+                    Some(var.ty.clone())
+                } else {
+                    None
+                }
+            }
+            ExpressionKind::IntLit(_) => Some(TypeName::Int),
+            ExpressionKind::FloatLit(_) => Some(TypeName::Float),
+            ExpressionKind::StringLit(_) => Some(TypeName::String),
+            ExpressionKind::BoolLit(_) => Some(TypeName::Bool),
+            ExpressionKind::TableFieldAccess { resolved_field, .. } => {
+                if let Some(field_id) = resolved_field {
+                    let field = &self.program.fields[*field_id];
+                    Some(field.field_type.clone())
+                } else {
+                    None
+                }
+            }
+            ExpressionKind::UnaryOp { op, expr: inner_expr, .. } => {
+                // First infer the inner expression type
+                self.infer_expression_type(*inner_expr);
+                Some(infer_unary_result_type(op))
+            }
+            ExpressionKind::BinaryOp { left, right, op, .. } => {
+                // First infer the operand types  
+                self.infer_expression_type(*left);
+                self.infer_expression_type(*right);
+                Some(infer_binary_result_type(op))
+            }
+        };
+        
+        // Update the AST with the inferred type
+        if let Some(ref ty) = inferred_type {
+            match &mut self.program.expressions[expr_id].node {
+                ExpressionKind::TableFieldAccess { resolved_type, .. } => {
+                    *resolved_type = Some(ty.clone());
+                }
+                ExpressionKind::UnaryOp { resolved_type, .. } => {
+                    *resolved_type = Some(ty.clone());
+                }
+                ExpressionKind::BinaryOp { resolved_type, .. } => {
+                    *resolved_type = Some(ty.clone());
+                }
+                _ => {}
+            }
+        }
+        
+        inferred_type
+    }
 }

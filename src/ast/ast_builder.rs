@@ -327,6 +327,9 @@ impl AstBuilder {
             Rule::var_assignment_statement => {
                 StatementKind::VarAssignment(self.build_var_assignment_statement(inner)?)
             }
+            Rule::multi_assignment_statement => {
+                StatementKind::MultiAssignment(self.build_multi_assignment_statement(inner)?)
+            }
             Rule::assignment_statement => {
                 StatementKind::Assignment(self.build_assignment_statement(inner)?)
             }
@@ -413,6 +416,57 @@ impl AstBuilder {
         })
     }
 
+    /// Builds a multi-assignment statement from a Pest pair.
+    fn build_multi_assignment_statement(
+        &mut self,
+        pair: Pair<Rule>,
+    ) -> Result<MultiAssignmentStatement, Vec<SpannedError>> {
+        let mut inner = pair.into_inner();
+        let table_name = inner.next().unwrap().as_str().to_string();
+
+        // Parse the primary_key_list
+        let pk_list_pair = inner.next().unwrap();
+        let (pk_fields, pk_exprs) = self.build_primary_key_list(pk_list_pair)?;
+        let pk_count = pk_fields.len();
+
+        // Parse the multi_assignment_list
+        let multi_assignment_list = inner.next().unwrap();
+        let assignments = self.build_multi_assignment_list(multi_assignment_list)?;
+
+        Ok(MultiAssignmentStatement {
+            table_name,
+            pk_fields,
+            pk_exprs,
+            assignments,
+            resolved_table: None,
+            resolved_pk_fields: vec![None; pk_count],
+        })
+    }
+
+    /// Builds a list of multi-assignment pairs from a Pest pair.
+    fn build_multi_assignment_list(
+        &mut self,
+        pair: Pair<Rule>,
+    ) -> Result<Vec<MultiAssignmentPair>, Vec<SpannedError>> {
+        let mut assignments = Vec::new();
+
+        for assignment_pair in pair.into_inner() {
+            if assignment_pair.as_rule() == Rule::multi_assignment_pair {
+                let mut inner = assignment_pair.into_inner();
+                let field_name = inner.next().unwrap().as_str().to_string();
+                let rhs = self.build_expression(inner.next().unwrap())?;
+
+                assignments.push(MultiAssignmentPair {
+                    field_name,
+                    rhs,
+                    resolved_field: None,
+                });
+            }
+        }
+
+        Ok(assignments)
+    }
+
     /// Builds a list of primary keys from a Pest pair.
     fn build_primary_key_list(
         &mut self,
@@ -425,10 +479,10 @@ impl AstBuilder {
             if pk_pair.as_rule() == Rule::primary_key_pair {
                 let mut inner = pk_pair.into_inner();
                 let field_name = inner.next().unwrap().as_str().to_string();
-                let expr = self.build_expression(inner.next().unwrap())?;
-
+                let expr_id = self.build_expression(inner.next().unwrap())?;
+                
                 pk_fields.push(field_name);
-                pk_exprs.push(expr);
+                pk_exprs.push(expr_id);
             }
         }
 
@@ -573,7 +627,7 @@ impl AstBuilder {
             };
 
             let expr = Expression {
-                node: ExpressionKind::BinaryOp { left, op, right },
+                node: ExpressionKind::BinaryOp { left, op, right, resolved_type: None },
                 span: span.clone(),
             };
             left = self.program.expressions.alloc(expr);
@@ -607,7 +661,7 @@ impl AstBuilder {
             };
 
             let expr = Expression {
-                node: ExpressionKind::BinaryOp { left, op, right },
+                node: ExpressionKind::BinaryOp { left, op, right, resolved_type: None },
                 span: span.clone(),
             };
             left = self.program.expressions.alloc(expr);
@@ -639,7 +693,7 @@ impl AstBuilder {
             };
 
             let expr = Expression {
-                node: ExpressionKind::BinaryOp { left, op, right },
+                node: ExpressionKind::BinaryOp { left, op, right, resolved_type: None },
                 span: span.clone(),
             };
             left = self.program.expressions.alloc(expr);
@@ -674,7 +728,7 @@ impl AstBuilder {
             };
 
             let expr = Expression {
-                node: ExpressionKind::BinaryOp { left, op, right },
+                node: ExpressionKind::BinaryOp { left, op, right, resolved_type: None },
                 span: span.clone(),
             };
             left = self.program.expressions.alloc(expr);
@@ -703,7 +757,7 @@ impl AstBuilder {
             };
 
             let expr = Expression {
-                node: ExpressionKind::UnaryOp { op, expr: operand },
+                node: ExpressionKind::UnaryOp { op, expr: operand, resolved_type: None },
                 span,
             };
             Ok(self.program.expressions.alloc(expr))
@@ -742,6 +796,7 @@ impl AstBuilder {
                 resolved_table: None,
                 resolved_pk_fields: vec![None; pk_count], // Use the saved length
                 resolved_field: None,
+                resolved_type: None,
             },
             span,
         };
@@ -768,6 +823,7 @@ impl AstBuilder {
                     left,
                     op: default_op.clone(),
                     right,
+                    resolved_type: None,
                 },
                 span: span.clone(),
             };
