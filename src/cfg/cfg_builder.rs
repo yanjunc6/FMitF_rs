@@ -794,8 +794,10 @@ impl<'a> FunctionContextBuilder<'a> {
             } => {
                 let operand = self.build_expression(program, *inner_expr)?;
 
-                // Use resolved type from semantic analysis if available, otherwise infer
-                let result_type = resolved_type.clone().unwrap_or_else(|| ast::infer_unary_result_type(op));
+                // Use resolved type from semantic analysis - required for CFG building
+                let result_type = resolved_type.clone().ok_or_else(|| {
+                    "Unary operation type not resolved by semantic analysis".to_string()
+                })?;
                 
                 let temp_var = Variable {
                     name: format!("_temp_{}", self.function.variables.len()),
@@ -827,8 +829,10 @@ impl<'a> FunctionContextBuilder<'a> {
                 let left_operand = self.build_expression(program, *left)?;
                 let right_operand = self.build_expression(program, *right)?;
 
-                // Use resolved type from semantic analysis if available, otherwise infer
-                let result_type = resolved_type.clone().unwrap_or_else(|| ast::infer_binary_result_type(op));
+                // Use resolved type from semantic analysis - required for CFG building
+                let result_type = resolved_type.clone().ok_or_else(|| {
+                    "Binary operation type not resolved by semantic analysis".to_string()
+                })?;
                 
                 let temp_var = Variable {
                     name: format!("_temp_{}", self.function.variables.len()),
