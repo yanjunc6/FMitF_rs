@@ -96,12 +96,14 @@ impl RuntimeState {
             .copied()
             .ok_or_else(|| RuntimeError::NotFound(format!("Function '{}'", function_name)))?;
 
-        // Parse string args to RuntimeValue (simple: try int first, then string)
+        // Parse string args to RuntimeValue (try int, float, bool, then string)
         let parsed_args: Vec<RuntimeValue> = args
             .into_iter()
             .map(|arg| {
                 if let Ok(int_val) = arg.parse::<i64>() {
                     RuntimeValue::Int(int_val)
+                } else if let Ok(float_val) = arg.parse::<f64>() {
+                    RuntimeValue::Float(ordered_float::OrderedFloat(float_val))
                 } else if arg == "true" {
                     RuntimeValue::Bool(true)
                 } else if arg == "false" {
