@@ -73,6 +73,7 @@ hop_block = {
 statement = {
     var_decl_statement
   | var_assignment_statement
+  | multi_assignment_statement
   | assignment_statement
   | if_statement
   | while_statement
@@ -89,6 +90,24 @@ var_assignment_statement = {
 
 assignment_statement = {
     identifier ~ "[" ~ primary_key_list ~ "]" ~ "." ~ identifier ~ "=" ~ expression ~ ";"
+}
+
+multi_assignment_statement = {
+    identifier
+    ~ "[" ~ primary_key_list ~ "]"
+    ~ "="
+    ~ "{"
+    ~ multi_assignment_list
+    ~ "}"
+    ~ ";"
+}
+
+multi_assignment_list = {
+    multi_assignment_pair ~ ("," ~ multi_assignment_pair)*
+}
+
+multi_assignment_pair = {
+    identifier ~ ":" ~ expression
 }
 
 var_decl_statement = {

@@ -204,6 +204,7 @@ pub struct HopBlock {
 #[derive(Debug, Clone)]
 pub enum StatementKind {
     Assignment(AssignmentStatement),
+    MultiAssignment(MultiAssignmentStatement),
     VarAssignment(VarAssignmentStatement),
     IfStmt(IfStatement),
     WhileStmt(WhileStatement),
@@ -225,6 +226,25 @@ pub struct AssignmentStatement {
     pub rhs: ExpressionId,
     pub resolved_table: Option<TableId>,
     pub resolved_pk_fields: Vec<Option<FieldId>>,
+    pub resolved_field: Option<FieldId>,
+}
+
+/// Represents a multi-assignment statement in the AST.
+#[derive(Debug, Clone)]
+pub struct MultiAssignmentStatement {
+    pub table_name: String,
+    pub pk_fields: Vec<String>,
+    pub pk_exprs: Vec<ExpressionId>,
+    pub assignments: Vec<MultiAssignmentPair>,
+    pub resolved_table: Option<TableId>,
+    pub resolved_pk_fields: Vec<Option<FieldId>>,
+}
+
+/// Represents a field:value pair in a multi-assignment.
+#[derive(Debug, Clone)]
+pub struct MultiAssignmentPair {
+    pub field_name: String,
+    pub rhs: ExpressionId,
     pub resolved_field: Option<FieldId>,
 }
 
@@ -284,15 +304,18 @@ pub enum ExpressionKind {
         resolved_table: Option<TableId>,
         resolved_pk_fields: Vec<Option<FieldId>>,
         resolved_field: Option<FieldId>,
+        resolved_type: Option<TypeName>,
     },
     UnaryOp {
         op: UnaryOp,
         expr: ExpressionId,
+        resolved_type: Option<TypeName>,
     },
     BinaryOp {
         left: ExpressionId,
         op: BinaryOp,
         right: ExpressionId,
+        resolved_type: Option<TypeName>,
     },
 }
 
@@ -344,6 +367,56 @@ pub struct Scope {
 pub fn parse_and_analyze(source: &str) -> Results<Program> {
     let mut program = ast_builder::parse_and_build(source)?;
     name_resolver::resolve_names(&mut program)?;
-    semantics_analysis::analyze_program(&mut program)?;
+    semantics_analysis::analyze_program_with_types(&mut program)?;
     Ok(program)
+}
+
+impl ExpressionKind {
+    /// Get the resolved type of this expression, if available
+    pub fn resolved_type(&self) -> Option<&TypeName> {
+        match self {
+            ExpressionKind::TableFieldAccess { resolved_type, .. } => resolved_type.as_ref(),
+            ExpressionKind::UnaryOp { resolved_type, .. } => resolved_type.as_ref(),
+            ExpressionKind::BinaryOp { resolved_type, .. } => resolved_type.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Get the intrinsic type of literal expressions
+    pub fn intrinsic_type(&self) -> Option<TypeName> {
+        match self {
+            ExpressionKind::IntLit(_) => Some(TypeName::Int),
+            ExpressionKind::FloatLit(_) => Some(TypeName::Float),
+            ExpressionKind::StringLit(_) => Some(TypeName::String),
+            ExpressionKind::BoolLit(_) => Some(TypeName::Bool),
+            _ => None,
+        }
+    }
+}
+
+/// Infer the result type of a unary operation
+pub fn infer_unary_result_type(op: &UnaryOp) -> TypeName {
+    match op {
+        UnaryOp::Not => TypeName::Bool,
+        UnaryOp::Neg => TypeName::Int,
+    }
+}
+
+/// Infer the result type of a binary operation
+pub fn infer_binary_result_type(op: &BinaryOp) -> TypeName {
+    match op {
+        // Comparison operations return bool
+        BinaryOp::Eq
+        | BinaryOp::Neq
+        | BinaryOp::Lt
+        | BinaryOp::Lte
+        | BinaryOp::Gt
+        | BinaryOp::Gte => TypeName::Bool,
+
+        // Logical operations return bool
+        BinaryOp::And | BinaryOp::Or => TypeName::Bool,
+
+        // Arithmetic operations return numeric types (simplified to Int for now)
+        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => TypeName::Int,
+    }
 }
