@@ -460,6 +460,102 @@ impl<'a> Printer<'a> {
                 self.with_depth(self.depth + 2)
                     .print_expression(program, a.rhs);
             }
+            StatementKind::MultiAssignment(ma) => {
+                println!(
+                    "{}[{}] MultiAssignmentStatement{}",
+                    self.indent(),
+                    index,
+                    self.span(&stmt.span)
+                );
+                println!(
+                    "{}table_name: {}",
+                    self.with_depth(self.depth + 1).indent(),
+                    ma.table_name
+                );
+
+                // Print primary key fields
+                print!("{}pk_fields: [", self.with_depth(self.depth + 1).indent());
+                for (i, pk_field) in ma.pk_fields.iter().enumerate() {
+                    if i > 0 {
+                        print!(", ");
+                    }
+                    print!("{}", pk_field);
+                }
+                println!("]");
+
+                if let Some(resolved_table) = ma.resolved_table {
+                    let table = &program.tables[resolved_table];
+                    println!(
+                        "{}resolved_table: {} ({})",
+                        self.with_depth(self.depth + 1).indent(),
+                        table.name,
+                        resolved_table.index()
+                    );
+                } else {
+                    println!(
+                        "{}resolved_table: None",
+                        self.with_depth(self.depth + 1).indent()
+                    );
+                }
+
+                // Print resolved primary key fields
+                print!(
+                    "{}resolved_pk_fields: [",
+                    self.with_depth(self.depth + 1).indent()
+                );
+                for (i, resolved_pk_field) in ma.resolved_pk_fields.iter().enumerate() {
+                    if i > 0 {
+                        print!(", ");
+                    }
+                    if let Some(pk_field_id) = resolved_pk_field {
+                        let pk_field = &program.fields[*pk_field_id];
+                        print!("{} ({})", pk_field.field_name, pk_field_id.index());
+                    } else {
+                        print!("None");
+                    }
+                }
+                println!("]");
+
+                // Print assignments
+                println!(
+                    "{}assignments: [",
+                    self.with_depth(self.depth + 1).indent()
+                );
+                for (i, assignment) in ma.assignments.iter().enumerate() {
+                    println!(
+                        "{}[{}] field: {} ->",
+                        self.with_depth(self.depth + 2).indent(),
+                        i,
+                        assignment.field_name
+                    );
+                    if let Some(resolved_field) = assignment.resolved_field {
+                        let field = &program.fields[resolved_field];
+                        println!(
+                            "{}resolved_field: {} ({})",
+                            self.with_depth(self.depth + 3).indent(),
+                            field.field_name,
+                            resolved_field.index()
+                        );
+                    } else {
+                        println!(
+                            "{}resolved_field: None",
+                            self.with_depth(self.depth + 3).indent()
+                        );
+                    }
+                    println!("{}rhs:", self.with_depth(self.depth + 3).indent());
+                    self.with_depth(self.depth + 4)
+                        .print_expression(program, assignment.rhs);
+                }
+                println!("{}]", self.with_depth(self.depth + 1).indent());
+
+                // Print primary key expressions
+                println!("{}pk_exprs:", self.with_depth(self.depth + 1).indent());
+                for (i, &pk_expr) in ma.pk_exprs.iter().enumerate() {
+                    println!("{}[{}]:", self.with_depth(self.depth + 2).indent(), i);
+                    self.with_depth(self.depth + 3)
+                        .print_expression(program, pk_expr);
+                }
+            }
             StatementKind::Return(r) => {
                 println!(
                     "{}[{}] ReturnStatement{}",
@@ -577,6 +673,7 @@ impl<'a> Printer<'a> {
                 resolved_table,
                 resolved_pk_fields,
                 resolved_field,
+                ..
             } => {
                 println!("{}TableFieldAccess", self.indent());
                 println!(
@@ -657,14 +754,14 @@ impl<'a> Printer<'a> {
                         .print_expression(program, pk_expr);
                 }
             }
-            ExpressionKind::UnaryOp { op, expr } => {
+            ExpressionKind::UnaryOp { op, expr, .. } => {
                 println!("{}UnaryOp", self.indent());
                 println!("{}op: {:?}", self.with_depth(self.depth + 1).indent(), op);
                 println!("{}expr:", self.with_depth(self.depth + 1).indent());
                 self.with_depth(self.depth + 2)
                     .print_expression(program, *expr);
             }
-            ExpressionKind::BinaryOp { left, op, right } => {
+            ExpressionKind::BinaryOp { left, op, right, .. } => {
                 println!("{}BinaryOp", self.indent());
                 println!("{}left:", self.with_depth(self.depth + 1).indent());
                 self.with_depth(self.depth + 2)
@@ -1000,7 +1097,8 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
     ) -> Result<()> {
         let indent = self.indent();
         let indent1 = "  ".repeat(self.depth + 1);
-        let _indent2 = "  ".repeat(self.depth + 2);
+        let indent2 = "  ".repeat(self.depth + 2);
+        let indent3 = "  ".repeat(self.depth + 3);
 
         match &stmt.node {
             StatementKind::VarDecl(v) => {
@@ -1134,6 +1232,106 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                 self.depth += 2;
                 self.print_expression(program, a.rhs)?;
                 self.depth -= 2;
+            }
+            StatementKind::MultiAssignment(ma) => {
+                writeln!(
+                    self.writer,
+                    "{}[{}] MultiAssignmentStatement{}",
+                    indent,
+                    index,
+                    self.span(&stmt.span)
+                )?;
+                writeln!(
+                    self.writer,
+                    "{}table_name: {}",
+                    indent1,
+                    ma.table_name
+                )?;
+
+                // Write primary key fields
+                write!(self.writer, "{}pk_fields: [", indent1)?;
+                for (i, pk_field) in ma.pk_fields.iter().enumerate() {
+                    if i > 0 {
+                        write!(self.writer, ", ")?;
+                    }
+                    write!(self.writer, "{}", pk_field)?;
+                }
+                writeln!(self.writer, "]")?;
+
+                if let Some(resolved_table) = ma.resolved_table {
+                    let table = &program.tables[resolved_table];
+                    writeln!(
+                        self.writer,
+                        "{}resolved_table: {} ({})",
+                        indent1,
+                        table.name,
+                        resolved_table.index()
+                    )?;
+                } else {
+                    writeln!(self.writer, "{}resolved_table: None", indent1)?;
+                }
+
+                // Write resolved primary key fields
+                write!(self.writer, "{}resolved_pk_fields: [", indent1)?;
+                for (i, resolved_pk_field) in ma.resolved_pk_fields.iter().enumerate() {
+                    if i > 0 {
+                        write!(self.writer, ", ")?;
+                    }
+                    if let Some(pk_field_id) = resolved_pk_field {
+                        let pk_field = &program.fields[*pk_field_id];
+                        write!(
+                            self.writer,
+                            "{} ({})",
+                            pk_field.field_name,
+                            pk_field_id.index()
+                        )?;
+                    } else {
+                        write!(self.writer, "None")?;
+                    }
+                }
+                writeln!(self.writer, "]")?;
+
+                // Print assignments
+                writeln!(self.writer, "{}assignments: [", indent1)?;
+                for (i, assignment) in ma.assignments.iter().enumerate() {
+                    writeln!(
+                        self.writer,
+                        "{}[{}] field: {} ->",
+                        indent2,
+                        i,
+                        assignment.field_name
+                    )?;
+                    if let Some(resolved_field) = assignment.resolved_field {
+                        let field = &program.fields[resolved_field];
+                        writeln!(
+                            self.writer,
+                            "{}resolved_field: {} ({})",
+                            indent3,
+                            field.field_name,
+                            resolved_field.index()
+                        )?;
+                    } else {
+                        writeln!(
+                            self.writer,
+                            "{}resolved_field: None",
+                            indent3
+                        )?;
+                    }
+                    writeln!(self.writer, "{}rhs:", indent3)?;
+                    self.depth += 4;
+                    self.print_expression(program, assignment.rhs)?;
+                    self.depth -= 4;
+                }
+                writeln!(self.writer, "{}]", indent1)?;
+
+                // Print primary key expressions
+                writeln!(self.writer, "{}pk_exprs:", indent1)?;
+                for (i, &pk_expr) in ma.pk_exprs.iter().enumerate() {
+                    writeln!(self.writer, "{}[{}]:", indent2, i)?;
+                    self.depth += 3;
+                    self.print_expression(program, pk_expr)?;
+                    self.depth -= 3;
+                }
             }
             StatementKind::Return(r) => {
                 writeln!(
@@ -1284,6 +1482,7 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                 resolved_table,
                 resolved_pk_fields,
                 resolved_field,
+                ..
             } => {
                 writeln!(self.writer, "{}TableFieldAccess", indent)?;
                 writeln!(self.writer, "{}table_name: {}", indent1, table_name)?;
@@ -1356,7 +1555,7 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                     self.depth -= 3;
                 }
             }
-            ExpressionKind::UnaryOp { op, expr } => {
+            ExpressionKind::UnaryOp { op, expr, .. } => {
                 writeln!(self.writer, "{}UnaryOp", indent)?;
                 writeln!(self.writer, "{}op: {:?}", indent1, op)?;
                 writeln!(self.writer, "{}expr:", indent1)?;
@@ -1364,7 +1563,7 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                 self.print_expression(program, *expr)?;
                 self.depth -= 2;
             }
-            ExpressionKind::BinaryOp { left, op, right } => {
+            ExpressionKind::BinaryOp { left, op, right, .. } => {
                 writeln!(self.writer, "{}BinaryOp", indent)?;
                 writeln!(self.writer, "{}left:", indent1)?;
                 self.depth += 2;

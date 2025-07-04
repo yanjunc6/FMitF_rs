@@ -294,6 +294,106 @@ impl<'p> NameResolver<'p> {
                     }
                 }
             }
+            StatementKind::MultiAssignment(multi_assign) => {
+                // First resolve all primary key expressions and assignment RHS expressions
+                for &pk_expr in &multi_assign.pk_exprs {
+                    self.resolve_expression(pk_expr);
+                }
+                for assignment in &multi_assign.assignments {
+                    self.resolve_expression(assignment.rhs);
+                }
+
+                // Clone the multi_assign to avoid borrowing issues
+                let mut multi_assign_copy = multi_assign.clone();
+
+                // Look up table
+                let table_lookup_result =
+                    self.program.table_map.get(&multi_assign_copy.table_name).copied();
+
+                match table_lookup_result {
+                    Some(table_id) => {
+                        multi_assign_copy.resolved_table = Some(table_id);
+
+                        // Resolve each primary key field
+                        let table = &self.program.tables[table_id];
+                        let mut missing_pk_fields = Vec::new();
+
+                        for (i, pk_field_name) in multi_assign_copy.pk_fields.iter().enumerate() {
+                            let pk_field_id = table
+                                .fields
+                                .iter()
+                                .find(|&&field_id| {
+                                    self.program.fields[field_id].field_name == *pk_field_name
+                                })
+                                .copied();
+
+                            match pk_field_id {
+                                Some(field_id) => {
+                                    multi_assign_copy.resolved_pk_fields[i] = Some(field_id);
+                                }
+                                None => {
+                                    missing_pk_fields.push((i, pk_field_name.clone()));
+                                }
+                            }
+                        }
+
+                        // Resolve each assignment field
+                        let mut missing_target_fields = Vec::new();
+                        for assignment in &mut multi_assign_copy.assignments {
+                            let field_id = table
+                                .fields
+                                .iter()
+                                .find(|&&field_id| {
+                                    self.program.fields[field_id].field_name == assignment.field_name
+                                })
+                                .copied();
+
+                            match field_id {
+                                Some(field_id) => {
+                                    assignment.resolved_field = Some(field_id);
+                                }
+                                None => {
+                                    missing_target_fields.push(assignment.field_name.clone());
+                                }
+                            }
+                        }
+
+                        // Report all errors after borrowing
+                        for (_, field_name) in missing_pk_fields {
+                            self.error_at(
+                                &stmt_span,
+                                AstError::UndeclaredField {
+                                    table: multi_assign_copy.table_name.clone(),
+                                    field: field_name,
+                                },
+                            );
+                        }
+
+                        for field_name in missing_target_fields {
+                            self.error_at(
+                                &stmt_span,
+                                AstError::UndeclaredField {
+                                    table: multi_assign_copy.table_name.clone(),
+                                    field: field_name,
+                                },
+                            );
+                        }
+
+                        // Update the statement with resolved multi-assignment
+                        if let StatementKind::MultiAssignment(ref mut multi_assign_mut) =
+                            &mut self.program.statements[stmt_id].node
+                        {
+                            *multi_assign_mut = multi_assign_copy;
+                        }
+                    }
+                    None => {
+                        self.error_at(
+                            &stmt_span,
+                            AstError::UndeclaredTable(multi_assign_copy.table_name.clone()),
+                        );
+                    }
+                }
+            }
             StatementKind::IfStmt(if_stmt) => {
                 self.resolve_expression(if_stmt.condition);
                 self.resolve_block(&if_stmt.then_branch);
