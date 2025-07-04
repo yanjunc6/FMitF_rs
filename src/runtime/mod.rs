@@ -4,11 +4,13 @@
 //! It's designed for quick testing and experimentation, not production use.
 
 use std::fmt;
+use ordered_float::OrderedFloat;
 
 /// Runtime values - keep it simple
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RuntimeValue {
     Int(i64),
+    Float(OrderedFloat<f64>),
     String(String),
     Bool(bool),
 }
@@ -35,6 +37,7 @@ impl fmt::Display for RuntimeValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RuntimeValue::Int(i) => write!(f, "{}", i),
+            RuntimeValue::Float(fl) => write!(f, "{}", fl.into_inner()),
             RuntimeValue::String(s) => write!(f, "{}", s),
             RuntimeValue::Bool(b) => write!(f, "{}", b),
         }
