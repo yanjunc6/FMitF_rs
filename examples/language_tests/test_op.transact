@@ -1,0 +1,22 @@
+nodes {
+    NodeA
+}
+
+table User on NodeA {
+    primary int id;
+    string name;
+    int age;
+    string email;
+    float balance;
+}
+
+void test_multi_assignment() {
+    hop on NodeA {
+        User[id: 5] = {
+            name: "Alice",
+            age: (-30) + 5,
+            email: "alice@example.com",
+            balance: (1000.0 * 1.5)
+        };
+    }
+}
