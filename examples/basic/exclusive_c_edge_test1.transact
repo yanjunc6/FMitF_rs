@@ -9,6 +9,7 @@ nodes {
 table User on UserNode {
     primary int id;
     int cursor;
+    int time;
 }
 
 table Text on TextNode {
@@ -17,10 +18,11 @@ table Text on TextNode {
 }
 
 // Transaction 1: Type
-void type(int userId, string input) {
+void type(int userId, string input, int time) {
     hop on UserNode {
         int cur = User[id: userId].cursor;
         User[id: userId].cursor = cur + 1;
+        User[id: userId].time = time;
     }
     
     hop on TextNode {
@@ -29,10 +31,11 @@ void type(int userId, string input) {
 }
 
 // Transaction 2: Clear
-void clear(int userId) {
+void clear(int userId, int time) {
     hop on UserNode {
         int cur = User[id: userId].cursor;
         User[id: userId].cursor = cur + 1;
+        User[id: userId].time = time;
     }
     
     hop on TextNode {

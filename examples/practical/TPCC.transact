@@ -1,0 +1,243 @@
+nodes {
+    warehouse_node,
+    district_node,
+    customer_node,
+    oorder_node,
+    new_order_node,
+    item_node,
+    stock_node,
+    order_line_node,
+    history_node
+}
+
+// -------------------------------------------------
+// Table Schemas
+// -------------------------------------------------
+
+table warehouse on warehouse_node {
+    primary int w_id;
+    float w_ytd;
+}
+
+table district on district_node {
+    primary int d_w_id;
+    primary int d_id;
+    float d_ytd;
+    int d_next_o_id;
+}
+
+table customer on customer_node {
+    primary int c_w_id;
+    primary int c_d_id;
+    primary int c_id;
+    float c_balance;
+    float c_ytd_payment;
+    int c_payment_cnt;
+    string c_credit;
+    string c_data;
+}
+
+table oorder on oorder_node {
+    primary int o_w_id;
+    primary int o_d_id;
+    primary int o_id;
+    int o_c_id;
+    int o_carrier_id;
+    int o_ol_cnt;
+    int o_all_local;
+    int o_entry_d;
+}
+
+table new_order on new_order_node {
+    primary int no_w_id;
+    primary int no_d_id;
+    primary int no_o_id;
+}
+
+table item on item_node {
+    primary int i_id;
+    float i_price;
+}
+
+table stock on stock_node {
+    primary int s_w_id;
+    primary int s_i_id;
+    int s_quantity;
+    int s_ytd;
+    int s_order_cnt;
+    int s_remote_cnt;
+    string s_dist_01;
+    string s_dist_02;
+    string s_dist_03;
+    string s_dist_04;
+    string s_dist_05;
+    string s_dist_06;
+    string s_dist_07;
+    string s_dist_08;
+    string s_dist_09;
+    string s_dist_10;
+}
+
+table order_line on order_line_node {
+    primary int ol_w_id;
+    primary int ol_d_id;
+    primary int ol_o_id;
+    primary int ol_number;
+    int ol_i_id;
+    int ol_delivery_d;
+    float ol_amount;
+    int ol_supply_w_id;
+    int ol_quantity;
+    string ol_dist_info;
+}
+
+table history on history_node {
+    primary int h_c_id;
+    primary int h_c_d_id;
+    primary int h_c_w_id;
+    primary int h_d_id;
+    primary int h_w_id;
+    int h_date;
+    float h_amount;
+    string h_data;
+}
+
+// -------------------------------------------------
+// Transaction Implementations
+// -------------------------------------------------
+
+void TPCC_newOrder(int w_id, int d_id, int c_id, int ol_cnt, int ol_i_id_1, int ol_qty_1, int ol_i_id_2, int ol_qty_2, int ol_i_id_3, int ol_qty_3) {
+    int next_o_id;
+    float i_price_1;
+    float i_price_2;
+    float i_price_3;
+    string s_dist_info_1;
+    string s_dist_info_2;
+    string s_dist_info_3;
+
+    hop on district_node {
+        next_o_id = district[d_w_id:w_id, d_id:d_id].d_next_o_id;
+        district[d_w_id:w_id, d_id:d_id].d_next_o_id = next_o_id + 1;
+    }
+
+    hop on oorder_node {
+        oorder[o_w_id:w_id, o_d_id:d_id, o_id:next_o_id].o_c_id = c_id;
+        oorder[o_w_id:w_id, o_d_id:d_id, o_id:next_o_id].o_carrier_id = 0; // null
+        oorder[o_w_id:w_id, o_d_id:d_id, o_id:next_o_id].o_ol_cnt = ol_cnt;
+        oorder[o_w_id:w_id, o_d_id:d_id, o_id:next_o_id].o_all_local = 1;
+        oorder[o_w_id:w_id, o_d_id:d_id, o_id:next_o_id].o_entry_d = 123456789; // current_timestamp
+    }
+
+    hop on new_order_node {
+        new_order[no_w_id:w_id, no_d_id:d_id, no_o_id:next_o_id].no_o_id = next_o_id;
+    }
+
+    hop on item_node {
+        i_price_1 = item[i_id:ol_i_id_1].i_price;
+        i_price_2 = item[i_id:ol_i_id_2].i_price;
+        i_price_3 = item[i_id:ol_i_id_3].i_price;
+    }
+
+    hop on stock_node {
+        // Process Order Line 1
+        int s_quantity_1 = stock[s_w_id:w_id, s_i_id:ol_i_id_1].s_quantity;
+        int new_s_quantity_1 = s_quantity_1 - ol_qty_1;
+        if (s_quantity_1 - ol_qty_1 < 10) {
+            new_s_quantity_1 = s_quantity_1 - ol_qty_1 + 91;
+        }
+        stock[s_w_id:w_id, s_i_id:ol_i_id_1].s_quantity = new_s_quantity_1;
+        stock[s_w_id:w_id, s_i_id:ol_i_id_1].s_ytd = stock[s_w_id:w_id, s_i_id:ol_i_id_1].s_ytd + ol_qty_1;
+        stock[s_w_id:w_id, s_i_id:ol_i_id_1].s_order_cnt = stock[s_w_id:w_id, s_i_id:ol_i_id_1].s_order_cnt + 1;
+        s_dist_info_1 = stock[s_w_id:w_id, s_i_id:ol_i_id_1].s_dist_01;
+
+        // Process Order Line 2
+        int s_quantity_2 = stock[s_w_id:w_id, s_i_id:ol_i_id_2].s_quantity;
+        int new_s_quantity_2 = s_quantity_2 - ol_qty_2;
+        if (s_quantity_2 - ol_qty_2 < 10) {
+            new_s_quantity_2 = s_quantity_2 - ol_qty_2 + 91;
+        }
+        stock[s_w_id:w_id, s_i_id:ol_i_id_2].s_quantity = new_s_quantity_2;
+        stock[s_w_id:w_id, s_i_id:ol_i_id_2].s_ytd = stock[s_w_id:w_id, s_i_id:ol_i_id_2].s_ytd + ol_qty_2;
+        stock[s_w_id:w_id, s_i_id:ol_i_id_2].s_order_cnt = stock[s_w_id:w_id, s_i_id:ol_i_id_2].s_order_cnt + 1;
+        s_dist_info_2 = stock[s_w_id:w_id, s_i_id:ol_i_id_2].s_dist_02;
+
+        // Process Order Line 3
+        int s_quantity_3 = stock[s_w_id:w_id, s_i_id:ol_i_id_3].s_quantity;
+        int new_s_quantity_3 = s_quantity_3 - ol_qty_3;
+        if (s_quantity_3 - ol_qty_3 < 10) {
+            new_s_quantity_3 = s_quantity_3 - ol_qty_3 + 91;
+        }
+        stock[s_w_id:w_id, s_i_id:ol_i_id_3].s_quantity = new_s_quantity_3;
+        stock[s_w_id:w_id, s_i_id:ol_i_id_3].s_ytd = stock[s_w_id:w_id, s_i_id:ol_i_id_3].s_ytd + ol_qty_3;
+        stock[s_w_id:w_id, s_i_id:ol_i_id_3].s_order_cnt = stock[s_w_id:w_id, s_i_id:ol_i_id_3].s_order_cnt + 1;
+        s_dist_info_3 = stock[s_w_id:w_id, s_i_id:ol_i_id_3].s_dist_03;
+    }
+
+    hop on order_line_node {
+        // Insert Order Line 1
+        float ol_amount_1 = ol_qty_1 * i_price_1;
+        order_line[ol_w_id:w_id, ol_d_id:d_id, ol_o_id:next_o_id, ol_number:1].ol_i_id = ol_i_id_1;
+        order_line[ol_w_id:w_id, ol_d_id:d_id, ol_o_id:next_o_id, ol_number:1].ol_delivery_d = 123456789;
+        order_line[ol_w_id:w_id, ol_d_id:d_id, ol_o_id:next_o_id, ol_number:1].ol_amount = ol_amount_1;
+        order_line[ol_w_id:w_id, ol_d_id:d_id, ol_o_id:next_o_id, ol_number:1].ol_supply_w_id = w_id;
+        order_line[ol_w_id:w_id, ol_d_id:d_id, ol_o_id:next_o_id, ol_number:1].ol_quantity = ol_qty_1;
+        order_line[ol_w_id:w_id, ol_d_id:d_id, ol_o_id:next_o_id, ol_number:1].ol_dist_info = s_dist_info_1;
+
+        // Insert Order Line 2
+        float ol_amount_2 = ol_qty_2 * i_price_2;
+        order_line[ol_w_id:w_id, ol_d_id:d_id, ol_o_id:next_o_id, ol_number:2].ol_i_id = ol_i_id_2;
+        order_line[ol_w_id:w_id, ol_d_id:d_id, ol_o_id:next_o_id, ol_number:2].ol_delivery_d = 123456789;
+        order_line[ol_w_id:w_id, ol_d_id:d_id, ol_o_id:next_o_id, ol_number:2].ol_amount = ol_amount_2;
+        order_line[ol_w_id:w_id, ol_d_id:d_id, ol_o_id:next_o_id, ol_number:2].ol_supply_w_id = w_id;
+        order_line[ol_w_id:w_id, ol_d_id:d_id, ol_o_id:next_o_id, ol_number:2].ol_quantity = ol_qty_2;
+        order_line[ol_w_id:w_id, ol_d_id:d_id, ol_o_id:next_o_id, ol_number:2].ol_dist_info = s_dist_info_2;
+
+        // Insert Order Line 3
+        float ol_amount_3 = ol_qty_3 * i_price_3;
+        order_line[ol_w_id:w_id, ol_d_id:d_id, ol_o_id:next_o_id, ol_number:3].ol_i_id = ol_i_id_3;
+        order_line[ol_w_id:w_id, ol_d_id:d_id, ol_o_id:next_o_id, ol_number:3].ol_delivery_d = 123456789;
+        order_line[ol_w_id:w_id, ol_d_id:d_id, ol_o_id:next_o_id, ol_number:3].ol_amount = ol_amount_3;
+        order_line[ol_w_id:w_id, ol_d_id:d_id, ol_o_id:next_o_id, ol_number:3].ol_supply_w_id = w_id;
+        order_line[ol_w_id:w_id, ol_d_id:d_id, ol_o_id:next_o_id, ol_number:3].ol_quantity = ol_qty_3;
+        order_line[ol_w_id:w_id, ol_d_id:d_id, ol_o_id:next_o_id, ol_number:3].ol_dist_info = s_dist_info_3;
+    }
+}
+
+void TPCC_payment(int w_id, int d_id, int c_id, float payment_amount) {
+    hop on warehouse_node {
+        // Update warehouse
+        float w_ytd = warehouse[w_id:w_id].w_ytd;
+        warehouse[w_id:w_id].w_ytd = w_ytd + payment_amount;
+    }
+
+    hop on district_node {
+        // Update district
+        float d_ytd = district[d_w_id:w_id, d_id:d_id].d_ytd;
+        district[d_w_id:w_id, d_id:d_id].d_ytd = d_ytd + payment_amount;
+    }
+
+    hop on customer_node {
+        // Update customer
+        float c_balance = customer[c_w_id:w_id, c_d_id:d_id, c_id:c_id].c_balance;
+        float c_ytd_payment = customer[c_w_id:w_id, c_d_id:d_id, c_id:c_id].c_ytd_payment;
+        int c_payment_cnt = customer[c_w_id:w_id, c_d_id:d_id, c_id:c_id].c_payment_cnt;
+        string c_credit = customer[c_w_id:w_id, c_d_id:d_id, c_id:c_id].c_credit;
+
+        customer[c_w_id:w_id, c_d_id:d_id, c_id:c_id].c_balance = c_balance - payment_amount;
+        customer[c_w_id:w_id, c_d_id:d_id, c_id:c_id].c_ytd_payment = c_ytd_payment + payment_amount;
+        customer[c_w_id:w_id, c_d_id:d_id, c_id:c_id].c_payment_cnt = c_payment_cnt + 1;
+
+        if (c_credit == "BC") {
+            string c_data = customer[c_w_id:w_id, c_d_id:d_id, c_id:c_id].c_data;
+            // String concatenation is not in the grammar, so we just overwrite.
+            customer[c_w_id:w_id, c_d_id:d_id, c_id:c_id].c_data = "Bad credit history update";
+        }
+    }
+
+    hop on history_node {
+        // Insert history
+        history[h_c_id:c_id, h_c_d_id:d_id, h_c_w_id:w_id, h_d_id:d_id, h_w_id:w_id].h_date = 123456789; // current_timestamp
+        history[h_c_id:c_id, h_c_d_id:d_id, h_c_w_id:w_id, h_d_id:d_id, h_w_id:w_id].h_amount = payment_amount;
+        history[h_c_id:c_id, h_c_d_id:d_id, h_c_w_id:w_id, h_d_id:d_id, h_w_id:w_id].h_data = "payment";
+    }
+}
