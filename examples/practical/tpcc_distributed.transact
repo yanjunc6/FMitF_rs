@@ -1,0 +1,250 @@
+// Mostly written with transact syntax
+// There are some syntax not in transact, to express tables being partitioned into different nodes
+
+
+// Partition should be in table level
+table Warehouse{
+    primary int W_ID;
+    Node 10*W_ID;
+
+    string W_NAME;
+    string W_STREET_1;
+    string W_STREET_2;
+    string W_CITY;
+    string W_STATE;
+    string W_ZIP;
+    float W_TAX;
+    float W_YTD;
+}
+
+table District{
+    primary int D_W_ID;
+    primary int D_ID;
+    Node 10*D_W_ID + D_ID;
+
+    string D_NAME;
+    string D_STREET_1;
+    string D_STREET_2;
+    string D_CITY;
+    string D_STATE;
+    string D_ZIP;
+    float D_TAX;
+    float D_YTD;
+    int D_NEXT_O_ID;
+    int D_NEXT_NO_ID;
+}
+
+table Customer{
+    primary int C_W_ID;
+    primary int C_D_ID;
+    primary int C_ID;
+    Node 10*C_W_ID + C_D_ID;
+
+    string C_FIRST;
+    string C_MIDDLE;
+    string C_LAST;
+    string C_STREET_1;
+    string C_STREET_2;
+    string C_CITY;
+    string C_STATE;
+    string C_ZIP;
+    string C_PHONE;
+    int C_SINCE;
+    string C_CREDIT;
+    float C_CREDIT_LIMIT;
+    float C_DISCOUNT;
+    float C_BALANCE;
+    float C_YTD_PAYMENT;
+    float C_PAYMENT_CNT;
+    float C_DELIVERY_CNT;
+    string C_DATA;
+}
+
+table History {
+    int H_C_W_ID;
+    int H_C_D_ID;
+    int H_C_ID;
+    int H_D_ID;
+    int H_W_ID;
+    int H_DATE;
+    int H_AMOUNT;
+    int H_DATA;
+}
+
+table New_Order {
+    primary int NO_W_ID;
+    primary int NO_D_ID;
+    primary int NO_O_ID;
+    Node 10*NO_W_ID + NO_D_ID;
+}
+
+table Order {
+    primary int O_W_ID;
+    primary int O_D_ID;
+    primary int O_ID;
+    Node 10*O_W_ID + O_D_ID;
+
+    int O_C_ID;
+    int O_ENTRY_DATE;
+    int O_CARRIER_ID;
+    int O_OL_CNT;
+    int O_ALL_LOCAL;
+}
+
+table Order_Line{
+    primary int OL_W_ID;
+    primary int OL_D_ID;
+    primary int OL_O_ID;
+    primary int OL_NUMBER;
+    Node 10*OL_W_ID + OL_D_ID;
+
+    int OL_I_ID;
+    int OL_SUPPLY_W_ID;
+    int OL_DELIVERY_DATE;
+    int OL_QUANTITY;
+    int OL_AMOUNT;
+    string OL_DIST_INTO;
+}
+
+table Item {
+    primary int I_ID;
+    primary int W_ID;
+    Node 10*W_ID + I_ID % 10;
+
+    int I_IM_ID;
+    string I_NAME;
+    float I_PRICE;
+    string I_DATA;
+}
+
+table Stock {
+    primary int S_W_ID;
+    primary int S_I_ID;
+    Node 10*S_W_ID + S_I_ID % 10;
+
+    int S_QUANTITY;
+    float S_YTD;
+    int S_ORDER_CNT;
+    int S_REMOTE_CNT;
+    string S_DATA;
+}
+
+// In the following functions, we use "parition by" to indicate the partition key of each hop
+// num_nodes = num_warehouses * 10
+// Warehouses are paritioned by w_id, node_id = w_id * 10
+// Stocks and Items are paritioned by w_id, i_id, node_id = w_id * 10 + i_id % 10
+// Districts (and other tables under district) are paritioned by (w_id, d_id), node_id = w_id * 10 + d_id
+void newOrder(int w_id, int d_id, int c_id, int o_ol_cnt, int o_all_local, int date,
+    int[] itemIDs, int[] supplierWarehouseIDs, int[] orderQuantities) {
+   
+    float[] itemPrices;
+
+    // Get warehouse tax
+    hop {
+        float w_tax = Warehouse[W_ID: w_id].W_TAX;
+    }
+    
+    // Read item and update stock
+    for (int ol_number := 0; ol_number < o_ol_cnt; ol_number ++) {
+        hop {
+            itemPrices[ol_number] = Item[I_ID: itemIDs[ol_number]， W_ID: supplierWarehouseIDs[ol_number]].I_PRICE;
+
+            Stock s = Stock[S_W_ID: supplierWarehouseIDs[ol_number], S_I_ID: itemIDs[ol_number]]
+
+            if (s.S_QUANTITY - orderQuantities[ol_number] >= 10) {
+                s.S_QUANTITY -= orderQuantities[ol_number];
+            } else {
+                s.S_QUANTITY += 91 - orderQuantities[ol_number];
+            }
+
+            if (supplierWarehouseIDs[ol_number] != w_id) {
+                s.S_REMOTE_CNT += 1;
+            }
+            s.S_ORDER_CNT += 1;
+            s.S_YTD += orderQuantities[ol_number];
+            
+            Stock[S_W_ID: supplierWarehouseIDs[ol_number], S_I_ID: itemIDs[ol_number]] = s;
+        }
+    }
+    
+    // Update District
+    hop {
+        // Read district and increment o_id
+        int d_next_oid = District[D_W_ID: w_id, D_ID: d_id].D_NEXT_O_ID;
+        float d_tax = District[D_W_ID: w_id, D_ID: d_id].D_TAX;
+        District[D_W_ID: w_id, D_ID: d_id].D_NEXT_O_ID += 1;
+
+        // Insert Order
+        Order[O_W_ID: w_id, O_D_ID: d_id, O_ID: d_next_oid] = {
+            O_C_ID: c_id,
+            O_ENTRY_DATE: date,
+            O_OL_CNT: o_ol_cnt,
+            O_ALL_LOCAL: o_all_local
+        };
+        
+        // Insert NewOrder
+        New_Order[NO_W_ID: w_id, NO_D_ID: d_id, NO_ID: d_next_oid] = {};
+
+        // Insert order line
+        for (int ol_number := 0; ol_number < o_ol_cnt; ol_number ++) {
+            Order_Line[O_W_ID: w_id, O_D_ID: d_id, O_ID: d_next_oid, OL_NUMBER: ol_number] = {
+                OL_I_ID: itemIDs[ol_number],
+                OL_SUPPLY_W_ID: supplierWarehouseIDs[ol_number],
+                OL_QUANTITY: orderQuantities[ol_number],
+                OL_AMOUNT: itemPrices[ol_number] * orderQuantities[ol_number]
+            };
+        }
+    }
+}
+
+void Delivery(int w_id, int o_carrier_id, int date) {
+    for (int d_id = 0; d_id < 10; d_id ++) {
+        hop {
+            // Get new order id and increment by 1
+            int no_o_id = District[D_W_ID: w_id, D_ID: d_id].D_NEXT_NO_ID;
+            District[D_W_ID: w_id, D_ID: d_id].D_NEXT_NO_ID += 1;
+
+            // Read Order table, update carrier id
+            int c_id = Order[O_W_ID: w_id, O_D_ID: d_id, O_ID: no_o_id].O_C_ID;
+            int ol_cnt = Order[O_W_ID: w_id, O_D_ID: d_id, O_ID: no_o_id].O_OL_CNT;
+            Order[O_W_ID: w_id, O_D_ID: d_id, O_ID: no_o_id].O_C_ID.O_CARRIER_ID = o_carrier_id;
+            
+            // Read Order Lines to get total order price, and update delivery date
+            float ol_total = 0
+            for int ol_number := 0; ol_number < o_ol_cnt; ol_number ++ {
+                Order_Line[O_W_ID: w_id, O_D_ID: d_id, O_ID: no_o_id, OL_NUMBER: ol_number].OL_DELIVERY_DATE = date;
+                ol_total += Order_Line[O_W_ID: w_id, O_D_ID: d_id, O_ID: no_o_id, OL_NUMBER: ol_number].OL_AMOUNT
+            }
+
+            // Update Customer 
+            Customer[C_W_ID: w_id, C_D_ID: d_id, C_ID: c_id].C_BALANCE += ol_total;
+            Customer[C_W_ID: w_id, C_D_ID: d_id, C_ID: c_id].C_DELIVERY_CNT += 1;
+        }
+    }
+}
+
+void Payment(int w_id, int d_id, int c_w_id, int c_d_id, int c_id, float amount) {
+    // Add payment amount to supply warehouse
+    hop {
+        Warehouse[W_ID: w_id].W_YTD += amount;
+    }
+
+    // Add payment amount to supply district
+    hop {
+        District[D_W_ID: w_id, D_ID: d_id].D_YTD += amount;
+    }
+
+    // Update customer
+    hop {
+        Customer c = Customer[C_W_ID: c_w_id, C_D_ID: c_d_id, C_ID: c_id];
+        c.C_BALANCE -= amount;
+        c.C_YTD_PAYMENT += amount;
+        c.C_PAYMENT_CNT += 1;
+
+        if (c.C_CREDIT == "BC") {
+            C.C_DATA = c.C_ID + " " + c.C_D_ID + " " + c.C_W_ID + " " + d_id + " " + w_id 
+                + " " + amount + " | " + c.C_DATA;
+        }
+        Customer[C_W_ID: c_w_id, C_D_ID: c_d_id, C_ID: c_id] = c;
+    }
+}
