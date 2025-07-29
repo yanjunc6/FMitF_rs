@@ -39,24 +39,35 @@ Whitespace       = { " " | "\t" | "\r" | "\n" } ;
 (* Program structure *)
 (* ------------------------------------------------- *)
 Program =
-    NodesBlock,
+    { PartitionDeclaration },
     { TableDeclaration },
+    { ConstDeclaration },
     { FunctionDeclaration }
 ;
 
 (* ------------------------------------------------- *)
-(* Nodes *)
+(* Partition Functions *)
 (* ------------------------------------------------- *)
-NodesBlock =
-    "nodes",
-    "{",
-        NodeList,
-    "}"
+PartitionDeclaration =
+    "partition",
+    Identifier,
+    "(",
+        [ ParameterList ],
+    ")",
+    [ "=", Expression ],
+    ";"
 ;
 
-NodeList =
+(* ------------------------------------------------- *)
+(* Constants *)
+(* ------------------------------------------------- *)
+ConstDeclaration =
+    "const",
+    Type,
     Identifier,
-    { ",", Identifier }
+    "=",
+    Expression,
+    ";"
 ;
 
 (* ------------------------------------------------- *)
@@ -65,21 +76,29 @@ NodeList =
 TableDeclaration =
     "table",
     Identifier,
-    "on",
-    Identifier,
     "{",
         { FieldDeclaration },
     "}"
 ;
 
 FieldDeclaration =
-    [ "primary" ],
-    Type,
-    Identifier,
-    ";"
+    ( [ "primary" ], Type, Identifier, ";" )
+  | ( "node", Identifier, "(", [ ExpressionList ], ")", ";" )
 ;
 
-Type = "int" | "float" | "string" | "bool" ;
+Type = 
+    BasicType
+  | ArrayType
+;
+
+BasicType = "int" | "float" | "string" | "bool" ;
+
+ArrayType =
+    BasicType,
+    "[",
+    [ IntegerLiteral ],
+    "]"
+;
 
 (* ------------------------------------------------- *)
 (* Functions *)
@@ -109,6 +128,7 @@ ParameterDecl =
 
 FunctionBodyItem =
     HopBlock
+  | HopsForLoop
 ;
 
 (* ------------------------------------------------- *)
@@ -116,8 +136,24 @@ FunctionBodyItem =
 (* ------------------------------------------------- *)
 HopBlock =
     "hop",
-    "on",
-    Identifier,
+    "{",
+        { Statement },
+    "}"
+;
+
+HopsForLoop =
+    "hops",
+    "for",
+    "(",
+        Type,
+        Identifier,
+        "=",
+        Expression,
+        ";",
+        Expression,
+        ";",
+        Expression,
+    ")",
     "{",
         { Statement },
     "}"
@@ -128,9 +164,9 @@ HopBlock =
 (* ------------------------------------------------- *)
 Statement =
     VarDeclStatement
-  | VarAssignmentStatement
   | AssignmentStatement
   | IfStatement
+  | ForStatement
   | WhileStatement
   | ReturnStatement
   | AbortStatement
@@ -147,23 +183,26 @@ VarDeclStatement =
     ";"
 ;
 
-VarAssignmentStatement =
-    Identifier,
-    "=",
+AssignmentStatement =
+    LValue,
+    AssignmentOperator,
     Expression,
     ";"
 ;
 
-AssignmentStatement =
-    Identifier,
-    "[",
-        PrimaryKeyList,
-    "]",
-    ".",
-    Identifier,
-    "=",
-    Expression,
-    ";"
+AssignmentOperator =
+    "="
+  | "+="
+  | "-="
+  | "*="
+  | "/="
+;
+
+LValue =
+    Identifier
+  | TableFieldAccess
+  | TableAccess
+  | ArrayAccess
 ;
 
 PrimaryKeyList =
@@ -177,6 +216,23 @@ PrimaryKeyPair =
     Expression
 ;
 
+RecordLiteral =
+    "{",
+        [ FieldAssignmentList ],
+    "}"
+;
+
+FieldAssignmentList =
+    FieldAssignment,
+    { ",", FieldAssignment }
+;
+
+FieldAssignment =
+    Identifier,
+    ":",
+    Expression
+;
+
 IfStatement =
     "if",
     "(",
@@ -184,6 +240,21 @@ IfStatement =
     ")",
     Block,
     [ "else", Block ]
+;
+
+ForStatement =
+    "for",
+    "(",
+        Type,
+        Identifier,
+        "=",
+        Expression,
+        ";",
+        Expression,
+        ";",
+        Expression,
+    ")",
+    Block
 ;
 
 WhileStatement =
@@ -230,6 +301,11 @@ Block =
 
 Expression = LogicOr ;
 
+ExpressionList =
+    Expression,
+    { ",", Expression }
+;
+
 LogicOr =
     LogicAnd,
     { "||", LogicAnd }
@@ -268,6 +344,9 @@ Unary =
 Primary =
     BooleanLiteral
   | TableFieldAccess
+  | TableAccess
+  | ArrayAccess
+  | RecordLiteral
   | FloatLiteral
   | IntegerLiteral
   | StringLiteral
@@ -282,5 +361,19 @@ TableFieldAccess =
     "]",
     ".",
     Identifier
+;
+
+TableAccess =
+    Identifier,
+    "[",
+        PrimaryKeyList,
+    "]"
+;
+
+ArrayAccess =
+    Identifier,
+    "[",
+        Expression,
+    "]"
 ;
 ```
