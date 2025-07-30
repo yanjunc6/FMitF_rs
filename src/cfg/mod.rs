@@ -6,9 +6,10 @@ mod cfg_builder;
 pub use cfg_builder::CfgBuilder;
 
 // Core ID types
-pub type NodeId = Id<NodeInfo>;
 pub type TableId = Id<TableInfo>;
 pub type FieldId = Id<FieldInfo>;
+pub type PartitionId = Id<PartitionInfo>;
+pub type ConstantId = Id<ConstantInfo>;
 pub type FunctionId = Id<FunctionCfg>;
 pub type HopId = Id<HopCfg>;
 pub type BasicBlockId = Id<BasicBlock>;
@@ -18,27 +19,23 @@ pub type VarId = Id<Variable>;
 #[derive(Debug)]
 pub struct CfgProgram {
     // Arena for storing various components
-    pub nodes: Arena<NodeInfo>,
     pub tables: Arena<TableInfo>,
     pub fields: Arena<FieldInfo>,
+    pub partitions: Arena<PartitionInfo>,
+    pub constants: Arena<ConstantInfo>,
     pub functions: Arena<FunctionCfg>,
 
     // Root collections - public for iteration
-    pub root_nodes: Vec<NodeId>,
     pub root_tables: Vec<TableId>,
+    pub root_partitions: Vec<PartitionId>,
+    pub root_constants: Vec<ConstantId>,
     pub root_functions: Vec<FunctionId>,
 }
 
-#[derive(Debug, Clone)]
-pub struct NodeInfo {
-    pub name: String,
-    pub tables: Vec<TableId>,
-}
 
 #[derive(Debug, Clone)]
 pub struct TableInfo {
     pub name: String,
-    pub node_id: NodeId,
     pub fields: Vec<FieldId>,
     pub primary_keys: Vec<FieldId>, // Changed from single primary_key to multiple primary_keys
 }
@@ -49,6 +46,22 @@ pub struct FieldInfo {
     pub ty: TypeName,
     pub table_id: Option<TableId>, // Can be None during initial CFG construction, set later
     pub is_primary: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct PartitionInfo {
+    pub name: String,
+    pub parameters: Vec<String>, // Parameter names
+    pub parameter_types: Vec<TypeName>, // Parameter types
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConstantInfo {
+    pub name: String,
+    pub ty: TypeName,
+    pub value: Constant,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -78,7 +91,6 @@ pub struct FunctionCfg {
 /// Hop - execution on a specific node
 #[derive(Debug)]
 pub struct HopCfg {
-    pub node_id: NodeId,
     pub entry_block: Option<BasicBlockId>, // Set after its basic block is created
     pub blocks: Vec<BasicBlockId>,
     pub span: Span,
@@ -119,6 +131,10 @@ pub enum Rvalue {
         pk_values: Vec<Operand>,
         field: FieldId,
     },
+    ArrayAccess {
+        array: Operand,
+        index: Operand,
+    },
     UnaryOp {
         op: UnaryOp,
         operand: Operand,
@@ -142,6 +158,7 @@ pub enum Constant {
     Float(ordered_float::OrderedFloat<f64>),
     Bool(bool),
     String(String),
+    Array(Vec<Constant>), // Support for array literals
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

@@ -346,3 +346,10 @@ src/
 ├── verification/  # Boogie code generation and verification
 └── runtime/       # Runtime environment
 ```
+
+
+
+# TODO-list
+
+- array literals
+- hop for grammar changes
