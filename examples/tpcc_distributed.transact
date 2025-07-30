@@ -149,7 +149,7 @@ void newOrder(int w_id, int d_id, int c_id, int o_all_local, int date,
     }
     
     // Read item and update stock
-    hops for (int ol_number = 0; ol_number < O_OL_CNT; ol_number ++) { // grammar "hops for" requires the compile time const iteration
+    hops for int ol_number = 0 to O_OL_CNT { // grammar "hops for" requires the compile time const iteration
 
         float[10] itemPrices;
         itemPrices[ol_number] = Item[I_ID: itemIDs[ol_number], W_ID: supplierWarehouseIDs[ol_number]].I_PRICE;
@@ -203,7 +203,7 @@ void newOrder(int w_id, int d_id, int c_id, int o_all_local, int date,
 }
 
 void Delivery(int w_id, int o_carrier_id, int date) {
-    hops for (int d_id = 0; d_id < 10; d_id ++) {
+    hops for int d_id = 0 to 10 {
         // Get new order id and increment by 1
         int no_o_id = District[D_W_ID: w_id, D_ID: d_id].D_NEXT_NO_ID;
         District[D_W_ID: w_id, D_ID: d_id].D_NEXT_NO_ID += 1;
