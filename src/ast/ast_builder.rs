@@ -1,4 +1,3 @@
-use id_arena::Arena;
 use pest::iterators::Pair;
 use pest::Parser;
 use std::collections::HashMap;
@@ -16,259 +15,418 @@ pub struct AstBuilder {
     program: Program,
 }
 
-impl Program {
-    pub fn new() -> Self {
-        Program {
-            nodes: Arena::new(),
-            node_map: HashMap::new(),
-            root_nodes: Vec::new(),
-            tables: Arena::new(),
-            table_map: HashMap::new(),
-            root_tables: Vec::new(),
-            fields: Arena::new(),
-            functions: Arena::new(),
-            function_map: HashMap::new(),
-            root_functions: Vec::new(),
-            hops: Arena::new(),
-            parameters: Arena::new(),
-            statements: Arena::new(),
-            expressions: Arena::new(),
-            variables: Arena::new(),
-            scopes: Arena::new(),
-            resolutions: HashMap::new(),
-            var_types: HashMap::new(),
-        }
-    }
+/// Result type for field declaration parsing
+enum FieldDeclResult {
+    Field { field_id: FieldId, is_primary: bool },
+    NodePartition(NodePartition),
+}
+
+/// Enum for function body items.
+enum FunctionBodyItem {
+    Statement(StatementId),
+    Hop(HopId),
 }
 
 impl AstBuilder {
     /// Creates a new `AstBuilder` instance.
     pub fn new() -> Self {
         Self {
-            program: Program::new(),
+            program: Program {
+                partitions: Arena::new(),
+                constants: Arena::new(),
+                tables: Arena::new(),
+                fields: Arena::new(),
+                functions: Arena::new(),
+                hops: Arena::new(),
+                parameters: Arena::new(),
+                statements: Arena::new(),
+                expressions: Arena::new(),
+                variables: Arena::new(),
+                scopes: Arena::new(),
+                root_partitions: Vec::new(),
+                root_constants: Vec::new(),
+                root_tables: Vec::new(),
+                root_functions: Vec::new(),
+                partition_map: HashMap::new(),
+                constant_map: HashMap::new(),
+                table_map: HashMap::new(),
+                function_map: HashMap::new(),
+                resolutions: HashMap::new(),
+                var_types: HashMap::new(),
+            },
         }
     }
 
-    /// Builds the program from a Pest program pair.
-    pub fn build_program(&mut self, pair: Pair<Rule>) -> Results<Program> {
+    /// Builds the complete program from the root grammar rule.
+    pub fn build_program(mut self, pair: Pair<Rule>) -> Results<Program> {
         let mut errors = Vec::new();
 
-        // First pass: collect nodes
-        for item in pair.clone().into_inner() {
-            if item.as_rule() == Rule::nodes_block {
-                if let Err(mut errs) = self.build_nodes_block(item) {
-                    errors.append(&mut errs);
-                }
-            }
-        }
-
-        // Second pass: collect tables
-        for item in pair.clone().into_inner() {
-            if item.as_rule() == Rule::table_declaration {
-                if let Err(mut errs) = self.build_table_declaration(item) {
-                    errors.append(&mut errs);
-                }
-            }
-        }
-
-        // Third pass: parse functions
-        for item in pair.into_inner() {
-            if item.as_rule() == Rule::function_declaration {
-                if let Err(mut errs) = self.build_function_declaration(item) {
-                    errors.append(&mut errs);
-                }
-            }
-        }
-
-        if errors.is_empty() {
-            Ok(std::mem::replace(&mut self.program, Program::new()))
-        } else {
-            Err(errors)
-        }
-    }
-
-    /// Builds nodes block from a Pest pair.
-    fn build_nodes_block(&mut self, pair: Pair<Rule>) -> Results<()> {
-        for item in pair.into_inner() {
-            if item.as_rule() == Rule::node_list {
-                self.build_node_list(item)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Builds a list of nodes from a Pest pair.
-    fn build_node_list(&mut self, pair: Pair<Rule>) -> Results<()> {
-        for node_pair in pair.into_inner() {
-            if node_pair.as_rule() == Rule::identifier {
-                let name = node_pair.as_str().to_string();
-                let span = Span::from_pest(node_pair.as_span());
-
-                let node = NodeDef {
-                    name: name.clone(),
-                    span,
-                };
-                let node_id = self.program.nodes.alloc(node);
-
-                self.program.node_map.insert(name, node_id);
-                self.program.root_nodes.push(node_id);
-            }
-        }
-        Ok(())
-    }
-
-    /// Builds a table declaration from a Pest pair.
-    fn build_table_declaration(&mut self, pair: Pair<Rule>) -> Results<()> {
-        let span = Span::from_pest(pair.as_span());
-        let mut inner = pair.into_inner();
-
-        let table_name = inner.next().unwrap().as_str().to_string();
-        let node_name = inner.next().unwrap().as_str().to_string();
-
-        let node_id = self
-            .program
-            .node_map
-            .get(&node_name)
-            .copied()
-            .ok_or_else(|| {
-                vec![SpannedError {
-                    error: AstError::UndeclaredNode(node_name),
-                    span: Some(span.clone()),
-                }]
-            })?;
-
-        let mut field_ids = Vec::new();
-        let mut primary_key_ids = Vec::new();
-
-        for field_pair in inner {
-            if field_pair.as_rule() == Rule::field_declaration {
-                let (field_id, is_primary) = self.build_field_declaration(field_pair)?;
-                field_ids.push(field_id);
-
-                if is_primary {
-                    primary_key_ids.push(field_id);
-                }
-            }
-        }
-
-        if primary_key_ids.is_empty() {
-            return Err(vec![SpannedError {
-                error: AstError::ParseError(format!(
-                    "Table {} must have at least one primary key",
-                    table_name
-                )),
-                span: Some(span.clone()),
-            }]);
-        }
-
-        let table = TableDeclaration {
-            name: table_name.clone(),
-            node: node_id,
-            fields: field_ids,
-            primary_keys: primary_key_ids,
-            span,
-        };
-
-        let table_id = self.program.tables.alloc(table);
-        self.program.table_map.insert(table_name, table_id);
-        self.program.root_tables.push(table_id);
-
-        Ok(())
-    }
-
-    /// Builds a field declaration from a Pest pair.
-    fn build_field_declaration(
-        &mut self,
-        pair: Pair<Rule>,
-    ) -> Result<(FieldId, bool), Vec<SpannedError>> {
-        let span = Span::from_pest(pair.as_span());
-        let mut inner = pair.into_inner();
-
-        let first = inner.next().unwrap();
-        let (is_primary, field_type) = if first.as_rule() == Rule::primary_keyword {
-            (true, self.parse_type_name(inner.next().unwrap())?)
-        } else {
-            (false, self.parse_type_name(first)?)
-        };
-
-        let field_name = inner.next().unwrap().as_str().to_string();
-
-        let field = FieldDeclaration {
-            field_type,
-            field_name,
-            is_primary,
-            span,
-        };
-
-        let field_id = self.program.fields.alloc(field);
-        Ok((field_id, is_primary))
-    }
-
-    /// Builds function declaration from a Pest pair.
-    fn build_function_declaration(&mut self, pair: Pair<Rule>) -> Results<()> {
-        let span = Span::from_pest(pair.as_span());
-        let mut inner = pair.into_inner();
-
-        let return_type = self.parse_ret_type(inner.next().unwrap())?;
-        let name = inner.next().unwrap().as_str().to_string();
-
-        let mut parameter_ids = Vec::new();
-        let mut hop_ids = Vec::new();
-
-        for item in inner {
-            match item.as_rule() {
-                Rule::parameter_list => {
-                    parameter_ids = self.build_parameter_list(item)?;
-                }
-                Rule::function_body_item => {
-                    for hop_item in item.into_inner() {
-                        if hop_item.as_rule() == Rule::hop_block {
-                            let hop_id = self.build_hop_block(hop_item)?;
-                            hop_ids.push(hop_id);
-                        }
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::partition_declaration => match self.build_partition_declaration(inner_pair) {
+                    Ok(partition_id) => {
+                        self.program.root_partitions.push(partition_id);
                     }
+                    Err(mut errs) => errors.append(&mut errs),
+                },
+                Rule::table_declaration => match self.build_table_declaration(inner_pair) {
+                    Ok(table_id) => {
+                        self.program.root_tables.push(table_id);
+                    }
+                    Err(mut errs) => errors.append(&mut errs),
+                },
+                Rule::const_declaration => match self.build_const_declaration(inner_pair) {
+                    Ok(const_id) => {
+                        self.program.root_constants.push(const_id);
+                    }
+                    Err(mut errs) => errors.append(&mut errs),
+                },
+                Rule::function_declaration => match self.build_function_declaration(inner_pair) {
+                    Ok(function_id) => {
+                        self.program.root_functions.push(function_id);
+                    }
+                    Err(mut errs) => errors.append(&mut errs),
+                },
+                Rule::EOI => break,
+                _ => {
+                    errors.push(SpannedError {
+                        error: AstError::ParseError(format!(
+                            "Unexpected rule in program: {:?}",
+                            inner_pair.as_rule()
+                        )),
+                        span: Some(Span::from_pest(inner_pair.as_span())),
+                    });
+                }
+            }
+        }
+
+        if !errors.is_empty() {
+            Err(errors)
+        } else {
+            Ok(self.program)
+        }
+    }
+
+    /// Builds a partition declaration.
+    fn build_partition_declaration(&mut self, pair: Pair<Rule>) -> Results<PartitionId> {
+        let span = Span::from_pest(pair.as_span());
+        let mut name = String::new();
+        let mut parameters = Vec::new();
+        let mut implementation = None;
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::identifier => {
+                    if name.is_empty() {
+                        name = inner_pair.as_str().to_string();
+                    }
+                }
+                Rule::parameter_list => {
+                    parameters = self.build_parameter_list(inner_pair)?;
+                }
+                Rule::expression => {
+                    implementation = Some(self.build_expression(inner_pair)?);
                 }
                 _ => {}
             }
         }
 
+        // Check for duplicate partition names
+        if self.program.partition_map.contains_key(&name) {
+            return Err(vec![SpannedError {
+                error: AstError::DuplicatePartition(name),
+                span: Some(span),
+            }]);
+        }
+
+        let partition = PartitionDeclaration {
+            name: name.clone(),
+            parameters,
+            implementation,
+            span,
+        };
+
+        let partition_id = self.program.partitions.alloc(partition);
+        self.program.partition_map.insert(name, partition_id);
+        Ok(partition_id)
+    }
+
+    /// Builds a constant declaration.
+    fn build_const_declaration(&mut self, pair: Pair<Rule>) -> Results<VarId> {
+        let span = Span::from_pest(pair.as_span());
+        let mut const_type = None;
+        let mut name = String::new();
+        let mut value = None;
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::type_name => {
+                    const_type = Some(self.build_type_name(inner_pair)?);
+                }
+                Rule::identifier => {
+                    name = inner_pair.as_str().to_string();
+                }
+                Rule::expression => {
+                    value = Some(self.build_expression(inner_pair)?);
+                }
+                _ => {}
+            }
+        }
+
+        let const_type = const_type.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing type in constant declaration".to_string()),
+                span: Some(span.clone()),
+            }]
+        })?;
+
+        let value = value.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing value in constant declaration".to_string()),
+                span: Some(span.clone()),
+            }]
+        })?;
+
+        // Check for duplicate constant names
+        if self.program.constant_map.contains_key(&name) {
+            return Err(vec![SpannedError {
+                error: AstError::DuplicateConstant(name),
+                span: Some(span.clone()),
+            }]);
+        }
+
+        let const_decl = ConstDeclaration {
+            const_type: const_type.clone(),
+            name: name.clone(),
+            value,
+            span: span.clone(),
+        };
+
+        // Create a VarDecl for the constant
+        let var_decl = VarDecl {
+            name: name.clone(),
+            ty: const_type,
+            kind: VarKind::Global,
+            defined_at: span,
+            scope: self.program.scopes.alloc(Scope {
+                parent: None,
+                variables: HashMap::new(),
+            }), // Global scope
+        };
+
+        let var_id = self.program.variables.alloc(var_decl);
+        let _const_id = self.program.constants.alloc(const_decl);
+        self.program.constant_map.insert(name, var_id);
+        Ok(var_id)
+    }
+
+    /// Builds a table declaration.
+    fn build_table_declaration(&mut self, pair: Pair<Rule>) -> Results<TableId> {
+        let span = Span::from_pest(pair.as_span());
+        let mut name = String::new();
+        let mut fields = Vec::new();
+        let mut primary_keys = Vec::new();
+        let mut node_partition = None;
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::identifier => {
+                    name = inner_pair.as_str().to_string();
+                }
+                Rule::field_declaration => match self.build_field_declaration(inner_pair)? {
+                    FieldDeclResult::Field {
+                        field_id,
+                        is_primary,
+                    } => {
+                        if is_primary {
+                            primary_keys.push(field_id);
+                        }
+                        fields.push(field_id);
+                    }
+                    FieldDeclResult::NodePartition(partition) => {
+                        node_partition = Some(partition);
+                    }
+                },
+                _ => {}
+            }
+        }
+
+        // Check for duplicate table names
+        if self.program.table_map.contains_key(&name) {
+            return Err(vec![SpannedError {
+                error: AstError::DuplicateTable(name),
+                span: Some(span),
+            }]);
+        }
+
+        let table = TableDeclaration {
+            name: name.clone(),
+            fields,
+            primary_keys,
+            node_partition,
+            span,
+        };
+
+        let table_id = self.program.tables.alloc(table);
+        self.program.table_map.insert(name, table_id);
+        Ok(table_id)
+    }
+
+    /// Builds a field declaration or node partition.
+    fn build_field_declaration(&mut self, pair: Pair<Rule>) -> Results<FieldDeclResult> {
+        let span = Span::from_pest(pair.as_span());
+        let mut is_primary = false;
+        let mut field_type = None;
+        let mut field_name = String::new();
+        let mut is_node = false;
+        let mut partition_name = String::new();
+        let mut arguments = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::primary_keyword => {
+                    is_primary = true;
+                }
+                Rule::type_name => {
+                    field_type = Some(self.build_type_name(inner_pair)?);
+                }
+                Rule::identifier => {
+                    if inner_pair.as_str() == "node" {
+                        is_node = true;
+                    } else if is_node && partition_name.is_empty() {
+                        partition_name = inner_pair.as_str().to_string();
+                    } else if field_name.is_empty() {
+                        field_name = inner_pair.as_str().to_string();
+                    }
+                }
+                Rule::expression_list => {
+                    arguments = self.build_expression_list_as_identifiers(inner_pair)?;
+                }
+                _ => {}
+            }
+        }
+
+        if is_node {
+            Ok(FieldDeclResult::NodePartition(NodePartition {
+                partition_name,
+                arguments,
+                resolved_partition: None,
+            }))
+        } else {
+            let field_type = field_type.ok_or_else(|| {
+                vec![SpannedError {
+                    error: AstError::ParseError("Missing type in field declaration".to_string()),
+                    span: Some(span.clone()),
+                }]
+            })?;
+
+            let field = FieldDeclaration {
+                field_type,
+                field_name,
+                is_primary,
+                span,
+            };
+
+            let field_id = self.program.fields.alloc(field);
+            Ok(FieldDeclResult::Field {
+                field_id,
+                is_primary,
+            })
+        }
+    }
+
+    /// Builds a function declaration.
+    fn build_function_declaration(&mut self, pair: Pair<Rule>) -> Results<FunctionId> {
+        let span = Span::from_pest(pair.as_span());
+        let mut return_type = ReturnType::Void;
+        let mut name = String::new();
+        let mut parameters = Vec::new();
+        let mut hops = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::ret_type => {
+                    return_type = self.build_ret_type(inner_pair)?;
+                }
+                Rule::identifier => {
+                    name = inner_pair.as_str().to_string();
+                }
+                Rule::parameter_list => {
+                    parameters = self.build_parameter_list(inner_pair)?;
+                }
+                Rule::function_body_item => match self.build_function_body_item(inner_pair)? {
+                    FunctionBodyItem::Hop(hop_id) => hops.push(hop_id),
+                    FunctionBodyItem::Statement(_) => {
+                        return Err(vec![SpannedError {
+                            error: AstError::ParseError(
+                                "Statements outside hop blocks are not allowed".to_string(),
+                            ),
+                            span: Some(span),
+                        }]);
+                    }
+                },
+                _ => {}
+            }
+        }
+
+        // Check for duplicate function names
+        if self.program.function_map.contains_key(&name) {
+            return Err(vec![SpannedError {
+                error: AstError::DuplicateFunction(name),
+                span: Some(span),
+            }]);
+        }
+
         let function = FunctionDeclaration {
             return_type,
             name: name.clone(),
-            parameters: parameter_ids,
-            hops: hop_ids,
+            parameters,
+            hops,
             span,
         };
 
         let function_id = self.program.functions.alloc(function);
         self.program.function_map.insert(name, function_id);
-        self.program.root_functions.push(function_id);
-
-        Ok(())
+        Ok(function_id)
     }
 
-    /// Builds a list of parameters from a Pest pair.
-    fn build_parameter_list(
-        &mut self,
-        pair: Pair<Rule>,
-    ) -> Result<Vec<ParameterId>, Vec<SpannedError>> {
-        let mut parameter_ids = Vec::new();
-        for param_pair in pair.into_inner() {
-            if param_pair.as_rule() == Rule::parameter_decl {
-                let param_id = self.build_parameter_decl(param_pair)?;
-                parameter_ids.push(param_id);
+    /// Builds a parameter list.
+    fn build_parameter_list(&mut self, pair: Pair<Rule>) -> Results<Vec<ParameterId>> {
+        let mut parameters = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            if inner_pair.as_rule() == Rule::parameter_decl {
+                parameters.push(self.build_parameter_decl(inner_pair)?);
             }
         }
-        Ok(parameter_ids)
+
+        Ok(parameters)
     }
 
-    /// Builds a parameter declaration from a Pest pair.
-    fn build_parameter_decl(&mut self, pair: Pair<Rule>) -> Result<ParameterId, Vec<SpannedError>> {
+    /// Builds a parameter declaration.
+    fn build_parameter_decl(&mut self, pair: Pair<Rule>) -> Results<ParameterId> {
         let span = Span::from_pest(pair.as_span());
-        let mut inner = pair.into_inner();
+        let mut param_type = None;
+        let mut param_name = String::new();
 
-        let param_type = self.parse_type_name(inner.next().unwrap())?;
-        let param_name = inner.next().unwrap().as_str().to_string();
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::type_name => {
+                    param_type = Some(self.build_type_name(inner_pair)?);
+                }
+                Rule::identifier => {
+                    param_name = inner_pair.as_str().to_string();
+                }
+                _ => {}
+            }
+        }
+
+        let param_type = param_type.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing type in parameter declaration".to_string()),
+                span: Some(span.clone()),
+            }]
+        })?;
 
         let parameter = ParameterDecl {
             param_type,
@@ -279,91 +437,314 @@ impl AstBuilder {
         Ok(self.program.parameters.alloc(parameter))
     }
 
-    /// Builds hop block from a Pest pair.
-    fn build_hop_block(&mut self, pair: Pair<Rule>) -> Result<HopId, Vec<SpannedError>> {
+    /// Builds a return type.
+    fn build_ret_type(&mut self, pair: Pair<Rule>) -> Results<ReturnType> {
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::type_name => {
+                    return Ok(ReturnType::Type(self.build_type_name(inner_pair)?));
+                }
+                _ => {}
+            }
+        }
+        Ok(ReturnType::Void)
+    }
+
+    /// Builds a type name.
+    fn build_type_name(&mut self, pair: Pair<Rule>) -> Results<TypeName> {
         let span = Span::from_pest(pair.as_span());
-        let mut inner = pair.into_inner();
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::basic_type => {
+                    return Ok(TypeName {
+                        base: self.build_basic_type(inner_pair)?,
+                        dims: Vec::new(),
+                    });
+                }
+                Rule::array_type => {
+                    return self.build_array_type(inner_pair);
+                }
+                _ => {}
+            }
+        }
+        Err(vec![SpannedError {
+            error: AstError::ParseError("Invalid type name".to_string()),
+            span: Some(span),
+        }])
+    }
 
-        let node_name = inner.next().unwrap().as_str().to_string();
+    /// Builds a basic type.
+    fn build_basic_type(&mut self, pair: Pair<Rule>) -> Results<PrimitiveType> {
+        let type_str = pair.as_str();
+        match type_str {
+            "int" => Ok(PrimitiveType::Int),
+            "float" => Ok(PrimitiveType::Float),
+            "string" => Ok(PrimitiveType::String),
+            "bool" => Ok(PrimitiveType::Bool),
+            _ => Err(vec![SpannedError {
+                error: AstError::ParseError(format!("Unknown basic type: {}", type_str)),
+                span: Some(Span::from_pest(pair.as_span())),
+            }]),
+        }
+    }
 
-        let mut statement_ids = Vec::new();
-        for item in inner {
-            if item.as_rule() == Rule::block {
-                statement_ids = self.build_block(item)?;
+    /// Builds an array type.
+    fn build_array_type(&mut self, pair: Pair<Rule>) -> Results<TypeName> {
+        let span = Span::from_pest(pair.as_span());
+        let mut base = None;
+        let mut size = None;
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::basic_type => {
+                    base = Some(self.build_basic_type(inner_pair)?);
+                }
+                Rule::integer_literal => {
+                    size = Some(inner_pair.as_str().parse::<usize>().map_err(|_| {
+                        vec![SpannedError {
+                            error: AstError::ParseError("Invalid array size".to_string()),
+                            span: Some(Span::from_pest(inner_pair.as_span())),
+                        }]
+                    })?);
+                }
+                _ => {}
+            }
+        }
+
+        let base = base.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing base type in array type".to_string()),
+                span: Some(span),
+            }]
+        })?;
+
+        Ok(TypeName {
+            base,
+            dims: vec![size],
+        })
+    }
+
+    /// Builds a function body item.
+    fn build_function_body_item(&mut self, pair: Pair<Rule>) -> Results<FunctionBodyItem> {
+        let span = Span::from_pest(pair.as_span());
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::statement => {
+                    return Ok(FunctionBodyItem::Statement(
+                        self.build_statement(inner_pair)?,
+                    ));
+                }
+                Rule::hop_block => {
+                    return Ok(FunctionBodyItem::Hop(self.build_hop_block(inner_pair)?));
+                }
+                Rule::hops_for_loop => {
+                    return Ok(FunctionBodyItem::Hop(self.build_hops_for_loop(inner_pair)?));
+                }
+                _ => {}
+            }
+        }
+        Err(vec![SpannedError {
+            error: AstError::ParseError("Invalid function body item".to_string()),
+            span: Some(span),
+        }])
+    }
+
+    /// Builds a hop block.
+    fn build_hop_block(&mut self, pair: Pair<Rule>) -> Results<HopId> {
+        let span = Span::from_pest(pair.as_span());
+        let mut statements = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            if inner_pair.as_rule() == Rule::block {
+                statements = self.build_block(inner_pair)?;
             }
         }
 
         let hop = HopBlock {
-            node_name,
-            statements: statement_ids,
+            statements,
             span,
-            resolved_node: None,
+            hop_type: HopType::Simple,
         };
 
         Ok(self.program.hops.alloc(hop))
     }
 
-    /// Builds a block of statements from a Pest pair.
-    fn build_block(&mut self, pair: Pair<Rule>) -> Result<Vec<StatementId>, Vec<SpannedError>> {
-        let mut statement_ids = Vec::new();
-        for stmt_pair in pair.into_inner() {
-            if stmt_pair.as_rule() == Rule::statement {
-                let stmt_id = self.build_statement(stmt_pair)?;
-                statement_ids.push(stmt_id);
+    /// Builds a hops for loop.
+    fn build_hops_for_loop(&mut self, pair: Pair<Rule>) -> Results<HopId> {
+        let span = Span::from_pest(pair.as_span());
+        let mut loop_var = String::new();
+        let mut loop_var_type = None;
+        let mut init = None;
+        let mut condition = None;
+        let mut increment = None;
+        let mut statements = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::type_name => {
+                    loop_var_type = Some(self.build_type_name(inner_pair)?);
+                }
+                Rule::identifier => {
+                    loop_var = inner_pair.as_str().to_string();
+                }
+                Rule::expression => {
+                    if init.is_none() {
+                        init = Some(self.build_expression(inner_pair)?);
+                    } else if condition.is_none() {
+                        condition = Some(self.build_expression(inner_pair)?);
+                    } else if increment.is_none() {
+                        increment = Some(self.build_expression(inner_pair)?);
+                    }
+                }
+                Rule::block => {
+                    statements = self.build_block(inner_pair)?;
+                }
+                _ => {}
             }
         }
-        Ok(statement_ids)
-    }
 
-    /// Builds a statement from a Pest pair.
-    fn build_statement(&mut self, pair: Pair<Rule>) -> Result<StatementId, Vec<SpannedError>> {
-        let span = Span::from_pest(pair.as_span());
-        let inner = pair.into_inner().next().unwrap();
+        let loop_var_type = loop_var_type.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing loop variable type".to_string()),
+                span: Some(span.clone()),
+            }]
+        })?;
 
-        let kind = match inner.as_rule() {
-            Rule::var_decl_statement => {
-                StatementKind::VarDecl(self.build_var_decl_statement(inner)?)
-            }
-            Rule::var_assignment_statement => {
-                StatementKind::VarAssignment(self.build_var_assignment_statement(inner)?)
-            }
-            Rule::multi_assignment_statement => {
-                StatementKind::MultiAssignment(self.build_multi_assignment_statement(inner)?)
-            }
-            Rule::assignment_statement => {
-                StatementKind::Assignment(self.build_assignment_statement(inner)?)
-            }
-            Rule::if_statement => StatementKind::IfStmt(self.build_if_statement(inner)?),
-            Rule::while_statement => StatementKind::WhileStmt(self.build_while_statement(inner)?),
-            Rule::return_statement => StatementKind::Return(self.build_return_statement(inner)?),
-            Rule::abort_statement => StatementKind::Abort(AbortStatement),
-            Rule::break_statement => StatementKind::Break(BreakStatement),
-            Rule::continue_statement => StatementKind::Continue(ContinueStatement),
-            Rule::empty_statement => StatementKind::Empty,
-            _ => {
-                return Err(vec![SpannedError {
-                    error: AstError::ParseError(format!(
-                        "Unknown statement: {:?}",
-                        inner.as_rule()
-                    )),
-                    span: Some(span),
-                }]);
-            }
+        let init = init.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing loop initialization".to_string()),
+                span: Some(span.clone()),
+            }]
+        })?;
+
+        let condition = condition.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing loop condition".to_string()),
+                span: Some(span.clone()),
+            }]
+        })?;
+
+        let increment = increment.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing loop increment".to_string()),
+                span: Some(span.clone()),
+            }]
+        })?;
+
+        let hop = HopBlock {
+            statements,
+            span,
+            hop_type: HopType::ForLoop {
+                loop_var,
+                loop_var_type,
+                init,
+                condition,
+                increment,
+            },
         };
 
-        let statement = Statement { node: kind, span };
-        Ok(self.program.statements.alloc(statement))
+        Ok(self.program.hops.alloc(hop))
     }
 
-    /// Builds a variable declaration statement from a Pest pair.
-    fn build_var_decl_statement(
-        &mut self,
-        pair: Pair<Rule>,
-    ) -> Result<VarDeclStatement, Vec<SpannedError>> {
-        let mut inner = pair.into_inner();
-        let var_type = self.parse_type_name(inner.next().unwrap())?;
-        let var_name = inner.next().unwrap().as_str().to_string();
-        let init_value = self.build_expression(inner.next().unwrap())?;
+    /// Builds a block of statements.
+    fn build_block(&mut self, pair: Pair<Rule>) -> Results<Vec<StatementId>> {
+        let mut statements = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            if inner_pair.as_rule() == Rule::statement {
+                statements.push(self.build_statement(inner_pair)?);
+            }
+        }
+
+        Ok(statements)
+    }
+
+    /// Builds a statement.
+    fn build_statement(&mut self, pair: Pair<Rule>) -> Results<StatementId> {
+        let span = Span::from_pest(pair.as_span());
+
+        for inner_pair in pair.into_inner() {
+            let statement_kind = match inner_pair.as_rule() {
+                Rule::var_decl_statement => {
+                    StatementKind::VarDecl(self.build_var_decl_statement(inner_pair)?)
+                }
+                Rule::assignment_statement => {
+                    StatementKind::Assignment(self.build_assignment_statement(inner_pair)?)
+                }
+                Rule::if_statement => StatementKind::IfStmt(self.build_if_statement(inner_pair)?),
+                Rule::for_statement => {
+                    StatementKind::ForStmt(self.build_for_statement(inner_pair)?)
+                }
+                Rule::while_statement => {
+                    StatementKind::WhileStmt(self.build_while_statement(inner_pair)?)
+                }
+                Rule::return_statement => {
+                    StatementKind::Return(self.build_return_statement(inner_pair)?)
+                }
+                Rule::abort_statement => StatementKind::Abort(AbortStatement),
+                Rule::break_statement => StatementKind::Break(BreakStatement),
+                Rule::continue_statement => StatementKind::Continue(ContinueStatement),
+                Rule::empty_statement => StatementKind::Empty,
+                _ => {
+                    return Err(vec![SpannedError {
+                        error: AstError::ParseError(format!(
+                            "Unexpected statement type: {:?}",
+                            inner_pair.as_rule()
+                        )),
+                        span: Some(span),
+                    }]);
+                }
+            };
+
+            let statement = Spanned {
+                node: statement_kind,
+                span,
+            };
+
+            return Ok(self.program.statements.alloc(statement));
+        }
+
+        Err(vec![SpannedError {
+            error: AstError::ParseError("Empty statement".to_string()),
+            span: Some(span),
+        }])
+    }
+
+    /// Builds a variable declaration statement.
+    fn build_var_decl_statement(&mut self, pair: Pair<Rule>) -> Results<VarDeclStatement> {
+        let span = Span::from_pest(pair.as_span());
+        let mut var_type = None;
+        let mut var_name = String::new();
+        let mut init_value = None;
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::type_name => {
+                    var_type = Some(self.build_type_name(inner_pair)?);
+                }
+                Rule::identifier => {
+                    var_name = inner_pair.as_str().to_string();
+                }
+                Rule::expression => {
+                    init_value = Some(self.build_expression(inner_pair)?);
+                }
+                _ => {}
+            }
+        }
+
+        let var_type = var_type.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing variable type".to_string()),
+                span: Some(span.clone()),
+            }]
+        })?;
+
+        let init_value = init_value.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing variable initialization".to_string()),
+                span: Some(span),
+            }]
+        })?;
 
         Ok(VarDeclStatement {
             var_type,
@@ -372,133 +753,233 @@ impl AstBuilder {
         })
     }
 
-    /// Builds a variable assignment statement from a Pest pair.
-    fn build_var_assignment_statement(
-        &mut self,
-        pair: Pair<Rule>,
-    ) -> Result<VarAssignmentStatement, Vec<SpannedError>> {
-        let mut inner = pair.into_inner();
-        let var_name = inner.next().unwrap().as_str().to_string();
-        let rhs = self.build_expression(inner.next().unwrap())?;
+    /// Builds an assignment statement.
+    fn build_assignment_statement(&mut self, pair: Pair<Rule>) -> Results<AssignmentStatement> {
+        let span = Span::from_pest(pair.as_span());
+        let mut lvalue = None;
+        let mut operator = None;
+        let mut rhs = None;
 
-        Ok(VarAssignmentStatement {
-            var_name,
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::lvalue => {
+                    lvalue = Some(self.build_lvalue(inner_pair)?);
+                }
+                Rule::assignment_operator => {
+                    operator = Some(self.build_assignment_operator(inner_pair)?);
+                }
+                Rule::expression => {
+                    rhs = Some(self.build_expression(inner_pair)?);
+                }
+                _ => {}
+            }
+        }
+
+        let lvalue = lvalue.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing assignment target".to_string()),
+                span: Some(span.clone()),
+            }]
+        })?;
+
+        let operator = operator.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing assignment operator".to_string()),
+                span: Some(span.clone()),
+            }]
+        })?;
+
+        let rhs = rhs.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing assignment value".to_string()),
+                span: Some(span),
+            }]
+        })?;
+
+        Ok(AssignmentStatement {
+            lvalue,
+            operator,
             rhs,
-            resolved_var: None,
         })
     }
 
-    /// Builds an assignment statement from a Pest pair.
-    fn build_assignment_statement(
-        &mut self,
-        pair: Pair<Rule>,
-    ) -> Result<AssignmentStatement, Vec<SpannedError>> {
-        let mut inner = pair.into_inner();
-        let table_name = inner.next().unwrap().as_str().to_string();
+    /// Builds an assignment operator.
+    fn build_assignment_operator(&mut self, pair: Pair<Rule>) -> Results<AssignmentOperator> {
+        match pair.as_str() {
+            "=" => Ok(AssignmentOperator::Assign),
+            "+=" => Ok(AssignmentOperator::AddAssign),
+            "-=" => Ok(AssignmentOperator::SubAssign),
+            "*=" => Ok(AssignmentOperator::MulAssign),
+            "/=" => Ok(AssignmentOperator::DivAssign),
+            _ => Err(vec![SpannedError {
+                error: AstError::ParseError(format!(
+                    "Unknown assignment operator: {}",
+                    pair.as_str()
+                )),
+                span: Some(Span::from_pest(pair.as_span())),
+            }]),
+        }
+    }
 
-        // Parse the primary_key_list
-        let pk_list_pair = inner.next().unwrap();
-        let (pk_fields, pk_exprs) = self.build_primary_key_list(pk_list_pair)?;
-        let pk_count = pk_fields.len(); // Calculate length before moving
+    /// Builds an lvalue.
+    fn build_lvalue(&mut self, pair: Pair<Rule>) -> Results<LValue> {
+        let span = Span::from_pest(pair.as_span());
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::table_field_access => {
+                    return self.build_table_field_access_lvalue(inner_pair);
+                }
+                Rule::table_access => {
+                    return self.build_table_access_lvalue(inner_pair);
+                }
+                Rule::array_access => {
+                    return self.build_array_access_lvalue(inner_pair);
+                }
+                Rule::identifier => {
+                    return Ok(LValue::Var {
+                        name: inner_pair.as_str().to_string(),
+                        resolved_var: None,
+                    });
+                }
+                _ => {}
+            }
+        }
+        Err(vec![SpannedError {
+            error: AstError::ParseError("Invalid lvalue".to_string()),
+            span: Some(span),
+        }])
+    }
 
-        let field_name = inner.next().unwrap().as_str().to_string();
-        let rhs = self.build_expression(inner.next().unwrap())?;
+    /// Builds a table field access lvalue.
+    fn build_table_field_access_lvalue(&mut self, pair: Pair<Rule>) -> Results<LValue> {
+        let mut table_name = String::new();
+        let mut pk_fields = Vec::new();
+        let mut pk_exprs = Vec::new();
+        let mut field_name = String::new();
 
-        Ok(AssignmentStatement {
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::identifier => {
+                    if table_name.is_empty() {
+                        table_name = inner_pair.as_str().to_string();
+                    } else {
+                        field_name = inner_pair.as_str().to_string();
+                    }
+                }
+                Rule::primary_key_list => {
+                    let (fields, exprs) = self.build_primary_key_list(inner_pair)?;
+                    pk_fields = fields;
+                    pk_exprs = exprs;
+                }
+                _ => {}
+            }
+        }
+
+        let pk_len = pk_fields.len();
+        Ok(LValue::TableField {
             table_name,
             pk_fields,
             pk_exprs,
             field_name,
-            rhs,
             resolved_table: None,
-            resolved_pk_fields: vec![None; pk_count], // Use the saved length
+            resolved_pk_fields: vec![None; pk_len],
             resolved_field: None,
         })
     }
 
-    /// Builds a multi-assignment statement from a Pest pair.
-    fn build_multi_assignment_statement(
-        &mut self,
-        pair: Pair<Rule>,
-    ) -> Result<MultiAssignmentStatement, Vec<SpannedError>> {
-        let mut inner = pair.into_inner();
-        let table_name = inner.next().unwrap().as_str().to_string();
-
-        // Parse the primary_key_list
-        let pk_list_pair = inner.next().unwrap();
-        let (pk_fields, pk_exprs) = self.build_primary_key_list(pk_list_pair)?;
-        let pk_count = pk_fields.len();
-
-        // Parse the multi_assignment_list
-        let multi_assignment_list = inner.next().unwrap();
-        let assignments = self.build_multi_assignment_list(multi_assignment_list)?;
-
-        Ok(MultiAssignmentStatement {
-            table_name,
-            pk_fields,
-            pk_exprs,
-            assignments,
-            resolved_table: None,
-            resolved_pk_fields: vec![None; pk_count],
-        })
-    }
-
-    /// Builds a list of multi-assignment pairs from a Pest pair.
-    fn build_multi_assignment_list(
-        &mut self,
-        pair: Pair<Rule>,
-    ) -> Result<Vec<MultiAssignmentPair>, Vec<SpannedError>> {
-        let mut assignments = Vec::new();
-
-        for assignment_pair in pair.into_inner() {
-            if assignment_pair.as_rule() == Rule::multi_assignment_pair {
-                let mut inner = assignment_pair.into_inner();
-                let field_name = inner.next().unwrap().as_str().to_string();
-                let rhs = self.build_expression(inner.next().unwrap())?;
-
-                assignments.push(MultiAssignmentPair {
-                    field_name,
-                    rhs,
-                    resolved_field: None,
-                });
-            }
-        }
-
-        Ok(assignments)
-    }
-
-    /// Builds a list of primary keys from a Pest pair.
-    fn build_primary_key_list(
-        &mut self,
-        pair: Pair<Rule>,
-    ) -> Result<(Vec<String>, Vec<ExpressionId>), Vec<SpannedError>> {
+    /// Builds a table access lvalue.
+    fn build_table_access_lvalue(&mut self, pair: Pair<Rule>) -> Results<LValue> {
+        let mut table_name = String::new();
         let mut pk_fields = Vec::new();
         let mut pk_exprs = Vec::new();
 
-        for pk_pair in pair.into_inner() {
-            if pk_pair.as_rule() == Rule::primary_key_pair {
-                let mut inner = pk_pair.into_inner();
-                let field_name = inner.next().unwrap().as_str().to_string();
-                let expr_id = self.build_expression(inner.next().unwrap())?;
-                
-                pk_fields.push(field_name);
-                pk_exprs.push(expr_id);
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::identifier => {
+                    table_name = inner_pair.as_str().to_string();
+                }
+                Rule::primary_key_list => {
+                    let (fields, exprs) = self.build_primary_key_list(inner_pair)?;
+                    pk_fields = fields;
+                    pk_exprs = exprs;
+                }
+                _ => {}
             }
         }
 
-        Ok((pk_fields, pk_exprs))
+        let pk_len = pk_fields.len();
+        Ok(LValue::TableRecord {
+            table_name,
+            pk_fields,
+            pk_exprs,
+            resolved_table: None,
+            resolved_pk_fields: vec![None; pk_len],
+        })
     }
 
-    /// Builds an if statement from a Pest pair.
-    fn build_if_statement(&mut self, pair: Pair<Rule>) -> Result<IfStatement, Vec<SpannedError>> {
-        let mut inner = pair.into_inner();
-        let condition = self.build_expression(inner.next().unwrap())?;
-        let then_branch = self.build_block(inner.next().unwrap())?;
-        let else_branch = if let Some(else_block) = inner.next() {
-            Some(self.build_block(else_block)?)
-        } else {
-            None
-        };
+    /// Builds an array access lvalue.
+    fn build_array_access_lvalue(&mut self, pair: Pair<Rule>) -> Results<LValue> {
+        let span = Span::from_pest(pair.as_span());
+        let mut array_name = String::new();
+        let mut index = None;
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::identifier => {
+                    array_name = inner_pair.as_str().to_string();
+                }
+                Rule::expression => {
+                    index = Some(self.build_expression(inner_pair)?);
+                }
+                _ => {}
+            }
+        }
+
+        let index = index.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing array index".to_string()),
+                span: Some(span),
+            }]
+        })?;
+
+        Ok(LValue::ArrayElement {
+            array_name,
+            index,
+            resolved_var: None,
+        })
+    }
+
+    /// Builds an if statement.
+    fn build_if_statement(&mut self, pair: Pair<Rule>) -> Results<IfStatement> {
+        let span = Span::from_pest(pair.as_span());
+        let mut condition = None;
+        let mut then_branch = Vec::new();
+        let mut else_branch = None;
+        let mut parsing_else = false;
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::expression => {
+                    condition = Some(self.build_expression(inner_pair)?);
+                }
+                Rule::block => {
+                    if parsing_else {
+                        else_branch = Some(self.build_block(inner_pair)?);
+                    } else {
+                        then_branch = self.build_block(inner_pair)?;
+                        parsing_else = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let condition = condition.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing if condition".to_string()),
+                span: Some(span),
+            }]
+        })?;
 
         Ok(IfStatement {
             condition,
@@ -507,294 +988,522 @@ impl AstBuilder {
         })
     }
 
-    /// Builds a while statement from a Pest pair.
-    fn build_while_statement(
-        &mut self,
-        pair: Pair<Rule>,
-    ) -> Result<WhileStatement, Vec<SpannedError>> {
-        let mut inner = pair.into_inner();
-        let condition = self.build_expression(inner.next().unwrap())?;
-        let body = self.build_block(inner.next().unwrap())?;
+    /// Builds a for statement.
+    fn build_for_statement(&mut self, pair: Pair<Rule>) -> Results<ForStatement> {
+        let span = Span::from_pest(pair.as_span());
+        let mut loop_var = String::new();
+        let mut loop_var_type = None;
+        let mut init = None;
+        let mut condition = None;
+        let mut increment = None;
+        let mut body = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::type_name => {
+                    loop_var_type = Some(self.build_type_name(inner_pair)?);
+                }
+                Rule::identifier => {
+                    loop_var = inner_pair.as_str().to_string();
+                }
+                Rule::expression => {
+                    if init.is_none() {
+                        init = Some(self.build_expression(inner_pair)?);
+                    } else if condition.is_none() {
+                        condition = Some(self.build_expression(inner_pair)?);
+                    } else if increment.is_none() {
+                        increment = Some(self.build_expression(inner_pair)?);
+                    }
+                }
+                Rule::block => {
+                    body = self.build_block(inner_pair)?;
+                }
+                _ => {}
+            }
+        }
+
+        let loop_var_type = loop_var_type.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing loop variable type".to_string()),
+                span: Some(span.clone()),
+            }]
+        })?;
+
+        let init = init.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing loop initialization".to_string()),
+                span: Some(span.clone()),
+            }]
+        })?;
+
+        let condition = condition.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing loop condition".to_string()),
+                span: Some(span.clone()),
+            }]
+        })?;
+
+        let increment = increment.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing loop increment".to_string()),
+                span: Some(span),
+            }]
+        })?;
+
+        Ok(ForStatement {
+            loop_var,
+            loop_var_type,
+            init,
+            condition,
+            increment,
+            body,
+        })
+    }
+
+    /// Builds a while statement.
+    fn build_while_statement(&mut self, pair: Pair<Rule>) -> Results<WhileStatement> {
+        let span = Span::from_pest(pair.as_span());
+        let mut condition = None;
+        let mut body = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::expression => {
+                    condition = Some(self.build_expression(inner_pair)?);
+                }
+                Rule::block => {
+                    body = self.build_block(inner_pair)?;
+                }
+                _ => {}
+            }
+        }
+
+        let condition = condition.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing while condition".to_string()),
+                span: Some(span),
+            }]
+        })?;
 
         Ok(WhileStatement { condition, body })
     }
 
-    /// Builds a return statement from a Pest pair.
-    fn build_return_statement(
-        &mut self,
-        pair: Pair<Rule>,
-    ) -> Result<ReturnStatement, Vec<SpannedError>> {
-        let mut inner = pair.into_inner();
-        let value = if let Some(expr_pair) = inner.next() {
-            Some(self.build_expression(expr_pair)?)
-        } else {
-            None
-        };
+    /// Builds a return statement.
+    fn build_return_statement(&mut self, pair: Pair<Rule>) -> Results<ReturnStatement> {
+        let mut value = None;
+
+        for inner_pair in pair.into_inner() {
+            if inner_pair.as_rule() == Rule::expression {
+                value = Some(self.build_expression(inner_pair)?);
+            }
+        }
 
         Ok(ReturnStatement { value })
     }
 
-    /// Builds an expression from a Pest pair.
-    fn build_expression(&mut self, pair: Pair<Rule>) -> Result<ExpressionId, Vec<SpannedError>> {
-        let span = Span::from_pest(pair.as_span());
+    /// Builds an expression.
+    fn build_expression(&mut self, pair: Pair<Rule>) -> Results<ExpressionId> {
+        self.build_logic_or(pair)
+    }
 
-        let kind = match pair.as_rule() {
-            Rule::expression => {
-                let inner = pair.into_inner().next().unwrap();
-                return self.build_expression(inner);
+    /// Builds a logical OR expression.
+    fn build_logic_or(&mut self, pair: Pair<Rule>) -> Results<ExpressionId> {
+        let span = Span::from_pest(pair.as_span());
+        let mut operands = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::logic_and => {
+                    operands.push(self.build_logic_and(inner_pair)?);
+                }
+                Rule::logic_or_op => {
+                    // Operator handled implicitly
+                }
+                _ => {}
             }
-            Rule::logic_or => return self.build_logic_or(pair),
-            Rule::logic_and => return self.build_logic_and(pair),
-            Rule::equality => return self.build_equality(pair),
-            Rule::comparison => return self.build_comparison(pair),
-            Rule::addition => return self.build_addition(pair),
-            Rule::multiplication => return self.build_multiplication(pair),
-            Rule::unary => return self.build_unary(pair),
-            Rule::primary => return self.build_primary(pair),
-            Rule::bool_literal => ExpressionKind::BoolLit(pair.as_str() == "true"),
-            Rule::integer_literal => {
-                let value = pair.as_str().parse().map_err(|_| {
-                    vec![SpannedError {
-                        error: AstError::ParseError(format!("Invalid integer: {}", pair.as_str())),
-                        span: Some(span.clone()),
-                    }]
-                })?;
-                ExpressionKind::IntLit(value)
-            }
-            Rule::float_literal => {
-                let value = pair.as_str().parse().map_err(|_| {
-                    vec![SpannedError {
-                        error: AstError::ParseError(format!("Invalid float: {}", pair.as_str())),
-                        span: Some(span.clone()),
-                    }]
-                })?;
-                ExpressionKind::FloatLit(value)
-            }
-            Rule::string_literal => {
-                let s = pair.as_str();
-                let content = if s.len() >= 2 {
-                    s[1..s.len() - 1].to_string()
-                } else {
-                    String::new()
+        }
+
+        if operands.len() == 1 {
+            Ok(operands.into_iter().next().unwrap())
+        } else {
+            // Build left-associative binary operations
+            let mut result = operands[0];
+            for i in 1..operands.len() {
+                let expr = Spanned {
+                    node: ExpressionKind::BinaryOp {
+                        left: result,
+                        op: BinaryOp::Or,
+                        right: operands[i],
+                        resolved_type: None,
+                    },
+                    span: span.clone(),
                 };
-                ExpressionKind::StringLit(content)
+                result = self.program.expressions.alloc(expr);
             }
-            Rule::identifier => ExpressionKind::Ident(pair.as_str().to_string()),
-            Rule::table_field_access => return self.build_table_field_access(pair),
-            _ => {
-                return Err(vec![SpannedError {
-                    error: AstError::ParseError(format!(
-                        "Unknown expression rule: {:?}",
-                        pair.as_rule()
-                    )),
-                    span: Some(span),
-                }]);
+            Ok(result)
+        }
+    }
+
+    /// Builds a logical AND expression.
+    fn build_logic_and(&mut self, pair: Pair<Rule>) -> Results<ExpressionId> {
+        let span = Span::from_pest(pair.as_span());
+        let mut operands = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::equality => {
+                    operands.push(self.build_equality(inner_pair)?);
+                }
+                Rule::logic_and_op => {
+                    // Operator handled implicitly
+                }
+                _ => {}
             }
-        };
+        }
 
-        let expression = Expression { node: kind, span };
-        Ok(self.program.expressions.alloc(expression))
+        if operands.len() == 1 {
+            Ok(operands.into_iter().next().unwrap())
+        } else {
+            // Build left-associative binary operations
+            let mut result = operands[0];
+            for i in 1..operands.len() {
+                let expr = Spanned {
+                    node: ExpressionKind::BinaryOp {
+                        left: result,
+                        op: BinaryOp::And,
+                        right: operands[i],
+                        resolved_type: None,
+                    },
+                    span: span.clone(),
+                };
+                result = self.program.expressions.alloc(expr);
+            }
+            Ok(result)
+        }
     }
 
-    fn build_logic_or(&mut self, pair: Pair<Rule>) -> Result<ExpressionId, Vec<SpannedError>> {
-        self.build_binary_expr(pair, BinaryOp::Or)
-    }
-
-    fn build_logic_and(&mut self, pair: Pair<Rule>) -> Result<ExpressionId, Vec<SpannedError>> {
-        self.build_binary_expr(pair, BinaryOp::And)
-    }
-
-    fn build_equality(&mut self, pair: Pair<Rule>) -> Result<ExpressionId, Vec<SpannedError>> {
+    /// Builds an equality expression.
+    fn build_equality(&mut self, pair: Pair<Rule>) -> Results<ExpressionId> {
         let span = Span::from_pest(pair.as_span());
-        let mut inner = pair.into_inner();
+        let mut operands = Vec::new();
+        let mut operators = Vec::new();
 
-        let mut left = self.build_expression(inner.next().unwrap())?;
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::comparison => {
+                    operands.push(self.build_comparison(inner_pair)?);
+                }
+                Rule::equality_op => {
+                    operators.push(match inner_pair.as_str() {
+                        "==" => BinaryOp::Eq,
+                        "!=" => BinaryOp::Neq,
+                        _ => unreachable!(),
+                    });
+                }
+                _ => {}
+            }
+        }
 
-        while let Some(op_pair) = inner.next() {
-            let right = self.build_expression(inner.next().unwrap())?;
-            let op = match op_pair.as_str() {
-                "==" => BinaryOp::Eq,
-                "!=" => BinaryOp::Neq,
+        if operands.len() == 1 {
+            Ok(operands.into_iter().next().unwrap())
+        } else {
+            // Build left-associative binary operations
+            let mut result = operands[0];
+            for (i, op) in operators.into_iter().enumerate() {
+                let expr = Spanned {
+                    node: ExpressionKind::BinaryOp {
+                        left: result,
+                        op,
+                        right: operands[i + 1],
+                        resolved_type: None,
+                    },
+                    span: span.clone(),
+                };
+                result = self.program.expressions.alloc(expr);
+            }
+            Ok(result)
+        }
+    }
+
+    /// Builds a comparison expression.
+    fn build_comparison(&mut self, pair: Pair<Rule>) -> Results<ExpressionId> {
+        let span = Span::from_pest(pair.as_span());
+        let mut operands = Vec::new();
+        let mut operators = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::addition => {
+                    operands.push(self.build_addition(inner_pair)?);
+                }
+                Rule::comparison_op => {
+                    operators.push(match inner_pair.as_str() {
+                        "<" => BinaryOp::Lt,
+                        "<=" => BinaryOp::Lte,
+                        ">" => BinaryOp::Gt,
+                        ">=" => BinaryOp::Gte,
+                        _ => unreachable!(),
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        if operands.len() == 1 {
+            Ok(operands.into_iter().next().unwrap())
+        } else {
+            // Build left-associative binary operations
+            let mut result = operands[0];
+            for (i, op) in operators.into_iter().enumerate() {
+                let expr = Spanned {
+                    node: ExpressionKind::BinaryOp {
+                        left: result,
+                        op,
+                        right: operands[i + 1],
+                        resolved_type: None,
+                    },
+                    span: span.clone(),
+                };
+                result = self.program.expressions.alloc(expr);
+            }
+            Ok(result)
+        }
+    }
+
+    /// Builds an addition expression.
+    fn build_addition(&mut self, pair: Pair<Rule>) -> Results<ExpressionId> {
+        let span = Span::from_pest(pair.as_span());
+        let mut operands = Vec::new();
+        let mut operators = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::multiplication => {
+                    operands.push(self.build_multiplication(inner_pair)?);
+                }
+                Rule::addition_op => {
+                    operators.push(match inner_pair.as_str() {
+                        "+" => BinaryOp::Add,
+                        "-" => BinaryOp::Sub,
+                        _ => unreachable!(),
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        if operands.len() == 1 {
+            Ok(operands.into_iter().next().unwrap())
+        } else {
+            // Build left-associative binary operations
+            let mut result = operands[0];
+            for (i, op) in operators.into_iter().enumerate() {
+                let expr = Spanned {
+                    node: ExpressionKind::BinaryOp {
+                        left: result,
+                        op,
+                        right: operands[i + 1],
+                        resolved_type: None,
+                    },
+                    span: span.clone(),
+                };
+                result = self.program.expressions.alloc(expr);
+            }
+            Ok(result)
+        }
+    }
+
+    /// Builds a multiplication expression.
+    fn build_multiplication(&mut self, pair: Pair<Rule>) -> Results<ExpressionId> {
+        let span = Span::from_pest(pair.as_span());
+        let mut operands = Vec::new();
+        let mut operators = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::unary => {
+                    operands.push(self.build_unary(inner_pair)?);
+                }
+                Rule::multiplication_op => {
+                    operators.push(match inner_pair.as_str() {
+                        "*" => BinaryOp::Mul,
+                        "/" => BinaryOp::Div,
+                        _ => unreachable!(),
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        if operands.len() == 1 {
+            Ok(operands.into_iter().next().unwrap())
+        } else {
+            // Build left-associative binary operations
+            let mut result = operands[0];
+            for (i, op) in operators.into_iter().enumerate() {
+                let expr = Spanned {
+                    node: ExpressionKind::BinaryOp {
+                        left: result,
+                        op,
+                        right: operands[i + 1],
+                        resolved_type: None,
+                    },
+                    span: span.clone(),
+                };
+                result = self.program.expressions.alloc(expr);
+            }
+            Ok(result)
+        }
+    }
+
+    /// Builds a unary expression.
+    fn build_unary(&mut self, pair: Pair<Rule>) -> Results<ExpressionId> {
+        let span = Span::from_pest(pair.as_span());
+        let pairs_vec: Vec<_> = pair.into_inner().collect();
+
+        if pairs_vec.len() == 1 && pairs_vec[0].as_rule() == Rule::primary {
+            return self.build_primary(pairs_vec.into_iter().next().unwrap());
+        }
+
+        if pairs_vec.len() == 2 {
+            if let (Some(op_pair), Some(expr_pair)) = (pairs_vec.get(0), pairs_vec.get(1)) {
+                if op_pair.as_rule() == Rule::unary_op && expr_pair.as_rule() == Rule::unary {
+                    let op = match op_pair.as_str() {
+                        "!" => UnaryOp::Not,
+                        "-" => UnaryOp::Neg,
+                        _ => unreachable!(),
+                    };
+
+                    let expr_id = self.build_unary(expr_pair.clone())?;
+                    let expr = Spanned {
+                        node: ExpressionKind::UnaryOp {
+                            op,
+                            expr: expr_id,
+                            resolved_type: None,
+                        },
+                        span,
+                    };
+                    return Ok(self.program.expressions.alloc(expr));
+                }
+            }
+        }
+
+        Err(vec![SpannedError {
+            error: AstError::ParseError("Invalid unary expression".to_string()),
+            span: Some(span),
+        }])
+    }
+
+    /// Builds a primary expression.
+    fn build_primary(&mut self, pair: Pair<Rule>) -> Results<ExpressionId> {
+        let span = Span::from_pest(pair.as_span());
+
+        for inner_pair in pair.into_inner() {
+            let expr_kind = match inner_pair.as_rule() {
+                Rule::bool_literal => ExpressionKind::BoolLit(inner_pair.as_str() == "true"),
+                Rule::integer_literal => {
+                    let value = inner_pair.as_str().parse::<i64>().map_err(|_| {
+                        vec![SpannedError {
+                            error: AstError::ParseError("Invalid integer literal".to_string()),
+                            span: Some(Span::from_pest(inner_pair.as_span())),
+                        }]
+                    })?;
+                    ExpressionKind::IntLit(value)
+                }
+                Rule::float_literal => {
+                    let value = inner_pair.as_str().parse::<f64>().map_err(|_| {
+                        vec![SpannedError {
+                            error: AstError::ParseError("Invalid float literal".to_string()),
+                            span: Some(Span::from_pest(inner_pair.as_span())),
+                        }]
+                    })?;
+                    ExpressionKind::FloatLit(value)
+                }
+                Rule::string_literal => {
+                    let mut value = inner_pair.as_str().to_string();
+                    // Remove quotes
+                    if value.starts_with('"') && value.ends_with('"') {
+                        value = value[1..value.len() - 1].to_string();
+                    }
+                    ExpressionKind::StringLit(value)
+                }
+                Rule::identifier => ExpressionKind::Ident(inner_pair.as_str().to_string()),
+                Rule::table_field_access => {
+                    return self.build_table_field_access_expression(inner_pair);
+                }
+                Rule::table_access => {
+                    return self.build_table_access_expression(inner_pair);
+                }
+                Rule::array_access => {
+                    return self.build_array_access_expression(inner_pair);
+                }
+                Rule::record_literal => {
+                    return self.build_record_literal(inner_pair);
+                }
+                Rule::expression => {
+                    // Parenthesized expression
+                    return self.build_expression(inner_pair);
+                }
                 _ => {
                     return Err(vec![SpannedError {
                         error: AstError::ParseError(format!(
-                            "Unknown equality op: {}",
-                            op_pair.as_str()
+                            "Unexpected primary expression: {:?}",
+                            inner_pair.as_rule()
                         )),
                         span: Some(span),
-                    }])
+                    }]);
                 }
             };
 
-            let expr = Expression {
-                node: ExpressionKind::BinaryOp { left, op, right, resolved_type: None },
-                span: span.clone(),
-            };
-            left = self.program.expressions.alloc(expr);
-        }
-
-        Ok(left)
-    }
-
-    fn build_comparison(&mut self, pair: Pair<Rule>) -> Result<ExpressionId, Vec<SpannedError>> {
-        let span = Span::from_pest(pair.as_span());
-        let mut inner = pair.into_inner();
-
-        let mut left = self.build_expression(inner.next().unwrap())?;
-
-        while let Some(op_pair) = inner.next() {
-            let right = self.build_expression(inner.next().unwrap())?;
-            let op = match op_pair.as_str() {
-                "<" => BinaryOp::Lt,
-                "<=" => BinaryOp::Lte,
-                ">" => BinaryOp::Gt,
-                ">=" => BinaryOp::Gte,
-                _ => {
-                    return Err(vec![SpannedError {
-                        error: AstError::ParseError(format!(
-                            "Unknown comparison op: {}",
-                            op_pair.as_str()
-                        )),
-                        span: Some(span),
-                    }])
-                }
-            };
-
-            let expr = Expression {
-                node: ExpressionKind::BinaryOp { left, op, right, resolved_type: None },
-                span: span.clone(),
-            };
-            left = self.program.expressions.alloc(expr);
-        }
-
-        Ok(left)
-    }
-
-    fn build_addition(&mut self, pair: Pair<Rule>) -> Result<ExpressionId, Vec<SpannedError>> {
-        let span = Span::from_pest(pair.as_span());
-        let mut inner = pair.into_inner();
-
-        let mut left = self.build_expression(inner.next().unwrap())?;
-
-        while let Some(op_pair) = inner.next() {
-            let right = self.build_expression(inner.next().unwrap())?;
-            let op = match op_pair.as_str() {
-                "+" => BinaryOp::Add,
-                "-" => BinaryOp::Sub,
-                _ => {
-                    return Err(vec![SpannedError {
-                        error: AstError::ParseError(format!(
-                            "Unknown addition op: {}",
-                            op_pair.as_str()
-                        )),
-                        span: Some(span),
-                    }])
-                }
-            };
-
-            let expr = Expression {
-                node: ExpressionKind::BinaryOp { left, op, right, resolved_type: None },
-                span: span.clone(),
-            };
-            left = self.program.expressions.alloc(expr);
-        }
-
-        Ok(left)
-    }
-
-    fn build_multiplication(
-        &mut self,
-        pair: Pair<Rule>,
-    ) -> Result<ExpressionId, Vec<SpannedError>> {
-        let span = Span::from_pest(pair.as_span());
-        let mut inner = pair.into_inner();
-
-        let mut left = self.build_expression(inner.next().unwrap())?;
-
-        while let Some(op_pair) = inner.next() {
-            let right = self.build_expression(inner.next().unwrap())?;
-            let op = match op_pair.as_str() {
-                "*" => BinaryOp::Mul,
-                "/" => BinaryOp::Div,
-                _ => {
-                    return Err(vec![SpannedError {
-                        error: AstError::ParseError(format!(
-                            "Unknown multiplication op: {}",
-                            op_pair.as_str()
-                        )),
-                        span: Some(span),
-                    }])
-                }
-            };
-
-            let expr = Expression {
-                node: ExpressionKind::BinaryOp { left, op, right, resolved_type: None },
-                span: span.clone(),
-            };
-            left = self.program.expressions.alloc(expr);
-        }
-
-        Ok(left)
-    }
-
-    fn build_unary(&mut self, pair: Pair<Rule>) -> Result<ExpressionId, Vec<SpannedError>> {
-        let span = Span::from_pest(pair.as_span());
-        let mut inner = pair.into_inner();
-        let first = inner.next().unwrap();
-
-        if first.as_rule() == Rule::unary_op {
-            let op_str = first.as_str();
-            let operand = self.build_expression(inner.next().unwrap())?;
-            let op = match op_str {
-                "!" => UnaryOp::Not,
-                "-" => UnaryOp::Neg,
-                _ => {
-                    return Err(vec![SpannedError {
-                        error: AstError::ParseError(format!("Unknown unary op: {}", op_str)),
-                        span: Some(span),
-                    }])
-                }
-            };
-
-            let expr = Expression {
-                node: ExpressionKind::UnaryOp { op, expr: operand, resolved_type: None },
+            let expr = Spanned {
+                node: expr_kind,
                 span,
             };
-            Ok(self.program.expressions.alloc(expr))
-        } else {
-            self.build_expression(first)
+
+            return Ok(self.program.expressions.alloc(expr));
         }
+
+        Err(vec![SpannedError {
+            error: AstError::ParseError("Empty primary expression".to_string()),
+            span: Some(span),
+        }])
     }
 
-    fn build_primary(&mut self, pair: Pair<Rule>) -> Result<ExpressionId, Vec<SpannedError>> {
-        let inner = pair.into_inner().next().unwrap();
-        self.build_expression(inner)
-    }
-
-    fn build_table_field_access(
-        &mut self,
-        pair: Pair<Rule>,
-    ) -> Result<ExpressionId, Vec<SpannedError>> {
+    /// Builds a table field access expression.
+    fn build_table_field_access_expression(&mut self, pair: Pair<Rule>) -> Results<ExpressionId> {
         let span = Span::from_pest(pair.as_span());
-        let mut inner = pair.into_inner();
+        let mut table_name = String::new();
+        let mut pk_fields = Vec::new();
+        let mut pk_exprs = Vec::new();
+        let mut field_name = String::new();
 
-        let table_name = inner.next().unwrap().as_str().to_string();
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::identifier => {
+                    if table_name.is_empty() {
+                        table_name = inner_pair.as_str().to_string();
+                    } else {
+                        field_name = inner_pair.as_str().to_string();
+                    }
+                }
+                Rule::primary_key_list => {
+                    let (fields, exprs) = self.build_primary_key_list(inner_pair)?;
+                    pk_fields = fields;
+                    pk_exprs = exprs;
+                }
+                _ => {}
+            }
+        }
 
-        // Parse the primary_key_list
-        let pk_list_pair = inner.next().unwrap();
-        let (pk_fields, pk_exprs) = self.build_primary_key_list(pk_list_pair)?;
-        let pk_count = pk_fields.len(); // Calculate length before moving
-
-        let field_name = inner.next().unwrap().as_str().to_string();
-
-        let expr = Expression {
+        let pk_len = pk_fields.len();
+        let expr = Spanned {
             node: ExpressionKind::TableFieldAccess {
                 table_name,
                 pk_fields,
                 pk_exprs,
                 field_name,
                 resolved_table: None,
-                resolved_pk_fields: vec![None; pk_count], // Use the saved length
+                resolved_pk_fields: vec![None; pk_len],
                 resolved_field: None,
                 resolved_type: None,
             },
@@ -804,80 +1513,231 @@ impl AstBuilder {
         Ok(self.program.expressions.alloc(expr))
     }
 
-    fn build_binary_expr(
+    /// Builds a table access expression.
+    fn build_table_access_expression(&mut self, pair: Pair<Rule>) -> Results<ExpressionId> {
+        let span = Span::from_pest(pair.as_span());
+        let mut table_name = String::new();
+        let mut pk_fields = Vec::new();
+        let mut pk_exprs = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::identifier => {
+                    table_name = inner_pair.as_str().to_string();
+                }
+                Rule::primary_key_list => {
+                    let (fields, exprs) = self.build_primary_key_list(inner_pair)?;
+                    pk_fields = fields;
+                    pk_exprs = exprs;
+                }
+                _ => {}
+            }
+        }
+
+        let pk_len = pk_fields.len();
+        let expr = Spanned {
+            node: ExpressionKind::TableAccess {
+                table_name,
+                pk_fields,
+                pk_exprs,
+                resolved_table: None,
+                resolved_pk_fields: vec![None; pk_len],
+                resolved_type: None,
+            },
+            span,
+        };
+
+        Ok(self.program.expressions.alloc(expr))
+    }
+
+    /// Builds an array access expression.
+    fn build_array_access_expression(&mut self, pair: Pair<Rule>) -> Results<ExpressionId> {
+        let span = Span::from_pest(pair.as_span());
+        let mut array_name = String::new();
+        let mut index = None;
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::identifier => {
+                    array_name = inner_pair.as_str().to_string();
+                }
+                Rule::expression => {
+                    index = Some(self.build_expression(inner_pair)?);
+                }
+                _ => {}
+            }
+        }
+
+        let index = index.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing array index".to_string()),
+                span: Some(span.clone()),
+            }]
+        })?;
+
+        let expr = Spanned {
+            node: ExpressionKind::ArrayAccess {
+                array_name,
+                index,
+                resolved_var: None,
+                resolved_type: None,
+            },
+            span,
+        };
+
+        Ok(self.program.expressions.alloc(expr))
+    }
+
+    /// Builds a record literal.
+    fn build_record_literal(&mut self, pair: Pair<Rule>) -> Results<ExpressionId> {
+        let span = Span::from_pest(pair.as_span());
+        let mut fields = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            if inner_pair.as_rule() == Rule::field_assignment_list {
+                fields = self.build_field_assignment_list(inner_pair)?;
+            }
+        }
+
+        let expr = Spanned {
+            node: ExpressionKind::RecordLiteral {
+                fields,
+                resolved_type: None,
+            },
+            span,
+        };
+
+        Ok(self.program.expressions.alloc(expr))
+    }
+
+    /// Builds a field assignment list.
+    fn build_field_assignment_list(&mut self, pair: Pair<Rule>) -> Results<Vec<FieldAssignment>> {
+        let mut fields = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            if inner_pair.as_rule() == Rule::field_assignment {
+                fields.push(self.build_field_assignment(inner_pair)?);
+            }
+        }
+
+        Ok(fields)
+    }
+
+    /// Builds a field assignment.
+    fn build_field_assignment(&mut self, pair: Pair<Rule>) -> Results<FieldAssignment> {
+        let span = Span::from_pest(pair.as_span());
+        let mut field_name = String::new();
+        let mut value = None;
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::identifier => {
+                    field_name = inner_pair.as_str().to_string();
+                }
+                Rule::expression => {
+                    value = Some(self.build_expression(inner_pair)?);
+                }
+                _ => {}
+            }
+        }
+
+        let value = value.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing field assignment value".to_string()),
+                span: Some(span),
+            }]
+        })?;
+
+        Ok(FieldAssignment {
+            field_name,
+            value,
+            resolved_field: None,
+        })
+    }
+
+    /// Builds a primary key list.
+    fn build_primary_key_list(
         &mut self,
         pair: Pair<Rule>,
-        default_op: BinaryOp,
-    ) -> Result<ExpressionId, Vec<SpannedError>> {
+    ) -> Results<(Vec<String>, Vec<ExpressionId>)> {
+        let mut fields = Vec::new();
+        let mut exprs = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            if inner_pair.as_rule() == Rule::primary_key_pair {
+                let (field, expr) = self.build_primary_key_pair(inner_pair)?;
+                fields.push(field);
+                exprs.push(expr);
+            }
+        }
+
+        Ok((fields, exprs))
+    }
+
+    /// Builds a primary key pair.
+    fn build_primary_key_pair(&mut self, pair: Pair<Rule>) -> Results<(String, ExpressionId)> {
         let span = Span::from_pest(pair.as_span());
-        let mut inner = pair.into_inner();
+        let mut field_name = String::new();
+        let mut value = None;
 
-        let mut left = self.build_expression(inner.next().unwrap())?;
-
-        while inner.peek().is_some() {
-            let _op_pair = inner.next().unwrap(); // Skip operator for now, use default
-            let right = self.build_expression(inner.next().unwrap())?;
-
-            let expr = Expression {
-                node: ExpressionKind::BinaryOp {
-                    left,
-                    op: default_op.clone(),
-                    right,
-                    resolved_type: None,
-                },
-                span: span.clone(),
-            };
-            left = self.program.expressions.alloc(expr);
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::identifier => {
+                    field_name = inner_pair.as_str().to_string();
+                }
+                Rule::expression => {
+                    value = Some(self.build_expression(inner_pair)?);
+                }
+                _ => {}
+            }
         }
 
-        Ok(left)
+        let value = value.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing primary key value".to_string()),
+                span: Some(span),
+            }]
+        })?;
+
+        Ok((field_name, value))
     }
 
-    /// Parses a return type from a Pest pair.
-    fn parse_ret_type(&self, pair: Pair<Rule>) -> Result<ReturnType, Vec<SpannedError>> {
-        match pair.as_str() {
-            "void" => Ok(ReturnType::Void),
-            _ => self.parse_type_name(pair).map(ReturnType::Type),
-        }
-    }
+    /// Helper method to build expression list as identifiers (for node arguments).
+    fn build_expression_list_as_identifiers(&mut self, pair: Pair<Rule>) -> Results<Vec<String>> {
+        let mut identifiers = Vec::new();
 
-    /// Parses a type name from a Pest pair.
-    fn parse_type_name(&self, pair: Pair<Rule>) -> Result<TypeName, Vec<SpannedError>> {
-        match pair.as_str() {
-            "int" => Ok(TypeName::Int),
-            "float" => Ok(TypeName::Float),
-            "string" => Ok(TypeName::String),
-            "bool" => Ok(TypeName::Bool),
-            _ => Err(vec![SpannedError {
-                error: AstError::ParseError(format!("Unknown type: {}", pair.as_str())),
-                span: Some(Span::from_pest(pair.as_span())),
-            }]),
+        for inner_pair in pair.into_inner() {
+            if inner_pair.as_rule() == Rule::expression {
+                // For node arguments, we expect simple identifiers
+                for expr_inner in inner_pair.into_inner() {
+                    if expr_inner.as_rule() == Rule::identifier {
+                        identifiers.push(expr_inner.as_str().to_string());
+                        break;
+                    }
+                }
+            }
         }
+
+        Ok(identifiers)
     }
 }
 
-pub fn build_program_from_pair(pair: Pair<Rule>) -> Results<Program> {
-    let mut builder = AstBuilder::new();
-    builder.build_program(pair)
-}
-
-/// Parses and builds a program from source code.
+/// Parse and build the AST from source code.
 pub fn parse_and_build(source: &str) -> Results<Program> {
-    // Parse using Pest
-    let pairs = TransActParser::parse(Rule::program, source).map_err(|e| {
+    let mut pairs = TransActParser::parse(Rule::program, source).map_err(|e| {
         vec![SpannedError {
-            error: AstError::ParseError(e.to_string()),
+            error: AstError::ParseError(format!("Parse error: {}", e)),
             span: None,
         }]
     })?;
 
-    let program_pair = pairs.into_iter().next().ok_or_else(|| {
+    let program_pair = pairs.next().ok_or_else(|| {
         vec![SpannedError {
-            error: AstError::ParseError("No program found".to_string()),
+            error: AstError::ParseError("Empty input".to_string()),
             span: None,
         }]
     })?;
 
-    // Build arena-based AST
-    build_program_from_pair(program_pair)
+    let builder = AstBuilder::new();
+    builder.build_program(program_pair)
 }

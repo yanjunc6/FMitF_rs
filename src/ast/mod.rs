@@ -81,7 +81,7 @@ impl Default for Span {
 }
 
 // Arena-based IDs - keep these public for external use
-pub type NodeId = Id<NodeDef>;
+pub type PartitionId = Id<PartitionDeclaration>;
 pub type TableId = Id<TableDeclaration>;
 pub type FieldId = Id<FieldDeclaration>;
 pub type FunctionId = Id<FunctionDeclaration>;
@@ -105,7 +105,8 @@ pub type Statement = Spanned<StatementKind>;
 #[derive(Debug)]
 pub struct Program {
     // Arena storage - keep public for read access
-    pub nodes: Arena<NodeDef>,
+    pub partitions: Arena<PartitionDeclaration>,
+    pub constants: Arena<ConstDeclaration>,
     pub tables: Arena<TableDeclaration>,
     pub fields: Arena<FieldDeclaration>,
     pub functions: Arena<FunctionDeclaration>,
@@ -117,12 +118,14 @@ pub struct Program {
     pub scopes: Arena<Scope>,
 
     // Root collections - public for iteration
-    pub root_nodes: Vec<NodeId>,
+    pub root_partitions: Vec<PartitionId>,
+    pub root_constants: Vec<VarId>,
     pub root_tables: Vec<TableId>,
     pub root_functions: Vec<FunctionId>,
 
     // Lookup maps - public for convenience
-    pub node_map: HashMap<String, NodeId>,
+    pub partition_map: HashMap<String, PartitionId>,
+    pub constant_map: HashMap<String, VarId>,
     pub table_map: HashMap<String, TableId>,
     pub function_map: HashMap<String, FunctionId>,
 
@@ -131,10 +134,21 @@ pub struct Program {
     pub var_types: HashMap<VarId, TypeName>,
 }
 
-/// Represents a node definition in the AST.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct NodeDef {
+/// Represents a partition function declaration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PartitionDeclaration {
     pub name: String,
+    pub parameters: Vec<ParameterId>,
+    pub implementation: Option<ExpressionId>,
+    pub span: Span,
+}
+
+/// Represents a constant declaration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstDeclaration {
+    pub const_type: TypeName,
+    pub name: String,
+    pub value: ExpressionId,
     pub span: Span,
 }
 
@@ -142,10 +156,18 @@ pub struct NodeDef {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TableDeclaration {
     pub name: String,
-    pub node: NodeId,
     pub fields: Vec<FieldId>,
     pub primary_keys: Vec<FieldId>,
+    pub node_partition: Option<NodePartition>,
     pub span: Span,
+}
+
+/// Represents a node partition specification.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NodePartition {
+    pub partition_name: String,
+    pub arguments: Vec<String>, // Field names used as arguments
+    pub resolved_partition: Option<PartitionId>,
 }
 
 /// Represents a field declaration in the AST.
@@ -157,13 +179,21 @@ pub struct FieldDeclaration {
     pub span: Span,
 }
 
-/// Represents the type of a field or variable.
+/// leaf / atomic types
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum TypeName {
+pub enum PrimitiveType {
     Int,
     Float,
     String,
     Bool,
+    Table(String), // Table type with name
+}
+
+/// full type = primitive + zero or more array dimensions
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TypeName {
+    pub base: PrimitiveType,
+    pub dims: Vec<Option<usize>>, // empty = scalar; [None] = []T; [Some(10)] = [10]T; …
 }
 
 /// Represents a function declaration in the AST.
@@ -194,21 +224,32 @@ pub struct ParameterDecl {
 /// Represents a hop block in the AST.
 #[derive(Debug, Clone)]
 pub struct HopBlock {
-    pub node_name: String,
     pub statements: Vec<StatementId>,
     pub span: Span,
-    pub resolved_node: Option<NodeId>,
+    pub hop_type: HopType,
+}
+
+/// Represents the type of hop block.
+#[derive(Debug, Clone)]
+pub enum HopType {
+    Simple, // hop { ... }
+    ForLoop {
+        loop_var: String,
+        loop_var_type: TypeName,
+        init: ExpressionId,
+        condition: ExpressionId,
+        increment: ExpressionId,
+    }, // hops for (...) { ... }
 }
 
 /// Represents a statement in the AST.
 #[derive(Debug, Clone)]
 pub enum StatementKind {
     Assignment(AssignmentStatement),
-    MultiAssignment(MultiAssignmentStatement),
-    VarAssignment(VarAssignmentStatement),
-    IfStmt(IfStatement),
-    WhileStmt(WhileStatement),
     VarDecl(VarDeclStatement),
+    IfStmt(IfStatement),
+    ForStmt(ForStatement),
+    WhileStmt(WhileStatement),
     Return(ReturnStatement),
     Abort(AbortStatement),
     Break(BreakStatement),
@@ -219,40 +260,66 @@ pub enum StatementKind {
 /// Represents an assignment statement in the AST.
 #[derive(Debug, Clone)]
 pub struct AssignmentStatement {
-    pub table_name: String,
-    pub pk_fields: Vec<String>,
-    pub pk_exprs: Vec<ExpressionId>,
-    pub field_name: String,
+    pub lvalue: LValue,
+    pub operator: AssignmentOperator,
     pub rhs: ExpressionId,
-    pub resolved_table: Option<TableId>,
-    pub resolved_pk_fields: Vec<Option<FieldId>>,
-    pub resolved_field: Option<FieldId>,
 }
 
-/// Represents a multi-assignment statement in the AST.
-#[derive(Debug, Clone)]
-pub struct MultiAssignmentStatement {
-    pub table_name: String,
-    pub pk_fields: Vec<String>,
-    pub pk_exprs: Vec<ExpressionId>,
-    pub assignments: Vec<MultiAssignmentPair>,
-    pub resolved_table: Option<TableId>,
-    pub resolved_pk_fields: Vec<Option<FieldId>>,
+/// Represents an assignment operator.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AssignmentOperator {
+    Assign,    // =
+    AddAssign, // +=
+    SubAssign, // -=
+    MulAssign, // *=
+    DivAssign, // /=
 }
 
-/// Represents a field:value pair in a multi-assignment.
+/// Represents a left-hand side value that can be assigned to.
 #[derive(Debug, Clone)]
-pub struct MultiAssignmentPair {
-    pub field_name: String,
-    pub rhs: ExpressionId,
-    pub resolved_field: Option<FieldId>,
+pub enum LValue {
+    Var {
+        name: String,
+        resolved_var: Option<VarId>,
+    },
+    TableField {
+        table_name: String,
+        pk_fields: Vec<String>,
+        pk_exprs: Vec<ExpressionId>,
+        field_name: String,
+        resolved_table: Option<TableId>,
+        resolved_pk_fields: Vec<Option<FieldId>>,
+        resolved_field: Option<FieldId>,
+    },
+    TableRecord {
+        table_name: String,
+        pk_fields: Vec<String>,
+        pk_exprs: Vec<ExpressionId>,
+        resolved_table: Option<TableId>,
+        resolved_pk_fields: Vec<Option<FieldId>>,
+    },
+    ArrayElement {
+        array_name: String,
+        index: ExpressionId,
+        resolved_var: Option<VarId>,
+    },
 }
 
 #[derive(Debug, Clone)]
-pub struct VarAssignmentStatement {
+pub struct VarDeclStatement {
+    pub var_type: TypeName,
     pub var_name: String,
-    pub rhs: ExpressionId,
-    pub resolved_var: Option<VarId>,
+    pub init_value: ExpressionId,
+}
+
+#[derive(Debug, Clone)]
+pub struct ForStatement {
+    pub loop_var: String,
+    pub loop_var_type: TypeName,
+    pub init: ExpressionId,
+    pub condition: ExpressionId,
+    pub increment: ExpressionId,
+    pub body: Vec<StatementId>,
 }
 
 #[derive(Debug, Clone)]
@@ -266,13 +333,6 @@ pub struct IfStatement {
 pub struct WhileStatement {
     pub condition: ExpressionId,
     pub body: Vec<StatementId>,
-}
-
-#[derive(Debug, Clone)]
-pub struct VarDeclStatement {
-    pub var_type: TypeName,
-    pub var_name: String,
-    pub init_value: ExpressionId,
 }
 
 #[derive(Debug, Clone)]
@@ -306,6 +366,24 @@ pub enum ExpressionKind {
         resolved_field: Option<FieldId>,
         resolved_type: Option<TypeName>,
     },
+    TableAccess {
+        table_name: String,
+        pk_fields: Vec<String>,
+        pk_exprs: Vec<ExpressionId>,
+        resolved_table: Option<TableId>,
+        resolved_pk_fields: Vec<Option<FieldId>>,
+        resolved_type: Option<TypeName>,
+    },
+    ArrayAccess {
+        array_name: String,
+        index: ExpressionId,
+        resolved_var: Option<VarId>,
+        resolved_type: Option<TypeName>,
+    },
+    RecordLiteral {
+        fields: Vec<FieldAssignment>,
+        resolved_type: Option<TypeName>,
+    },
     UnaryOp {
         op: UnaryOp,
         expr: ExpressionId,
@@ -317,6 +395,14 @@ pub enum ExpressionKind {
         right: ExpressionId,
         resolved_type: Option<TypeName>,
     },
+}
+
+/// Represents a field assignment in a record literal.
+#[derive(Debug, Clone)]
+pub struct FieldAssignment {
+    pub field_name: String,
+    pub value: ExpressionId,
+    pub resolved_field: Option<FieldId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -355,6 +441,7 @@ pub struct VarDecl {
 pub enum VarKind {
     Parameter,
     Local,
+    Global,
 }
 
 #[derive(Debug)]
