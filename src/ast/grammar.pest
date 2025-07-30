@@ -65,7 +65,7 @@ hop_block = {
 }
 
 hops_for_loop = {
-    "hops" ~ "for" ~ "(" ~ type_name ~ identifier ~ "=" ~ expression ~ ";" ~ expression ~ ";" ~ expression ~ ")" ~ block
+    "hops" ~ "for" ~ type_name ~ identifier ~ "=" ~ expression ~ "to" ~ expression ~ block
 }
 
 // Statements

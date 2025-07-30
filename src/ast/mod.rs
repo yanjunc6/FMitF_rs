@@ -236,10 +236,9 @@ pub enum HopType {
     ForLoop {
         loop_var: String,
         loop_var_type: TypeName,
-        init: ExpressionId,
-        condition: ExpressionId,
-        increment: ExpressionId,
-    }, // hops for (...) { ... }
+        start: ExpressionId,
+        end: ExpressionId,
+    }, // hops for int var = start to end { ... }
 }
 
 /// Represents a statement in the AST.

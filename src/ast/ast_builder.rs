@@ -574,9 +574,8 @@ impl AstBuilder {
         let span = Span::from_pest(pair.as_span());
         let mut loop_var = String::new();
         let mut loop_var_type = None;
-        let mut init = None;
-        let mut condition = None;
-        let mut increment = None;
+        let mut start = None;
+        let mut end = None;
         let mut statements = Vec::new();
 
         for inner_pair in pair.into_inner() {
@@ -588,12 +587,10 @@ impl AstBuilder {
                     loop_var = inner_pair.as_str().to_string();
                 }
                 Rule::expression => {
-                    if init.is_none() {
-                        init = Some(self.build_expression(inner_pair)?);
-                    } else if condition.is_none() {
-                        condition = Some(self.build_expression(inner_pair)?);
-                    } else if increment.is_none() {
-                        increment = Some(self.build_expression(inner_pair)?);
+                    if start.is_none() {
+                        start = Some(self.build_expression(inner_pair)?);
+                    } else if end.is_none() {
+                        end = Some(self.build_expression(inner_pair)?);
                     }
                 }
                 Rule::block => {
@@ -610,23 +607,16 @@ impl AstBuilder {
             }]
         })?;
 
-        let init = init.ok_or_else(|| {
+        let start = start.ok_or_else(|| {
             vec![SpannedError {
-                error: AstError::ParseError("Missing loop initialization".to_string()),
+                error: AstError::ParseError("Missing loop start value".to_string()),
                 span: Some(span.clone()),
             }]
         })?;
 
-        let condition = condition.ok_or_else(|| {
+        let end = end.ok_or_else(|| {
             vec![SpannedError {
-                error: AstError::ParseError("Missing loop condition".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        let increment = increment.ok_or_else(|| {
-            vec![SpannedError {
-                error: AstError::ParseError("Missing loop increment".to_string()),
+                error: AstError::ParseError("Missing loop end value".to_string()),
                 span: Some(span.clone()),
             }]
         })?;
@@ -637,9 +627,8 @@ impl AstBuilder {
             hop_type: HopType::ForLoop {
                 loop_var,
                 loop_var_type,
-                init,
-                condition,
-                increment,
+                start,
+                end,
             },
         };
 
