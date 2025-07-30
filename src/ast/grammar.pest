@@ -2,7 +2,6 @@ WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 COMMENT    = _{ "//" ~ (!"\n" ~ ANY)* }
 
 // Basic tokens
-
 letter_or_underscore          = { ASCII_ALPHA | "_" }
 letter_or_digit_or_underscore = { ASCII_ALPHANUMERIC | "_" }
 
@@ -11,41 +10,39 @@ integer_literal = @{ ASCII_DIGIT+ }
 float_literal   = @{ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
 string_literal  = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 bool_literal    = @{ "true" | "false" }
-// Add Boolean literal
 
-type_name = { "int" | "float" | "string" | "bool" }
-// Add bool type
-ret_type        = { type_name | "void" }
+basic_type = { "int" | "float" | "string" | "bool" }
+array_type = { basic_type ~ "[" ~ integer_literal? ~ "]" }
+type_name = { array_type | basic_type }
+ret_type = { type_name | "void" }
 primary_keyword = { "primary" }
 
 // Grammar Start
-
 program = {
-    SOI ~ nodes_block ~ table_declaration* ~ function_declaration* ~ EOI
+    SOI ~ partition_declaration* ~ table_declaration* ~ const_declaration* ~ function_declaration* ~ EOI
 }
 
-// Nodes Block
-
-nodes_block = {
-    "nodes" ~ "{" ~ node_list ~ "}"
+// Partition Declarations
+partition_declaration = {
+    "partition" ~ identifier ~ "(" ~ parameter_list? ~ ")" ~ ("=" ~ expression)? ~ ";"
 }
 
-node_list = {
-    identifier ~ ("," ~ identifier)*
+// Constant Declarations
+const_declaration = {
+    "const" ~ type_name ~ identifier ~ "=" ~ expression ~ ";"
 }
 
 // Table Declarations
-
 table_declaration = {
-    "table" ~ identifier ~ "on" ~ identifier ~ "{" ~ field_declaration* ~ "}"
+    "table" ~ identifier ~ "{" ~ field_declaration* ~ "}"
 }
 
 field_declaration = {
-    primary_keyword? ~ type_name ~ identifier ~ ";"
+    (primary_keyword? ~ type_name ~ identifier ~ ";")
+  | ("node" ~ identifier ~ "(" ~ expression_list? ~ ")" ~ ";")
 }
 
 // Function Declarations
-
 function_declaration = {
     ret_type ~ identifier ~ "(" ~ parameter_list? ~ ")" ~ "{" ~ function_body_item* ~ "}"
 }
@@ -59,23 +56,24 @@ parameter_decl = {
 }
 
 function_body_item = {
-    hop_block
+    statement | hop_block | hops_for_loop
 }
 
 // Hop Blocks
-
 hop_block = {
-    "hop" ~ "on" ~ identifier ~ block
+    "hop" ~ block
+}
+
+hops_for_loop = {
+    "hops" ~ "for" ~ "(" ~ type_name ~ identifier ~ "=" ~ expression ~ ";" ~ expression ~ ";" ~ expression ~ ")" ~ block
 }
 
 // Statements
-
 statement = {
     var_decl_statement
-  | var_assignment_statement
-  | multi_assignment_statement
   | assignment_statement
   | if_statement
+  | for_statement
   | while_statement
   | return_statement
   | abort_statement
@@ -84,34 +82,35 @@ statement = {
   | empty_statement
 }
 
-var_assignment_statement = {
-    identifier ~ "=" ~ expression ~ ";"
+var_decl_statement = {
+    type_name ~ identifier ~ "=" ~ expression ~ ";"
 }
 
 assignment_statement = {
-    identifier ~ "[" ~ primary_key_list ~ "]" ~ "." ~ identifier ~ "=" ~ expression ~ ";"
+    lvalue ~ assignment_operator ~ expression ~ ";"
 }
 
-multi_assignment_statement = {
-    identifier
-    ~ "[" ~ primary_key_list ~ "]"
-    ~ "="
-    ~ "{"
-    ~ multi_assignment_list
-    ~ "}"
-    ~ ";"
+assignment_operator = {
+    "+=" | "-=" | "*=" | "/=" | "="
 }
 
-multi_assignment_list = {
-    multi_assignment_pair ~ ("," ~ multi_assignment_pair)*
+lvalue = {
+    table_field_access
+  | table_access
+  | array_access
+  | identifier
 }
 
-multi_assignment_pair = {
-    identifier ~ ":" ~ expression
+if_statement = {
+    "if" ~ "(" ~ expression ~ ")" ~ block ~ ("else" ~ block)?
 }
 
-var_decl_statement = {
-    type_name ~ identifier ~ "=" ~ expression ~ ";"
+for_statement = {
+    "for" ~ "(" ~ type_name ~ identifier ~ "=" ~ expression ~ ";" ~ expression ~ ";" ~ expression ~ ")" ~ block
+}
+
+while_statement = {
+    "while" ~ "(" ~ expression ~ ")" ~ block
 }
 
 return_statement = {
@@ -130,14 +129,6 @@ continue_statement = {
     "continue" ~ ";"
 }
 
-if_statement = {
-    "if" ~ "(" ~ expression ~ ")" ~ block ~ ("else" ~ block)?
-}
-
-while_statement = {
-    "while" ~ "(" ~ expression ~ ")" ~ block
-}
-
 block = {
     "{" ~ statement* ~ "}"
 }
@@ -145,8 +136,11 @@ block = {
 empty_statement = { ";" }
 
 // Expressions (operator precedence)
-
 expression = { logic_or }
+
+expression_list = {
+    expression ~ ("," ~ expression)*
+}
 
 logic_or = {
     logic_and ~ (logic_or_op ~ logic_and)*
@@ -194,6 +188,9 @@ unary_op = { "!" | "-" }
 primary = {
     bool_literal
   | table_field_access
+  | table_access
+  | array_access
+  | record_literal
   | float_literal
   | integer_literal
   | string_literal
@@ -205,6 +202,26 @@ table_field_access = {
     identifier ~ "[" ~ primary_key_list ~ "]" ~ "." ~ identifier
 }
 
+table_access = {
+    identifier ~ "[" ~ primary_key_list ~ "]"
+}
+
+array_access = {
+    identifier ~ "[" ~ expression ~ "]"
+}
+
+record_literal = {
+    "{" ~ field_assignment_list? ~ "}"
+}
+
+field_assignment_list = {
+    field_assignment ~ ("," ~ field_assignment)*
+}
+
+field_assignment = {
+    identifier ~ ":" ~ expression
+}
+
 primary_key_list = {
     primary_key_pair ~ ("," ~ primary_key_pair)*
 }
@@ -212,6 +229,3 @@ primary_key_list = {
 primary_key_pair = {
     identifier ~ ":" ~ expression
 }
-
-// We skip whitespace and single-line comments globally:
-_WHITESPACE_SL_COMMENT = _{ WHITESPACE | COMMENT }

@@ -51,6 +51,8 @@ pub enum AstError {
     DuplicateFunction(String),
     DuplicateTable(String),
     DuplicateNode(String),
+    DuplicatePartition(String),
+    DuplicateConstant(String),
 
     // Type checking errors (for later use)
     TypeMismatch {
@@ -67,6 +69,26 @@ pub enum AstError {
         right: TypeName,
     },
     InvalidCondition(TypeName),
+    InvalidArrayAccess {
+        array_type: TypeName,
+        index_type: TypeName,
+    },
+    ArraySizeMismatch {
+        expected: Option<usize>,
+        found: Option<usize>,
+    },
+
+    // Assignment errors
+    InvalidAssignmentTarget,
+    ReadOnlyAssignment(String),
+
+    // Partition errors
+    UndeclaredPartition(String),
+    InvalidPartitionArguments {
+        partition: String,
+        expected: usize,
+        found: usize,
+    },
 
     // Control flow errors
     BreakOutsideLoop,
@@ -116,10 +138,18 @@ impl AstError {
             Self::DuplicateFunction(_) => "DuplicateFunction",
             Self::DuplicateTable(_) => "DuplicateTable",
             Self::DuplicateNode(_) => "DuplicateNode",
+            Self::DuplicatePartition(_) => "DuplicatePartition",
+            Self::DuplicateConstant(_) => "DuplicateConstant",
             Self::TypeMismatch { .. } => "TypeMismatch",
             Self::InvalidUnaryOp { .. } => "InvalidUnaryOp",
             Self::InvalidBinaryOp { .. } => "InvalidBinaryOp",
             Self::InvalidCondition(_) => "InvalidCondition",
+            Self::InvalidArrayAccess { .. } => "InvalidArrayAccess",
+            Self::ArraySizeMismatch { .. } => "ArraySizeMismatch",
+            Self::InvalidAssignmentTarget => "InvalidAssignmentTarget",
+            Self::ReadOnlyAssignment(_) => "ReadOnlyAssignment",
+            Self::UndeclaredPartition(_) => "UndeclaredPartition",
+            Self::InvalidPartitionArguments { .. } => "InvalidPartitionArguments",
             Self::BreakOutsideLoop => "BreakOutsideLoop",
             Self::ContinueOutsideLoop => "ContinueOutsideLoop",
             Self::MissingReturn(_) => "MissingReturn",
@@ -145,6 +175,8 @@ impl AstError {
             Self::DuplicateFunction(name) => format!("Function '{}' is already declared", name),
             Self::DuplicateTable(name) => format!("Table '{}' is already declared", name),
             Self::DuplicateNode(name) => format!("Node '{}' is already declared", name),
+            Self::DuplicatePartition(name) => format!("Partition '{}' is already declared", name),
+            Self::DuplicateConstant(name) => format!("Constant '{}' is already declared", name),
             Self::TypeMismatch { expected, found } => {
                 format!("Expected type {:?} but found {:?}", expected, found)
             }
@@ -158,6 +190,40 @@ impl AstError {
             Self::InvalidCondition(ty) => {
                 format!("Condition must be boolean, found {:?}", ty)
             }
+            Self::InvalidArrayAccess {
+                array_type,
+                index_type,
+            } => format!(
+                "Cannot index into {:?} with {:?}, expected integer index",
+                array_type, index_type
+            ),
+            Self::ArraySizeMismatch { expected, found } => match (expected, found) {
+                (Some(exp), Some(fnd)) => {
+                    format!("Array size mismatch: expected {} but found {}", exp, fnd)
+                }
+                (Some(exp), None) => format!(
+                    "Array size mismatch: expected {} but found variable size",
+                    exp
+                ),
+                (None, Some(fnd)) => format!(
+                    "Array size mismatch: expected variable size but found {}",
+                    fnd
+                ),
+                (None, None) => "Array size mismatch".to_string(),
+            },
+            Self::InvalidAssignmentTarget => "Invalid assignment target".to_string(),
+            Self::ReadOnlyAssignment(name) => {
+                format!("Cannot assign to read-only variable '{}'", name)
+            }
+            Self::UndeclaredPartition(name) => format!("Partition '{}' is not declared", name),
+            Self::InvalidPartitionArguments {
+                partition,
+                expected,
+                found,
+            } => format!(
+                "Partition '{}' expects {} arguments but found {}",
+                partition, expected, found
+            ),
             Self::BreakOutsideLoop => "Break statement can only be used inside a loop".to_string(),
             Self::ContinueOutsideLoop => {
                 "Continue statement can only be used inside a loop".to_string()

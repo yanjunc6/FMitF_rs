@@ -1,5 +1,5 @@
 //! The `semantics_analysis` module performs semantic analysis on the AST.
-//! It checks for type correctness, control flow validity, and cross-node access rules.
+//! It checks for type correctness, control flow validity, and partition access rules.
 //!
 //! # Overview
 //!
@@ -8,9 +8,10 @@
 //!
 //! # Features
 //!
-//! - Type checking for expressions and assignments.
+//! - Type checking for expressions and assignments including array types.
 //! - Validation of control flow constructs (loops, returns, aborts).
-//! - Cross-node access and primary key validation for table operations.
+//! - Table access and primary key validation for partition-aware operations.
+//! - Partition function validation and node assignment checking.
 //!
 //! # Usage
 //!
@@ -39,7 +40,6 @@ pub struct SemanticAnalyzer<'p> {
     current_hop: Option<HopId>,
     return_type: Option<ReturnType>,
     has_return: bool,
-    current_node: Option<NodeId>,
     in_loop: bool,
 }
 
@@ -53,7 +53,6 @@ impl<'p> SemanticAnalyzer<'p> {
             current_hop: None,
             return_type: None,
             has_return: false,
-            current_node: None,
             in_loop: false,
         }
     }
@@ -104,8 +103,6 @@ impl<'p> SemanticAnalyzer<'p> {
         let hop = &self.program.hops[hop_id];
 
         self.current_hop = Some(hop_id);
-        // Use resolved node ID from name resolution
-        self.current_node = hop.resolved_node;
 
         // Check each statement in the hop
         for stmt_id in &hop.statements {
@@ -113,7 +110,6 @@ impl<'p> SemanticAnalyzer<'p> {
         }
 
         self.current_hop = None;
-        self.current_node = None;
     }
 
     /// Checks a statement for semantic correctness.
@@ -124,10 +120,11 @@ impl<'p> SemanticAnalyzer<'p> {
 
         match &stmt.node {
             StatementKind::Assignment(a) => self.check_assignment(a, &stmt.span),
-            StatementKind::MultiAssignment(a) => self.check_multi_assignment(a, &stmt.span),
-            StatementKind::VarAssignment(a) => self.check_var_assignment(a, &stmt.span),
             StatementKind::IfStmt(i) => {
                 self.check_if_statement(i, &stmt.span, hop_index, function_name)
+            }
+            StatementKind::ForStmt(f) => {
+                self.check_for_statement(f, &stmt.span, hop_index, function_name)
             }
             StatementKind::WhileStmt(w) => {
                 self.check_while_statement(w, &stmt.span, hop_index, function_name)
@@ -155,6 +152,38 @@ impl<'p> SemanticAnalyzer<'p> {
         }
     }
 
+    fn check_for_statement(
+        &mut self,
+        for_stmt: &ForStatement,
+        _span: &Span,
+        hop_index: usize,
+        function_name: &str,
+    ) {
+        // Check initialization, condition, and increment expressions
+        self.check_expression(for_stmt.init);
+        
+        if let Some(cond_type) = self.check_expression(for_stmt.condition) {
+            if !self.is_bool_type(&cond_type) {
+                let cond_expr = &self.program.expressions[for_stmt.condition];
+                self.error_at(&cond_expr.span, AstError::InvalidCondition(cond_type));
+            }
+        }
+        
+        self.check_expression(for_stmt.increment);
+
+        // Set loop context
+        let previous_in_loop = self.in_loop;
+        self.in_loop = true;
+
+        // Check body
+        for stmt_id in &for_stmt.body {
+            self.check_statement(*stmt_id, hop_index, function_name);
+        }
+
+        // Restore loop context
+        self.in_loop = previous_in_loop;
+    }
+
     fn check_if_statement(
         &mut self,
         if_stmt: &IfStatement,
@@ -164,7 +193,7 @@ impl<'p> SemanticAnalyzer<'p> {
     ) {
         // Check condition
         if let Some(cond_type) = self.check_expression(if_stmt.condition) {
-            if cond_type != TypeName::Bool {
+            if !self.is_bool_type(&cond_type) {
                 let cond_expr = &self.program.expressions[if_stmt.condition];
                 self.error_at(&cond_expr.span, AstError::InvalidCondition(cond_type));
             }
@@ -192,7 +221,7 @@ impl<'p> SemanticAnalyzer<'p> {
     ) {
         // Check condition
         if let Some(cond_type) = self.check_expression(while_stmt.condition) {
-            if cond_type != TypeName::Bool {
+            if !self.is_bool_type(&cond_type) {
                 let cond_expr = &self.program.expressions[while_stmt.condition];
                 self.error_at(&cond_expr.span, AstError::InvalidCondition(cond_type));
             }
@@ -224,211 +253,137 @@ impl<'p> SemanticAnalyzer<'p> {
     }
 
     fn check_assignment(&mut self, assign: &AssignmentStatement, span: &Span) {
-        // Use resolved IDs if available
-        let table_id = assign.resolved_table.ok_or_else(|| {
-            self.error_at(span, AstError::UndeclaredTable(assign.table_name.clone()));
-        });
+        // Check RHS expression
+        self.check_expression(assign.rhs);
 
-        if let Ok(table_id) = table_id {
-            let table = &self.program.tables[table_id];
+        // Check LValue
+        self.check_lvalue(&assign.lvalue, span);
+    }
 
-            // Check cross-node access
-            if let Some(current_node_id) = self.current_node {
-                if table.node != current_node_id {
-                    let current_node_name = &self.program.nodes[current_node_id].name;
-                    let table_node_name = &self.program.nodes[table.node].name;
-                    self.error_at(
-                        span,
-                        AstError::CrossNodeAccess {
-                            table: table.name.clone(),
-                            table_node: table_node_name.clone(),
-                            current_node: current_node_name.clone(),
-                        },
-                    );
-                    return;
+    fn check_lvalue(&mut self, lvalue: &LValue, span: &Span) {
+        match lvalue {
+            LValue::Var { name, resolved_var } => {
+                if resolved_var.is_none() {
+                    self.error_at(span, AstError::UndeclaredVariable(name.clone()));
                 }
             }
-
-            // Check that we have all primary key fields resolved
-            let all_pk_fields_resolved = assign.resolved_pk_fields.iter().all(|opt| opt.is_some());
-
-            if all_pk_fields_resolved && assign.resolved_field.is_some() {
-                let field_id = assign.resolved_field.unwrap();
-
-                // Validate each primary key field
-                for (i, resolved_pk_field_opt) in assign.resolved_pk_fields.iter().enumerate() {
-                    if let Some(pk_field_id) = resolved_pk_field_opt {
-                        // Check that this field is actually a primary key of this table
-                        if !table.primary_keys.contains(pk_field_id) {
-                            let pk_field = &self.program.fields[*pk_field_id];
-                            self.error_at(
-                                span,
-                                AstError::InvalidPrimaryKey {
-                                    table: table.name.clone(),
-                                    column: pk_field.field_name.clone(),
-                                },
-                            );
-                            return;
-                        }
-
-                        // Check primary key expression type
-                        if i < assign.pk_exprs.len() {
-                            if let Some(pk_type) = self.check_expression(assign.pk_exprs[i]) {
-                                let primary_key_field = &self.program.fields[*pk_field_id];
-                                if !self.types_compatible(&primary_key_field.field_type, &pk_type) {
-                                    self.error_at(
-                                        span,
-                                        AstError::TypeMismatch {
-                                            expected: primary_key_field.field_type.clone(),
-                                            found: pk_type,
-                                        },
-                                    );
-                                }
-                            }
-                        }
-                    }
+            LValue::TableField {
+                table_name,
+                pk_exprs,
+                resolved_table,
+                resolved_pk_fields,
+                resolved_field,
+                ..
+            } => {
+                // Check all primary key expressions
+                for &pk_expr in pk_exprs {
+                    self.check_expression(pk_expr);
                 }
 
-                // Check that all table primary keys are provided
-                if table.primary_keys.len() != assign.resolved_pk_fields.len() {
+                if resolved_table.is_none() {
+                    self.error_at(span, AstError::UndeclaredTable(table_name.clone()));
+                    return;
+                }
+
+                let table_id = resolved_table.unwrap();
+                let table = &self.program.tables[table_id];
+
+                // Check that all primary key fields are resolved
+                let all_pk_fields_resolved = resolved_pk_fields.iter().all(|opt| opt.is_some());
+                if !all_pk_fields_resolved {
                     self.error_at(
                         span,
                         AstError::ParseError(format!(
-                            "Table {} requires {} primary key values, but {} were provided",
-                            table.name,
-                            table.primary_keys.len(),
-                            assign.resolved_pk_fields.len()
+                            "Some primary key fields for table {} are not resolved",
+                            table_name
                         )),
                     );
                     return;
                 }
 
-                // Check RHS type
-                if let Some(rhs_type) = self.check_expression(assign.rhs) {
-                    let assigned_field = &self.program.fields[field_id];
-                    if !self.types_compatible(&assigned_field.field_type, &rhs_type) {
-                        self.error_at(
-                            span,
-                            AstError::TypeMismatch {
-                                expected: assigned_field.field_type.clone(),
-                                found: rhs_type,
-                            },
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    fn check_multi_assignment(&mut self, multi_assign: &MultiAssignmentStatement, span: &Span) {
-        // Use resolved IDs if available
-        let table_id = multi_assign.resolved_table.ok_or_else(|| {
-            self.error_at(span, AstError::UndeclaredTable(multi_assign.table_name.clone()));
-        });
-
-        if let Ok(table_id) = table_id {
-            let table = &self.program.tables[table_id];
-
-            // Check cross-node access
-            if let Some(current_node_id) = self.current_node {
-                if table.node != current_node_id {
-                    let current_node_name = &self.program.nodes[current_node_id].name;
-                    let table_node_name = &self.program.nodes[table.node].name;
-                    self.error_at(
-                        span,
-                        AstError::CrossNodeAccess {
-                            table: table.name.clone(),
-                            table_node: table_node_name.clone(),
-                            current_node: current_node_name.clone(),
-                        },
-                    );
-                    return;
-                }
-            }
-
-            // Check that we have all primary key fields resolved
-            let all_pk_fields_resolved = multi_assign.resolved_pk_fields.iter().all(|opt| opt.is_some());
-            let all_assignment_fields_resolved = multi_assign.assignments.iter().all(|a| a.resolved_field.is_some());
-
-            if all_pk_fields_resolved && all_assignment_fields_resolved {
-                // Validate each primary key field
-                for (i, resolved_pk_field_opt) in multi_assign.resolved_pk_fields.iter().enumerate() {
-                    if let Some(pk_field_id) = resolved_pk_field_opt {
-                        // Check that this field is actually a primary key of this table
-                        if !table.primary_keys.contains(pk_field_id) {
-                            let pk_field = &self.program.fields[*pk_field_id];
-                            self.error_at(
-                                span,
-                                AstError::InvalidPrimaryKey {
-                                    table: table.name.clone(),
-                                    column: pk_field.field_name.clone(),
-                                },
-                            );
-                            return;
-                        }
-
-                        // Check primary key expression type
-                        if i < multi_assign.pk_exprs.len() {
-                            if let Some(pk_type) = self.check_expression(multi_assign.pk_exprs[i]) {
-                                let primary_key_field = &self.program.fields[*pk_field_id];
-                                if !self.types_compatible(&primary_key_field.field_type, &pk_type) {
-                                    self.error_at(
-                                        span,
-                                        AstError::TypeMismatch {
-                                            expected: primary_key_field.field_type.clone(),
-                                            found: pk_type,
-                                        },
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Check that all table primary keys are provided
-                if table.primary_keys.len() != multi_assign.resolved_pk_fields.len() {
+                // Check that we have the right number of primary keys
+                if table.primary_keys.len() != resolved_pk_fields.len() {
                     self.error_at(
                         span,
                         AstError::ParseError(format!(
                             "Table {} requires {} primary key values, but {} were provided",
-                            table.name,
+                            table_name,
                             table.primary_keys.len(),
-                            multi_assign.resolved_pk_fields.len()
+                            resolved_pk_fields.len()
                         )),
                     );
                     return;
                 }
 
-                // Check each assignment field and RHS type
-                for assignment in &multi_assign.assignments {
-                    if let Some(field_id) = assignment.resolved_field {
-                        if let Some(rhs_type) = self.check_expression(assignment.rhs) {
-                            let assigned_field = &self.program.fields[field_id];
-                            if !self.types_compatible(&assigned_field.field_type, &rhs_type) {
-                                self.error_at(
-                                    span,
-                                    AstError::TypeMismatch {
-                                        expected: assigned_field.field_type.clone(),
-                                        found: rhs_type,
-                                    },
-                                );
-                            }
-                        }
-                    }
+                // Check that the target field is resolved
+                if resolved_field.is_none() {
+                    self.error_at(
+                        span,
+                        AstError::UndeclaredField {
+                            table: table_name.clone(),
+                            field: "unknown".to_string(),
+                        },
+                    );
                 }
             }
-        }
-    }
+            LValue::TableRecord {
+                table_name,
+                pk_exprs,
+                resolved_table,
+                resolved_pk_fields,
+                ..
+            } => {
+                // Check all primary key expressions
+                for &pk_expr in pk_exprs {
+                    self.check_expression(pk_expr);
+                }
 
-    fn check_var_assignment(&mut self, var_assign: &VarAssignmentStatement, _span: &Span) {
-        // The name resolver should have already checked if the variable exists
-        // We can use the resolutions to get the variable type directly
-        // For now, we'll check the type compatibility
+                if resolved_table.is_none() {
+                    self.error_at(span, AstError::UndeclaredTable(table_name.clone()));
+                    return;
+                }
 
-        if let Some(_rhs_type) = self.check_expression(var_assign.rhs) {
-            // We would need to look up the variable type from the name resolver's results
-            // For now, we'll skip detailed type checking and let the name resolver handle existence
-            // In a full implementation, we'd look up the resolved variable and check its type
+                let table_id = resolved_table.unwrap();
+                let table = &self.program.tables[table_id];
+
+                // Check that all primary key fields are resolved
+                let all_pk_fields_resolved = resolved_pk_fields.iter().all(|opt| opt.is_some());
+                if !all_pk_fields_resolved {
+                    self.error_at(
+                        span,
+                        AstError::ParseError(format!(
+                            "Some primary key fields for table {} are not resolved",
+                            table_name
+                        )),
+                    );
+                    return;
+                }
+
+                // Check that we have the right number of primary keys
+                if table.primary_keys.len() != resolved_pk_fields.len() {
+                    self.error_at(
+                        span,
+                        AstError::ParseError(format!(
+                            "Table {} requires {} primary key values, but {} were provided",
+                            table_name,
+                            table.primary_keys.len(),
+                            resolved_pk_fields.len()
+                        )),
+                    );
+                }
+            }
+            LValue::ArrayElement {
+                array_name,
+                index,
+                resolved_var,
+            } => {
+                // Check index expression
+                self.check_expression(*index);
+
+                if resolved_var.is_none() {
+                    self.error_at(span, AstError::UndeclaredVariable(array_name.clone()));
+                }
+            }
         }
     }
 
@@ -445,6 +400,34 @@ impl<'p> SemanticAnalyzer<'p> {
                 );
             }
         }
+    }
+
+    /// Helper function to create primitive TypeName instances
+    fn make_type(base: PrimitiveType) -> TypeName {
+        TypeName {
+            base,
+            dims: Vec::new(),
+        }
+    }
+
+    /// Helper function to check if a type is boolean
+    fn is_bool_type(&self, ty: &TypeName) -> bool {
+        matches!(ty.base, PrimitiveType::Bool) && ty.dims.is_empty()
+    }
+
+    /// Helper function to check if a type is numeric (int or float)
+    fn is_numeric_type(&self, ty: &TypeName) -> bool {
+        matches!(ty.base, PrimitiveType::Int | PrimitiveType::Float) && ty.dims.is_empty()
+    }
+
+    /// Helper function to check if a type is integer
+    fn is_int_type(&self, ty: &TypeName) -> bool {
+        matches!(ty.base, PrimitiveType::Int) && ty.dims.is_empty()
+    }
+
+    /// Helper function to check if a type is float
+    fn is_float_type(&self, ty: &TypeName) -> bool {
+        matches!(ty.base, PrimitiveType::Float) && ty.dims.is_empty()
     }
 
     fn check_return_statement(&mut self, ret_stmt: &ReturnStatement, span: &Span) {
@@ -496,17 +479,16 @@ impl<'p> SemanticAnalyzer<'p> {
                     None
                 }
             }
-            ExpressionKind::IntLit(_) => Some(TypeName::Int),
-            ExpressionKind::FloatLit(_) => Some(TypeName::Float),
-            ExpressionKind::StringLit(_) => Some(TypeName::String),
-            ExpressionKind::BoolLit(_) => Some(TypeName::Bool),
+            ExpressionKind::IntLit(_) => Some(Self::make_type(PrimitiveType::Int)),
+            ExpressionKind::FloatLit(_) => Some(Self::make_type(PrimitiveType::Float)),
+            ExpressionKind::StringLit(_) => Some(Self::make_type(PrimitiveType::String)),
+            ExpressionKind::BoolLit(_) => Some(Self::make_type(PrimitiveType::Bool)),
             ExpressionKind::TableFieldAccess {
                 resolved_table,
                 resolved_pk_fields,
                 pk_exprs,
                 resolved_field,
                 table_name,
-                pk_fields: _,
                 field_name,
                 ..
             } => {
@@ -523,24 +505,6 @@ impl<'p> SemanticAnalyzer<'p> {
                     .ok()?;
 
                 let table_obj = &self.program.tables[table_id];
-
-                // Check cross-node access
-                if let Some(current_node_id) = self.current_node {
-                    if table_obj.node != current_node_id {
-                        let current_node_name = &self.program.nodes[current_node_id].name;
-                        let table_node_name = &self.program.nodes[table_obj.node].name;
-                        let expr_span = expr.span.clone();
-                        self.error_at(
-                            &expr_span,
-                            AstError::CrossNodeAccess {
-                                table: table_obj.name.clone(),
-                                table_node: table_node_name.clone(),
-                                current_node: current_node_name.clone(),
-                            },
-                        );
-                        return None;
-                    }
-                }
 
                 // Check that all primary key fields are resolved
                 let all_pk_fields_resolved = resolved_pk_fields.iter().all(|opt| opt.is_some());
@@ -601,6 +565,72 @@ impl<'p> SemanticAnalyzer<'p> {
                 let accessed_field = &self.program.fields[field_id];
                 Some(accessed_field.field_type.clone())
             }
+            ExpressionKind::TableAccess {
+                resolved_table,
+                resolved_pk_fields: _,
+                pk_exprs,
+                table_name,
+                ..
+            } => {
+                // Check all primary key expressions
+                for pk_expr in pk_exprs {
+                    self.check_expression(*pk_expr);
+                }
+
+                if let Some(table_id) = resolved_table {
+                    let table_obj = &self.program.tables[*table_id];
+                    // Return table type
+                    Some(TypeName {
+                        base: PrimitiveType::Table(table_obj.name.clone()),
+                        dims: Vec::new(),
+                    })
+                } else {
+                    let expr_span = expr.span.clone();
+                    self.error_at(&expr_span, AstError::UndeclaredTable(table_name.clone()));
+                    None
+                }
+            }
+            ExpressionKind::ArrayAccess {
+                resolved_var,
+                array_name,
+                index,
+                ..
+            } => {
+                // Check the index expression
+                self.check_expression(*index);
+
+                if let Some(var_id) = resolved_var {
+                    let var = &self.program.variables[*var_id];
+                    if !var.ty.dims.is_empty() {
+                        // Return the element type (remove one dimension)
+                        let mut element_type = var.ty.clone();
+                        element_type.dims.remove(0);
+                        Some(element_type)
+                    } else {
+                        let expr_span = expr.span.clone();
+                        self.error_at(
+                            &expr_span,
+                            AstError::ParseError(format!(
+                                "Variable {} is not an array",
+                                array_name
+                            )),
+                        );
+                        None
+                    }
+                } else {
+                    let expr_span = expr.span.clone();
+                    self.error_at(&expr_span, AstError::UndeclaredVariable(array_name.clone()));
+                    None
+                }
+            }
+            ExpressionKind::RecordLiteral { fields, .. } => {
+                // Check each field assignment expression
+                for field_assign in fields {
+                    self.check_expression(field_assign.value);
+                }
+                // For now, return None - we'd need more context to determine record type
+                None
+            }
             ExpressionKind::UnaryOp {
                 op,
                 expr: inner_expr,
@@ -612,7 +642,7 @@ impl<'p> SemanticAnalyzer<'p> {
 
                 match op {
                     UnaryOp::Neg => {
-                        if matches!(operand_type, TypeName::Int | TypeName::Float) {
+                        if self.is_numeric_type(&operand_type) {
                             Some(operand_type)
                         } else {
                             let expr_span = expr.span.clone();
@@ -627,8 +657,8 @@ impl<'p> SemanticAnalyzer<'p> {
                         }
                     }
                     UnaryOp::Not => {
-                        if operand_type == TypeName::Bool {
-                            Some(TypeName::Bool)
+                        if self.is_bool_type(&operand_type) {
+                            Some(Self::make_type(PrimitiveType::Bool))
                         } else {
                             let expr_span = expr.span.clone();
                             self.error_at(
@@ -650,9 +680,7 @@ impl<'p> SemanticAnalyzer<'p> {
                 self.check_binary_op(op, &left_type, &right_type, &expr_span)
             }
         }
-    }
-
-    fn check_binary_op(
+    }    fn check_binary_op(
         &mut self,
         op: &BinaryOp,
         left: &TypeName,
@@ -661,13 +689,11 @@ impl<'p> SemanticAnalyzer<'p> {
     ) -> Option<TypeName> {
         match op {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
-                if matches!(left, TypeName::Int | TypeName::Float)
-                    && matches!(right, TypeName::Int | TypeName::Float)
-                {
-                    if matches!(left, TypeName::Float) || matches!(right, TypeName::Float) {
-                        Some(TypeName::Float)
+                if self.is_numeric_type(left) && self.is_numeric_type(right) {
+                    if self.is_float_type(left) || self.is_float_type(right) {
+                        Some(Self::make_type(PrimitiveType::Float))
                     } else {
-                        Some(TypeName::Int)
+                        Some(Self::make_type(PrimitiveType::Int))
                     }
                 } else {
                     self.error_at(
@@ -683,7 +709,7 @@ impl<'p> SemanticAnalyzer<'p> {
             }
             BinaryOp::Eq | BinaryOp::Neq => {
                 if self.types_compatible(left, right) {
-                    Some(TypeName::Bool)
+                    Some(Self::make_type(PrimitiveType::Bool))
                 } else {
                     self.error_at(
                         span,
@@ -697,10 +723,8 @@ impl<'p> SemanticAnalyzer<'p> {
                 }
             }
             BinaryOp::Lt | BinaryOp::Lte | BinaryOp::Gt | BinaryOp::Gte => {
-                if matches!(left, TypeName::Int | TypeName::Float)
-                    && matches!(right, TypeName::Int | TypeName::Float)
-                {
-                    Some(TypeName::Bool)
+                if self.is_numeric_type(left) && self.is_numeric_type(right) {
+                    Some(Self::make_type(PrimitiveType::Bool))
                 } else {
                     self.error_at(
                         span,
@@ -714,8 +738,8 @@ impl<'p> SemanticAnalyzer<'p> {
                 }
             }
             BinaryOp::And | BinaryOp::Or => {
-                if left == &TypeName::Bool && right == &TypeName::Bool {
-                    Some(TypeName::Bool)
+                if self.is_bool_type(left) && self.is_bool_type(right) {
+                    Some(Self::make_type(PrimitiveType::Bool))
                 } else {
                     self.error_at(
                         span,
@@ -739,7 +763,8 @@ impl<'p> SemanticAnalyzer<'p> {
     }
 
     fn types_compatible(&self, expected: &TypeName, actual: &TypeName) -> bool {
-        expected == actual || (expected == &TypeName::Float && actual == &TypeName::Int)
+        expected == actual || 
+        (self.is_float_type(expected) && self.is_int_type(actual))
     }
 }
 
@@ -756,184 +781,9 @@ pub fn analyze_program_with_types(program: &mut Program) -> Results<()> {
         let analyzer = SemanticAnalyzer::new(program);
         analyzer.analyze()?;
     }
-    
-    // Then perform type inference and update the AST
-    let mut type_inferrer = TypeInferrer::new(program);
-    type_inferrer.infer_types();
-    
+
+    // For now, we don't do additional type inference
+    // This could be expanded in the future
+
     Ok(())
-}
-
-/// Type inferrer that updates expression types in the AST
-struct TypeInferrer<'p> {
-    program: &'p mut Program,
-}
-
-impl<'p> TypeInferrer<'p> {
-    fn new(program: &'p mut Program) -> Self {
-        Self { program }
-    }
-
-
-    /// Get the current resolved type of an expression, if available
-    fn get_expression_type(&self, expr_id: ExpressionId) -> Option<TypeName> {
-        let expr = &self.program.expressions[expr_id];
-        match &expr.node {
-            ExpressionKind::Ident(_name) => {
-                // Use name resolver's resolution to get the variable type
-                if let Some(var_id) = self.program.resolutions.get(&expr_id) {
-                    let var = &self.program.variables[*var_id];
-                    Some(var.ty.clone())
-                } else {
-                    None
-                }
-            }
-            ExpressionKind::IntLit(_) => Some(TypeName::Int),
-            ExpressionKind::FloatLit(_) => Some(TypeName::Float),
-            ExpressionKind::StringLit(_) => Some(TypeName::String),
-            ExpressionKind::BoolLit(_) => Some(TypeName::Bool),
-            ExpressionKind::TableFieldAccess { resolved_type, resolved_field, .. } => {
-                // Return resolved type if available, otherwise infer from field
-                if let Some(ty) = resolved_type {
-                    Some(ty.clone())
-                } else if let Some(field_id) = resolved_field {
-                    let field = &self.program.fields[*field_id];
-                    Some(field.field_type.clone())
-                } else {
-                    None
-                }
-            }
-            ExpressionKind::UnaryOp { resolved_type, .. } => resolved_type.clone(),
-            ExpressionKind::BinaryOp { resolved_type, .. } => resolved_type.clone(),
-        }
-    }
-
-    /// Infer the result type of a unary operation
-    fn infer_unary_result_type(&self, op: &UnaryOp, operand_type: Option<&TypeName>) -> TypeName {
-        match op {
-            UnaryOp::Not => TypeName::Bool,
-            UnaryOp::Neg => {
-                // If we know the operand type, preserve it (Int -> Int, Float -> Float)
-                // Otherwise default to Int
-                operand_type.cloned().unwrap_or(TypeName::Int)
-            }
-        }
-    }
-
-    /// Infer the result type of a binary operation
-    fn infer_binary_result_type(&self, op: &BinaryOp, left_type: Option<&TypeName>, right_type: Option<&TypeName>) -> TypeName {
-        match op {
-            // Comparison operations return bool
-            BinaryOp::Eq
-            | BinaryOp::Neq
-            | BinaryOp::Lt
-            | BinaryOp::Lte
-            | BinaryOp::Gt
-            | BinaryOp::Gte => TypeName::Bool,
-
-            // Logical operations return bool
-            BinaryOp::And | BinaryOp::Or => TypeName::Bool,
-
-            // Arithmetic operations return numeric types
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
-                // If either operand is Float, result is Float
-                // Otherwise result is Int
-                match (left_type, right_type) {
-                    (Some(TypeName::Float), _) | (_, Some(TypeName::Float)) => TypeName::Float,
-                    _ => TypeName::Int,
-                }
-            }
-        }
-    }
-    
-    fn infer_types(&mut self) {
-        // We need to collect expression IDs first to avoid borrowing issues
-        let expr_ids: Vec<ExpressionId> = self.program.expressions.iter().map(|(id, _)| id).collect();
-        
-        // Make multiple passes to handle dependencies between expressions
-        let max_passes = 3;
-        for _pass in 0..max_passes {
-            let mut changed = false;
-            for expr_id in &expr_ids {
-                let had_type_before = self.get_expression_type(*expr_id).is_some();
-                self.infer_expression_type(*expr_id);
-                let has_type_after = self.get_expression_type(*expr_id).is_some();
-                
-                if !had_type_before && has_type_after {
-                    changed = true;
-                }
-            }
-            
-            // If no new types were inferred in this pass, we're done
-            if !changed {
-                break;
-            }
-        }
-    }
-    
-    fn infer_expression_type(&mut self, expr_id: ExpressionId) -> Option<TypeName> {
-        // Check if we already have a type for this expression
-        if let Some(existing_type) = self.get_expression_type(expr_id) {
-            return Some(existing_type);
-        }
-        
-        // We need to clone the expression to avoid borrowing issues
-        let expr_node = self.program.expressions[expr_id].node.clone();
-        
-        let inferred_type = match &expr_node {
-            ExpressionKind::Ident(_name) => {
-                // Use name resolver's resolution to get the variable type
-                if let Some(var_id) = self.program.resolutions.get(&expr_id) {
-                    let var = &self.program.variables[*var_id];
-                    Some(var.ty.clone())
-                } else {
-                    None
-                }
-            }
-            ExpressionKind::IntLit(_) => Some(TypeName::Int),
-            ExpressionKind::FloatLit(_) => Some(TypeName::Float),
-            ExpressionKind::StringLit(_) => Some(TypeName::String),
-            ExpressionKind::BoolLit(_) => Some(TypeName::Bool),
-            ExpressionKind::TableFieldAccess { resolved_field, .. } => {
-                if let Some(field_id) = resolved_field {
-                    let field = &self.program.fields[*field_id];
-                    Some(field.field_type.clone())
-                } else {
-                    None
-                }
-            }
-            ExpressionKind::UnaryOp { op, expr: inner_expr, .. } => {
-                // First try to infer the inner expression type
-                let operand_type = self.infer_expression_type(*inner_expr);
-                Some(self.infer_unary_result_type(op, operand_type.as_ref()))
-            }
-            ExpressionKind::BinaryOp { left, right, op, .. } => {
-                // First try to infer the operand types  
-                let left_type = self.infer_expression_type(*left);
-                let right_type = self.infer_expression_type(*right);
-                Some(self.infer_binary_result_type(op, left_type.as_ref(), right_type.as_ref()))
-            }
-        };
-        
-        // Update the AST with the inferred type
-        if let Some(ref ty) = inferred_type {
-            match &mut self.program.expressions[expr_id].node {
-                ExpressionKind::TableFieldAccess { resolved_type, .. } => {
-                    *resolved_type = Some(ty.clone());
-                }
-                ExpressionKind::UnaryOp { resolved_type, .. } => {
-                    *resolved_type = Some(ty.clone());
-                }
-                ExpressionKind::BinaryOp { resolved_type, .. } => {
-                    *resolved_type = Some(ty.clone());
-                }
-                _ => {
-                    // For literals and identifiers, the type is intrinsic or from name resolution
-                    // No need to store it in the AST node
-                }
-            }
-        }
-        
-        inferred_type
-    }
 }
