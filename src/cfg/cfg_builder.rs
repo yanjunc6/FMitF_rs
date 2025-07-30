@@ -213,9 +213,9 @@ impl<'a> FunctionContextBuilder<'a> {
                 ast::HopType::Simple => {
                     self.create_simple_hop(program, hop_ast)?;
                 }
-                ast::HopType::ForLoop { loop_var, loop_var_type, init, condition, increment } => {
-                    // Flatten "hops for" into 10 deterministic hops (since AST is validated)
-                    self.create_flattened_hops_for(program, hop_ast, loop_var, loop_var_type, *init, *condition, *increment)?;
+                ast::HopType::ForLoop { loop_var, loop_var_type, start, end } => {
+                    // Flatten "hops for" into deterministic number of hops (since AST is validated)
+                    self.create_flattened_hops_for(program, hop_ast, loop_var, loop_var_type, *start, *end)?;
                 }
             }
         }
@@ -246,12 +246,12 @@ impl<'a> FunctionContextBuilder<'a> {
         hop_ast: &ast::HopBlock,
         loop_var: &str,
         loop_var_type: &ast::TypeName,
-        _init: ast::ExpressionId,
-        _condition: ast::ExpressionId,
-        _increment: ast::ExpressionId,
+        start: ast::ExpressionId,
+        end: ast::ExpressionId,
     ) -> Result<(), String> {
-        // Fixed 10 iterations since AST is validated
-        let num_iterations = 10;
+        // Calculate number of iterations from start to end
+        let num_iterations = self.calculate_loop_iterations(program, start, end)?;
+        let start_value = self.evaluate_constant_expr(program, start)?;
 
         let loop_var_obj = Variable {
             name: loop_var.to_string(),
@@ -275,7 +275,8 @@ impl<'a> FunctionContextBuilder<'a> {
                 self.function.entry_hop = Some(hop_id);
             }
 
-            self.build_hop_with_loop_iteration(program, hop_id, &hop_ast.statements, loop_var_id, i)?;
+            let iteration_value = start_value + i as i64;
+            self.build_hop_with_loop_iteration(program, hop_id, &hop_ast.statements, loop_var_id, iteration_value)?;
         }
         Ok(())
     }
@@ -302,7 +303,7 @@ impl<'a> FunctionContextBuilder<'a> {
         hop_id: HopId,
         statements: &[ast::StatementId],
         loop_var_id: VarId,
-        iteration: usize,
+        iteration_value: i64,
     ) -> Result<(), String> {
         self.current_hop_id = Some(hop_id);
 
@@ -314,7 +315,7 @@ impl<'a> FunctionContextBuilder<'a> {
             entry_block,
             Statement::Assign {
                 var: loop_var_id,
-                rvalue: Rvalue::Use(Operand::Const(Constant::Int(iteration as i64))),
+                rvalue: Rvalue::Use(Operand::Const(Constant::Int(iteration_value))),
                 span: ast::Span::default(),
             },
         );
@@ -573,6 +574,38 @@ impl<'a> FunctionContextBuilder<'a> {
         let var_id = self.function.variables.alloc(var);
         self.var_map.insert(temp_name, var_id);
         var_id
+    }
+
+    fn calculate_loop_iterations(&self, program: &ast::Program, start: ast::ExpressionId, end: ast::ExpressionId) -> Result<usize, String> {
+        let start_val = self.evaluate_constant_expr(program, start)?;
+        let end_val = self.evaluate_constant_expr(program, end)?;
+        
+        if end_val > start_val {
+            Ok((end_val - start_val) as usize)
+        } else {
+            Ok(0)
+        }
+    }
+
+    fn evaluate_constant_expr(&self, program: &ast::Program, expr_id: ast::ExpressionId) -> Result<i64, String> {
+        let expr = &program.expressions[expr_id];
+        
+        match &expr.node {
+            ast::ExpressionKind::IntLit(val) => Ok(*val),
+            ast::ExpressionKind::Ident(name) => {
+                // Try to resolve as constant
+                if let Some(&const_id) = self.ctx.constant_map.get(name) {
+                    let const_info = &self.ctx.program.constants[const_id];
+                    match &const_info.value {
+                        Constant::Int(val) => Ok(*val),
+                        _ => Err(format!("Constant {} is not an integer", name))
+                    }
+                } else {
+                    Err(format!("Cannot evaluate non-constant expression: {}", name))
+                }
+            }
+            _ => Err("Only integer literals and constants are supported in loop bounds".to_string())
+        }
     }
 
     fn new_basic_block(&mut self, hop_id: HopId) -> Result<BasicBlockId, String> {
