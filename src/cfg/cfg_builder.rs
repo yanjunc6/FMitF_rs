@@ -14,7 +14,7 @@ pub struct CfgCtx {
     pub function_map: HashMap<String, FunctionId>, // Unified map for both partitions and transactions
 }
 
-/// Helper struct to manage building a single function's CFG.
+/// Unified helper struct to manage building CFG for both functions and partitions.
 struct FunctionContextBuilder<'a> {
     ctx: &'a mut CfgCtx,
     function: FunctionCfg,
@@ -55,46 +55,9 @@ impl CfgBuilder {
         for &partition_id in &program.root_partitions {
             let partition_ast = &program.partitions[partition_id];
 
-            // Determine if this partition is abstract or concrete
-            let implementation = if partition_ast.implementation.is_some() {
-                FunctionImplementation::Concrete
-            } else {
-                FunctionImplementation::Abstract
-            };
-
-            // Create CFG function for partition
-            let mut function = FunctionCfg {
-                name: partition_ast.name.clone(),
-                function_type: FunctionType::Partition,
-                implementation,
-                return_type: ast::ReturnType::Type(ast::TypeName::Int), // Partitions always return int
-                span: partition_ast.span.clone(),
-                variables: id_arena::Arena::new(),
-                parameters: Vec::new(),
-                hops: id_arena::Arena::new(),
-                blocks: id_arena::Arena::new(),
-                entry_hop: None,
-                hop_order: Vec::new(),
-            };
-
-            // Add parameters
-            for &param_id in &partition_ast.parameters {
-                let param_ast = &program.parameters[param_id];
-                let var = Variable {
-                    name: param_ast.param_name.clone(),
-                    ty: param_ast.param_type.clone(),
-                    is_parameter: true,
-                };
-                let var_id = function.variables.alloc(var);
-                function.parameters.push(var_id);
-            }
-
-            // If concrete, build the implementation
-            if let Some(_impl_expr_id) = partition_ast.implementation {
-                // TODO: Convert the expression to CFG blocks
-                // This would involve converting the expression to CFG statements and terminator
-            }
-
+            // Use the unified function builder to build partitions
+            let builder = FunctionContextBuilder::new_for_partition(ctx, partition_ast)?;
+            let function = builder.build_partition(program, partition_ast)?;
             let cfg_function_id = ctx.program.functions.alloc(function);
             ctx.function_map.insert(partition_ast.name.clone(), cfg_function_id);
             ctx.program.root_functions.push(cfg_function_id);
@@ -148,8 +111,8 @@ impl CfgBuilder {
     fn build_functions(program: &ast::Program, ctx: &mut CfgCtx) -> Result<(), String> {
         for &func_id in &program.root_functions {
             let func_ast = &program.functions[func_id];
-            let builder = FunctionContextBuilder::new(ctx, func_ast)?;
-            let function = builder.build(program, func_ast)?;
+            let builder = FunctionContextBuilder::new_for_function(ctx, func_ast)?;
+            let function = builder.build_function(program, func_ast)?;
             let cfg_func_id = ctx.program.functions.alloc(function);
             ctx.function_map.insert(func_ast.name.clone(), cfg_func_id);
             ctx.program.root_functions.push(cfg_func_id);
@@ -159,7 +122,7 @@ impl CfgBuilder {
 }
 
 impl<'a> FunctionContextBuilder<'a> {
-    fn new(ctx: &'a mut CfgCtx, func_ast: &ast::FunctionDeclaration) -> Result<Self, String> {
+    fn new_for_function(ctx: &'a mut CfgCtx, func_ast: &ast::FunctionDeclaration) -> Result<Self, String> {
         let function = FunctionCfg {
             name: func_ast.name.clone(),
             function_type: FunctionType::Transaction, // Regular functions are transactions
@@ -184,13 +147,56 @@ impl<'a> FunctionContextBuilder<'a> {
         })
     }
 
-    fn build(mut self, program: &ast::Program, func_ast: &ast::FunctionDeclaration) -> Result<FunctionCfg, String> {
-        self.build_parameters(program, func_ast)?;
+    fn new_for_partition(ctx: &'a mut CfgCtx, partition_ast: &ast::PartitionDeclaration) -> Result<Self, String> {
+        // Determine if this partition is abstract or concrete
+        let implementation = if partition_ast.implementation.is_some() {
+            FunctionImplementation::Concrete
+        } else {
+            FunctionImplementation::Abstract
+        };
+
+        let function = FunctionCfg {
+            name: partition_ast.name.clone(),
+            function_type: FunctionType::Partition,
+            implementation,
+            return_type: ast::ReturnType::Type(ast::TypeName::Int), // Partitions always return int
+            span: partition_ast.span.clone(),
+            variables: id_arena::Arena::new(),
+            parameters: Vec::new(),
+            hops: id_arena::Arena::new(),
+            blocks: id_arena::Arena::new(),
+            entry_hop: None,
+            hop_order: Vec::new(),
+        };
+
+        Ok(Self {
+            ctx,
+            function,
+            var_map: HashMap::new(),
+            current_hop_id: None,
+            current_block_id: None,
+            temp_counter: 0,
+        })
+    }
+
+    fn build_function(mut self, program: &ast::Program, func_ast: &ast::FunctionDeclaration) -> Result<FunctionCfg, String> {
+        self.build_parameters_from_function(program, func_ast)?;
         self.build_hops(program, func_ast)?;
         Ok(self.function)
     }
 
-    fn build_parameters(&mut self, program: &ast::Program, func_ast: &ast::FunctionDeclaration) -> Result<(), String> {
+    fn build_partition(mut self, program: &ast::Program, partition_ast: &ast::PartitionDeclaration) -> Result<FunctionCfg, String> {
+        self.build_parameters_from_partition(program, partition_ast)?;
+        
+        // If concrete, build the implementation as a single expression return
+        if let Some(impl_expr_id) = partition_ast.implementation {
+            self.build_expression_as_return(program, impl_expr_id)?;
+        }
+        
+        Ok(self.function)
+    }
+
+    fn build_parameters_from_function(&mut self, program: &ast::Program, func_ast: &ast::FunctionDeclaration) -> Result<(), String> {
         for &param_id in &func_ast.parameters {
             let param_ast = &program.parameters[param_id];
 
@@ -204,6 +210,58 @@ impl<'a> FunctionContextBuilder<'a> {
             self.var_map.insert(param_ast.param_name.clone(), var_id);
             self.function.parameters.push(var_id);
         }
+        Ok(())
+    }
+
+    fn build_parameters_from_partition(&mut self, program: &ast::Program, partition_ast: &ast::PartitionDeclaration) -> Result<(), String> {
+        for &param_id in &partition_ast.parameters {
+            let param_ast = &program.parameters[param_id];
+
+            let var = Variable {
+                name: param_ast.param_name.clone(),
+                ty: param_ast.param_type.clone(),
+                is_parameter: true,
+            };
+
+            let var_id = self.function.variables.alloc(var);
+            self.var_map.insert(param_ast.param_name.clone(), var_id);
+            self.function.parameters.push(var_id);
+        }
+        Ok(())
+    }
+
+    /// Build partition implementation as a single hop with return statement
+    fn build_expression_as_return(&mut self, program: &ast::Program, expr_id: ast::ExpressionId) -> Result<(), String> {
+        // Create a single hop for the partition implementation
+        let hop = HopCfg {
+            entry_block: None,
+            blocks: Vec::new(),
+            span: program.expressions[expr_id].span.clone(),
+        };
+
+        let hop_id = self.function.hops.alloc(hop);
+        self.function.hop_order.push(hop_id);
+        self.function.entry_hop = Some(hop_id);
+
+        // Create a basic block for the expression evaluation
+        let block = BasicBlock {
+            hop_id,
+            statements: Vec::new(),
+            terminator: Terminator::Abort, // Will be updated to Return
+            span: program.expressions[expr_id].span.clone(),
+        };
+
+        let block_id = self.function.blocks.alloc(block);
+        self.function.hops[hop_id].blocks.push(block_id);
+        self.function.hops[hop_id].entry_block = Some(block_id);
+        self.current_block_id = Some(block_id);
+
+        // Build the expression and convert to return statement
+        let result_operand = self.build_expression(program, expr_id)?;
+
+        // Update terminator to return the result
+        self.function.blocks[block_id].terminator = Terminator::Return(Some(result_operand));
+
         Ok(())
     }
 
@@ -557,7 +615,8 @@ impl<'a> FunctionContextBuilder<'a> {
                 Ok(Operand::Var(temp_var))
             }
             _ => {
-                // For unsupported expressions, return a default constant
+                // For other expression types (table access, etc.), return a default value for now
+                // This can be expanded later to handle more complex expressions
                 Ok(Operand::Const(Constant::Int(0)))
             }
         }
