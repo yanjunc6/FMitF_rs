@@ -8,8 +8,6 @@ pub use cfg_builder::CfgBuilder;
 // Core ID types
 pub type TableId = Id<TableInfo>;
 pub type FieldId = Id<FieldInfo>;
-pub type PartitionId = Id<PartitionInfo>;
-pub type ConstantId = Id<ConstantInfo>;
 pub type FunctionId = Id<FunctionCfg>;
 pub type HopId = Id<HopCfg>;
 pub type BasicBlockId = Id<BasicBlock>;
@@ -21,17 +19,27 @@ pub struct CfgProgram {
     // Arena for storing various components
     pub tables: Arena<TableInfo>,
     pub fields: Arena<FieldInfo>,
-    pub partitions: Arena<PartitionInfo>,
-    pub constants: Arena<ConstantInfo>,
     pub functions: Arena<FunctionCfg>,
 
     // Root collections - public for iteration
     pub root_tables: Vec<TableId>,
-    pub root_partitions: Vec<PartitionId>,
-    pub root_constants: Vec<ConstantId>,
-    pub root_functions: Vec<FunctionId>,
+    pub root_functions: Vec<FunctionId>, // Contains both partitions and transactions
 }
 
+
+/// Function type distinguishing partitions from transactions
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FunctionType {
+    Partition, // Partition functions (always return int)
+    Transaction, // Regular transaction functions
+}
+
+/// Function implementation status
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FunctionImplementation {
+    Abstract, // Abstract/virtual function (no implementation)
+    Concrete, // Has actual implementation
+}
 
 #[derive(Debug, Clone)]
 pub struct TableInfo {
@@ -49,22 +57,6 @@ pub struct FieldInfo {
 }
 
 #[derive(Debug, Clone)]
-pub struct PartitionInfo {
-    pub name: String,
-    pub parameters: Vec<String>, // Parameter names
-    pub parameter_types: Vec<TypeName>, // Parameter types
-    pub span: Span,
-}
-
-#[derive(Debug, Clone)]
-pub struct ConstantInfo {
-    pub name: String,
-    pub ty: TypeName,
-    pub value: Constant,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone)]
 pub struct Variable {
     pub name: String,
     pub ty: TypeName,
@@ -75,6 +67,8 @@ pub struct Variable {
 #[derive(Debug)]
 pub struct FunctionCfg {
     pub name: String,
+    pub function_type: FunctionType, // Whether this is a partition or transaction
+    pub implementation: FunctionImplementation, // Whether this is abstract or concrete
     pub return_type: ReturnType,
     pub span: Span,
 
@@ -84,8 +78,8 @@ pub struct FunctionCfg {
     pub hops: Arena<HopCfg>,
     pub blocks: Arena<BasicBlock>,
 
-    pub entry_hop: Option<HopId>, // Set after all hops are allocated
-    pub hop_order: Vec<HopId>,
+    pub entry_hop: Option<HopId>, // Set after all hops are allocated, None for abstract functions
+    pub hop_order: Vec<HopId>, // Empty for abstract functions
 }
 
 /// Hop - execution on a specific node

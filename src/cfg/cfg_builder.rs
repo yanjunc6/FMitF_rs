@@ -11,8 +11,7 @@ pub struct CfgCtx {
     pub program: CfgProgram,
     pub table_map: HashMap<String, TableId>,
     pub field_map: HashMap<String, FieldId>,
-    pub partition_map: HashMap<String, PartitionId>,
-    pub constant_map: HashMap<String, ConstantId>,
+    pub function_map: HashMap<String, FunctionId>, // Unified map for both partitions and transactions
 }
 
 /// Helper struct to manage building a single function's CFG.
@@ -36,24 +35,18 @@ impl CfgBuilder {
             program: CfgProgram {
                 tables: id_arena::Arena::new(),
                 fields: id_arena::Arena::new(),
-                partitions: id_arena::Arena::new(),
-                constants: id_arena::Arena::new(),
                 functions: id_arena::Arena::new(),
                 root_tables: Vec::new(),
-                root_partitions: Vec::new(),
-                root_constants: Vec::new(),
                 root_functions: Vec::new(),
             },
             table_map: HashMap::new(),
             field_map: HashMap::new(),
-            partition_map: HashMap::new(),
-            constant_map: HashMap::new(),
+            function_map: HashMap::new(),
         };
 
-        Self::build_partitions(program, &mut ctx)?;
-        Self::build_constants(program, &mut ctx)?;
         Self::build_tables(program, &mut ctx)?;
-        Self::build_functions(program, &mut ctx)?;
+        Self::build_partitions(program, &mut ctx)?; // Convert partitions to functions
+        Self::build_functions(program, &mut ctx)?; // Convert transactions to functions
 
         Ok(ctx)
     }
@@ -62,43 +55,49 @@ impl CfgBuilder {
         for &partition_id in &program.root_partitions {
             let partition_ast = &program.partitions[partition_id];
 
-            let mut parameter_names = Vec::new();
-            let mut parameter_types = Vec::new();
-            
+            // Determine if this partition is abstract or concrete
+            let implementation = if partition_ast.implementation.is_some() {
+                FunctionImplementation::Concrete
+            } else {
+                FunctionImplementation::Abstract
+            };
+
+            // Create CFG function for partition
+            let mut function = FunctionCfg {
+                name: partition_ast.name.clone(),
+                function_type: FunctionType::Partition,
+                implementation,
+                return_type: ast::ReturnType::Type(ast::TypeName::Int), // Partitions always return int
+                span: partition_ast.span.clone(),
+                variables: id_arena::Arena::new(),
+                parameters: Vec::new(),
+                hops: id_arena::Arena::new(),
+                blocks: id_arena::Arena::new(),
+                entry_hop: None,
+                hop_order: Vec::new(),
+            };
+
+            // Add parameters
             for &param_id in &partition_ast.parameters {
                 let param_ast = &program.parameters[param_id];
-                parameter_names.push(param_ast.param_name.clone());
-                parameter_types.push(param_ast.param_type.clone());
+                let var = Variable {
+                    name: param_ast.param_name.clone(),
+                    ty: param_ast.param_type.clone(),
+                    is_parameter: true,
+                };
+                let var_id = function.variables.alloc(var);
+                function.parameters.push(var_id);
             }
 
-            let partition_info = PartitionInfo {
-                name: partition_ast.name.clone(),
-                parameters: parameter_names,
-                parameter_types,
-                span: partition_ast.span.clone(),
-            };
+            // If concrete, build the implementation
+            if let Some(_impl_expr_id) = partition_ast.implementation {
+                // TODO: Convert the expression to CFG blocks
+                // This would involve converting the expression to CFG statements and terminator
+            }
 
-            let cfg_partition_id = ctx.program.partitions.alloc(partition_info);
-            ctx.partition_map.insert(partition_ast.name.clone(), cfg_partition_id);
-            ctx.program.root_partitions.push(cfg_partition_id);
-        }
-        Ok(())
-    }
-
-    fn build_constants(program: &ast::Program, ctx: &mut CfgCtx) -> Result<(), String> {
-        for &const_var_id in &program.root_constants {
-            let const_var_ast = &program.variables[const_var_id];
-
-            let const_info = ConstantInfo {
-                name: const_var_ast.name.clone(),
-                ty: const_var_ast.ty.clone(),
-                value: Constant::Int(0), // Default value - AST already validated
-                span: ast::Span::default(),
-            };
-
-            let cfg_const_id = ctx.program.constants.alloc(const_info);
-            ctx.constant_map.insert(const_var_ast.name.clone(), cfg_const_id);
-            ctx.program.root_constants.push(cfg_const_id);
+            let cfg_function_id = ctx.program.functions.alloc(function);
+            ctx.function_map.insert(partition_ast.name.clone(), cfg_function_id);
+            ctx.program.root_functions.push(cfg_function_id);
         }
         Ok(())
     }
@@ -152,6 +151,7 @@ impl CfgBuilder {
             let builder = FunctionContextBuilder::new(ctx, func_ast)?;
             let function = builder.build(program, func_ast)?;
             let cfg_func_id = ctx.program.functions.alloc(function);
+            ctx.function_map.insert(func_ast.name.clone(), cfg_func_id);
             ctx.program.root_functions.push(cfg_func_id);
         }
         Ok(())
@@ -162,6 +162,8 @@ impl<'a> FunctionContextBuilder<'a> {
     fn new(ctx: &'a mut CfgCtx, func_ast: &ast::FunctionDeclaration) -> Result<Self, String> {
         let function = FunctionCfg {
             name: func_ast.name.clone(),
+            function_type: FunctionType::Transaction, // Regular functions are transactions
+            implementation: FunctionImplementation::Concrete, // AST functions are always concrete
             return_type: func_ast.return_type.clone(),
             span: func_ast.span.clone(),
             variables: id_arena::Arena::new(),
@@ -567,7 +569,7 @@ impl<'a> FunctionContextBuilder<'a> {
         
         let var = Variable {
             name: temp_name.clone(),
-            ty: TypeName { base: crate::ast::PrimitiveType::Int, dims: Vec::new() },
+            ty: ast::TypeName::Int,
             is_parameter: false,
         };
         
@@ -592,19 +594,12 @@ impl<'a> FunctionContextBuilder<'a> {
         
         match &expr.node {
             ast::ExpressionKind::IntLit(val) => Ok(*val),
-            ast::ExpressionKind::Ident(name) => {
-                // Try to resolve as constant
-                if let Some(&const_id) = self.ctx.constant_map.get(name) {
-                    let const_info = &self.ctx.program.constants[const_id];
-                    match &const_info.value {
-                        Constant::Int(val) => Ok(*val),
-                        _ => Err(format!("Constant {} is not an integer", name))
-                    }
-                } else {
-                    Err(format!("Cannot evaluate non-constant expression: {}", name))
-                }
+            ast::ExpressionKind::Ident(_name) => {
+                // For now, we don't support variable resolution in loop bounds
+                // This could be enhanced later to support compile-time constant evaluation
+                Err("Variable references in loop bounds are not yet supported".to_string())
             }
-            _ => Err("Only integer literals and constants are supported in loop bounds".to_string())
+            _ => Err("Only integer literals are supported in loop bounds".to_string())
         }
     }
 
