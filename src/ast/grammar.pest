@@ -22,9 +22,17 @@ program = {
     SOI ~ partition_declaration* ~ table_declaration* ~ const_declaration* ~ function_declaration* ~ EOI
 }
 
-// Partition Declarations
+// Partition Declarations (function-like with typed parameters, always returns int)
 partition_declaration = {
-    "partition" ~ identifier ~ "(" ~ parameter_list? ~ ")" ~ ("=" ~ expression)? ~ ";"
+    "partition" ~ identifier ~ "(" ~ partition_parameter_list? ~ ")" ~ ("=" ~ expression)? ~ ";"
+}
+
+partition_parameter_list = {
+    partition_parameter ~ ("," ~ partition_parameter)*
+}
+
+partition_parameter = {
+    type_name ~ identifier
 }
 
 // Constant Declarations
@@ -65,7 +73,7 @@ hop_block = {
 }
 
 hops_for_loop = {
-    "hops" ~ "for" ~ type_name ~ identifier ~ "=" ~ expression ~ "to" ~ expression ~ block
+    "hops" ~ "for" ~ "(" ~ type_name ~ identifier ~ "=" ~ expression ~ ";" ~ expression ~ ";" ~ expression ~ ")" ~ block
 }
 
 // Statements

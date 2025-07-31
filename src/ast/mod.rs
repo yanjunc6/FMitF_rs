@@ -135,12 +135,14 @@ pub struct Program {
 }
 
 /// Represents a partition function declaration.
+/// Partitions are function-like with typed parameters and always return int.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PartitionDeclaration {
     pub name: String,
-    pub parameters: Vec<ParameterId>,
-    pub implementation: Option<ExpressionId>,
+    pub parameters: Vec<ParameterId>, // Typed parameters like functions
+    pub implementation: Option<ExpressionId>, // Optional implementation expression
     pub span: Span,
+    // Note: Return type is always int (implicitly), no need to store it
 }
 
 /// Represents a constant declaration.
@@ -179,21 +181,18 @@ pub struct FieldDeclaration {
     pub span: Span,
 }
 
-/// leaf / atomic types
+/// Represents type names in the AST.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum PrimitiveType {
+pub enum TypeName {
     Int,
     Float,
     String,
     Bool,
-    Table(String), // Table type with name
-}
-
-/// full type = primitive + zero or more array dimensions
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TypeName {
-    pub base: PrimitiveType,
-    pub dims: Vec<Option<usize>>, // empty = scalar; [None] = []T; [Some(10)] = [10]T; …
+    Array {
+        element_type: Box<TypeName>,
+        size: Option<usize>, // None for dynamic arrays, Some(n) for fixed-size
+    },
+    Table(String), // For table variable declarations like "Stock s"
 }
 
 /// Represents a function declaration in the AST.
