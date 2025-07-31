@@ -121,8 +121,8 @@ impl AstBuilder {
                         name = inner_pair.as_str().to_string();
                     }
                 }
-                Rule::parameter_list => {
-                    parameters = self.build_parameter_list(inner_pair)?;
+                Rule::partition_parameter_list => {
+                    parameters = self.build_partition_parameter_list(inner_pair)?;
                 }
                 Rule::expression => {
                     implementation = Some(self.build_expression(inner_pair)?);
@@ -437,6 +437,53 @@ impl AstBuilder {
         Ok(self.program.parameters.alloc(parameter))
     }
 
+    /// Builds a partition parameter list (same as regular parameter list but with explicit naming).
+    fn build_partition_parameter_list(&mut self, pair: Pair<Rule>) -> Results<Vec<ParameterId>> {
+        let mut parameters = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            if inner_pair.as_rule() == Rule::partition_parameter {
+                parameters.push(self.build_partition_parameter(inner_pair)?);
+            }
+        }
+
+        Ok(parameters)
+    }
+
+    /// Builds a partition parameter declaration (same as regular parameter).
+    fn build_partition_parameter(&mut self, pair: Pair<Rule>) -> Results<ParameterId> {
+        let span = Span::from_pest(pair.as_span());
+        let mut param_type = None;
+        let mut param_name = String::new();
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::type_name => {
+                    param_type = Some(self.build_type_name(inner_pair)?);
+                }
+                Rule::identifier => {
+                    param_name = inner_pair.as_str().to_string();
+                }
+                _ => {}
+            }
+        }
+
+        let param_type = param_type.ok_or_else(|| {
+            vec![SpannedError {
+                error: AstError::ParseError("Missing type in partition parameter declaration".to_string()),
+                span: Some(span.clone()),
+            }]
+        })?;
+
+        let parameter = ParameterDecl {
+            param_type,
+            param_name,
+            span,
+        };
+
+        Ok(self.program.parameters.alloc(parameter))
+    }
+
     /// Builds a return type.
     fn build_ret_type(&mut self, pair: Pair<Rule>) -> Results<ReturnType> {
         for inner_pair in pair.into_inner() {
@@ -456,10 +503,7 @@ impl AstBuilder {
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
                 Rule::basic_type => {
-                    return Ok(TypeName {
-                        base: self.build_basic_type(inner_pair)?,
-                        dims: Vec::new(),
-                    });
+                    return self.build_basic_type(inner_pair);
                 }
                 Rule::array_type => {
                     return self.build_array_type(inner_pair);
@@ -474,13 +518,13 @@ impl AstBuilder {
     }
 
     /// Builds a basic type.
-    fn build_basic_type(&mut self, pair: Pair<Rule>) -> Results<PrimitiveType> {
+    fn build_basic_type(&mut self, pair: Pair<Rule>) -> Results<TypeName> {
         let type_str = pair.as_str();
         match type_str {
-            "int" => Ok(PrimitiveType::Int),
-            "float" => Ok(PrimitiveType::Float),
-            "string" => Ok(PrimitiveType::String),
-            "bool" => Ok(PrimitiveType::Bool),
+            "int" => Ok(TypeName::Int),
+            "float" => Ok(TypeName::Float),
+            "string" => Ok(TypeName::String),
+            "bool" => Ok(TypeName::Bool),
             _ => Err(vec![SpannedError {
                 error: AstError::ParseError(format!("Unknown basic type: {}", type_str)),
                 span: Some(Span::from_pest(pair.as_span())),
@@ -511,16 +555,16 @@ impl AstBuilder {
             }
         }
 
-        let base = base.ok_or_else(|| {
+        let element_type = base.ok_or_else(|| {
             vec![SpannedError {
-                error: AstError::ParseError("Missing base type in array type".to_string()),
+                error: AstError::ParseError("Missing element type in array".to_string()),
                 span: Some(span),
             }]
         })?;
 
-        Ok(TypeName {
-            base,
-            dims: vec![size],
+        Ok(TypeName::Array {
+            element_type: Box::new(element_type),
+            size,
         })
     }
 

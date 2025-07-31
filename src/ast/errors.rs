@@ -89,6 +89,39 @@ pub enum AstError {
         expected: usize,
         found: usize,
     },
+    PartitionArgumentTypeMismatch {
+        partition: String,
+        param_index: usize,
+        expected: TypeName,
+        found: TypeName,
+    },
+
+    // Table validation errors
+    EmptyPrimaryKey(String),
+    InvalidPrimaryKeyField {
+        table: String,
+        field: String,
+    },
+    MissingTableFields(String),
+    DuplicateField {
+        table: String,
+        field: String,
+    },
+    UnresolvedTablePartition {
+        table: String,
+        partition: String,
+    },
+    InvalidTablePartitionArguments {
+        table: String,
+        partition: String,
+        expected: usize,
+        found: usize,
+    },
+    PartitionFieldNotInTable {
+        table: String,
+        partition: String,
+        field: String,
+    },
 
     // Control flow errors
     BreakOutsideLoop,
@@ -150,6 +183,14 @@ impl AstError {
             Self::ReadOnlyAssignment(_) => "ReadOnlyAssignment",
             Self::UndeclaredPartition(_) => "UndeclaredPartition",
             Self::InvalidPartitionArguments { .. } => "InvalidPartitionArguments",
+            Self::PartitionArgumentTypeMismatch { .. } => "PartitionArgumentTypeMismatch",
+            Self::EmptyPrimaryKey(_) => "EmptyPrimaryKey",
+            Self::InvalidPrimaryKeyField { .. } => "InvalidPrimaryKeyField",
+            Self::MissingTableFields(_) => "MissingTableFields",
+            Self::DuplicateField { .. } => "DuplicateField",
+            Self::UnresolvedTablePartition { .. } => "UnresolvedTablePartition",
+            Self::InvalidTablePartitionArguments { .. } => "InvalidTablePartitionArguments",
+            Self::PartitionFieldNotInTable { .. } => "PartitionFieldNotInTable",
             Self::BreakOutsideLoop => "BreakOutsideLoop",
             Self::ContinueOutsideLoop => "ContinueOutsideLoop",
             Self::MissingReturn(_) => "MissingReturn",
@@ -223,6 +264,49 @@ impl AstError {
             } => format!(
                 "Partition '{}' expects {} arguments but found {}",
                 partition, expected, found
+            ),
+            Self::PartitionArgumentTypeMismatch {
+                partition,
+                param_index,
+                expected,
+                found,
+            } => format!(
+                "Partition '{}' parameter {} expects type {:?} but found {:?}",
+                partition, param_index + 1, expected, found
+            ),
+            Self::EmptyPrimaryKey(table) => {
+                format!("Table '{}' must have at least one primary key field", table)
+            }
+            Self::InvalidPrimaryKeyField { table, field } => format!(
+                "Field '{}' in table '{}' is marked as primary key but doesn't exist in the table",
+                field, table
+            ),
+            Self::MissingTableFields(table) => {
+                format!("Table '{}' must have at least one field", table)
+            }
+            Self::DuplicateField { table, field } => {
+                format!("Field '{}' is declared multiple times in table '{}'", field, table)
+            }
+            Self::UnresolvedTablePartition { table, partition } => format!(
+                "Table '{}' references partition '{}' which is not declared",
+                table, partition
+            ),
+            Self::InvalidTablePartitionArguments {
+                table,
+                partition,
+                expected,
+                found,
+            } => format!(
+                "Table '{}' uses partition '{}' with {} arguments but partition expects {}",
+                table, partition, found, expected
+            ),
+            Self::PartitionFieldNotInTable {
+                table,
+                partition,
+                field,
+            } => format!(
+                "Table '{}' uses partition '{}' with field '{}' which doesn't exist in the table",
+                table, partition, field
             ),
             Self::BreakOutsideLoop => "Break statement can only be used inside a loop".to_string(),
             Self::ContinueOutsideLoop => {
