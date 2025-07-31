@@ -1,9 +1,9 @@
 // Mostly written with transact syntax
 // There are some syntax not in transact, to express tables being partitioned into different nodes
 
-partition f(x) = 10 * x;
-partition g(x, y) = 10 * x + y;
-partition h(x, y); // implementation of partition is optional. It is 10 * x + y % 10;
+partition f(int x) = 10 * x;
+partition g(int x, int y) = 10 * x + y;
+partition h(int x, int y); // implementation of partition is optional. It is 10 * x + y % 10;
 
 
 table Warehouse{

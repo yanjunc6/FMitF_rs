@@ -352,4 +352,3 @@ src/
 # TODO-list
 
 - array literals
-- hop for grammar changes
