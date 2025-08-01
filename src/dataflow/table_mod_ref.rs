@@ -14,7 +14,7 @@ pub struct TableAccess {
     pub access_type: AccessType,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AccessType {
     Read,
     Write,
