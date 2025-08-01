@@ -1,100 +1,110 @@
-use crate::cfg::{FunctionCfg, Operand, Rvalue, Statement, Terminator, VarId};
+use crate::cfg::{FunctionCfg, Operand, Rvalue, Statement, ControlFlowEdge, EdgeType, VarId};
 use crate::dataflow::{
     DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice, TransferFunction,
 };
+use std::collections::HashSet;
 
+/// Transfer function for live variables analysis
+/// Live variables analysis is a backward analysis that tracks which variables
+/// are live (will be used in the future) at each program point
 pub struct LiveVariablesTransfer;
 
 impl TransferFunction<SetLattice<VarId>> for LiveVariablesTransfer {
     fn transfer_statement(&self, stmt: &Statement, state: &SetLattice<VarId>) -> SetLattice<VarId> {
-        let mut result = state.clone();
+        if state.is_top {
+            return state.clone();
+        }
+
+        let mut live_vars = state.set.clone();
 
         match stmt {
             Statement::Assign { var, rvalue, .. } => {
-                // Remove defined variable
-                result.set.remove(var);
+                // Kill: Remove the assigned variable (it's defined here)
+                live_vars.remove(var);
 
-                // Add used variables
-                match rvalue {
-                    Rvalue::Use(operand) => {
-                        if let Operand::Var(v) = operand {
-                            result.set.insert(*v);
-                        }
-                    }
-                    Rvalue::TableAccess { pk_values, .. } => {
-                        for pk_value in pk_values {
-                            if let Operand::Var(v) = pk_value {
-                                result.set.insert(*v);
-                            }
-                        }
-                    }
-                    Rvalue::UnaryOp { operand, .. } => {
-                        if let Operand::Var(v) = operand {
-                            result.set.insert(*v);
-                        }
-                    }
-                    Rvalue::BinaryOp { left, right, .. } => {
-                        if let Operand::Var(v) = left {
-                            result.set.insert(*v);
-                        }
-                        if let Operand::Var(v) = right {
-                            result.set.insert(*v);
-                        }
-                    }
-                }
+                // Gen: Add all variables used in the rvalue
+                self.add_used_vars_from_rvalue(rvalue, &mut live_vars);
             }
-            Statement::TableAssign {
-                pk_values, value, ..
-            } => {
-                // Add used variables
+            Statement::TableAssign { pk_values, value, .. } => {
+                // Gen: Add all variables used in primary key values and the assigned value
                 for pk_value in pk_values {
-                    if let Operand::Var(v) = pk_value {
-                        result.set.insert(*v);
-                    }
+                    self.add_used_var_from_operand(pk_value, &mut live_vars);
                 }
-                if let Operand::Var(v) = value {
-                    result.set.insert(*v);
-                }
+                self.add_used_var_from_operand(value, &mut live_vars);
             }
         }
 
-        result
+        SetLattice::new(live_vars)
     }
 
-    fn transfer_terminator(
-        &self,
-        term: &Terminator,
-        state: &SetLattice<VarId>,
-    ) -> SetLattice<VarId> {
-        let mut result = state.clone();
-
-        match term {
-            Terminator::Branch { condition, .. } => {
-                if let Operand::Var(v) = condition {
-                    result.set.insert(*v);
-                }
-            }
-            Terminator::Return(Some(operand)) => {
-                if let Operand::Var(v) = operand {
-                    result.set.insert(*v);
-                }
-            }
-            _ => {}
+    fn transfer_edge(&self, edge: &ControlFlowEdge, state: &SetLattice<VarId>) -> SetLattice<VarId> {
+        if state.is_top {
+            return state.clone();
         }
 
-        result
+        let mut live_vars = state.set.clone();
+
+        match &edge.edge_type {
+            EdgeType::ConditionalTrue { condition } | EdgeType::ConditionalFalse { condition } => {
+                // Gen: Add variables used in the condition
+                self.add_used_var_from_operand(condition, &mut live_vars);
+            }
+            EdgeType::Return { value: Some(return_val) } => {
+                // Gen: Add variable used in return value
+                self.add_used_var_from_operand(return_val, &mut live_vars);
+            }
+            _ => {
+                // No variables used in other edge types
+            }
+        }
+
+        SetLattice::new(live_vars)
     }
 
     fn initial_value(&self) -> SetLattice<VarId> {
-        SetLattice::bottom()
+        // Start with empty set for backward analysis
+        SetLattice::bottom().unwrap()
     }
 
     fn boundary_value(&self) -> SetLattice<VarId> {
-        SetLattice::bottom()
+        // At function exit points, no variables are live
+        SetLattice::bottom().unwrap()
     }
 }
 
-/// Helper function to run live variables analysis
+impl LiveVariablesTransfer {
+    fn add_used_vars_from_rvalue(&self, rvalue: &Rvalue, live_vars: &mut HashSet<VarId>) {
+        match rvalue {
+            Rvalue::Use(operand) => {
+                self.add_used_var_from_operand(operand, live_vars);
+            }
+            Rvalue::TableAccess { pk_values, .. } => {
+                for pk_value in pk_values {
+                    self.add_used_var_from_operand(pk_value, live_vars);
+                }
+            }
+            Rvalue::ArrayAccess { array, index } => {
+                self.add_used_var_from_operand(array, live_vars);
+                self.add_used_var_from_operand(index, live_vars);
+            }
+            Rvalue::UnaryOp { operand, .. } => {
+                self.add_used_var_from_operand(operand, live_vars);
+            }
+            Rvalue::BinaryOp { left, right, .. } => {
+                self.add_used_var_from_operand(left, live_vars);
+                self.add_used_var_from_operand(right, live_vars);
+            }
+        }
+    }
+
+    fn add_used_var_from_operand(&self, operand: &Operand, live_vars: &mut HashSet<VarId>) {
+        if let Operand::Var(var_id) = operand {
+            live_vars.insert(*var_id);
+        }
+    }
+}
+
+/// Run live variables analysis on a function
 pub fn analyze_live_variables(func: &FunctionCfg) -> DataflowResults<SetLattice<VarId>> {
     let analysis = DataflowAnalysis::new(Direction::Backward, LiveVariablesTransfer);
     analysis.analyze(func)

@@ -3,8 +3,8 @@
 //! This module provides a simple REPL environment for testing TransAct programs.
 //! It's designed for quick testing and experimentation, not production use.
 
-use std::fmt;
 use ordered_float::OrderedFloat;
+use std::fmt;
 
 /// Runtime values - keep it simple
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

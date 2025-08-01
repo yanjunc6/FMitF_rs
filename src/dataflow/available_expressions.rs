@@ -1,34 +1,34 @@
-use crate::cfg::{FieldId, FunctionCfg, Operand, Rvalue, Statement, TableId, Terminator, VarId};
-use crate::dataflow::{DataflowAnalysis, DataflowResults, Direction, SetLattice, TransferFunction};
-use std::collections::HashSet;
-use std::fmt::Debug; // Required for SetLattice<T> if T needs Debug
-
-// Ensure Rvalue, Operand, Constant, BinaryOp, UnaryOp in cfg/mod.rs
-// derive PartialEq, Eq, Hash, Clone, Debug.
-// Note: If Rvalue contains f64 (e.g., via Constant::Float), deriving Eq and Hash
-// for Rvalue will be problematic. You might need to handle f64 specially
-// (e.g., by wrapping it or disallowing floats in tracked expressions).
+use crate::cfg::{FieldId, FunctionCfg, Operand, Rvalue, Statement, TableId, ControlFlowEdge, EdgeType, VarId};
+use crate::dataflow::{DataflowAnalysis, DataflowResults, Direction, SetLattice, TransferFunction, Lattice};
 
 /// Transfer function for Available Expressions analysis.
+/// Available expressions analysis is a forward analysis that tracks which expressions
+/// are available (have been computed and their operands haven't been redefined) at each point.
 #[derive(Debug, Clone)]
 pub struct AvailableExpressionsTransfer;
 
 impl AvailableExpressionsTransfer {
-    /// Checks if an Rvalue represents a computation that can be "available".
+    /// Checks if an Rvalue represents a computation that should be tracked
     fn is_tracked_expression(rvalue: &Rvalue) -> bool {
-        matches!(
-            rvalue,
-            Rvalue::TableAccess { .. } | Rvalue::UnaryOp { .. } | Rvalue::BinaryOp { .. }
-        )
+        match rvalue {
+            Rvalue::Use(_) => false, // Simple variable use is not a "computation"
+            Rvalue::TableAccess { .. } |
+            Rvalue::ArrayAccess { .. } |
+            Rvalue::UnaryOp { .. } |
+            Rvalue::BinaryOp { .. } => true,
+        }
     }
 
-    /// Checks if the given Rvalue uses the specified variable.
+    /// Checks if the given Rvalue uses the specified variable
     fn expr_uses_var(rvalue: &Rvalue, var_id: VarId) -> bool {
         match rvalue {
             Rvalue::Use(op) => Self::operand_uses_var(op, var_id),
-            Rvalue::TableAccess { pk_values, .. } => pk_values
-                .iter()
-                .any(|pk_value| Self::operand_uses_var(pk_value, var_id)),
+            Rvalue::TableAccess { pk_values, .. } => {
+                pk_values.iter().any(|pk_value| Self::operand_uses_var(pk_value, var_id))
+            }
+            Rvalue::ArrayAccess { array, index } => {
+                Self::operand_uses_var(array, var_id) || Self::operand_uses_var(index, var_id)
+            }
             Rvalue::UnaryOp { operand, .. } => Self::operand_uses_var(operand, var_id),
             Rvalue::BinaryOp { left, right, .. } => {
                 Self::operand_uses_var(left, var_id) || Self::operand_uses_var(right, var_id)
@@ -36,16 +36,12 @@ impl AvailableExpressionsTransfer {
         }
     }
 
-    /// Checks if the given Operand is or contains the specified variable.
+    /// Checks if the given Operand uses the specified variable
     fn operand_uses_var(operand: &Operand, var_id: VarId) -> bool {
-        match operand {
-            Operand::Var(v) => *v == var_id,
-            Operand::Const(_) => false,
-        }
+        matches!(operand, Operand::Var(v) if *v == var_id)
     }
 
-    /// Checks if an Rvalue (specifically a TableAccess) is killed by an assignment
-    /// to the given table and field.
+    /// Checks if an Rvalue is killed by a table assignment
     fn expr_killed_by_table_assign(
         rvalue: &Rvalue,
         assigned_table_id: TableId,
@@ -61,79 +57,68 @@ impl AvailableExpressionsTransfer {
 }
 
 impl TransferFunction<SetLattice<Rvalue>> for AvailableExpressionsTransfer {
-    fn boundary_value(&self) -> SetLattice<Rvalue> {
-        // At the entry of the function, no expressions are available.
-        SetLattice {
-            set: HashSet::new(),
+    fn transfer_statement(
+        &self,
+        stmt: &Statement,
+        state: &SetLattice<Rvalue>,
+    ) -> SetLattice<Rvalue> {
+        if state.is_top {
+            return state.clone();
+        }
+
+        let mut available_exprs = state.set.clone();
+
+        match stmt {
+            Statement::Assign { var, rvalue, .. } => {
+                // KILL: Remove any expression that uses the defined variable
+                available_exprs.retain(|expr| !Self::expr_uses_var(expr, *var));
+
+                // GEN: Add the computed expression if it's trackable
+                if Self::is_tracked_expression(rvalue) {
+                    available_exprs.insert(rvalue.clone());
+                }
+            }
+            Statement::TableAssign { table, field, .. } => {
+                // KILL: Remove any table access to the same table and field
+                available_exprs.retain(|expr| !Self::expr_killed_by_table_assign(expr, *table, *field));
+
+                // Note: We don't add table assignments as available expressions
+                // since they are not expressions that compute values
+            }
+        }
+
+        SetLattice::new(available_exprs)
+    }
+
+    fn transfer_edge(&self, edge: &ControlFlowEdge, state: &SetLattice<Rvalue>) -> SetLattice<Rvalue> {
+        match &edge.edge_type {
+            EdgeType::ConditionalTrue { .. } | EdgeType::ConditionalFalse { .. } => {
+                // Conditions don't generate new expressions but might use variables
+                // For available expressions, we typically don't kill expressions based on conditions
+                state.clone()
+            }
+            _ => {
+                // Other edge types don't affect available expressions
+                state.clone()
+            }
         }
     }
 
     fn initial_value(&self) -> SetLattice<Rvalue> {
-        // For forward analysis, initial value is typically the same as boundary value
-        SetLattice {
-            set: HashSet::new(),
-        }
+        // Start with empty set for forward analysis
+        SetLattice::bottom().unwrap()
     }
 
-    fn transfer_statement(
-        &self,
-        stmt: &Statement,
-        in_state: &SetLattice<Rvalue>,
-    ) -> SetLattice<Rvalue> {
-        let mut available_after_statement = in_state.set.clone();
-
-        match stmt {
-            Statement::Assign {
-                var: defined_var,
-                rvalue,
-                ..
-            } => {
-                // KILL: Any expression that uses `defined_var` is no longer available.
-                available_after_statement.retain(|expr| !Self::expr_uses_var(expr, *defined_var));
-
-                // GEN: The expression `rvalue` itself becomes available if trackable.
-                if Self::is_tracked_expression(rvalue) {
-                    available_after_statement.insert(rvalue.clone());
-                }
-            }
-            Statement::TableAssign {
-                table,
-                field,
-                pk_values: _, // Operands for composite PK
-                value: _,     // Operand for value
-                ..
-            } => {
-                // KILL: Any expression that reads from the specific table and field.
-                available_after_statement
-                    .retain(|expr| !Self::expr_killed_by_table_assign(expr, *table, *field));
-            }
-        }
-        SetLattice {
-            set: available_after_statement,
-        }
-    }
-
-    fn transfer_terminator(
-        &self,
-        _term: &Terminator,
-        in_state: &SetLattice<Rvalue>,
-    ) -> SetLattice<Rvalue> {
-        // Terminators typically don't generate or kill expressions in available expressions analysis.
-        // So, the state is passed through.
-        SetLattice {
-            set: in_state.set.clone(),
-        }
+    fn boundary_value(&self) -> SetLattice<Rvalue> {
+        // At function entry, no expressions are available
+        SetLattice::bottom().unwrap()
     }
 }
 
-/// Runs the Available Expressions analysis on a given function CFG.
-///
-/// Available Expressions analysis is a forward dataflow analysis.
-/// An expression is "available" at a point if it has been computed on every
-/// path to that point, and its operands have not been redefined since their last computation.
-/// The lattice elements are sets of Rvalues. The meet operation is set intersection.
+/// Run available expressions analysis on a function
+/// Available expressions analysis tracks which expressions are available
+/// (computed and operands not redefined) at each program point.
 pub fn analyze_available_expressions(func: &FunctionCfg) -> DataflowResults<SetLattice<Rvalue>> {
-    let transfer_fn = AvailableExpressionsTransfer {};
-    let analysis = DataflowAnalysis::new(Direction::Forward, transfer_fn);
+    let analysis = DataflowAnalysis::new(Direction::Forward, AvailableExpressionsTransfer);
     analysis.analyze(func)
 }

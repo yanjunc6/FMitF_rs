@@ -1,11 +1,14 @@
 //! Function Executor - CFG interpreter with proper control flow
 
 use super::{RuntimeError, RuntimeState, RuntimeValue};
-use crate::cfg::{BasicBlockId, BinaryOp, Constant, FunctionId, HopId, Operand, Rvalue, Statement, Terminator, UnaryOp};
+use crate::cfg::{
+    BasicBlockId, BinaryOp, Constant, FunctionId, HopId, Operand, Rvalue, Statement, Terminator,
+    UnaryOp,
+};
 use std::collections::HashMap;
 
 /// Execute a function by properly following CFG control flow
-/// 
+///
 /// This executor respects the CFG structure:
 /// 1. Starts from the entry hop
 /// 2. Follows terminators (branches, gotos, returns) properly
@@ -23,7 +26,7 @@ pub fn execute_function(
         .ok_or_else(|| RuntimeError::ExecutionError("No program loaded".to_string()))?;
 
     let func = &cfg.functions[func_id];
-    
+
     // Set up parameter bindings
     let mut local_vars: HashMap<String, RuntimeValue> = HashMap::new();
     for (i, &param_var_id) in func.parameters.iter().enumerate() {
@@ -34,9 +37,9 @@ pub fn execute_function(
     }
 
     // Start execution from entry hop
-    let entry_hop = func.entry_hop.ok_or_else(|| {
-        RuntimeError::ExecutionError("Function has no entry hop".to_string())
-    })?;
+    let entry_hop = func
+        .entry_hop
+        .ok_or_else(|| RuntimeError::ExecutionError("Function has no entry hop".to_string()))?;
 
     execute_hop(state, func_id, entry_hop, &mut local_vars)
 }
@@ -52,9 +55,9 @@ fn execute_hop(
     let func = &cfg.functions[func_id];
     let hop = &func.hops[hop_id];
 
-    let entry_block = hop.entry_block.ok_or_else(|| {
-        RuntimeError::ExecutionError("Hop has no entry block".to_string())
-    })?;
+    let entry_block = hop
+        .entry_block
+        .ok_or_else(|| RuntimeError::ExecutionError("Hop has no entry block".to_string()))?;
 
     execute_block(state, func_id, entry_block, local_vars)
 }
@@ -81,26 +84,27 @@ fn execute_block(
 
     // Handle the terminator
     match terminator {
-        Terminator::Goto(next_block) => {
-            execute_block(state, func_id, next_block, local_vars)
-        }
-        
+        Terminator::Goto(next_block) => execute_block(state, func_id, next_block, local_vars),
+
         Terminator::Branch {
             condition,
             then_block,
             else_block,
         } => {
-            let condition_value = evaluate_operand_isolated(&condition, local_vars, state, func_id)?;
+            let condition_value =
+                evaluate_operand_isolated(&condition, local_vars, state, func_id)?;
             let next_block = match condition_value {
                 RuntimeValue::Bool(true) => then_block,
                 RuntimeValue::Bool(false) => else_block,
-                _ => return Err(RuntimeError::ExecutionError(
-                    "Branch condition must be boolean".to_string()
-                )),
+                _ => {
+                    return Err(RuntimeError::ExecutionError(
+                        "Branch condition must be boolean".to_string(),
+                    ))
+                }
             };
             execute_block(state, func_id, next_block, local_vars)
         }
-        
+
         Terminator::Return(operand) => {
             if let Some(operand) = operand {
                 let return_value = evaluate_operand_isolated(&operand, local_vars, state, func_id)?;
@@ -109,11 +113,9 @@ fn execute_block(
                 Ok(None)
             }
         }
-        
-        Terminator::Abort => {
-            Err(RuntimeError::ExecutionError("Function aborted".to_string()))
-        }
-        
+
+        Terminator::Abort => Err(RuntimeError::ExecutionError("Function aborted".to_string())),
+
         Terminator::HopExit { next_hop } => {
             if let Some(next_hop_id) = next_hop {
                 execute_hop(state, func_id, next_hop_id, local_vars)
@@ -199,8 +201,8 @@ fn evaluate_rvalue_isolated(
 
         Rvalue::TableAccess {
             table,
-            pk_values, 
-            field, 
+            pk_values,
+            field,
             ..
         } => {
             // Get primary key values
@@ -214,7 +216,7 @@ fn evaluate_rvalue_isolated(
             let table_data = state.table_data.get(table).ok_or_else(|| {
                 RuntimeError::ExecutionError(format!("Table {:?} not found", table))
             })?;
-            
+
             let value = table_data
                 .get(&pk_vals)
                 .and_then(|record| record.get(field))
@@ -227,7 +229,9 @@ fn evaluate_rvalue_isolated(
                             crate::ast::TypeName::Int => RuntimeValue::Int(0),
                             crate::ast::TypeName::Bool => RuntimeValue::Bool(false),
                             crate::ast::TypeName::String => RuntimeValue::String(String::new()),
-                            crate::ast::TypeName::Float => RuntimeValue::Float(ordered_float::OrderedFloat(0.0)),
+                            crate::ast::TypeName::Float => {
+                                RuntimeValue::Float(ordered_float::OrderedFloat(0.0))
+                            }
                         })
                     } else {
                         Some(RuntimeValue::Int(0)) // Fallback
@@ -259,63 +263,75 @@ fn evaluate_rvalue_isolated(
                         Ok(RuntimeValue::Int(a / b))
                     }
                 }
-                
+
                 // Float operations
                 (BinaryOp::Add, RuntimeValue::Float(a), RuntimeValue::Float(b)) => {
-                    Ok(RuntimeValue::Float(ordered_float::OrderedFloat(a.into_inner() + b.into_inner())))
+                    Ok(RuntimeValue::Float(ordered_float::OrderedFloat(
+                        a.into_inner() + b.into_inner(),
+                    )))
                 }
                 (BinaryOp::Sub, RuntimeValue::Float(a), RuntimeValue::Float(b)) => {
-                    Ok(RuntimeValue::Float(ordered_float::OrderedFloat(a.into_inner() - b.into_inner())))
+                    Ok(RuntimeValue::Float(ordered_float::OrderedFloat(
+                        a.into_inner() - b.into_inner(),
+                    )))
                 }
                 (BinaryOp::Mul, RuntimeValue::Float(a), RuntimeValue::Float(b)) => {
-                    Ok(RuntimeValue::Float(ordered_float::OrderedFloat(a.into_inner() * b.into_inner())))
+                    Ok(RuntimeValue::Float(ordered_float::OrderedFloat(
+                        a.into_inner() * b.into_inner(),
+                    )))
                 }
                 (BinaryOp::Div, RuntimeValue::Float(a), RuntimeValue::Float(b)) => {
                     if b.into_inner() == 0.0 {
                         Err(RuntimeError::ExecutionError("Division by zero".to_string()))
                     } else {
-                        Ok(RuntimeValue::Float(ordered_float::OrderedFloat(a.into_inner() / b.into_inner())))
+                        Ok(RuntimeValue::Float(ordered_float::OrderedFloat(
+                            a.into_inner() / b.into_inner(),
+                        )))
                     }
                 }
-                
+
                 // Mixed Int/Float operations (promote to Float)
-                (BinaryOp::Add, RuntimeValue::Int(a), RuntimeValue::Float(b)) => {
-                    Ok(RuntimeValue::Float(ordered_float::OrderedFloat(*a as f64 + b.into_inner())))
-                }
-                (BinaryOp::Add, RuntimeValue::Float(a), RuntimeValue::Int(b)) => {
-                    Ok(RuntimeValue::Float(ordered_float::OrderedFloat(a.into_inner() + *b as f64)))
-                }
-                (BinaryOp::Sub, RuntimeValue::Int(a), RuntimeValue::Float(b)) => {
-                    Ok(RuntimeValue::Float(ordered_float::OrderedFloat(*a as f64 - b.into_inner())))
-                }
-                (BinaryOp::Sub, RuntimeValue::Float(a), RuntimeValue::Int(b)) => {
-                    Ok(RuntimeValue::Float(ordered_float::OrderedFloat(a.into_inner() - *b as f64)))
-                }
-                (BinaryOp::Mul, RuntimeValue::Int(a), RuntimeValue::Float(b)) => {
-                    Ok(RuntimeValue::Float(ordered_float::OrderedFloat(*a as f64 * b.into_inner())))
-                }
-                (BinaryOp::Mul, RuntimeValue::Float(a), RuntimeValue::Int(b)) => {
-                    Ok(RuntimeValue::Float(ordered_float::OrderedFloat(a.into_inner() * *b as f64)))
-                }
+                (BinaryOp::Add, RuntimeValue::Int(a), RuntimeValue::Float(b)) => Ok(
+                    RuntimeValue::Float(ordered_float::OrderedFloat(*a as f64 + b.into_inner())),
+                ),
+                (BinaryOp::Add, RuntimeValue::Float(a), RuntimeValue::Int(b)) => Ok(
+                    RuntimeValue::Float(ordered_float::OrderedFloat(a.into_inner() + *b as f64)),
+                ),
+                (BinaryOp::Sub, RuntimeValue::Int(a), RuntimeValue::Float(b)) => Ok(
+                    RuntimeValue::Float(ordered_float::OrderedFloat(*a as f64 - b.into_inner())),
+                ),
+                (BinaryOp::Sub, RuntimeValue::Float(a), RuntimeValue::Int(b)) => Ok(
+                    RuntimeValue::Float(ordered_float::OrderedFloat(a.into_inner() - *b as f64)),
+                ),
+                (BinaryOp::Mul, RuntimeValue::Int(a), RuntimeValue::Float(b)) => Ok(
+                    RuntimeValue::Float(ordered_float::OrderedFloat(*a as f64 * b.into_inner())),
+                ),
+                (BinaryOp::Mul, RuntimeValue::Float(a), RuntimeValue::Int(b)) => Ok(
+                    RuntimeValue::Float(ordered_float::OrderedFloat(a.into_inner() * *b as f64)),
+                ),
                 (BinaryOp::Div, RuntimeValue::Int(a), RuntimeValue::Float(b)) => {
                     if b.into_inner() == 0.0 {
                         Err(RuntimeError::ExecutionError("Division by zero".to_string()))
                     } else {
-                        Ok(RuntimeValue::Float(ordered_float::OrderedFloat(*a as f64 / b.into_inner())))
+                        Ok(RuntimeValue::Float(ordered_float::OrderedFloat(
+                            *a as f64 / b.into_inner(),
+                        )))
                     }
                 }
                 (BinaryOp::Div, RuntimeValue::Float(a), RuntimeValue::Int(b)) => {
                     if *b == 0 {
                         Err(RuntimeError::ExecutionError("Division by zero".to_string()))
                     } else {
-                        Ok(RuntimeValue::Float(ordered_float::OrderedFloat(a.into_inner() / *b as f64)))
+                        Ok(RuntimeValue::Float(ordered_float::OrderedFloat(
+                            a.into_inner() / *b as f64,
+                        )))
                     }
                 }
-                
+
                 // Equality operations (work with any type)
                 (BinaryOp::Eq, a, b) => Ok(RuntimeValue::Bool(a == b)),
                 (BinaryOp::Neq, a, b) => Ok(RuntimeValue::Bool(a != b)),
-                
+
                 // Comparison operations for integers
                 (BinaryOp::Lt, RuntimeValue::Int(a), RuntimeValue::Int(b)) => {
                     Ok(RuntimeValue::Bool(a < b))
@@ -329,7 +345,7 @@ fn evaluate_rvalue_isolated(
                 (BinaryOp::Gte, RuntimeValue::Int(a), RuntimeValue::Int(b)) => {
                     Ok(RuntimeValue::Bool(a >= b))
                 }
-                
+
                 // Comparison operations for floats
                 (BinaryOp::Lt, RuntimeValue::Float(a), RuntimeValue::Float(b)) => {
                     Ok(RuntimeValue::Bool(a < b))
@@ -343,7 +359,7 @@ fn evaluate_rvalue_isolated(
                 (BinaryOp::Gte, RuntimeValue::Float(a), RuntimeValue::Float(b)) => {
                     Ok(RuntimeValue::Bool(a >= b))
                 }
-                
+
                 // Mixed comparison operations
                 (BinaryOp::Lt, RuntimeValue::Int(a), RuntimeValue::Float(b)) => {
                     Ok(RuntimeValue::Bool((*a as f64) < b.into_inner()))
@@ -381,7 +397,9 @@ fn evaluate_rvalue_isolated(
 
             match (op, &val) {
                 (UnaryOp::Neg, RuntimeValue::Int(a)) => Ok(RuntimeValue::Int(-a)),
-                (UnaryOp::Neg, RuntimeValue::Float(a)) => Ok(RuntimeValue::Float(ordered_float::OrderedFloat(-a.into_inner()))),
+                (UnaryOp::Neg, RuntimeValue::Float(a)) => Ok(RuntimeValue::Float(
+                    ordered_float::OrderedFloat(-a.into_inner()),
+                )),
                 (UnaryOp::Not, RuntimeValue::Bool(a)) => Ok(RuntimeValue::Bool(!a)),
                 _ => Err(RuntimeError::ExecutionError(format!(
                     "Unsupported unary operation: {:?} {:?}",
@@ -400,14 +418,14 @@ fn evaluate_operand_isolated(
     func_id: FunctionId,
 ) -> Result<RuntimeValue, RuntimeError> {
     match operand {
-        Operand::Const(constant) => {
-            match constant {
-                Constant::Int(val) => Ok(RuntimeValue::Int(*val)),
-                Constant::String(val) => Ok(RuntimeValue::String(val.clone())),
-                Constant::Bool(val) => Ok(RuntimeValue::Bool(*val)),
-                Constant::Float(val) => Ok(RuntimeValue::Float(ordered_float::OrderedFloat(val.into_inner()))),
-            }
-        }
+        Operand::Const(constant) => match constant {
+            Constant::Int(val) => Ok(RuntimeValue::Int(*val)),
+            Constant::String(val) => Ok(RuntimeValue::String(val.clone())),
+            Constant::Bool(val) => Ok(RuntimeValue::Bool(*val)),
+            Constant::Float(val) => Ok(RuntimeValue::Float(ordered_float::OrderedFloat(
+                val.into_inner(),
+            ))),
+        },
 
         Operand::Var(var_id) => {
             // Get variable name from CFG
