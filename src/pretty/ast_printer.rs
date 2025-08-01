@@ -517,10 +517,7 @@ impl<'a> Printer<'a> {
                 println!("]");
 
                 // Print assignments
-                println!(
-                    "{}assignments: [",
-                    self.with_depth(self.depth + 1).indent()
-                );
+                println!("{}assignments: [", self.with_depth(self.depth + 1).indent());
                 for (i, assignment) in ma.assignments.iter().enumerate() {
                     println!(
                         "{}[{}] field: {} ->",
@@ -761,7 +758,9 @@ impl<'a> Printer<'a> {
                 self.with_depth(self.depth + 2)
                     .print_expression(program, *expr);
             }
-            ExpressionKind::BinaryOp { left, op, right, .. } => {
+            ExpressionKind::BinaryOp {
+                left, op, right, ..
+            } => {
                 println!("{}BinaryOp", self.indent());
                 println!("{}left:", self.with_depth(self.depth + 1).indent());
                 self.with_depth(self.depth + 2)
@@ -1241,12 +1240,7 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                     index,
                     self.span(&stmt.span)
                 )?;
-                writeln!(
-                    self.writer,
-                    "{}table_name: {}",
-                    indent1,
-                    ma.table_name
-                )?;
+                writeln!(self.writer, "{}table_name: {}", indent1, ma.table_name)?;
 
                 // Write primary key fields
                 write!(self.writer, "{}pk_fields: [", indent1)?;
@@ -1297,9 +1291,7 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                     writeln!(
                         self.writer,
                         "{}[{}] field: {} ->",
-                        indent2,
-                        i,
-                        assignment.field_name
+                        indent2, i, assignment.field_name
                     )?;
                     if let Some(resolved_field) = assignment.resolved_field {
                         let field = &program.fields[resolved_field];
@@ -1311,11 +1303,7 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                             resolved_field.index()
                         )?;
                     } else {
-                        writeln!(
-                            self.writer,
-                            "{}resolved_field: None",
-                            indent3
-                        )?;
+                        writeln!(self.writer, "{}resolved_field: None", indent3)?;
                     }
                     writeln!(self.writer, "{}rhs:", indent3)?;
                     self.depth += 4;
@@ -1563,7 +1551,9 @@ impl<'a, W: Write> WriterPrinter<'a, W> {
                 self.print_expression(program, *expr)?;
                 self.depth -= 2;
             }
-            ExpressionKind::BinaryOp { left, op, right, .. } => {
+            ExpressionKind::BinaryOp {
+                left, op, right, ..
+            } => {
                 writeln!(self.writer, "{}BinaryOp", indent)?;
                 writeln!(self.writer, "{}left:", indent1)?;
                 self.depth += 2;

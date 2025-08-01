@@ -63,10 +63,10 @@ impl<'p> SemanticAnalyzer<'p> {
     pub fn analyze(mut self) -> Results<()> {
         // Check partitions first (since tables may reference them)
         self.check_partitions();
-        
+
         // Check tables (including their partition references)
         self.check_tables();
-        
+
         // Check functions last
         self.check_functions();
 
@@ -119,7 +119,10 @@ impl<'p> SemanticAnalyzer<'p> {
 
         // Check that table has at least one field
         if table.fields.is_empty() {
-            self.error_at(&table.span, AstError::MissingTableFields(table.name.clone()));
+            self.error_at(
+                &table.span,
+                AstError::MissingTableFields(table.name.clone()),
+            );
             return;
         }
 
@@ -219,7 +222,7 @@ impl<'p> SemanticAnalyzer<'p> {
             if arg_index < partition.parameters.len() {
                 let param_id = partition.parameters[arg_index];
                 let param = &self.program.parameters[param_id];
-                
+
                 // Find the field type
                 if let Some(field_id) = table.fields.iter().find(|field_id| {
                     let field = &self.program.fields[**field_id];
@@ -341,14 +344,14 @@ impl<'p> SemanticAnalyzer<'p> {
     ) {
         // Check initialization, condition, and increment expressions
         self.check_expression(for_stmt.init);
-        
+
         if let Some(cond_type) = self.check_expression(for_stmt.condition) {
             if !self.is_bool_type(&cond_type) {
                 let cond_expr = &self.program.expressions[for_stmt.condition];
                 self.error_at(&cond_expr.span, AstError::InvalidCondition(cond_type));
             }
         }
-        
+
         self.check_expression(for_stmt.increment);
 
         // Set loop context
@@ -862,14 +865,17 @@ impl<'p> SemanticAnalyzer<'p> {
                     }
                 }
             }
-            ExpressionKind::BinaryOp { left, op, right, .. } => {
+            ExpressionKind::BinaryOp {
+                left, op, right, ..
+            } => {
                 let left_type = self.check_expression(*left)?;
                 let right_type = self.check_expression(*right)?;
                 let expr_span = expr.span.clone();
                 self.check_binary_op(op, &left_type, &right_type, &expr_span)
             }
         }
-    }    fn check_binary_op(
+    }
+    fn check_binary_op(
         &mut self,
         op: &BinaryOp,
         left: &TypeName,
@@ -952,8 +958,7 @@ impl<'p> SemanticAnalyzer<'p> {
     }
 
     fn types_compatible(&self, expected: &TypeName, actual: &TypeName) -> bool {
-        expected == actual || 
-        (self.is_float_type(expected) && self.is_int_type(actual))
+        expected == actual || (self.is_float_type(expected) && self.is_int_type(actual))
     }
 }
 

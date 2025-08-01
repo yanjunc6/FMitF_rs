@@ -272,7 +272,10 @@ impl AstError {
                 found,
             } => format!(
                 "Partition '{}' parameter {} expects type {:?} but found {:?}",
-                partition, param_index + 1, expected, found
+                partition,
+                param_index + 1,
+                expected,
+                found
             ),
             Self::EmptyPrimaryKey(table) => {
                 format!("Table '{}' must have at least one primary key field", table)
@@ -285,7 +288,10 @@ impl AstError {
                 format!("Table '{}' must have at least one field", table)
             }
             Self::DuplicateField { table, field } => {
-                format!("Field '{}' is declared multiple times in table '{}'", field, table)
+                format!(
+                    "Field '{}' is declared multiple times in table '{}'",
+                    field, table
+                )
             }
             Self::UnresolvedTablePartition { table, partition } => format!(
                 "Table '{}' references partition '{}' which is not declared",

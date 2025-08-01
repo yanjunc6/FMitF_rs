@@ -470,7 +470,9 @@ impl AstBuilder {
 
         let param_type = param_type.ok_or_else(|| {
             vec![SpannedError {
-                error: AstError::ParseError("Missing type in partition parameter declaration".to_string()),
+                error: AstError::ParseError(
+                    "Missing type in partition parameter declaration".to_string(),
+                ),
                 span: Some(span.clone()),
             }]
         })?;
