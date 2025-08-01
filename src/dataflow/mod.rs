@@ -25,6 +25,15 @@ pub enum Direction {
     Backward,
 }
 
+/// Level of dataflow analysis
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnalysisLevel {
+    /// Function-level analysis: data flows between hops across the entire function
+    Function,
+    /// Hop-level analysis: each hop analyzed individually (hop exits treated as boundaries)
+    Hop,
+}
+
 /// Trait for lattice values in dataflow analysis
 pub trait Lattice: Clone + Eq + Debug {
     /// Bottom element of the lattice
@@ -64,6 +73,7 @@ pub trait TransferFunction<L: Lattice> {
 /// General monotone dataflow analysis framework
 pub struct DataflowAnalysis<L: Lattice, T: TransferFunction<L>> {
     pub direction: Direction,
+    pub level: AnalysisLevel,
     pub transfer: T,
     _phantom: std::marker::PhantomData<L>,
 }

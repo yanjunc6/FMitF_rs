@@ -1,5 +1,5 @@
 use crate::cfg::{BasicBlockId, Constant, FunctionCfg, Operand, Rvalue, Statement};
-use crate::dataflow::{analyze_reaching_definitions, ReachingDefinition};
+use crate::dataflow::{analyze_reaching_definitions, AnalysisLevel, ReachingDefinition};
 use crate::optimization::OptimizationPass;
 use std::collections::{HashMap, HashSet};
 
@@ -12,7 +12,7 @@ impl OptimizationPass for ConstantPropagationPass {
     }
 
     fn optimize_function(&self, func: &mut FunctionCfg) -> bool {
-        let reaching_defs_results = analyze_reaching_definitions(func);
+        let reaching_defs_results = analyze_reaching_definitions(func, AnalysisLevel::Function);
         let mut changed = false;
 
         // Build a map from (block_id, stmt_index) to their constant values (if any)
@@ -32,15 +32,16 @@ impl OptimizationPass for ConstantPropagationPass {
         // Second pass: propagate constants using reaching definitions
         for (block_id, block) in func.blocks.iter_mut() {
             // Get reaching definitions at entry of this block
-            let reaching_defs_at_entry = if let Some(lattice) = reaching_defs_results.entry.get(&block_id) {
-                if let Some(set) = lattice.as_set() {
-                    set
+            let reaching_defs_at_entry =
+                if let Some(lattice) = reaching_defs_results.entry.get(&block_id) {
+                    if let Some(set) = lattice.as_set() {
+                        set
+                    } else {
+                        &HashSet::new()
+                    }
                 } else {
                     &HashSet::new()
-                }
-            } else {
-                &HashSet::new()
-            };
+                };
 
             let mut current_reaching_defs = reaching_defs_at_entry.clone();
             let mut new_statements = Vec::new();
@@ -151,9 +152,11 @@ impl ConstantPropagationPass {
         definition_to_constant: &HashMap<(BasicBlockId, usize), Constant>,
     ) -> Rvalue {
         match rvalue {
-            Rvalue::Use(operand) => {
-                Rvalue::Use(self.propagate_in_operand(operand, reaching_defs, definition_to_constant))
-            }
+            Rvalue::Use(operand) => Rvalue::Use(self.propagate_in_operand(
+                operand,
+                reaching_defs,
+                definition_to_constant,
+            )),
             Rvalue::TableAccess {
                 table,
                 pk_fields,
@@ -171,9 +174,11 @@ impl ConstantPropagationPass {
                 field: *field,
             },
             Rvalue::ArrayAccess { array, index } => {
-                let new_array = self.propagate_in_operand(array, reaching_defs, definition_to_constant);
-                let new_index = self.propagate_in_operand(index, reaching_defs, definition_to_constant);
-                
+                let new_array =
+                    self.propagate_in_operand(array, reaching_defs, definition_to_constant);
+                let new_index =
+                    self.propagate_in_operand(index, reaching_defs, definition_to_constant);
+
                 Rvalue::ArrayAccess {
                     array: new_array,
                     index: new_index,
@@ -196,8 +201,10 @@ impl ConstantPropagationPass {
                 }
             }
             Rvalue::BinaryOp { op, left, right } => {
-                let new_left = self.propagate_in_operand(left, reaching_defs, definition_to_constant);
-                let new_right = self.propagate_in_operand(right, reaching_defs, definition_to_constant);
+                let new_left =
+                    self.propagate_in_operand(left, reaching_defs, definition_to_constant);
+                let new_right =
+                    self.propagate_in_operand(right, reaching_defs, definition_to_constant);
 
                 // Try to evaluate the operation if both operands are now constants
                 if let (Operand::Const(c1), Operand::Const(c2)) = (&new_left, &new_right) {

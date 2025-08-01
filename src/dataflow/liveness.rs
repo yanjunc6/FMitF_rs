@@ -1,6 +1,7 @@
-use crate::cfg::{FunctionCfg, Operand, Rvalue, Statement, ControlFlowEdge, EdgeType, VarId};
+use crate::cfg::{ControlFlowEdge, EdgeType, FunctionCfg, Operand, Rvalue, Statement, VarId};
 use crate::dataflow::{
-    DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice, TransferFunction,
+    AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
+    TransferFunction,
 };
 use std::collections::HashSet;
 
@@ -25,7 +26,9 @@ impl TransferFunction<SetLattice<VarId>> for LiveVariablesTransfer {
                 // Gen: Add all variables used in the rvalue
                 self.add_used_vars_from_rvalue(rvalue, &mut live_vars);
             }
-            Statement::TableAssign { pk_values, value, .. } => {
+            Statement::TableAssign {
+                pk_values, value, ..
+            } => {
                 // Gen: Add all variables used in primary key values and the assigned value
                 for pk_value in pk_values {
                     self.add_used_var_from_operand(pk_value, &mut live_vars);
@@ -37,7 +40,11 @@ impl TransferFunction<SetLattice<VarId>> for LiveVariablesTransfer {
         SetLattice::new(live_vars)
     }
 
-    fn transfer_edge(&self, edge: &ControlFlowEdge, state: &SetLattice<VarId>) -> SetLattice<VarId> {
+    fn transfer_edge(
+        &self,
+        edge: &ControlFlowEdge,
+        state: &SetLattice<VarId>,
+    ) -> SetLattice<VarId> {
         if state.is_top {
             return state.clone();
         }
@@ -49,7 +56,9 @@ impl TransferFunction<SetLattice<VarId>> for LiveVariablesTransfer {
                 // Gen: Add variables used in the condition
                 self.add_used_var_from_operand(condition, &mut live_vars);
             }
-            EdgeType::Return { value: Some(return_val) } => {
+            EdgeType::Return {
+                value: Some(return_val),
+            } => {
                 // Gen: Add variable used in return value
                 self.add_used_var_from_operand(return_val, &mut live_vars);
             }
@@ -105,7 +114,10 @@ impl LiveVariablesTransfer {
 }
 
 /// Run live variables analysis on a function
-pub fn analyze_live_variables(func: &FunctionCfg) -> DataflowResults<SetLattice<VarId>> {
-    let analysis = DataflowAnalysis::new(Direction::Backward, LiveVariablesTransfer);
+pub fn analyze_live_variables(
+    func: &FunctionCfg,
+    level: AnalysisLevel,
+) -> DataflowResults<SetLattice<VarId>> {
+    let analysis = DataflowAnalysis::new(level, Direction::Backward, LiveVariablesTransfer);
     analysis.analyze(func)
 }
