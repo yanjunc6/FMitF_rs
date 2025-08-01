@@ -1,10 +1,10 @@
 use crate::cfg::{FieldId, FunctionCfg, Operand, Rvalue, Statement, TableId, VarId};
-use crate::dataflow::analyze_available_expressions;
+use crate::dataflow::{analyze_available_expressions, AnalysisLevel};
 use crate::optimization::OptimizationPass;
 use std::collections::{HashMap, HashSet};
 
 /// Common Subexpression Elimination optimization pass
-/// 
+///
 /// This pass identifies computations that are performed multiple times
 /// and replaces subsequent computations with references to the first result.
 pub struct CommonSubexpressionEliminationPass;
@@ -91,7 +91,7 @@ impl OptimizationPass for CommonSubexpressionEliminationPass {
     }
 
     fn optimize_function(&self, func: &mut FunctionCfg) -> bool {
-        let available_expr_results = analyze_available_expressions(func);
+        let available_expr_results = analyze_available_expressions(func, AnalysisLevel::Function);
         let mut changed = false;
 
         // Track expressions to their defining variables across the entire function
@@ -100,15 +100,16 @@ impl OptimizationPass for CommonSubexpressionEliminationPass {
         // Process each basic block
         for (block_id, block) in func.blocks.iter_mut() {
             // Get available expressions at entry of this block
-            let available_at_entry = if let Some(lattice) = available_expr_results.entry.get(&block_id) {
-                if let Some(set) = lattice.as_set() {
-                    set.clone()
+            let available_at_entry =
+                if let Some(lattice) = available_expr_results.entry.get(&block_id) {
+                    if let Some(set) = lattice.as_set() {
+                        set.clone()
+                    } else {
+                        HashSet::new()
+                    }
                 } else {
                     HashSet::new()
-                }
-            } else {
-                HashSet::new()
-            };
+                };
 
             // Track available expressions through this block
             let mut current_available = available_at_entry;
@@ -128,9 +129,13 @@ impl OptimizationPass for CommonSubexpressionEliminationPass {
                                 };
                                 new_statements.push(new_stmt);
                                 changed = true;
-                                
+
                                 // Update available expressions (the assignment itself doesn't change availability)
-                                self.update_available_after_assign(&mut current_available, *var, &Rvalue::Use(Operand::Var(existing_var)));
+                                self.update_available_after_assign(
+                                    &mut current_available,
+                                    *var,
+                                    &Rvalue::Use(Operand::Var(existing_var)),
+                                );
                                 continue;
                             }
                         }
@@ -146,11 +151,7 @@ impl OptimizationPass for CommonSubexpressionEliminationPass {
                         // Update available expressions
                         self.update_available_after_assign(&mut current_available, *var, rvalue);
                     }
-                    Statement::TableAssign {
-                        table,
-                        field,
-                        ..
-                    } => {
+                    Statement::TableAssign { table, field, .. } => {
                         // Table assignments can invalidate expressions that read from the same table/field
                         self.kill_table_expressions(&mut current_available, *table, *field);
                         new_statements.push(stmt.clone());

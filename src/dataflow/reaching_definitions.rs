@@ -1,6 +1,7 @@
-use crate::cfg::{BasicBlockId, FunctionCfg, Statement, ControlFlowEdge, VarId};
+use crate::cfg::{BasicBlockId, ControlFlowEdge, FunctionCfg, Statement, VarId};
 use crate::dataflow::{
-    DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice, TransferFunction,
+    AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
+    TransferFunction,
 };
 
 /// Represents a definition of a variable at a specific program point.
@@ -47,7 +48,11 @@ impl TransferFunction<SetLattice<Definition>> for ReachingDefinitionsTransfer {
         SetLattice::new(reaching_defs)
     }
 
-    fn transfer_edge(&self, _edge: &ControlFlowEdge, state: &SetLattice<Definition>) -> SetLattice<Definition> {
+    fn transfer_edge(
+        &self,
+        _edge: &ControlFlowEdge,
+        state: &SetLattice<Definition>,
+    ) -> SetLattice<Definition> {
         // Control flow edges don't define variables, so pass through unchanged
         state.clone()
     }
@@ -115,7 +120,11 @@ impl TransferFunction<SetLattice<Definition>> for ReachingDefinitionsTransferWit
         SetLattice::new(reaching_defs)
     }
 
-    fn transfer_edge(&self, _edge: &ControlFlowEdge, state: &SetLattice<Definition>) -> SetLattice<Definition> {
+    fn transfer_edge(
+        &self,
+        _edge: &ControlFlowEdge,
+        state: &SetLattice<Definition>,
+    ) -> SetLattice<Definition> {
         // Control flow edges don't define variables
         state.clone()
     }
@@ -131,16 +140,10 @@ impl TransferFunction<SetLattice<Definition>> for ReachingDefinitionsTransferWit
 }
 
 /// Run reaching definitions analysis on a function
-pub fn analyze_reaching_definitions(func: &FunctionCfg) -> DataflowResults<SetLattice<Definition>> {
-    let analysis = DataflowAnalysis::new(Direction::Forward, ReachingDefinitionsTransfer);
+pub fn analyze_reaching_definitions(
+    func: &FunctionCfg,
+    level: AnalysisLevel,
+) -> DataflowResults<SetLattice<Definition>> {
+    let analysis = DataflowAnalysis::new(level, Direction::Forward, ReachingDefinitionsTransfer);
     analysis.analyze(func)
-}
-
-/// Run reaching definitions analysis with location tracking
-/// This provides more detailed analysis but requires per-block transfer functions
-pub fn analyze_reaching_definitions_detailed(func: &FunctionCfg) -> DataflowResults<SetLattice<Definition>> {
-    // For simplicity, we'll use the basic transfer function for now
-    // In a more sophisticated implementation, you'd create per-block transfer functions
-    // and handle statement indexing properly
-    analyze_reaching_definitions(func)
 }

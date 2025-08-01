@@ -1,9 +1,10 @@
 //! Table modification-reference analysis for tracking table reads and writes per hop.
 //! This analysis determines which tables are read from and written to by each hop.
 
-use crate::cfg::{FunctionCfg, Rvalue, Statement, TableId, ControlFlowEdge};
+use crate::cfg::{ControlFlowEdge, FunctionCfg, Rvalue, Statement, TableId};
 use crate::dataflow::{
-    DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice, TransferFunction,
+    AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
+    TransferFunction,
 };
 
 /// Represents table access information (reads and writes)
@@ -40,7 +41,14 @@ impl TransferFunction<SetLattice<TableAccess>> for TableModRefTransfer {
                 // Check if the assignment reads from a table
                 self.add_table_reads_from_rvalue(rvalue, &mut table_accesses);
             }
-            Statement::TableAssign { table, pk_fields: _, pk_values: _, field: _, value: _, span: _ } => {
+            Statement::TableAssign {
+                table,
+                pk_fields: _,
+                pk_values: _,
+                field: _,
+                value: _,
+                span: _,
+            } => {
                 // Table assignment is a write
                 table_accesses.insert(TableAccess {
                     table_id: *table,
@@ -55,7 +63,11 @@ impl TransferFunction<SetLattice<TableAccess>> for TableModRefTransfer {
         SetLattice::new(table_accesses)
     }
 
-    fn transfer_edge(&self, _edge: &ControlFlowEdge, state: &SetLattice<TableAccess>) -> SetLattice<TableAccess> {
+    fn transfer_edge(
+        &self,
+        _edge: &ControlFlowEdge,
+        state: &SetLattice<TableAccess>,
+    ) -> SetLattice<TableAccess> {
         // Control flow edges don't typically access tables directly
         state.clone()
     }
@@ -71,7 +83,11 @@ impl TransferFunction<SetLattice<TableAccess>> for TableModRefTransfer {
 }
 
 impl TableModRefTransfer {
-    fn add_table_reads_from_rvalue(&self, rvalue: &Rvalue, table_accesses: &mut std::collections::HashSet<TableAccess>) {
+    fn add_table_reads_from_rvalue(
+        &self,
+        rvalue: &Rvalue,
+        table_accesses: &mut std::collections::HashSet<TableAccess>,
+    ) {
         match rvalue {
             Rvalue::Use(_) => {
                 // Simple variable use doesn't access tables
@@ -91,7 +107,9 @@ impl TableModRefTransfer {
             Rvalue::UnaryOp { op: _, operand: _ } => {
                 // Unary operations don't directly access tables
             }
-            Rvalue::BinaryOp { left: _, right: _, .. } => {
+            Rvalue::BinaryOp {
+                left: _, right: _, ..
+            } => {
                 // Binary operations don't directly access tables
             }
         }
@@ -100,7 +118,10 @@ impl TableModRefTransfer {
 
 /// Analyze table modification and reference patterns for a function
 /// Returns the cumulative set of table accesses for each program point
-pub fn analyze_table_mod_ref(func: &FunctionCfg) -> DataflowResults<SetLattice<TableAccess>> {
-    let analysis = DataflowAnalysis::new(Direction::Forward, TableModRefTransfer);
+pub fn analyze_table_mod_ref(
+    func: &FunctionCfg,
+    level: AnalysisLevel,
+) -> DataflowResults<SetLattice<TableAccess>> {
+    let analysis = DataflowAnalysis::new(level, Direction::Forward, TableModRefTransfer);
     analysis.analyze(func)
 }

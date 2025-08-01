@@ -1,5 +1,10 @@
-use crate::cfg::{FieldId, FunctionCfg, Operand, Rvalue, Statement, TableId, ControlFlowEdge, EdgeType, VarId};
-use crate::dataflow::{DataflowAnalysis, DataflowResults, Direction, SetLattice, TransferFunction, Lattice};
+use crate::cfg::{
+    ControlFlowEdge, EdgeType, FieldId, FunctionCfg, Operand, Rvalue, Statement, TableId, VarId,
+};
+use crate::dataflow::{
+    AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
+    TransferFunction,
+};
 
 /// Transfer function for Available Expressions analysis.
 /// Available expressions analysis is a forward analysis that tracks which expressions
@@ -12,10 +17,10 @@ impl AvailableExpressionsTransfer {
     fn is_tracked_expression(rvalue: &Rvalue) -> bool {
         match rvalue {
             Rvalue::Use(_) => false, // Simple variable use is not a "computation"
-            Rvalue::TableAccess { .. } |
-            Rvalue::ArrayAccess { .. } |
-            Rvalue::UnaryOp { .. } |
-            Rvalue::BinaryOp { .. } => true,
+            Rvalue::TableAccess { .. }
+            | Rvalue::ArrayAccess { .. }
+            | Rvalue::UnaryOp { .. }
+            | Rvalue::BinaryOp { .. } => true,
         }
     }
 
@@ -23,9 +28,9 @@ impl AvailableExpressionsTransfer {
     fn expr_uses_var(rvalue: &Rvalue, var_id: VarId) -> bool {
         match rvalue {
             Rvalue::Use(op) => Self::operand_uses_var(op, var_id),
-            Rvalue::TableAccess { pk_values, .. } => {
-                pk_values.iter().any(|pk_value| Self::operand_uses_var(pk_value, var_id))
-            }
+            Rvalue::TableAccess { pk_values, .. } => pk_values
+                .iter()
+                .any(|pk_value| Self::operand_uses_var(pk_value, var_id)),
             Rvalue::ArrayAccess { array, index } => {
                 Self::operand_uses_var(array, var_id) || Self::operand_uses_var(index, var_id)
             }
@@ -80,7 +85,8 @@ impl TransferFunction<SetLattice<Rvalue>> for AvailableExpressionsTransfer {
             }
             Statement::TableAssign { table, field, .. } => {
                 // KILL: Remove any table access to the same table and field
-                available_exprs.retain(|expr| !Self::expr_killed_by_table_assign(expr, *table, *field));
+                available_exprs
+                    .retain(|expr| !Self::expr_killed_by_table_assign(expr, *table, *field));
 
                 // Note: We don't add table assignments as available expressions
                 // since they are not expressions that compute values
@@ -90,7 +96,11 @@ impl TransferFunction<SetLattice<Rvalue>> for AvailableExpressionsTransfer {
         SetLattice::new(available_exprs)
     }
 
-    fn transfer_edge(&self, edge: &ControlFlowEdge, state: &SetLattice<Rvalue>) -> SetLattice<Rvalue> {
+    fn transfer_edge(
+        &self,
+        edge: &ControlFlowEdge,
+        state: &SetLattice<Rvalue>,
+    ) -> SetLattice<Rvalue> {
         match &edge.edge_type {
             EdgeType::ConditionalTrue { .. } | EdgeType::ConditionalFalse { .. } => {
                 // Conditions don't generate new expressions but might use variables
@@ -118,7 +128,10 @@ impl TransferFunction<SetLattice<Rvalue>> for AvailableExpressionsTransfer {
 /// Run available expressions analysis on a function
 /// Available expressions analysis tracks which expressions are available
 /// (computed and operands not redefined) at each program point.
-pub fn analyze_available_expressions(func: &FunctionCfg) -> DataflowResults<SetLattice<Rvalue>> {
-    let analysis = DataflowAnalysis::new(Direction::Forward, AvailableExpressionsTransfer);
+pub fn analyze_available_expressions(
+    func: &FunctionCfg,
+    level: AnalysisLevel,
+) -> DataflowResults<SetLattice<Rvalue>> {
+    let analysis = DataflowAnalysis::new(level, Direction::Forward, AvailableExpressionsTransfer);
     analysis.analyze(func)
 }

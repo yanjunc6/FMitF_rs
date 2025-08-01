@@ -1,4 +1,7 @@
-use super::{DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice, TransferFunction};
+use super::{
+    AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
+    TransferFunction,
+};
 use crate::cfg::{BasicBlock, BasicBlockId, EdgeType, FunctionCfg};
 use std::collections::HashMap;
 
@@ -110,9 +113,19 @@ impl<T: Eq + Hash + Clone + Debug> Lattice for SetLattice<T> {
 }
 
 impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
-    pub fn new(direction: Direction, transfer: T) -> Self {
+    pub fn new(level: AnalysisLevel, direction: Direction, transfer: T) -> Self {
         Self {
             direction,
+            level,
+            transfer,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    pub fn hop_level(direction: Direction, transfer: T) -> Self {
+        Self {
+            direction,
+            level: AnalysisLevel::Hop,
             transfer,
             _phantom: std::marker::PhantomData,
         }
@@ -234,17 +247,30 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                 Direction::Backward => exit[&block_id].clone(),
             }
         } else {
-            // Join all neighbor values
+            // Join all neighbor values, but filter hop exits for hop-level analysis
             let mut result: Option<L> = None;
             for edge in neighbors {
-                let neighbor_value = match self.direction {
-                    Direction::Forward => &exit[&edge.from],
-                    Direction::Backward => &entry[&edge.to],
-                };
-                result = Some(match result {
-                    None => neighbor_value.clone(),
-                    Some(acc) => acc.join(neighbor_value),
-                });
+                // For hop-level analysis, ignore hop exit edges (treat as boundaries)
+                if matches!(self.level, AnalysisLevel::Hop)
+                    && matches!(edge.edge_type, EdgeType::HopExit { .. })
+                {
+                    // Use initial value for hop exit boundaries
+                    let initial = self.transfer.initial_value();
+                    result = Some(match result {
+                        None => initial,
+                        Some(acc) => acc.join(&initial),
+                    });
+                } else {
+                    // Normal data flow
+                    let neighbor_value = match self.direction {
+                        Direction::Forward => &exit[&edge.from],
+                        Direction::Backward => &entry[&edge.to],
+                    };
+                    result = Some(match result {
+                        None => neighbor_value.clone(),
+                        Some(acc) => acc.join(neighbor_value),
+                    });
+                }
             }
             result.unwrap_or_else(|| L::bottom().unwrap_or_else(|| self.transfer.initial_value()))
         }

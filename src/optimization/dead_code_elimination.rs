@@ -1,10 +1,10 @@
 use crate::cfg::{FunctionCfg, Operand, Rvalue, Statement, VarId};
-use crate::dataflow::analyze_live_variables;
+use crate::dataflow::{analyze_live_variables, AnalysisLevel};
 use crate::optimization::OptimizationPass;
 use std::collections::HashSet;
 
 /// Dead Code Elimination optimization pass
-/// 
+///
 /// This pass removes assignments to variables that are never used (dead code).
 /// It uses backward live variables analysis to determine which variables are live.
 pub struct DeadCodeEliminationPass;
@@ -17,7 +17,7 @@ impl DeadCodeEliminationPass {
     /// Get all variables used in an rvalue
     fn get_used_vars_from_rvalue(&self, rvalue: &Rvalue) -> HashSet<VarId> {
         let mut used_vars = HashSet::new();
-        
+
         match rvalue {
             Rvalue::Use(operand) => {
                 if let Operand::Var(var_id) = operand {
@@ -53,7 +53,7 @@ impl DeadCodeEliminationPass {
                 }
             }
         }
-        
+
         used_vars
     }
 
@@ -74,7 +74,7 @@ impl OptimizationPass for DeadCodeEliminationPass {
 
     fn optimize_function(&self, func: &mut FunctionCfg) -> bool {
         // Run live variables analysis
-        let liveness_results = analyze_live_variables(func);
+        let liveness_results = analyze_live_variables(func, AnalysisLevel::Function);
         let mut changed = false;
 
         // Process each block
@@ -102,7 +102,7 @@ impl OptimizationPass for DeadCodeEliminationPass {
                         if current_live.contains(var) {
                             // Keep this statement
                             statements_to_keep.push(stmt.clone());
-                            
+
                             // Update liveness: remove defined variable, add used variables
                             current_live.remove(var);
                             let used_vars = self.get_used_vars_from_rvalue(rvalue);
@@ -112,10 +112,10 @@ impl OptimizationPass for DeadCodeEliminationPass {
                             // But we still need to consider side effects in the rvalue
                             // For now, we only eliminate pure assignments
                             // TODO: Could be more aggressive with pure expressions
-                            
+
                             // Check if rvalue has side effects (like table access)
                             let has_side_effects = matches!(rvalue, Rvalue::TableAccess { .. });
-                            
+
                             if has_side_effects {
                                 // Keep statement due to side effects
                                 statements_to_keep.push(stmt.clone());
@@ -127,10 +127,12 @@ impl OptimizationPass for DeadCodeEliminationPass {
                             }
                         }
                     }
-                    Statement::TableAssign { pk_values, value, .. } => {
+                    Statement::TableAssign {
+                        pk_values, value, ..
+                    } => {
                         // Table assignments have side effects, always keep them
                         statements_to_keep.push(stmt.clone());
-                        
+
                         // Add used variables to live set
                         for pk_value in pk_values {
                             let used_vars = self.get_used_vars_from_operand(pk_value);
