@@ -33,6 +33,21 @@ impl<T: Eq + Hash + Clone + Debug> SetLattice<T> {
             is_top: true,
         }
     }
+
+    /// Get a reference to the underlying set.
+    /// Returns None if this is the top element.
+    pub fn as_set(&self) -> Option<&HashSet<T>> {
+        if self.is_top {
+            None
+        } else {
+            Some(&self.set)
+        }
+    }
+
+    /// Check if this is the top element
+    pub fn is_top(&self) -> bool {
+        self.is_top
+    }
 }
 
 impl<T: Eq + Hash + Clone + Debug> Lattice for SetLattice<T> {

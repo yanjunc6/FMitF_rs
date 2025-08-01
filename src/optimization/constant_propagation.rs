@@ -1,13 +1,11 @@
-use crate::cfg::{Constant, FunctionCfg, Operand, Rvalue, Statement};
+use crate::cfg::{BasicBlockId, Constant, FunctionCfg, Operand, Rvalue, Statement};
 use crate::dataflow::{analyze_reaching_definitions, ReachingDefinition};
 use crate::optimization::OptimizationPass;
-use std::collections::HashMap;
-use std::ptr::NonNull;
+use std::collections::{HashMap, HashSet};
 
 /// Constant Propagation optimization pass
 pub struct ConstantPropagationPass;
 
-// Implement the OptimizationPass trait
 impl OptimizationPass for ConstantPropagationPass {
     fn name(&self) -> &'static str {
         "Constant Propagation"
@@ -17,50 +15,68 @@ impl OptimizationPass for ConstantPropagationPass {
         let reaching_defs_results = analyze_reaching_definitions(func);
         let mut changed = false;
 
-        // Build a map from statement sites to their constant values (if any)
-        let mut stmt_to_constant: HashMap<NonNull<Statement>, Constant> = HashMap::new();
+        // Build a map from (block_id, stmt_index) to their constant values (if any)
+        let mut definition_to_constant: HashMap<(BasicBlockId, usize), Constant> = HashMap::new();
 
-        // First pass: collect constant definitions
-        for (_, block) in func.blocks.iter() {
-            for stmt in &block.statements {
+        // First pass: collect constant definitions from all blocks
+        for (block_id, block) in func.blocks.iter() {
+            for (stmt_index, stmt) in block.statements.iter().enumerate() {
                 if let Statement::Assign { rvalue, .. } = stmt {
                     if let Some(constant) = self.extract_constant(rvalue) {
-                        let stmt_ptr = NonNull::from(stmt);
-                        stmt_to_constant.insert(stmt_ptr, constant);
+                        definition_to_constant.insert((block_id, stmt_index), constant);
                     }
                 }
             }
         }
 
-        // Second pass: propagate constants
+        // Second pass: propagate constants using reaching definitions
         for (block_id, block) in func.blocks.iter_mut() {
-            let empty_set = std::collections::HashSet::new();
-            let reaching_defs_at_entry = reaching_defs_results
-                .entry
-                .get(&block_id)
-                .map(|set| &set.set)
-                .unwrap_or(&empty_set);
+            // Get reaching definitions at entry of this block
+            let reaching_defs_at_entry = if let Some(lattice) = reaching_defs_results.entry.get(&block_id) {
+                if let Some(set) = lattice.as_set() {
+                    set
+                } else {
+                    &HashSet::new()
+                }
+            } else {
+                &HashSet::new()
+            };
 
+            let mut current_reaching_defs = reaching_defs_at_entry.clone();
             let mut new_statements = Vec::new();
 
-            for stmt in &block.statements {
+            for (stmt_index, stmt) in block.statements.iter().enumerate() {
                 match stmt {
                     Statement::Assign { var, rvalue, span } => {
                         let new_rvalue = self.propagate_in_rvalue(
                             rvalue,
-                            reaching_defs_at_entry,
-                            &stmt_to_constant,
+                            &current_reaching_defs,
+                            &definition_to_constant,
                         );
 
                         if new_rvalue != *rvalue {
                             changed = true;
                         }
 
-                        new_statements.push(Statement::Assign {
+                        let new_stmt = Statement::Assign {
                             var: *var,
-                            rvalue: new_rvalue,
+                            rvalue: new_rvalue.clone(),
                             span: span.clone(),
+                        };
+                        new_statements.push(new_stmt);
+
+                        // Update reaching definitions: kill old definitions of var, add new one
+                        current_reaching_defs.retain(|def| def.var_id != *var);
+                        current_reaching_defs.insert(ReachingDefinition {
+                            var_id: *var,
+                            block_id,
+                            stmt_index,
                         });
+
+                        // If this is a new constant definition, record it
+                        if let Some(constant) = self.extract_constant(&new_rvalue) {
+                            definition_to_constant.insert((block_id, stmt_index), constant);
+                        }
                     }
                     Statement::TableAssign {
                         table,
@@ -75,18 +91,17 @@ impl OptimizationPass for ConstantPropagationPass {
                             .map(|pk_value| {
                                 self.propagate_in_operand(
                                     pk_value,
-                                    reaching_defs_at_entry,
-                                    &stmt_to_constant,
+                                    &current_reaching_defs,
+                                    &definition_to_constant,
                                 )
                             })
                             .collect();
                         let new_value = self.propagate_in_operand(
                             value,
-                            reaching_defs_at_entry,
-                            &stmt_to_constant,
+                            &current_reaching_defs,
+                            &definition_to_constant,
                         );
 
-                        // Check if any primary key values changed
                         let pk_values_changed = new_pk_values
                             .iter()
                             .zip(pk_values.iter())
@@ -132,12 +147,12 @@ impl ConstantPropagationPass {
     fn propagate_in_rvalue(
         &self,
         rvalue: &Rvalue,
-        reaching_defs: &std::collections::HashSet<ReachingDefinition>,
-        stmt_to_constant: &HashMap<NonNull<Statement>, Constant>,
+        reaching_defs: &HashSet<ReachingDefinition>,
+        definition_to_constant: &HashMap<(BasicBlockId, usize), Constant>,
     ) -> Rvalue {
         match rvalue {
             Rvalue::Use(operand) => {
-                Rvalue::Use(self.propagate_in_operand(operand, reaching_defs, stmt_to_constant))
+                Rvalue::Use(self.propagate_in_operand(operand, reaching_defs, definition_to_constant))
             }
             Rvalue::TableAccess {
                 table,
@@ -150,14 +165,23 @@ impl ConstantPropagationPass {
                 pk_values: pk_values
                     .iter()
                     .map(|pk_value| {
-                        self.propagate_in_operand(pk_value, reaching_defs, stmt_to_constant)
+                        self.propagate_in_operand(pk_value, reaching_defs, definition_to_constant)
                     })
                     .collect(),
                 field: *field,
             },
+            Rvalue::ArrayAccess { array, index } => {
+                let new_array = self.propagate_in_operand(array, reaching_defs, definition_to_constant);
+                let new_index = self.propagate_in_operand(index, reaching_defs, definition_to_constant);
+                
+                Rvalue::ArrayAccess {
+                    array: new_array,
+                    index: new_index,
+                }
+            }
             Rvalue::UnaryOp { op, operand } => {
                 let new_operand =
-                    self.propagate_in_operand(operand, reaching_defs, stmt_to_constant);
+                    self.propagate_in_operand(operand, reaching_defs, definition_to_constant);
 
                 // Try to evaluate the operation if operand is now a constant
                 if let Operand::Const(c) = &new_operand {
@@ -172,8 +196,8 @@ impl ConstantPropagationPass {
                 }
             }
             Rvalue::BinaryOp { op, left, right } => {
-                let new_left = self.propagate_in_operand(left, reaching_defs, stmt_to_constant);
-                let new_right = self.propagate_in_operand(right, reaching_defs, stmt_to_constant);
+                let new_left = self.propagate_in_operand(left, reaching_defs, definition_to_constant);
+                let new_right = self.propagate_in_operand(right, reaching_defs, definition_to_constant);
 
                 // Try to evaluate the operation if both operands are now constants
                 if let (Operand::Const(c1), Operand::Const(c2)) = (&new_left, &new_right) {
@@ -195,8 +219,8 @@ impl ConstantPropagationPass {
     fn propagate_in_operand(
         &self,
         operand: &Operand,
-        reaching_defs: &std::collections::HashSet<ReachingDefinition>,
-        stmt_to_constant: &HashMap<NonNull<Statement>, Constant>,
+        reaching_defs: &HashSet<ReachingDefinition>,
+        definition_to_constant: &HashMap<(BasicBlockId, usize), Constant>,
     ) -> Operand {
         match operand {
             Operand::Var(var_id) => {
@@ -204,7 +228,7 @@ impl ConstantPropagationPass {
                 let constant_defs: Vec<&Constant> = reaching_defs
                     .iter()
                     .filter(|def| def.var_id == *var_id)
-                    .filter_map(|def| stmt_to_constant.get(&def.site))
+                    .filter_map(|def| definition_to_constant.get(&(def.block_id, def.stmt_index)))
                     .collect();
 
                 // Only propagate if there's exactly one constant definition
