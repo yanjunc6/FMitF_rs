@@ -629,6 +629,18 @@ impl AstPrinter {
                 }
                 write!(writer, "}}")?;
             }
+            ExpressionKind::ArrayLiteral { elements, .. } => {
+                write!(writer, "{{")?;
+                for (i, element_id) in elements.iter().enumerate() {
+                    if i > 0 {
+                        write!(writer, ", ")?;
+                    }
+                    if let Some(element_expr) = program.expressions.get(*element_id) {
+                        self.print_expression(element_expr, program, writer)?;
+                    }
+                }
+                write!(writer, "}}")?;
+            }
             ExpressionKind::UnaryOp { op, expr, .. } => {
                 write!(writer, "{}", self.format_unary_op(op))?;
                 if let Some(inner_expr) = program.expressions.get(*expr) {

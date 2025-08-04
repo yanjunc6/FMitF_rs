@@ -12,6 +12,7 @@
 //! - Validation of control flow constructs (loops, returns, aborts).
 //! - Table access and primary key validation for partition-aware operations.
 //! - Partition function validation and node assignment checking.
+//! - Constant expression validation using the analysis::constant_checker module.
 //!
 //! # Usage
 //!
@@ -25,6 +26,7 @@
 //! analyze_program(&program).expect("Semantic analysis failed");
 //! ```
 
+use crate::ast::analysis::ConstantChecker;
 use crate::ast::*;
 
 /// The `SemanticAnalyzer` struct performs semantic analysis on a given program.
@@ -34,6 +36,7 @@ use crate::ast::*;
 pub struct SemanticAnalyzer<'p> {
     program: &'p Program,
     errors: Vec<SpannedError>,
+    constant_checker: ConstantChecker<'p>,
 
     // Current context
     current_function: Option<FunctionId>,
@@ -49,6 +52,7 @@ impl<'p> SemanticAnalyzer<'p> {
         Self {
             program,
             errors: Vec::new(),
+            constant_checker: ConstantChecker::new(program),
             current_function: None,
             current_hop: None,
             return_type: None,
@@ -292,6 +296,56 @@ impl<'p> SemanticAnalyzer<'p> {
         let hop = &self.program.hops[hop_id];
 
         self.current_hop = Some(hop_id);
+
+        // Check hop type constraints
+        match &hop.hop_type {
+            HopType::Simple => {
+                // No additional validation needed for simple hops
+            }
+            HopType::ForLoop { start, end, .. } => {
+                // Validate that start and end are constant expressions
+                if !self.constant_checker.is_constant_expression(*start) {
+                    self.error_at(
+                        &hop.span,
+                        AstError::NonConstantExpression {
+                            context: "hop loop start value".to_string(),
+                        },
+                    );
+                }
+                if !self.constant_checker.is_constant_expression(*end) {
+                    self.error_at(
+                        &hop.span,
+                        AstError::NonConstantExpression {
+                            context: "hop loop end value".to_string(),
+                        },
+                    );
+                }
+
+                // Validate that both are integer expressions
+                if let Some(start_type) = self.check_expression(*start) {
+                    if !self.is_int_type(&start_type) {
+                        self.error_at(
+                            &hop.span,
+                            AstError::TypeMismatch {
+                                expected: TypeName::Int,
+                                found: start_type,
+                            },
+                        );
+                    }
+                }
+                if let Some(end_type) = self.check_expression(*end) {
+                    if !self.is_int_type(&end_type) {
+                        self.error_at(
+                            &hop.span,
+                            AstError::TypeMismatch {
+                                expected: TypeName::Int,
+                                found: end_type,
+                            },
+                        );
+                    }
+                }
+            }
+        }
 
         // Check each statement in the hop
         for stmt_id in &hop.statements {
@@ -589,6 +643,38 @@ impl<'p> SemanticAnalyzer<'p> {
                 );
             }
         }
+
+        // Validate type constraints (e.g., array sizes must be constants)
+        self.validate_type_constraints(&var_decl.var_type, span);
+    }
+
+    /// Validate constraints on types (e.g., array sizes must be constants)
+    fn validate_type_constraints(&mut self, type_name: &TypeName, span: &Span) {
+        match type_name {
+            TypeName::Array { element_type, size } => {
+                // Recursively validate the element type
+                self.validate_type_constraints(element_type, span);
+
+                // For fixed-size arrays, we would need the size expression to validate
+                // Currently, the AST stores the computed size, but we'd need the original
+                // expression to validate it's constant. This is a limitation of the current design.
+                if let Some(array_size) = size {
+                    if *array_size == 0 {
+                        self.error_at(
+                            span,
+                            AstError::ParseError("Array size must be greater than 0".to_string()),
+                        );
+                    }
+                }
+            }
+            TypeName::Table(_)
+            | TypeName::Int
+            | TypeName::Float
+            | TypeName::String
+            | TypeName::Bool => {
+                // No additional constraints for these types
+            }
+        }
     }
 
     /// Helper function to check if a type is boolean
@@ -828,6 +914,24 @@ impl<'p> SemanticAnalyzer<'p> {
                 }
                 // For now, return None - we'd need more context to determine record type
                 None
+            }
+            ExpressionKind::ArrayLiteral { elements, .. } => {
+                // Check each element expression and try to infer common type
+                let mut element_type = None;
+                for element_id in elements {
+                    if let Some(elem_type) = self.check_expression(*element_id) {
+                        if element_type.is_none() {
+                            element_type = Some(elem_type);
+                        }
+                        // For now, we don't enforce type consistency across elements
+                        // This could be enhanced later
+                    }
+                }
+                // Return array type if we can infer it
+                element_type.map(|elem_type| TypeName::Array {
+                    element_type: Box::new(elem_type),
+                    size: Some(elements.len()),
+                })
             }
             ExpressionKind::UnaryOp {
                 op,

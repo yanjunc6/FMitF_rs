@@ -12,7 +12,7 @@ string_literal  = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 bool_literal    = @{ "true" | "false" }
 
 basic_type = { "int" | "float" | "string" | "bool" }
-array_type = { basic_type ~ "[" ~ integer_literal? ~ "]" }
+array_type = { basic_type ~ "[" ~ expression? ~ "]" }
 type_name = { array_type | basic_type }
 ret_type = { type_name | "void" }
 primary_keyword = { "primary" }
@@ -20,7 +20,15 @@ node_keyword = { "node" }
 
 // Grammar Start
 program = {
-    SOI ~ partition_declaration* ~ table_declaration* ~ const_declaration* ~ function_declaration* ~ EOI
+    SOI ~ top_level_declaration* ~ EOI
+}
+
+// Top-level declarations in any order
+top_level_declaration = {
+    partition_declaration
+  | table_declaration
+  | const_declaration
+  | function_declaration
 }
 
 // Partition Declarations (function-like with typed parameters, always returns int)
@@ -74,13 +82,12 @@ hop_block = {
 }
 
 hops_for_loop = {
-    "hops" ~ "for" ~ "(" ~ type_name ~ identifier ~ "=" ~ expression ~ ";" ~ expression ~ ";" ~ expression ~ ")" ~ block
+    "hops" ~ "for" ~ type_name ~ identifier ~ "=" ~ expression ~ "to" ~ expression ~ block
 }
 
 // Statements
 statement = {
     var_decl_statement
-  | assignment_statement
   | if_statement
   | for_statement
   | while_statement
@@ -88,6 +95,7 @@ statement = {
   | abort_statement
   | break_statement
   | continue_statement
+  | assignment_statement
   | empty_statement
 }
 
@@ -199,6 +207,7 @@ primary = {
   | table_field_access
   | table_access
   | array_access
+  | array_literal
   | record_literal
   | float_literal
   | integer_literal
@@ -217,6 +226,10 @@ table_access = {
 
 array_access = {
     identifier ~ "[" ~ expression ~ "]"
+}
+
+array_literal = {
+    "{" ~ expression_list? ~ "}"
 }
 
 record_literal = {

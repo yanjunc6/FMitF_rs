@@ -182,7 +182,8 @@ impl OutputManager {
     fn write_ast_dump(&self, result: &CompilationResult, path: &PathBuf) -> Result<(), String> {
         let ast_content = format!("{:#?}", result.ast_program);
         let file_path = path.join("ast_dump.txt");
-        fs::write(file_path, ast_content).map_err(|e| format!("Failed to write AST dump: {}", e))?;
+        fs::write(file_path, ast_content)
+            .map_err(|e| format!("Failed to write AST dump: {}", e))?;
         Ok(())
     }
 
@@ -190,7 +191,8 @@ impl OutputManager {
     fn write_cfg_dump(&self, result: &CompilationResult, path: &PathBuf) -> Result<(), String> {
         let cfg_content = format!("{:#?}", result.cfg_program);
         let file_path = path.join("cfg_dump.txt");
-        fs::write(file_path, cfg_content).map_err(|e| format!("Failed to write CFG dump: {}", e))?;
+        fs::write(file_path, cfg_content)
+            .map_err(|e| format!("Failed to write CFG dump: {}", e))?;
         Ok(())
     }
 
@@ -212,7 +214,8 @@ impl OutputManager {
             .print_to_string(&result.ast_program)
             .map_err(|e| format!("Failed to pretty-print AST: {}", e))?;
         let file_path = path.join("ast_pretty.txt");
-        fs::write(file_path, ast_content).map_err(|e| format!("Failed to write AST pretty: {}", e))?;
+        fs::write(file_path, ast_content)
+            .map_err(|e| format!("Failed to write AST pretty: {}", e))?;
         Ok(())
     }
 
@@ -225,7 +228,8 @@ impl OutputManager {
             .print_to_string(&result.cfg_program)
             .map_err(|e| format!("Failed to pretty-print CFG: {}", e))?;
         let file_path = path.join("cfg_pretty.txt");
-        fs::write(file_path, cfg_content).map_err(|e| format!("Failed to write CFG pretty: {}", e))?;
+        fs::write(file_path, cfg_content)
+            .map_err(|e| format!("Failed to write CFG pretty: {}", e))?;
         Ok(())
     }
 
@@ -266,7 +270,11 @@ impl OutputManager {
     /// Write summary markdown file
     fn write_summary(&self, result: &CompilationResult, path: &PathBuf) -> Result<(), String> {
         let stats = result.get_stats();
-        let status = if result.success { "✅ SUCCESS" } else { "❌ FAILED" };
+        let status = if result.success {
+            "✅ SUCCESS"
+        } else {
+            "❌ FAILED"
+        };
 
         let summary_content = format!(
             r#"# FMitF Compilation Summary

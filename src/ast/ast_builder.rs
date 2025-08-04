@@ -63,6 +63,54 @@ impl AstBuilder {
 
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
+                Rule::top_level_declaration => {
+                    // Handle the top-level declaration wrapper
+                    for decl_pair in inner_pair.into_inner() {
+                        match decl_pair.as_rule() {
+                            Rule::partition_declaration => {
+                                match self.build_partition_declaration(decl_pair) {
+                                    Ok(partition_id) => {
+                                        self.program.root_partitions.push(partition_id);
+                                    }
+                                    Err(mut errs) => errors.append(&mut errs),
+                                }
+                            }
+                            Rule::table_declaration => {
+                                match self.build_table_declaration(decl_pair) {
+                                    Ok(table_id) => {
+                                        self.program.root_tables.push(table_id);
+                                    }
+                                    Err(mut errs) => errors.append(&mut errs),
+                                }
+                            }
+                            Rule::const_declaration => {
+                                match self.build_const_declaration(decl_pair) {
+                                    Ok(const_id) => {
+                                        self.program.root_constants.push(const_id);
+                                    }
+                                    Err(mut errs) => errors.append(&mut errs),
+                                }
+                            }
+                            Rule::function_declaration => {
+                                match self.build_function_declaration(decl_pair) {
+                                    Ok(function_id) => {
+                                        self.program.root_functions.push(function_id);
+                                    }
+                                    Err(mut errs) => errors.append(&mut errs),
+                                }
+                            }
+                            _ => {
+                                errors.push(SpannedError {
+                                    error: AstError::ParseError(format!(
+                                        "Unexpected rule in top_level_declaration: {:?}",
+                                        decl_pair.as_rule()
+                                    )),
+                                    span: Some(Span::from_pest(decl_pair.as_span())),
+                                });
+                            }
+                        }
+                    }
+                }
                 Rule::partition_declaration => match self.build_partition_declaration(inner_pair) {
                     Ok(partition_id) => {
                         self.program.root_partitions.push(partition_id);
@@ -546,13 +594,22 @@ impl AstBuilder {
                 Rule::basic_type => {
                     base = Some(self.build_basic_type(inner_pair)?);
                 }
-                Rule::integer_literal => {
-                    size = Some(inner_pair.as_str().parse::<usize>().map_err(|_| {
-                        vec![SpannedError {
-                            error: AstError::ParseError("Invalid array size".to_string()),
-                            span: Some(Span::from_pest(inner_pair.as_span())),
-                        }]
-                    })?);
+                Rule::expression => {
+                    // Parse the expression for array size
+                    let expr_id = self.build_expression(inner_pair)?;
+
+                    // Try to evaluate simple integer literals at parse time
+                    if let Some(expr) = self.program.expressions.get(expr_id) {
+                        match &expr.node {
+                            ExpressionKind::IntLit(val) => {
+                                size = Some(*val as usize);
+                            }
+                            _ => {
+                                // For non-literal expressions, defer size resolution to semantic analysis
+                                size = None;
+                            }
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -1511,6 +1568,9 @@ impl AstBuilder {
                 Rule::array_access => {
                     return self.build_array_access_expression(inner_pair);
                 }
+                Rule::array_literal => {
+                    return self.build_array_literal(inner_pair);
+                }
                 Rule::record_literal => {
                     return self.build_record_literal(inner_pair);
                 }
@@ -1676,6 +1736,32 @@ impl AstBuilder {
         let expr = Spanned {
             node: ExpressionKind::RecordLiteral {
                 fields,
+                resolved_type: None,
+            },
+            span,
+        };
+
+        Ok(self.program.expressions.alloc(expr))
+    }
+
+    /// Builds an array literal.
+    fn build_array_literal(&mut self, pair: Pair<Rule>) -> Results<ExpressionId> {
+        let span = Span::from_pest(pair.as_span());
+        let mut elements = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            if inner_pair.as_rule() == Rule::expression_list {
+                for expr_pair in inner_pair.into_inner() {
+                    if expr_pair.as_rule() == Rule::expression {
+                        elements.push(self.build_expression(expr_pair)?);
+                    }
+                }
+            }
+        }
+
+        let expr = Spanned {
+            node: ExpressionKind::ArrayLiteral {
+                elements,
                 resolved_type: None,
             },
             span,
