@@ -1,9 +1,16 @@
 use crate::cfg::{FunctionId, HopId};
-use id_arena::{Arena, Id};
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 mod sc_graph_builder;
 pub use sc_graph_builder::SCGraphBuilder;
+
+/// Represents a unique node identifier in the SC-Graph.
+/// Since HopId is only unique within a function, we need both FunctionId and HopId.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SCGraphNodeId {
+    pub function_id: FunctionId,
+    pub hop_id: HopId,
+}
 
 /// Represents an edge type in the SC-Graph.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -16,23 +23,12 @@ pub enum EdgeType {
     C,
 }
 
-/// Represents a node in the SC-Graph, which corresponds to a Hop in the CFG.
-#[derive(Debug, Clone)]
-pub struct SCGraphNode {
-    /// The ID of the corresponding Hop in the CFG.
-    pub hop_id: HopId,
-    /// The ID of the CFG Function (transaction) this hop belongs to.
-    pub function_id: FunctionId,
-}
-
-pub type SCGraphNodeId = Id<SCGraphNode>;
-
 /// Represents an edge in the SC-Graph.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SCGraphEdge {
-    /// The source SCGraphNodeId.
+    /// The source node.
     pub source: SCGraphNodeId,
-    /// The target SCGraphNodeId.
+    /// The target node.
     pub target: SCGraphNodeId,
     /// The type of the edge (S or C).
     pub edge_type: EdgeType,
@@ -41,7 +37,7 @@ pub struct SCGraphEdge {
 /// The Serializability Conflict Graph.
 /// 
 /// The SC-Graph contains:
-/// - Nodes: Each node represents a hop from the CFG
+/// - Nodes: Each node is represented by a unique (FunctionId, HopId) pair from the CFG
 /// - S-edges (directed): Connect hops that are sequentially executed within the same transaction
 /// - C-edges (undirected): Connect hops from different transactions that have conflicting table accesses
 ///
@@ -50,10 +46,8 @@ pub struct SCGraphEdge {
 /// - Both hops write to the same table
 #[derive(Debug)]
 pub struct SCGraph {
-    /// Arena storing all nodes (hops) in the SC-Graph.
-    pub nodes: Arena<SCGraphNode>,
+    /// Set of all node IDs that are nodes in the SC-Graph.
+    pub nodes: HashSet<SCGraphNodeId>,
     /// List of all edges in the SC-Graph.
     pub edges: Vec<SCGraphEdge>,
-    /// Mapping from CFG HopId to SCGraphNodeId for efficient lookups.
-    hop_to_node: HashMap<HopId, SCGraphNodeId>,
 }

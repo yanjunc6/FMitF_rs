@@ -6,23 +6,23 @@ pub mod cli;
 pub mod dataflow;
 pub mod optimization;
 pub mod pretty;
-pub mod runtime;
+// pub mod runtime;
 pub mod sc_graph;
-pub mod verification;
+// pub mod verification;
 // Re-export AST functionality
 pub use ast::{parse_and_analyze, Program as AstProgram, Span as AstSpan};
 pub use ast::{AstError, Results as AstResults, SpannedError as AstSpannedError};
 
 // Re-export pretty printing
-pub use pretty::ast_printer::{print_program, PrintMode, PrintOptions};
-pub use pretty::cfg_printer::{print_cfg, CfgFormat, CfgPrintOptions};
-pub use pretty::sc_graph_printer::{print_sc_graph, SCGraphFormat, SCGraphPrintOptions};
+pub use pretty::{print_program, PrintMode, PrintOptions};
+// pub use pretty::cfg_printer::{print_cfg, CfgFormat, CfgPrintOptions};
+// pub use pretty::sc_graph_printer::{print_sc_graph, SCGraphFormat, SCGraphPrintOptions};
 
 // Re-export CFG functionality
 pub use cfg::CfgProgram; // This is the main CFG structure
 pub use cfg::{
     BasicBlockId as CfgBasicBlockId, CfgBuilder, FieldId as CfgFieldId,
-    FunctionId as CfgFunctionId, HopId as CfgHopId, NodeId as CfgNodeId, TableId as CfgTableId,
+    FunctionId as CfgFunctionId, HopId as CfgHopId, TableId as CfgTableId,
     VarId as CfgVarId,
 };
 

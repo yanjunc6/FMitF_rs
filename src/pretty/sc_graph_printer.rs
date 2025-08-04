@@ -1,20 +1,8 @@
 use super::PrettyPrinter;
-use crate::sc_graph::{SCGraph, SCGraphNode, SCGraphEdge, EdgeType};
+use crate::sc_graph::{SCGraph, SCGraphEdge, SCGraphNodeId, EdgeType};
 use std::io::Write;
 use std::collections::HashMap;
 
-///         if self.show_details {
-            let source_hop = sc_graph.nodes[edge.source].hop_id;
-            let target_hop = sc_graph.nodes[edge.target].hop_id;
-            let source_func = sc_graph.nodes[edge.source].function_id;
-            let target_func = sc_graph.nodes[edge.target].function_id;
-            
-            self.write_indent(writer, level + 1)?;
-            writeln!(writer, "(hop_{:?} ↔ hop_{:?} across functions {:?}↔{:?})", 
-                     source_hop, target_hop, source_func, target_func)?;
-        }nter for SC-Graph structures.
-/// Provides human-readable output of the serializability conflict graph.
-/// 
 /// This printer correctly handles:
 /// - S-edges as directed edges (→)
 /// - C-edges as undirected edges (↔)
@@ -66,8 +54,8 @@ impl SCGraphPrinter {
         if nodes_count > 0 {
             self.write_indent(writer, 1)?;
             writeln!(writer, "Nodes:")?;
-            for (node_id, node) in sc_graph.nodes.iter() {
-                self.print_node(node, node_id, writer, 2)?;
+            for &node_id in &sc_graph.nodes {
+                self.print_node(node_id, writer, 2)?;
             }
             writeln!(writer)?;
         }
@@ -112,60 +100,49 @@ impl SCGraphPrinter {
     }
 
     /// Print a single node with its information
-    fn print_node(&self, node: &SCGraphNode, node_id: crate::sc_graph::SCGraphNodeId, writer: &mut dyn Write, level: usize) -> std::io::Result<()> {
+    fn print_node(&self, node_id: SCGraphNodeId, writer: &mut dyn Write, level: usize) -> std::io::Result<()> {
         self.write_indent(writer, level)?;
         if self.show_details {
-            writeln!(writer, "node_{:?}: hop_{:?} (function_{:?})", 
-                     node_id, node.hop_id, node.function_id)?;
+            writeln!(writer, "hop_{:?} (function_{:?})", node_id.hop_id, node_id.function_id)?;
         } else {
-            writeln!(writer, "node_{:?} (hop_{:?})", node_id, node.hop_id)?;
+            writeln!(writer, "hop_{:?}", node_id.hop_id)?;
         }
         Ok(())
     }
 
     /// Print an S-edge (directed sequential edge)
-    fn print_s_edge(&self, edge: &SCGraphEdge, sc_graph: &SCGraph, writer: &mut dyn Write, level: usize) -> std::io::Result<()> {
+    fn print_s_edge(&self, edge: &SCGraphEdge, _sc_graph: &SCGraph, writer: &mut dyn Write, level: usize) -> std::io::Result<()> {
         self.write_indent(writer, level)?;
         
         if self.use_symbols {
-            writeln!(writer, "node_{:?} → node_{:?}", edge.source, edge.target)?;
+            writeln!(writer, "hop_{:?} → hop_{:?}", edge.source.hop_id, edge.target.hop_id)?;
         } else {
-            writeln!(writer, "node_{:?} -> node_{:?}", edge.source, edge.target)?;
+            writeln!(writer, "hop_{:?} -> hop_{:?}", edge.source.hop_id, edge.target.hop_id)?;
         }
         
         if self.show_details {
-            let source_hop = sc_graph.nodes[edge.source].hop_id;
-            let target_hop = sc_graph.nodes[edge.target].hop_id;
-            let source_func = sc_graph.nodes[edge.source].function_id;
-            let target_func = sc_graph.nodes[edge.target].function_id;
-            
             self.write_indent(writer, level + 1)?;
             writeln!(writer, "(hop_{:?} → hop_{:?} within functions {:?}→{:?})", 
-                     source_hop, target_hop, source_func, target_func)?;
+                     edge.source.hop_id, edge.target.hop_id, edge.source.function_id, edge.target.function_id)?;
         }
         
         Ok(())
     }
 
     /// Print a C-edge (undirected conflict edge)
-    fn print_c_edge(&self, edge: &SCGraphEdge, sc_graph: &SCGraph, writer: &mut dyn Write, level: usize) -> std::io::Result<()> {
+    fn print_c_edge(&self, edge: &SCGraphEdge, _sc_graph: &SCGraph, writer: &mut dyn Write, level: usize) -> std::io::Result<()> {
         self.write_indent(writer, level)?;
         
         if self.use_symbols {
-            writeln!(writer, "node_{:?} ↔ node_{:?}", edge.source, edge.target)?;
+            writeln!(writer, "hop_{:?} ↔ hop_{:?}", edge.source.hop_id, edge.target.hop_id)?;
         } else {
-            writeln!(writer, "node_{:?} <-> node_{:?}", edge.source, edge.target)?;
+            writeln!(writer, "hop_{:?} <-> hop_{:?}", edge.source.hop_id, edge.target.hop_id)?;
         }
         
         if self.show_details {
-            let source_hop = sc_graph.get_hop_id(edge.source);
-            let target_hop = sc_graph.get_hop_id(edge.target);
-            let source_func = sc_graph.get_function_id(edge.source);
-            let target_func = sc_graph.get_function_id(edge.target);
-            
             self.write_indent(writer, level + 1)?;
             writeln!(writer, "(hop_{:?} ↔ hop_{:?} between function_{:?} and function_{:?})", 
-                     source_hop, target_hop, source_func, target_func)?;
+                     edge.source.hop_id, edge.target.hop_id, edge.source.function_id, edge.target.function_id)?;
         }
         
         Ok(())
@@ -177,9 +154,9 @@ impl SCGraphPrinter {
         writeln!(writer, "Adjacency Information:")?;
         
         // Build adjacency maps
-        let mut s_outgoing: HashMap<crate::sc_graph::SCGraphNodeId, Vec<crate::sc_graph::SCGraphNodeId>> = HashMap::new();
-        let mut s_incoming: HashMap<crate::sc_graph::SCGraphNodeId, Vec<crate::sc_graph::SCGraphNodeId>> = HashMap::new();
-        let mut c_adjacent: HashMap<crate::sc_graph::SCGraphNodeId, Vec<crate::sc_graph::SCGraphNodeId>> = HashMap::new();
+        let mut s_outgoing: HashMap<SCGraphNodeId, Vec<SCGraphNodeId>> = HashMap::new();
+        let mut s_incoming: HashMap<SCGraphNodeId, Vec<SCGraphNodeId>> = HashMap::new();
+        let mut c_adjacent: HashMap<SCGraphNodeId, Vec<SCGraphNodeId>> = HashMap::new();
         
         for edge in &sc_graph.edges {
             match edge.edge_type {
@@ -194,9 +171,9 @@ impl SCGraphPrinter {
             }
         }
         
-        for (node_id, _node) in sc_graph.nodes.iter() {
+        for &node_id in &sc_graph.nodes {
             self.write_indent(writer, 2)?;
-            writeln!(writer, "node_{:?}:", node_id)?;
+            writeln!(writer, "hop_{:?} (function_{:?}):", node_id.hop_id, node_id.function_id)?;
             
             // S-edge outgoing
             if let Some(targets) = s_outgoing.get(&node_id) {
@@ -204,7 +181,7 @@ impl SCGraphPrinter {
                 write!(writer, "S-outgoing: ")?;
                 for (i, &target) in targets.iter().enumerate() {
                     if i > 0 { write!(writer, ", ")?; }
-                    write!(writer, "node_{:?}", target)?;
+                    write!(writer, "hop_{:?}", target.hop_id)?;
                 }
                 writeln!(writer)?;
             }
@@ -215,7 +192,7 @@ impl SCGraphPrinter {
                 write!(writer, "S-incoming: ")?;
                 for (i, &source) in sources.iter().enumerate() {
                     if i > 0 { write!(writer, ", ")?; }
-                    write!(writer, "node_{:?}", source)?;
+                    write!(writer, "hop_{:?}", source.hop_id)?;
                 }
                 writeln!(writer)?;
             }
@@ -226,7 +203,7 @@ impl SCGraphPrinter {
                 write!(writer, "C-adjacent: ")?;
                 for (i, &adj) in adjacent.iter().enumerate() {
                     if i > 0 { write!(writer, ", ")?; }
-                    write!(writer, "node_{:?}", adj)?;
+                    write!(writer, "hop_{:?}", adj.hop_id)?;
                 }
                 writeln!(writer)?;
             }
@@ -247,7 +224,9 @@ impl SCGraphPrinter {
 
     /// Print a compact summary of the SC-Graph
     pub fn print_summary(&self, sc_graph: &SCGraph, writer: &mut dyn Write) -> std::io::Result<()> {
-        let (nodes_count, s_edges_count, c_edges_count) = sc_graph.stats();
+        let nodes_count = sc_graph.nodes.len();
+        let s_edges_count = sc_graph.edges.iter().filter(|e| e.edge_type == EdgeType::S).count();
+        let c_edges_count = sc_graph.edges.iter().filter(|e| e.edge_type == EdgeType::C).count();
         
         writeln!(writer, "SC-Graph Summary:")?;
         writeln!(writer, "  {} nodes (hops)", nodes_count)?;

@@ -30,16 +30,8 @@ pub struct Logger {
 }
 
 impl Logger {
-    pub fn new(verbose: bool, quiet: bool) -> Self {
-        let level = if quiet {
-            LogLevel::Quiet
-        } else if verbose {
-            LogLevel::Verbose
-        } else {
-            LogLevel::Normal
-        };
-
-        Self { level }
+    pub fn new() -> Self {
+        Self { level: LogLevel::Normal }
     }
 
     // Stage progress messages (Normal level)
@@ -255,14 +247,24 @@ impl Logger {
         }
     }
 
-    // A simple info message for positive cases
-    pub fn info_positive(&self, message: &str) {
+    // Compilation lifecycle messages
+    pub fn compilation_start(&self, input_path: &std::path::Path) {
         if self.level.should_show(LogLevel::Normal) {
-            println!("{}", message.bright_white());
+            println!(
+                "{} {}",
+                "Compiling".blue().bold(),
+                input_path.display().to_string().bright_blue()
+            );
         }
     }
 
-    pub fn get_level(&self) -> LogLevel {
-        self.level
+    pub fn compilation_complete(&self, duration_ms: u64) {
+        if self.level.should_show(LogLevel::Normal) {
+            println!(
+                "{} Compilation completed in {}ms",
+                "✓".green().bold(),
+                duration_ms.to_string().bright_white()
+            );
+        }
     }
 }

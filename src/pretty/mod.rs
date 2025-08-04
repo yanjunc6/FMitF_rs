@@ -4,7 +4,7 @@ mod ast_printer;
 mod cfg_printer;
 mod sc_graph_printer;
 
-pub use ast_printer::AstPrinter;
+pub use ast_printer::{AstPrinter, PrintMode, PrintOptions, print_program, print_program_to_string, print_program_to_writer};
 pub use cfg_printer::CfgPrinter;
 pub use sc_graph_printer::SCGraphPrinter;
 
