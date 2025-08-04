@@ -60,47 +60,106 @@ impl Compiler {
     }
 
     /// Compile a .transact file through the entire pipeline
+    /// Always generates debug output for completed stages, even on failure
     pub fn compile(&mut self, source_code: String, cli: &Cli) -> Result<CompilationResult, String> {
         let start_time = std::time::Instant::now();
 
         self.logger.compilation_start(&cli.input);
 
+        // Initialize partial results
+        let mut ast_program: Option<AstProgram> = None;
+        let mut cfg_program: Option<CfgProgram> = None;
+        let mut sc_graph: Option<crate::sc_graph::SCGraph> = None;
+        let mut compilation_success = true;
+        let mut error_stage = None;
+
         // Stage 1: AST
         self.logger.stage_start(1, 4, "Frontend Analysis");
-        let ast_program = self.compile_ast(source_code.clone())?;
-        self.logger.stage_success();
+        match self.compile_ast(source_code.clone()) {
+            Ok(ast) => {
+                self.logger.stage_success();
+                ast_program = Some(ast);
+            }
+            Err(err) => {
+                compilation_success = false;
+                error_stage = Some(1);
+                self.logger.stage_failed(&err);
+            }
+        }
 
-        // Stage 2: CFG
-        self.logger.stage_start(2, 4, "Building Control Flow Graph");
-        let cfg_program = self.compile_cfg(&ast_program)?;
-        self.logger.stage_success();
+        // Stage 2: CFG (only if AST succeeded)
+        if let Some(ref ast) = ast_program {
+            self.logger.stage_start(2, 4, "Building Control Flow Graph");
+            match self.compile_cfg(ast) {
+                Ok(cfg) => {
+                    self.logger.stage_success();
+                    cfg_program = Some(cfg);
+                }
+                Err(err) => {
+                    compilation_success = false;
+                    if error_stage.is_none() {
+                        error_stage = Some(2);
+                    }
+                    self.logger.stage_failed(&err);
+                }
+            }
+        } else {
+            self.logger
+                .stage_skipped_due_to_error(2, 4, "Building Control Flow Graph");
+        }
 
         // Stage 3: Optimization (skipped for now)
-        if !cli.no_optimize {
+        if cfg_program.is_some() && !cli.no_optimize {
             self.logger
                 .stage_start(3, 4, "Optimizing Control Flow Graph");
             self.logger
                 .stage_skipped("optimization not yet implemented");
+        } else if cfg_program.is_none() {
+            self.logger
+                .stage_skipped_due_to_error(3, 4, "Optimizing Control Flow Graph");
         }
 
-        // Stage 4: SC-Graph
-        self.logger
-            .stage_start(4, 4, "Building Serializability Conflict Graph");
-        let sc_graph = self.compile_scgraph(&cfg_program)?;
-        self.logger.stage_success();
+        // Stage 4: SC-Graph (only if CFG succeeded)
+        if let Some(ref cfg) = cfg_program {
+            self.logger
+                .stage_start(4, 4, "Building Serializability Conflict Graph");
+            match self.compile_scgraph(cfg) {
+                Ok(graph) => {
+                    self.logger.stage_success();
+                    sc_graph = Some(graph);
+                }
+                Err(err) => {
+                    compilation_success = false;
+                    if error_stage.is_none() {
+                        error_stage = Some(4);
+                    }
+                    self.logger.stage_failed(&err);
+                }
+            }
+        } else {
+            self.logger
+                .stage_skipped_due_to_error(4, 4, "Building Serializability Conflict Graph");
+        }
 
         let compilation_time = start_time.elapsed().as_millis() as u64;
 
+        // Create result with whatever stages completed
         let result = CompilationResult {
-            ast_program,
-            cfg_program,
-            sc_graph,
-            success: true,
+            ast_program: ast_program.unwrap_or_default(),
+            cfg_program: cfg_program.unwrap_or_default(),
+            sc_graph: sc_graph.unwrap_or_default(),
+            success: compilation_success,
             compilation_time_ms: compilation_time,
         };
 
-        self.logger.compilation_complete(compilation_time);
+        if compilation_success {
+            self.logger.compilation_complete(compilation_time);
+        } else {
+            self.logger
+                .compilation_failed(compilation_time, error_stage.unwrap_or(1));
+        }
 
+        // Always return the result so we can generate debug output
         Ok(result)
     }
 

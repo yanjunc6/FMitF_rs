@@ -195,38 +195,35 @@ impl CfgBuilder {
             }
 
             // Extract partition function and fields
-            let (partition_function, partition_fields) =
-                if let Some(node_partition) = &table_ast.node_partition {
-                    // Get the partition function ID
-                    let partition_func_id = ctx
-                        .function_map
-                        .get(&node_partition.partition_name)
-                        .ok_or_else(|| {
-                            format!(
-                                "Partition function '{}' not found for table '{}'",
-                                node_partition.partition_name, table_ast.name
-                            )
-                        })?;
+            // Note: Semantic analysis should have ensured that every table has a partition
+            let node_partition = table_ast.node_partition.as_ref().expect(
+                "Table should have a partition function - this should have been caught by semantic analysis"
+            );
 
-                    // Map partition argument field names to field IDs
-                    let mut partition_field_ids = Vec::new();
-                    for arg_name in &node_partition.arguments {
-                        let field_id = ctx.field_map.get(arg_name).ok_or_else(|| {
-                            format!(
-                                "Partition field '{}' not found in table '{}'",
-                                arg_name, table_ast.name
-                            )
-                        })?;
-                        partition_field_ids.push(*field_id);
-                    }
+            // Get the partition function ID
+            let partition_func_id = ctx
+                .function_map
+                .get(&node_partition.partition_name)
+                .ok_or_else(|| {
+                    format!(
+                        "Partition function '{}' not found for table '{}'",
+                        node_partition.partition_name, table_ast.name
+                    )
+                })?;
 
-                    (*partition_func_id, partition_field_ids)
-                } else {
-                    return Err(format!(
-                        "Table '{}' must have a partition function",
-                        table_ast.name
-                    ));
-                };
+            // Map partition argument field names to field IDs
+            let mut partition_field_ids = Vec::new();
+            for arg_name in &node_partition.arguments {
+                let field_id = ctx.field_map.get(arg_name).ok_or_else(|| {
+                    format!(
+                        "Partition field '{}' not found in table '{}'",
+                        arg_name, table_ast.name
+                    )
+                })?;
+                partition_field_ids.push(*field_id);
+            }
+
+            let (partition_function, partition_fields) = (*partition_func_id, partition_field_ids);
 
             let cfg_table = TableInfo {
                 name: table_ast.name.clone(),

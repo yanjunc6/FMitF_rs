@@ -37,7 +37,7 @@ fn main() {
 
     match compiler.compile(source_code, &cli) {
         Ok(result) => {
-            // Handle output based on CLI configuration
+            // Always handle output generation, regardless of compilation success
             if let Err(e) = compiler.handle_output(&result, &cli) {
                 eprintln!(
                     "{} Output generation failed: {}",
@@ -46,8 +46,14 @@ fn main() {
                 );
                 std::process::exit(1);
             }
+
+            // Exit with error code if compilation failed
+            if !result.success {
+                std::process::exit(1);
+            }
         }
         Err(e) => {
+            // This should not happen now, but keep as fallback
             eprintln!(
                 "{} Compilation failed: {}",
                 "ERROR:".red().bold(),

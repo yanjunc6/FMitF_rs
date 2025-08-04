@@ -164,6 +164,12 @@ impl<'p> SemanticAnalyzer<'p> {
         // Check node partition if present
         if let Some(node_partition) = &table.node_partition {
             self.check_table_partition(table, node_partition);
+        } else {
+            // Every table must have a partition function
+            self.error_at(
+                &table.span,
+                AstError::MissingTablePartition(table.name.clone()),
+            );
         }
     }
 

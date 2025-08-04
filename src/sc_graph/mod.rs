@@ -51,3 +51,12 @@ pub struct SCGraph {
     /// List of all edges in the SC-Graph.
     pub edges: Vec<SCGraphEdge>,
 }
+
+impl Default for SCGraph {
+    fn default() -> Self {
+        Self {
+            nodes: HashSet::new(),
+            edges: Vec::new(),
+        }
+    }
+}

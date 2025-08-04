@@ -28,6 +28,20 @@ pub struct CfgProgram {
     pub root_variables: Vec<VarId>,      // Global constants/variables
 }
 
+impl Default for CfgProgram {
+    fn default() -> Self {
+        Self {
+            tables: Arena::new(),
+            fields: Arena::new(),
+            functions: Arena::new(),
+            variables: Arena::new(),
+            root_tables: Vec::new(),
+            root_functions: Vec::new(),
+            root_variables: Vec::new(),
+        }
+    }
+}
+
 /// Function type distinguishing partitions from transactions
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionType {

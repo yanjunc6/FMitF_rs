@@ -103,6 +103,7 @@ pub enum AstError {
         field: String,
     },
     MissingTableFields(String),
+    MissingTablePartition(String),
     DuplicateField {
         table: String,
         field: String,
@@ -187,6 +188,7 @@ impl AstError {
             Self::EmptyPrimaryKey(_) => "EmptyPrimaryKey",
             Self::InvalidPrimaryKeyField { .. } => "InvalidPrimaryKeyField",
             Self::MissingTableFields(_) => "MissingTableFields",
+            Self::MissingTablePartition(_) => "MissingTablePartition",
             Self::DuplicateField { .. } => "DuplicateField",
             Self::UnresolvedTablePartition { .. } => "UnresolvedTablePartition",
             Self::InvalidTablePartitionArguments { .. } => "InvalidTablePartitionArguments",
@@ -286,6 +288,9 @@ impl AstError {
             ),
             Self::MissingTableFields(table) => {
                 format!("Table '{}' must have at least one field", table)
+            }
+            Self::MissingTablePartition(table) => {
+                format!("Table '{}' must have a partition function", table)
             }
             Self::DuplicateField { table, field } => {
                 format!(

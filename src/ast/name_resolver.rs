@@ -53,6 +53,9 @@ impl<'p> NameResolver<'p> {
     /// This function iterates over all root functions and resolves their names,
     /// including parameters, hops, and statements.
     pub fn resolve(mut self) -> Results<()> {
+        // Resolve table partitions first
+        self.resolve_table_partitions();
+
         // Resolve all functions
         let function_ids: Vec<_> = self.program.root_functions.iter().copied().collect();
         for func_id in function_ids {
@@ -63,6 +66,28 @@ impl<'p> NameResolver<'p> {
             Ok(())
         } else {
             Err(self.errors)
+        }
+    }
+
+    /// Resolves partition references in table declarations.
+    fn resolve_table_partitions(&mut self) {
+        // Build a map of partition names to partition IDs
+        let mut partition_map = HashMap::new();
+        for &partition_id in &self.program.root_partitions {
+            let partition = &self.program.partitions[partition_id];
+            partition_map.insert(partition.name.clone(), partition_id);
+        }
+
+        // Resolve partition references in tables
+        for &table_id in &self.program.root_tables {
+            let table = &mut self.program.tables[table_id];
+            if let Some(node_partition) = &mut table.node_partition {
+                if let Some(&partition_id) = partition_map.get(&node_partition.partition_name) {
+                    node_partition.resolved_partition = Some(partition_id);
+                }
+                // Note: If partition is not found, resolved_partition remains None
+                // This will be caught later in semantic analysis
+            }
         }
     }
 

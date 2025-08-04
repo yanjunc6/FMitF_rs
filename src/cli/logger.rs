@@ -72,6 +72,24 @@ impl Logger {
         }
     }
 
+    pub fn stage_failed(&self, error_message: &str) {
+        if self.level.should_show(LogLevel::Normal) {
+            println!("{}: {}", "ERROR".red().bold(), error_message);
+        }
+    }
+
+    pub fn stage_skipped_due_to_error(&self, stage_num: usize, total: usize, name: &str) {
+        if self.level.should_show(LogLevel::Normal) {
+            println!(
+                "{} {}: ({}) - {} due to previous errors",
+                "Stage".bright_blue().bold(),
+                format!("{}/{}", stage_num, total).bright_blue().bold(),
+                name.bright_blue(),
+                "SKIPPED".yellow().bold()
+            );
+        }
+    }
+
     // Process status (Normal level)
     pub fn process_start(&self, description: &str) {
         if self.level.should_show(LogLevel::Normal) {
@@ -265,6 +283,17 @@ impl Logger {
             println!(
                 "{} Compilation completed in {}ms",
                 "✓".green().bold(),
+                duration_ms.to_string().bright_white()
+            );
+        }
+    }
+
+    pub fn compilation_failed(&self, duration_ms: u64, failed_stage: usize) {
+        if self.level.should_show(LogLevel::Normal) {
+            println!(
+                "{} Compilation failed at stage {} after {}ms",
+                "✗".red().bold(),
+                failed_stage,
                 duration_ms.to_string().bright_white()
             );
         }
