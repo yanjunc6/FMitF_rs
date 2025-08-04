@@ -34,7 +34,7 @@ fn main() {
 
     // Create and run compiler
     let mut compiler = Compiler::new();
-    
+
     match compiler.compile(source_code, &cli) {
         Ok(result) => {
             // Handle output based on CLI configuration

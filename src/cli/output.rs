@@ -36,7 +36,10 @@ impl OutputManager {
         // Write console summary
         self.write_console_summary(result);
 
-        println!("Output directory created: {}", dir.display().to_string().bright_blue().underline());
+        println!(
+            "Output directory created: {}",
+            dir.display().to_string().bright_blue().underline()
+        );
         Ok(())
     }
 
@@ -50,64 +53,124 @@ impl OutputManager {
             println!("{} Compilation failed", "✗".red().bold());
         }
 
-        println!("  {}  : {} functions, {} tables, {} partitions", 
-                 "AST".bright_blue(),
-                 stats.functions, stats.tables, stats.partitions);
-        
-        println!("  {}  : {} basic blocks", 
-                 "CFG".bright_blue(),
-                 stats.basic_blocks);
-        
-        println!("  {}: {} nodes, {} S-edges, {} C-edges", 
-                 "SC-Graph".bright_blue(),
-                 stats.sc_nodes, stats.s_edges, stats.c_edges);
+        println!(
+            "  {}  : {} functions, {} tables, {} partitions",
+            "AST".bright_blue(),
+            stats.functions,
+            stats.tables,
+            stats.partitions
+        );
 
-        println!("\nCompilation completed in {}ms", result.compilation_time_ms);
+        println!(
+            "  {}  : {} basic blocks",
+            "CFG".bright_blue(),
+            stats.basic_blocks
+        );
+
+        println!(
+            "  {}: {} nodes, {} S-edges, {} C-edges",
+            "SC-Graph".bright_blue(),
+            stats.sc_nodes,
+            stats.s_edges,
+            stats.c_edges
+        );
+
+        println!(
+            "\nCompilation completed in {}ms",
+            result.compilation_time_ms
+        );
     }
 
-    fn write_markdown_summary(&self, result: &CompilationResult, writer: &mut dyn Write) -> io::Result<()> {
+    fn write_markdown_summary(
+        &self,
+        result: &CompilationResult,
+        writer: &mut dyn Write,
+    ) -> io::Result<()> {
         let stats = result.get_stats();
-        
+
         writeln!(writer, "# FMitF Compilation Report\n")?;
-        writeln!(writer, "**Generated:** {}\n", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"))?;
-        
+        writeln!(
+            writer,
+            "**Generated:** {}\n",
+            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+        )?;
+
         writeln!(writer, "## Compilation Summary\n")?;
-        writeln!(writer, "- **Status:** {}", if result.success { "✅ Success" } else { "❌ Failed" })?;
-        writeln!(writer, "- **Compilation Time:** {}ms", result.compilation_time_ms)?;
-        
+        writeln!(
+            writer,
+            "- **Status:** {}",
+            if result.success {
+                "✅ Success"
+            } else {
+                "❌ Failed"
+            }
+        )?;
+        writeln!(
+            writer,
+            "- **Compilation Time:** {}ms",
+            result.compilation_time_ms
+        )?;
+
         writeln!(writer, "\n## Stage Results\n")?;
         writeln!(writer, "| Stage | Result |")?;
         writeln!(writer, "|-------|--------|")?;
-        writeln!(writer, "| AST | {} functions, {} tables, {} partitions |", stats.functions, stats.tables, stats.partitions)?;
+        writeln!(
+            writer,
+            "| AST | {} functions, {} tables, {} partitions |",
+            stats.functions, stats.tables, stats.partitions
+        )?;
         writeln!(writer, "| CFG | {} basic blocks |", stats.basic_blocks)?;
-        writeln!(writer, "| SC-Graph | {} nodes, {} S-edges, {} C-edges |", stats.sc_nodes, stats.s_edges, stats.c_edges)?;
-        
+        writeln!(
+            writer,
+            "| SC-Graph | {} nodes, {} S-edges, {} C-edges |",
+            stats.sc_nodes, stats.s_edges, stats.c_edges
+        )?;
+
         Ok(())
     }
 
-    fn write_compilation_log(&self, result: &CompilationResult, path: &PathBuf) -> Result<(), String> {
-        let mut file = fs::File::create(path)
-            .map_err(|e| format!("Failed to create log file: {}", e))?;
-        
+    fn write_compilation_log(
+        &self,
+        result: &CompilationResult,
+        path: &PathBuf,
+    ) -> Result<(), String> {
+        let mut file =
+            fs::File::create(path).map_err(|e| format!("Failed to create log file: {}", e))?;
+
         writeln!(file, "FMitF Compilation Log")
             .map_err(|e| format!("Failed to write log: {}", e))?;
-        writeln!(file, "Generated: {}", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"))
-            .map_err(|e| format!("Failed to write log: {}", e))?;
-        writeln!(file, "\nStatus: {}", if result.success { "SUCCESS" } else { "FAILED" })
-            .map_err(|e| format!("Failed to write log: {}", e))?;
+        writeln!(
+            file,
+            "Generated: {}",
+            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+        )
+        .map_err(|e| format!("Failed to write log: {}", e))?;
+        writeln!(
+            file,
+            "\nStatus: {}",
+            if result.success { "SUCCESS" } else { "FAILED" }
+        )
+        .map_err(|e| format!("Failed to write log: {}", e))?;
         writeln!(file, "Compilation time: {}ms", result.compilation_time_ms)
             .map_err(|e| format!("Failed to write log: {}", e))?;
-        
+
         let stats = result.get_stats();
-        writeln!(file, "\nStage Results:")
-            .map_err(|e| format!("Failed to write log: {}", e))?;
-        writeln!(file, "- AST: {} functions, {} tables, {} partitions", stats.functions, stats.tables, stats.partitions)
-            .map_err(|e| format!("Failed to write log: {}", e))?;
+        writeln!(file, "\nStage Results:").map_err(|e| format!("Failed to write log: {}", e))?;
+        writeln!(
+            file,
+            "- AST: {} functions, {} tables, {} partitions",
+            stats.functions, stats.tables, stats.partitions
+        )
+        .map_err(|e| format!("Failed to write log: {}", e))?;
         writeln!(file, "- CFG: {} basic blocks", stats.basic_blocks)
             .map_err(|e| format!("Failed to write log: {}", e))?;
-        writeln!(file, "- SC-Graph: {} nodes, {} S-edges, {} C-edges", stats.sc_nodes, stats.s_edges, stats.c_edges)
-            .map_err(|e| format!("Failed to write log: {}", e))?;
-        
+        writeln!(
+            file,
+            "- SC-Graph: {} nodes, {} S-edges, {} C-edges",
+            stats.sc_nodes, stats.s_edges, stats.c_edges
+        )
+        .map_err(|e| format!("Failed to write log: {}", e))?;
+
         Ok(())
     }
 }

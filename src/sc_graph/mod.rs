@@ -35,7 +35,7 @@ pub struct SCGraphEdge {
 }
 
 /// The Serializability Conflict Graph.
-/// 
+///
 /// The SC-Graph contains:
 /// - Nodes: Each node is represented by a unique (FunctionId, HopId) pair from the CFG
 /// - S-edges (directed): Connect hops that are sequentially executed within the same transaction

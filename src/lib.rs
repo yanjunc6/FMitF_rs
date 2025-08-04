@@ -22,8 +22,7 @@ pub use pretty::{print_program, PrintMode, PrintOptions};
 pub use cfg::CfgProgram; // This is the main CFG structure
 pub use cfg::{
     BasicBlockId as CfgBasicBlockId, CfgBuilder, FieldId as CfgFieldId,
-    FunctionId as CfgFunctionId, HopId as CfgHopId, TableId as CfgTableId,
-    VarId as CfgVarId,
+    FunctionId as CfgFunctionId, HopId as CfgHopId, TableId as CfgTableId, VarId as CfgVarId,
 };
 
 // Re-export SC-Graph functionality

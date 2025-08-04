@@ -1,4 +1,4 @@
-parition f(int x);
+partition f(int x);
 
 table TestTable {
     primary int ID;

@@ -1,6 +1,8 @@
 use super::{EdgeType, SCGraph, SCGraphNodeId};
 use crate::cfg::{CfgProgram, FunctionType, HopId};
-use crate::dataflow::{analyze_table_mod_ref, AnalysisLevel, DataflowResults, SetLattice, AccessType, TableAccess};
+use crate::dataflow::{
+    analyze_table_mod_ref, AccessType, AnalysisLevel, DataflowResults, SetLattice, TableAccess,
+};
 use std::collections::{HashMap, HashSet};
 
 /// Builder for constructing SC-Graphs from CFG programs.
@@ -8,7 +10,7 @@ pub struct SCGraphBuilder;
 
 impl SCGraphBuilder {
     /// Builds an SC-Graph from a CFG program.
-    /// 
+    ///
     /// The process involves:
     /// 1. Creating nodes for each hop in transaction functions
     /// 2. Adding S-edges between sequential hops within the same transaction
@@ -25,7 +27,10 @@ impl SCGraphBuilder {
             // Only process transaction functions (skip partition functions)
             if function.function_type == FunctionType::Transaction {
                 for (hop_id, _hop) in function.hops.iter() {
-                    let node_id = SCGraphNodeId { function_id, hop_id };
+                    let node_id = SCGraphNodeId {
+                        function_id,
+                        hop_id,
+                    };
                     sc_graph.nodes.insert(node_id);
                 }
             }
@@ -41,23 +46,28 @@ impl SCGraphBuilder {
     }
 
     /// Adds S-edges between sequential hops within each transaction function.
-    fn add_sequential_edges(
-        sc_graph: &mut SCGraph,
-        cfg_program: &CfgProgram,
-    ) {
+    fn add_sequential_edges(sc_graph: &mut SCGraph, cfg_program: &CfgProgram) {
         for (function_id, function) in cfg_program.functions.iter() {
             // Only process transaction functions
             if function.function_type == FunctionType::Transaction {
                 let hop_order = &function.hop_order;
-                
+
                 // Add S-edges between consecutive hops
                 for window in hop_order.windows(2) {
                     if let [prev_hop_id, curr_hop_id] = window {
-                        let prev_node_id = SCGraphNodeId { function_id, hop_id: *prev_hop_id };
-                        let curr_node_id = SCGraphNodeId { function_id, hop_id: *curr_hop_id };
-                        
+                        let prev_node_id = SCGraphNodeId {
+                            function_id,
+                            hop_id: *prev_hop_id,
+                        };
+                        let curr_node_id = SCGraphNodeId {
+                            function_id,
+                            hop_id: *curr_hop_id,
+                        };
+
                         // Only add edge if both hops are in the SC-Graph
-                        if sc_graph.nodes.contains(&prev_node_id) && sc_graph.nodes.contains(&curr_node_id) {
+                        if sc_graph.nodes.contains(&prev_node_id)
+                            && sc_graph.nodes.contains(&curr_node_id)
+                        {
                             let edge = super::SCGraphEdge {
                                 source: prev_node_id,
                                 target: curr_node_id,
@@ -72,10 +82,7 @@ impl SCGraphBuilder {
     }
 
     /// Analyzes table accesses and adds C-edges between conflicting hops from different transactions.
-    fn add_conflict_edges(
-        sc_graph: &mut SCGraph,
-        cfg_program: &CfgProgram,
-    ) {
+    fn add_conflict_edges(sc_graph: &mut SCGraph, cfg_program: &CfgProgram) {
         // Analyze table accesses for each hop using hop-level dataflow analysis
         let mut hop_table_accesses: HashMap<HopId, HashSet<TableAccess>> = HashMap::new();
 
@@ -84,25 +91,18 @@ impl SCGraphBuilder {
             if function.function_type == FunctionType::Transaction {
                 // Run hop-level table mod-ref analysis
                 let analysis_results = analyze_table_mod_ref(function, AnalysisLevel::Hop);
-                
+
                 // Extract table accesses for each hop
                 for (hop_id, _hop) in function.hops.iter() {
-                    let hop_accesses = Self::extract_hop_table_accesses(
-                        hop_id,
-                        function,
-                        &analysis_results
-                    );
+                    let hop_accesses =
+                        Self::extract_hop_table_accesses(hop_id, function, &analysis_results);
                     hop_table_accesses.insert(hop_id, hop_accesses);
                 }
             }
         }
 
         // Add C-edges between conflicting hops from different transactions
-        Self::add_conflict_edges_from_accesses(
-            sc_graph,
-            cfg_program,
-            &hop_table_accesses,
-        );
+        Self::add_conflict_edges_from_accesses(sc_graph, cfg_program, &hop_table_accesses);
     }
 
     /// Extracts table accesses for a specific hop from the dataflow analysis results.
@@ -138,7 +138,7 @@ impl SCGraphBuilder {
     ) {
         // Get all hops with their corresponding transaction functions
         let mut hops_with_functions: Vec<(HopId, crate::cfg::FunctionId)> = Vec::new();
-        
+
         for (function_id, function) in cfg_program.functions.iter() {
             if function.function_type == FunctionType::Transaction {
                 for (hop_id, _hop) in function.hops.iter() {
@@ -155,23 +155,32 @@ impl SCGraphBuilder {
 
                 // Only check hops from different transactions
                 if func1_id != func2_id {
-                    if let (Some(accesses1), Some(accesses2)) = 
-                        (hop_table_accesses.get(&hop1_id), hop_table_accesses.get(&hop2_id)) {
-                        
+                    if let (Some(accesses1), Some(accesses2)) = (
+                        hop_table_accesses.get(&hop1_id),
+                        hop_table_accesses.get(&hop2_id),
+                    ) {
                         // Check for conflicts
                         if Self::have_conflicting_accesses(accesses1, accesses2) {
-                            let node1_id = SCGraphNodeId { function_id: func1_id, hop_id: hop1_id };
-                            let node2_id = SCGraphNodeId { function_id: func2_id, hop_id: hop2_id };
-                            
+                            let node1_id = SCGraphNodeId {
+                                function_id: func1_id,
+                                hop_id: hop1_id,
+                            };
+                            let node2_id = SCGraphNodeId {
+                                function_id: func2_id,
+                                hop_id: hop2_id,
+                            };
+
                             // Only add edge if both hops are in the SC-Graph
-                            if sc_graph.nodes.contains(&node1_id) && sc_graph.nodes.contains(&node2_id) {
+                            if sc_graph.nodes.contains(&node1_id)
+                                && sc_graph.nodes.contains(&node2_id)
+                            {
                                 // For undirected C-edges, ensure consistent ordering to avoid duplicates
                                 let (source, target) = if node1_id < node2_id {
                                     (node1_id, node2_id)
                                 } else {
                                     (node2_id, node1_id)
                                 };
-                                
+
                                 let edge = super::SCGraphEdge {
                                     source,
                                     target,
@@ -187,7 +196,7 @@ impl SCGraphBuilder {
     }
 
     /// Checks if two sets of table accesses have conflicts.
-    /// 
+    ///
     /// A conflict exists if:
     /// - One hop reads and another writes the same table, OR
     /// - Both hops write to the same table

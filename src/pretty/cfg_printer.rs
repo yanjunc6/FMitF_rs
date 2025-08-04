@@ -1,5 +1,7 @@
 use super::PrettyPrinter;
-use crate::cfg::{CfgProgram, FunctionCfg, HopCfg, BasicBlock, Statement, EdgeType, Operand, Rvalue};
+use crate::cfg::{
+    BasicBlock, CfgProgram, EdgeType, FunctionCfg, HopCfg, Operand, Rvalue, Statement,
+};
 use std::io::Write;
 
 /// Pretty printer for CFG structures.
@@ -14,7 +16,7 @@ pub struct CfgPrinter {
 impl CfgPrinter {
     /// Creates a new CFG printer with default settings.
     pub fn new() -> Self {
-        Self { 
+        Self {
             indent_size: 2,
             show_details: true,
         }
@@ -22,7 +24,10 @@ impl CfgPrinter {
 
     /// Creates a new CFG printer with custom settings.
     pub fn with_options(indent_size: usize, show_details: bool) -> Self {
-        Self { indent_size, show_details }
+        Self {
+            indent_size,
+            show_details,
+        }
     }
 
     /// Helper to write indentation
@@ -45,11 +50,13 @@ impl CfgPrinter {
             for (table_id, table_info) in program.tables.iter() {
                 self.write_indent(writer, 2)?;
                 writeln!(writer, "table {} (id: {:?}) {{", table_info.name, table_id)?;
-                
+
                 self.write_indent(writer, 3)?;
                 write!(writer, "fields: ")?;
                 for (i, &field_id) in table_info.fields.iter().enumerate() {
-                    if i > 0 { write!(writer, ", ")?; }
+                    if i > 0 {
+                        write!(writer, ", ")?;
+                    }
                     if let Some(field) = program.fields.get(field_id) {
                         write!(writer, "{}", field.name)?;
                     } else {
@@ -62,7 +69,9 @@ impl CfgPrinter {
                     self.write_indent(writer, 3)?;
                     write!(writer, "primary_keys: ")?;
                     for (i, &pk_field_id) in table_info.primary_keys.iter().enumerate() {
-                        if i > 0 { write!(writer, ", ")?; }
+                        if i > 0 {
+                            write!(writer, ", ")?;
+                        }
                         if let Some(field) = program.fields.get(pk_field_id) {
                             write!(writer, "{}", field.name)?;
                         } else {
@@ -92,16 +101,28 @@ impl CfgPrinter {
     }
 
     /// Print a function with its hops and control flow
-    fn print_function(&self, function: &FunctionCfg, func_id: crate::cfg::FunctionId, writer: &mut dyn Write, level: usize) -> std::io::Result<()> {
+    fn print_function(
+        &self,
+        function: &FunctionCfg,
+        func_id: crate::cfg::FunctionId,
+        writer: &mut dyn Write,
+        level: usize,
+    ) -> std::io::Result<()> {
         self.write_indent(writer, level)?;
-        writeln!(writer, "function {} (id: {:?}) -> {:?} {{", function.name, func_id, function.return_type)?;
+        writeln!(
+            writer,
+            "function {} (id: {:?}) -> {:?} {{",
+            function.name, func_id, function.return_type
+        )?;
 
         // Print parameters
         if !function.parameters.is_empty() {
             self.write_indent(writer, level + 1)?;
             write!(writer, "parameters: ")?;
             for (i, &param_id) in function.parameters.iter().enumerate() {
-                if i > 0 { write!(writer, ", ")?; }
+                if i > 0 {
+                    write!(writer, ", ")?;
+                }
                 write!(writer, "var_{:?}", param_id)?;
             }
             writeln!(writer)?;
@@ -112,7 +133,9 @@ impl CfgPrinter {
             self.write_indent(writer, level + 1)?;
             write!(writer, "hop_order: ")?;
             for (i, &hop_id) in function.hop_order.iter().enumerate() {
-                if i > 0 { write!(writer, " -> ")?; }
+                if i > 0 {
+                    write!(writer, " -> ")?;
+                }
                 write!(writer, "hop_{:?}", hop_id)?;
             }
             writeln!(writer)?;
@@ -131,7 +154,14 @@ impl CfgPrinter {
     }
 
     /// Print a hop with its basic blocks
-    fn print_hop(&self, hop: &HopCfg, hop_id: crate::cfg::HopId, function: &FunctionCfg, writer: &mut dyn Write, level: usize) -> std::io::Result<()> {
+    fn print_hop(
+        &self,
+        hop: &HopCfg,
+        hop_id: crate::cfg::HopId,
+        function: &FunctionCfg,
+        writer: &mut dyn Write,
+        level: usize,
+    ) -> std::io::Result<()> {
         self.write_indent(writer, level)?;
         writeln!(writer, "hop_{:?} {{", hop_id)?;
 
@@ -153,7 +183,13 @@ impl CfgPrinter {
     }
 
     /// Print a basic block with its statements and control flow
-    fn print_basic_block(&self, block: &BasicBlock, block_id: crate::cfg::BasicBlockId, writer: &mut dyn Write, level: usize) -> std::io::Result<()> {
+    fn print_basic_block(
+        &self,
+        block: &BasicBlock,
+        block_id: crate::cfg::BasicBlockId,
+        writer: &mut dyn Write,
+        level: usize,
+    ) -> std::io::Result<()> {
         self.write_indent(writer, level)?;
         writeln!(writer, "block_{:?} {{", block_id)?;
 
@@ -174,8 +210,15 @@ impl CfgPrinter {
             self.write_indent(writer, level + 1)?;
             write!(writer, "predecessors: ")?;
             for (i, edge) in block.predecessors.iter().enumerate() {
-                if i > 0 { write!(writer, ", ")?; }
-                write!(writer, "block_{:?} ({})", edge.from, self.edge_type_to_string(&edge.edge_type))?;
+                if i > 0 {
+                    write!(writer, ", ")?;
+                }
+                write!(
+                    writer,
+                    "block_{:?} ({})",
+                    edge.from,
+                    self.edge_type_to_string(&edge.edge_type)
+                )?;
             }
             writeln!(writer)?;
         }
@@ -185,8 +228,15 @@ impl CfgPrinter {
             self.write_indent(writer, level + 1)?;
             write!(writer, "successors: ")?;
             for (i, edge) in block.successors.iter().enumerate() {
-                if i > 0 { write!(writer, ", ")?; }
-                write!(writer, "block_{:?} ({})", edge.to, self.edge_type_to_string(&edge.edge_type))?;
+                if i > 0 {
+                    write!(writer, ", ")?;
+                }
+                write!(
+                    writer,
+                    "block_{:?} ({})",
+                    edge.to,
+                    self.edge_type_to_string(&edge.edge_type)
+                )?;
             }
             writeln!(writer)?;
         }
@@ -202,13 +252,32 @@ impl CfgPrinter {
             Statement::Assign { var, rvalue, .. } => {
                 write!(writer, "var_{:?} = {}", var, self.rvalue_to_string(rvalue))?;
             }
-            Statement::TableAssign { table, pk_fields, pk_values, field, value, .. } => {
+            Statement::TableAssign {
+                table,
+                pk_fields,
+                pk_values,
+                field,
+                value,
+                ..
+            } => {
                 write!(writer, "table_{:?}.", table)?;
                 for (i, &pk_field) in pk_fields.iter().enumerate() {
-                    if i > 0 { write!(writer, ",")?; }
-                    write!(writer, "field_{:?}[{}]", pk_field, self.operand_to_string(&pk_values[i]))?;
+                    if i > 0 {
+                        write!(writer, ",")?;
+                    }
+                    write!(
+                        writer,
+                        "field_{:?}[{}]",
+                        pk_field,
+                        self.operand_to_string(&pk_values[i])
+                    )?;
                 }
-                write!(writer, ".field_{:?} = {}", field, self.operand_to_string(value))?;
+                write!(
+                    writer,
+                    ".field_{:?} = {}",
+                    field,
+                    self.operand_to_string(value)
+                )?;
             }
         }
         Ok(())
@@ -255,24 +324,39 @@ impl CfgPrinter {
         match rvalue {
             Rvalue::Use(operand) => self.operand_to_string(operand),
             Rvalue::BinaryOp { op, left, right } => {
-                format!("({} {:?} {})", 
-                    self.operand_to_string(left), 
-                    op, 
-                    self.operand_to_string(right))
+                format!(
+                    "({} {:?} {})",
+                    self.operand_to_string(left),
+                    op,
+                    self.operand_to_string(right)
+                )
             }
             Rvalue::UnaryOp { op, operand } => {
                 format!("({:?} {})", op, self.operand_to_string(operand))
             }
-            Rvalue::TableAccess { table, pk_fields, pk_values, field } => {
+            Rvalue::TableAccess {
+                table,
+                pk_fields,
+                pk_values,
+                field,
+            } => {
                 let mut access = format!("table_{:?}", table);
                 for (i, &pk_field) in pk_fields.iter().enumerate() {
-                    access.push_str(&format!(".field_{:?}[{}]", pk_field, self.operand_to_string(&pk_values[i])));
+                    access.push_str(&format!(
+                        ".field_{:?}[{}]",
+                        pk_field,
+                        self.operand_to_string(&pk_values[i])
+                    ));
                 }
                 access.push_str(&format!(".field_{:?}", field));
                 access
             }
             Rvalue::ArrayAccess { array, index } => {
-                format!("{}[{}]", self.operand_to_string(array), self.operand_to_string(index))
+                format!(
+                    "{}[{}]",
+                    self.operand_to_string(array),
+                    self.operand_to_string(index)
+                )
             }
         }
     }
@@ -295,14 +379,20 @@ impl PrettyPrinter<FunctionCfg> for CfgPrinter {
         // For standalone function printing, we'll use a placeholder function ID
         // This is a workaround since we need a valid FunctionId but don't have one
         self.write_indent(writer, 0)?;
-        writeln!(writer, "function {} -> {:?} {{", function.name, function.return_type)?;
+        writeln!(
+            writer,
+            "function {} -> {:?} {{",
+            function.name, function.return_type
+        )?;
 
         // Print parameters
         if !function.parameters.is_empty() {
             self.write_indent(writer, 1)?;
             write!(writer, "parameters: ")?;
             for (i, &param_id) in function.parameters.iter().enumerate() {
-                if i > 0 { write!(writer, ", ")?; }
+                if i > 0 {
+                    write!(writer, ", ")?;
+                }
                 write!(writer, "var_{:?}", param_id)?;
             }
             writeln!(writer)?;
@@ -313,7 +403,9 @@ impl PrettyPrinter<FunctionCfg> for CfgPrinter {
             self.write_indent(writer, 1)?;
             write!(writer, "hop_order: ")?;
             for (i, &hop_id) in function.hop_order.iter().enumerate() {
-                if i > 0 { write!(writer, " -> ")?; }
+                if i > 0 {
+                    write!(writer, " -> ")?;
+                }
                 write!(writer, "hop_{:?}", hop_id)?;
             }
             writeln!(writer)?;
