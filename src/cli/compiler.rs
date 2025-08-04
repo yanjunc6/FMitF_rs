@@ -30,6 +30,13 @@ pub struct CompilationStats {
 
 impl CompilationResult {
     pub fn get_stats(&self) -> CompilationStats {
+        let s_edges = self.sc_graph.edges.iter()
+            .filter(|e| e.edge_type == crate::sc_graph::EdgeType::S)
+            .count();
+        let c_edges = self.sc_graph.edges.iter()
+            .filter(|e| e.edge_type == crate::sc_graph::EdgeType::C)
+            .count();
+
         CompilationStats {
             functions: self.ast_program.functions.len(),
             tables: self.ast_program.tables.len(),
@@ -40,9 +47,9 @@ impl CompilationResult {
                 .iter()
                 .map(|(_, f)| f.blocks.len())
                 .sum(),
-            sc_nodes: 0, // TODO: Add node count to SCGraph
-            s_edges: 0,  // TODO: Add edge count to SCGraph
-            c_edges: 0,  // TODO: Add edge count to SCGraph
+            sc_nodes: self.sc_graph.nodes.len(),
+            s_edges,
+            c_edges,
         }
     }
 }

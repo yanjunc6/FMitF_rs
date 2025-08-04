@@ -12,44 +12,37 @@ impl OutputManager {
         Self
     }
 
-    /// Write directory output (structured output with multiple files)
+    /// Write all debug output to a directory
     pub fn write_directory_output(
         &self,
         result: &CompilationResult,
-        dir: &PathBuf,
+        output_dir: &std::path::Path,
     ) -> Result<(), String> {
-        // Create main directory
-        fs::create_dir_all(dir)
-            .map_err(|e| format!("Failed to create directory {:?}: {}", dir, e))?;
+        // Create output directory
+        std::fs::create_dir_all(output_dir)
+            .map_err(|e| format!("Failed to create output directory: {}", e))?;
+
+        let output_pathbuf = output_dir.to_path_buf();
+
+        // Write AST dump and pretty print
+        self.write_ast_dump(result, &output_pathbuf)?;
+        self.write_ast_pretty(result, &output_pathbuf)?;
+
+        // Write CFG dump and pretty print
+        self.write_cfg_dump(result, &output_pathbuf)?;
+        self.write_cfg_pretty(result, &output_pathbuf)?;
+
+        // Write SC-Graph dump, pretty print, and DOT file
+        self.write_scgraph_dump(result, &output_pathbuf)?;
+        self.write_scgraph_pretty(result, &output_pathbuf)?;
+        self.write_scgraph_dot(result, &output_pathbuf)?;
 
         // Write compilation log
-        let log_path = dir.join("compilation.log");
-        self.write_compilation_log(result, &log_path)?;
+        self.write_compilation_log(result, &output_pathbuf)?;
 
-        // Write main summary
-        let summary_path = dir.join("summary.md");
-        let mut summary_file = fs::File::create(&summary_path)
-            .map_err(|e| format!("Failed to create summary file: {}", e))?;
-        self.write_markdown_summary(result, &mut summary_file)
-            .map_err(|e| format!("Failed to write summary: {}", e))?;
+        // Write summary
+        self.write_summary(result, &output_pathbuf)?;
 
-        // Always write debug dumps for debugging purposes
-        self.write_ast_dump(result, &dir.join("ast_dump.txt"))?;
-        self.write_cfg_dump(result, &dir.join("cfg_dump.txt"))?;
-        self.write_scgraph_dump(result, &dir.join("scgraph_dump.txt"))?;
-
-        // Also write pretty-printed versions for human readability
-        self.write_ast_pretty(result, &dir.join("ast_pretty.txt"))?;
-        self.write_cfg_pretty(result, &dir.join("cfg_pretty.txt"))?;
-        self.write_scgraph_pretty(result, &dir.join("scgraph_pretty.txt"))?;
-
-        // Write console summary
-        self.write_console_summary(result);
-
-        println!(
-            "Output directory created: {}",
-            dir.display().to_string().bright_blue().underline()
-        );
         Ok(())
     }
 
@@ -144,8 +137,9 @@ impl OutputManager {
         result: &CompilationResult,
         path: &PathBuf,
     ) -> Result<(), String> {
+        let file_path = path.join("compilation.log");
         let mut file =
-            fs::File::create(path).map_err(|e| format!("Failed to create log file: {}", e))?;
+            fs::File::create(file_path).map_err(|e| format!("Failed to create log file: {}", e))?;
 
         writeln!(file, "FMitF Compilation Log")
             .map_err(|e| format!("Failed to write log: {}", e))?;
@@ -187,21 +181,24 @@ impl OutputManager {
     /// Write AST debug dump
     fn write_ast_dump(&self, result: &CompilationResult, path: &PathBuf) -> Result<(), String> {
         let ast_content = format!("{:#?}", result.ast_program);
-        fs::write(path, ast_content).map_err(|e| format!("Failed to write AST dump: {}", e))?;
+        let file_path = path.join("ast_dump.txt");
+        fs::write(file_path, ast_content).map_err(|e| format!("Failed to write AST dump: {}", e))?;
         Ok(())
     }
 
     /// Write CFG debug dump  
     fn write_cfg_dump(&self, result: &CompilationResult, path: &PathBuf) -> Result<(), String> {
         let cfg_content = format!("{:#?}", result.cfg_program);
-        fs::write(path, cfg_content).map_err(|e| format!("Failed to write CFG dump: {}", e))?;
+        let file_path = path.join("cfg_dump.txt");
+        fs::write(file_path, cfg_content).map_err(|e| format!("Failed to write CFG dump: {}", e))?;
         Ok(())
     }
 
     /// Write SC-Graph debug dump
     fn write_scgraph_dump(&self, result: &CompilationResult, path: &PathBuf) -> Result<(), String> {
         let scgraph_content = format!("{:#?}", result.sc_graph);
-        fs::write(path, scgraph_content)
+        let file_path = path.join("scgraph_dump.txt");
+        fs::write(file_path, scgraph_content)
             .map_err(|e| format!("Failed to write SC-Graph dump: {}", e))?;
         Ok(())
     }
@@ -214,7 +211,8 @@ impl OutputManager {
         let ast_content = printer
             .print_to_string(&result.ast_program)
             .map_err(|e| format!("Failed to pretty-print AST: {}", e))?;
-        fs::write(path, ast_content).map_err(|e| format!("Failed to write AST pretty: {}", e))?;
+        let file_path = path.join("ast_pretty.txt");
+        fs::write(file_path, ast_content).map_err(|e| format!("Failed to write AST pretty: {}", e))?;
         Ok(())
     }
 
@@ -226,7 +224,8 @@ impl OutputManager {
         let cfg_content = printer
             .print_to_string(&result.cfg_program)
             .map_err(|e| format!("Failed to pretty-print CFG: {}", e))?;
-        fs::write(path, cfg_content).map_err(|e| format!("Failed to write CFG pretty: {}", e))?;
+        let file_path = path.join("cfg_pretty.txt");
+        fs::write(file_path, cfg_content).map_err(|e| format!("Failed to write CFG pretty: {}", e))?;
         Ok(())
     }
 
@@ -242,8 +241,97 @@ impl OutputManager {
         let scgraph_content = printer
             .print_to_string(&result.sc_graph)
             .map_err(|e| format!("Failed to pretty-print SC-Graph: {}", e))?;
-        fs::write(path, scgraph_content)
+        let file_path = path.join("scgraph_pretty.txt");
+        fs::write(file_path, scgraph_content)
             .map_err(|e| format!("Failed to write SC-Graph pretty: {}", e))?;
+        Ok(())
+    }
+
+    /// Write SC-Graph DOT file for visualization
+    fn write_scgraph_dot(&self, result: &CompilationResult, path: &PathBuf) -> Result<(), String> {
+        use crate::pretty::DotPrinter;
+
+        let printer = DotPrinter::new();
+        let mut dot_content = Vec::new();
+        printer
+            .generate_dot(&result.sc_graph, &result.cfg_program, &mut dot_content)
+            .map_err(|e| format!("Failed to generate DOT file: {}", e))?;
+
+        let file_path = path.join("scgraph.dot");
+        fs::write(file_path, dot_content)
+            .map_err(|e| format!("Failed to write SC-Graph DOT file: {}", e))?;
+        Ok(())
+    }
+
+    /// Write summary markdown file
+    fn write_summary(&self, result: &CompilationResult, path: &PathBuf) -> Result<(), String> {
+        let stats = result.get_stats();
+        let status = if result.success { "✅ SUCCESS" } else { "❌ FAILED" };
+
+        let summary_content = format!(
+            r#"# FMitF Compilation Summary
+
+**Status:** {}  
+**Compilation Time:** {}ms  
+**Generated:** {}
+
+## Statistics
+
+| Stage | Count |
+|-------|-------|
+| Functions | {} |
+| Tables | {} |
+| Partitions | {} |
+| Basic Blocks | {} |
+| SC-Graph Nodes | {} |
+| S-edges (Sequential) | {} |
+| C-edges (Conflict) | {} |
+
+## Generated Files
+
+- `ast_dump.txt` - Raw AST structure
+- `ast_pretty.txt` - Human-readable AST  
+- `cfg_dump.txt` - Raw CFG structure
+- `cfg_pretty.txt` - Human-readable CFG
+- `scgraph_dump.txt` - Raw SC-Graph structure
+- `scgraph_pretty.txt` - Human-readable SC-Graph
+- `scgraph.dot` - GraphViz DOT file for visualization
+- `compilation.log` - Detailed compilation log
+
+## Visualization
+
+To visualize the SC-Graph, use GraphViz:
+
+```bash
+# Generate PNG image
+dot -Tpng scgraph.dot -o scgraph.png
+
+# Generate SVG image  
+dot -Tsvg scgraph.dot -o scgraph.svg
+
+# Generate PDF
+dot -Tpdf scgraph.dot -o scgraph.pdf
+```
+
+Legend:
+- **Blue arrows (→)**: S-edges (sequential within transactions)
+- **Red lines (—)**: C-edges (conflicts between transactions)
+"#,
+            status,
+            result.compilation_time_ms,
+            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+            stats.functions,
+            stats.tables,
+            stats.partitions,
+            stats.basic_blocks,
+            stats.sc_nodes,
+            stats.s_edges,
+            stats.c_edges,
+        );
+
+        let file_path = path.join("summary.md");
+        fs::write(file_path, summary_content)
+            .map_err(|e| format!("Failed to write summary: {}", e))?;
         Ok(())
     }
 }

@@ -21,10 +21,6 @@ pub struct Cli {
     /// Input .transact file
     pub input: PathBuf,
 
-    /// Output directory (if not specified, creates directory with input filename)
-    #[arg(long = "output-dir")]
-    pub output_dir: Option<PathBuf>,
-
     /// Skip optimization passes
     #[arg(long = "no-optimize")]
     pub no_optimize: bool,
@@ -55,14 +51,10 @@ impl Cli {
         Ok(())
     }
 
-    /// Get the output directory, creating one from input filename if not specified
+    /// Get the output directory, creating one from input filename
     pub fn get_output_dir(&self) -> PathBuf {
-        if let Some(ref dir) = self.output_dir {
-            dir.clone()
-        } else {
-            // Create directory with same name as input file (without extension)
-            let input_stem = self.input.file_stem().unwrap_or_default();
-            PathBuf::from(input_stem)
-        }
+        // Create directory with same name as input file (without extension)
+        let input_stem = self.input.file_stem().unwrap_or_default();
+        PathBuf::from(input_stem)
     }
 }

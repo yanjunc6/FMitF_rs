@@ -3,6 +3,7 @@ use std::io::Write;
 mod ast_printer;
 mod cfg_printer;
 mod sc_graph_printer;
+mod dot_printer;
 
 pub use ast_printer::{
     print_program, print_program_to_string, print_program_to_writer, AstPrinter, PrintMode,
@@ -10,6 +11,7 @@ pub use ast_printer::{
 };
 pub use cfg_printer::CfgPrinter;
 pub use sc_graph_printer::SCGraphPrinter;
+pub use dot_printer::DotPrinter;
 
 /// Unified trait for pretty printing different data structures.
 /// All printers implement this trait to provide a consistent interface.
