@@ -145,12 +145,34 @@ impl<'p> NameResolver<'p> {
     ///
     /// This includes resolving statements within the hop.
     fn resolve_hop(&mut self, hop_id: HopId) {
+        let hop = &self.program.hops[hop_id];
+
+        // Check if this is a ForLoop hop that introduces a loop variable
+        if let HopType::ForLoop {
+            loop_var,
+            loop_var_type,
+            ..
+        } = &hop.hop_type
+        {
+            // Create a variable for the loop variable in the current scope
+            if let Some(current_scope_id) = self.current_scope {
+                let var_id = self.program.variables.alloc(VarDecl {
+                    name: loop_var.clone(),
+                    ty: loop_var_type.clone(),
+                    kind: VarKind::Local,
+                    defined_at: hop.span.clone(),
+                    scope: current_scope_id,
+                });
+
+                // Add to current scope
+                if let Some(scope) = self.program.scopes.get_mut(current_scope_id) {
+                    scope.variables.insert(loop_var.clone(), var_id);
+                }
+            }
+        }
+
         // Hops do NOT create their own scopes - resolve statements in current function scope
-        let stmt_ids: Vec<_> = self.program.hops[hop_id]
-            .statements
-            .iter()
-            .copied()
-            .collect();
+        let stmt_ids: Vec<_> = hop.statements.iter().copied().collect();
         for stmt_id in stmt_ids {
             self.resolve_statement(stmt_id);
         }
@@ -712,6 +734,12 @@ impl<'p> NameResolver<'p> {
                 }
                 // Note: Field names in record literals might need table context for resolution
                 // For now, we only resolve the value expressions
+            }
+            ExpressionKind::ArrayLiteral { elements, .. } => {
+                // Resolve each element expression
+                for element_id in &elements {
+                    self.resolve_expression(*element_id);
+                }
             }
             ExpressionKind::UnaryOp { expr, .. } => {
                 self.resolve_expression(expr);

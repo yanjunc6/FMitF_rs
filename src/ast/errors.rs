@@ -149,6 +149,11 @@ pub enum AstError {
         function: String,
         hop_index: usize,
     },
+
+    // Constant expression errors
+    NonConstantExpression {
+        context: String,
+    },
 }
 
 impl std::fmt::Display for AstError {
@@ -201,6 +206,7 @@ impl AstError {
             Self::CrossNodeAccess { .. } => "CrossNodeAccess",
             Self::InvalidPrimaryKey { .. } => "InvalidPrimaryKey",
             Self::AbortNotInFirstHop { .. } => "AbortNotInFirstHop",
+            Self::NonConstantExpression { .. } => "NonConstantExpression",
         }
     }
 
@@ -347,6 +353,9 @@ impl AstError {
                 "Abort statement in function '{}' can only be used in the first hop, not hop {}",
                 function, hop_index
             ),
+            Self::NonConstantExpression { context } => {
+                format!("Expression must be constant for {}", context)
+            }
         }
     }
 }

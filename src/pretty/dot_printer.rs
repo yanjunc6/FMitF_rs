@@ -1,14 +1,14 @@
-use crate::sc_graph::{EdgeType, SCGraph, SCGraphEdge, SCGraphNodeId};
 use crate::cfg::CfgProgram;
+use crate::sc_graph::{EdgeType, SCGraph, SCGraphEdge, SCGraphNodeId};
 use std::io::Write;
 
 /// DOT file generator for SC-Graph visualization.
-/// 
+///
 /// This generates GraphViz DOT format files that can be rendered using:
 /// - `dot -Tpng graph.dot -o graph.png` (PNG image)
 /// - `dot -Tsvg graph.dot -o graph.svg` (SVG image)
 /// - Online GraphViz viewers
-/// 
+///
 /// The visualization represents:
 /// - S-edges as directed edges (arrows) in blue
 /// - C-edges as undirected edges (no arrows) in red
@@ -38,12 +38,17 @@ impl DotPrinter {
     }
 
     /// Generate DOT format for the SC-Graph
-    pub fn generate_dot(&self, sc_graph: &SCGraph, cfg_program: &CfgProgram, writer: &mut dyn Write) -> std::io::Result<()> {
+    pub fn generate_dot(
+        &self,
+        sc_graph: &SCGraph,
+        cfg_program: &CfgProgram,
+        writer: &mut dyn Write,
+    ) -> std::io::Result<()> {
         // Start as digraph to support both directed and undirected edges
         writeln!(writer, "digraph SCGraph {{")?;
         writeln!(writer, "    rankdir=TB;")?;
         writeln!(writer, "    node [shape=box, style=rounded];")?;
-        
+
         if self.use_colors {
             writeln!(writer, "    edge [penwidth=2];")?;
         }
@@ -67,10 +72,14 @@ impl DotPrinter {
         writeln!(writer)?;
 
         // Generate edges - separate S and C edges for clarity
-        let s_edges: Vec<_> = sc_graph.edges.iter()
+        let s_edges: Vec<_> = sc_graph
+            .edges
+            .iter()
             .filter(|e| e.edge_type == EdgeType::S)
             .collect();
-        let c_edges: Vec<_> = sc_graph.edges.iter()
+        let c_edges: Vec<_> = sc_graph
+            .edges
+            .iter()
             .filter(|e| e.edge_type == EdgeType::C)
             .collect();
 
@@ -97,24 +106,36 @@ impl DotPrinter {
     }
 
     /// Generate a node declaration
-    fn generate_node(&self, node_id: SCGraphNodeId, cfg_program: &CfgProgram, writer: &mut dyn Write) -> std::io::Result<()> {
+    fn generate_node(
+        &self,
+        node_id: SCGraphNodeId,
+        cfg_program: &CfgProgram,
+        writer: &mut dyn Write,
+    ) -> std::io::Result<()> {
         let node_name = self.node_name(node_id);
-        
+
         // Get function name from CFG program
         let function_name = if let Some(function) = cfg_program.functions.get(node_id.function_id) {
             function.name.clone()
         } else {
-            format!("unknown_func_{}", self.format_function_id(node_id.function_id))
+            format!(
+                "unknown_func_{}",
+                self.format_function_id(node_id.function_id)
+            )
         };
-        
+
         if self.show_details {
-            writeln!(writer, "    {} [label=\"Hop {}\\n{}\"];",
+            writeln!(
+                writer,
+                "    {} [label=\"Hop {}\\n{}\"];",
                 node_name,
                 self.format_hop_id(node_id.hop_id),
                 function_name
             )?;
         } else {
-            writeln!(writer, "    {} [label=\"Hop {}\"];",
+            writeln!(
+                writer,
+                "    {} [label=\"Hop {}\"];",
                 node_name,
                 self.format_hop_id(node_id.hop_id)
             )?;
@@ -129,11 +150,15 @@ impl DotPrinter {
         let target_name = self.node_name(edge.target);
 
         if self.use_colors {
-            writeln!(writer, "    {} -> {} [color=blue, label=\"S\"];",
+            writeln!(
+                writer,
+                "    {} -> {} [color=blue, label=\"S\"];",
                 source_name, target_name
             )?;
         } else {
-            writeln!(writer, "    {} -> {} [label=\"S\"];",
+            writeln!(
+                writer,
+                "    {} -> {} [label=\"S\"];",
                 source_name, target_name
             )?;
         }
@@ -147,11 +172,15 @@ impl DotPrinter {
         let target_name = self.node_name(edge.target);
 
         if self.use_colors {
-            writeln!(writer, "    {} -> {} [dir=none, color=red, label=\"C\"];",
+            writeln!(
+                writer,
+                "    {} -> {} [dir=none, color=red, label=\"C\"];",
                 source_name, target_name
             )?;
         } else {
-            writeln!(writer, "    {} -> {} [dir=none, label=\"C\"];",
+            writeln!(
+                writer,
+                "    {} -> {} [dir=none, label=\"C\"];",
                 source_name, target_name
             )?;
         }
@@ -161,7 +190,8 @@ impl DotPrinter {
 
     /// Generate a unique node name for DOT format
     fn node_name(&self, node_id: SCGraphNodeId) -> String {
-        format!("hop_{}_{}", 
+        format!(
+            "hop_{}_{}",
             self.format_function_id(node_id.function_id),
             self.format_hop_id(node_id.hop_id)
         )

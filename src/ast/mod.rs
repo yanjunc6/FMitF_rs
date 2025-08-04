@@ -38,10 +38,10 @@
 use id_arena::{Arena, Id};
 use std::collections::HashMap;
 
+pub mod analysis;
 mod ast_builder;
 pub mod errors;
 mod name_resolver;
-mod semantics_analysis;
 
 // Re-export only the essential types users need
 pub use errors::{AstError, Results, SpannedError};
@@ -90,6 +90,7 @@ pub type ParameterId = Id<ParameterDecl>;
 pub type StatementId = Id<Statement>;
 pub type ExpressionId = Id<Expression>;
 pub type VarId = Id<VarDecl>;
+pub type ConstId = Id<ConstDeclaration>;
 pub type ScopeId = Id<Scope>;
 
 #[derive(Debug, Clone)]
@@ -410,6 +411,10 @@ pub enum ExpressionKind {
         fields: Vec<FieldAssignment>,
         resolved_type: Option<TypeName>,
     },
+    ArrayLiteral {
+        elements: Vec<ExpressionId>,
+        resolved_type: Option<TypeName>,
+    },
     UnaryOp {
         op: UnaryOp,
         expr: ExpressionId,
@@ -480,6 +485,6 @@ pub struct Scope {
 pub fn parse_and_analyze(source: &str) -> Results<Program> {
     let mut program = ast_builder::parse_and_build(source)?;
     name_resolver::resolve_names(&mut program)?;
-    semantics_analysis::analyze_program_with_types(&mut program)?;
+    analysis::analyze_program_with_types(&mut program)?;
     Ok(program)
 }

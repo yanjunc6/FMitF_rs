@@ -1,0 +1,25 @@
+// Example code to demonstrate constant analysis
+// This would be used to test the constant checker
+
+const int MAX_SIZE = 10;
+const int BLOCK_SIZE = 20;
+
+partition f(int x);
+
+table TestTable {
+    primary int id;
+    string name;
+    int[5] data;
+    int[2] buffer;
+
+    node f(id);
+}
+
+void test_function() {
+    hop {
+        int[BLOCK_SIZE] local_array = {0, 1, 2, 3, 4};
+    }
+    hops for int i = 0 to MAX_SIZE {
+        local_array[i] = i * 2;
+    }
+}

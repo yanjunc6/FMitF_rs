@@ -30,10 +30,16 @@ pub struct CompilationStats {
 
 impl CompilationResult {
     pub fn get_stats(&self) -> CompilationStats {
-        let s_edges = self.sc_graph.edges.iter()
+        let s_edges = self
+            .sc_graph
+            .edges
+            .iter()
             .filter(|e| e.edge_type == crate::sc_graph::EdgeType::S)
             .count();
-        let c_edges = self.sc_graph.edges.iter()
+        let c_edges = self
+            .sc_graph
+            .edges
+            .iter()
             .filter(|e| e.edge_type == crate::sc_graph::EdgeType::C)
             .count();
 
