@@ -31,7 +31,9 @@ pub struct Logger {
 
 impl Logger {
     pub fn new() -> Self {
-        Self { level: LogLevel::Normal }
+        Self {
+            level: LogLevel::Normal,
+        }
     }
 
     // Stage progress messages (Normal level)

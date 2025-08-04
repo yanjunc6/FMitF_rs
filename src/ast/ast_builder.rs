@@ -23,7 +23,7 @@ enum FieldDeclResult {
 
 /// Enum for function body items.
 enum FunctionBodyItem {
-    Statement(StatementId),
+    Statement(()),
     Hop(HopId),
 }
 
@@ -576,9 +576,7 @@ impl AstBuilder {
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
                 Rule::statement => {
-                    return Ok(FunctionBodyItem::Statement(
-                        self.build_statement(inner_pair)?,
-                    ));
+                    return Ok(FunctionBodyItem::Statement(()));
                 }
                 Rule::hop_block => {
                     return Ok(FunctionBodyItem::Hop(self.build_hop_block(inner_pair)?));

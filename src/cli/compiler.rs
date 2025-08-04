@@ -3,10 +3,7 @@
 
 use super::{Cli, Logger, OutputManager};
 use crate::{
-    ast::parse_and_analyze,
-    cfg::CfgBuilder,
-    sc_graph::SCGraphBuilder,
-    AstProgram, CfgProgram,
+    ast::parse_and_analyze, cfg::CfgBuilder, sc_graph::SCGraphBuilder, AstProgram, CfgProgram,
 };
 
 /// Compilation result containing all intermediate products
@@ -37,11 +34,14 @@ impl CompilationResult {
             functions: self.ast_program.functions.len(),
             tables: self.ast_program.tables.len(),
             partitions: self.ast_program.partitions.len(),
-            basic_blocks: self.cfg_program.functions.iter()
+            basic_blocks: self
+                .cfg_program
+                .functions
+                .iter()
                 .map(|(_, f)| f.blocks.len())
                 .sum(),
             sc_nodes: 0, // TODO: Add node count to SCGraph
-            s_edges: 0,  // TODO: Add edge count to SCGraph  
+            s_edges: 0,  // TODO: Add edge count to SCGraph
             c_edges: 0,  // TODO: Add edge count to SCGraph
         }
     }
@@ -60,17 +60,13 @@ impl Compiler {
     }
 
     /// Compile a .transact file through the entire pipeline
-    pub fn compile(
-        &mut self,
-        source_code: String,
-        cli: &Cli,
-    ) -> Result<CompilationResult, String> {
+    pub fn compile(&mut self, source_code: String, cli: &Cli) -> Result<CompilationResult, String> {
         let start_time = std::time::Instant::now();
 
         self.logger.compilation_start(&cli.input);
 
         // Stage 1: AST
-        self.logger.stage_start(1, 5, "Frontend Analysis");
+        self.logger.stage_start(1, 4, "Frontend Analysis");
         let ast_program = self.compile_ast(source_code.clone())?;
         self.logger.stage_success();
 
@@ -81,12 +77,15 @@ impl Compiler {
 
         // Stage 3: Optimization (skipped for now)
         if !cli.no_optimize {
-            self.logger.stage_start(3, 4, "Optimizing Control Flow Graph");
-            self.logger.stage_skipped("optimization not yet implemented");
+            self.logger
+                .stage_start(3, 4, "Optimizing Control Flow Graph");
+            self.logger
+                .stage_skipped("optimization not yet implemented");
         }
 
         // Stage 4: SC-Graph
-        self.logger.stage_start(4, 4, "Building Serializability Conflict Graph");
+        self.logger
+            .stage_start(4, 4, "Building Serializability Conflict Graph");
         let sc_graph = self.compile_scgraph(&cfg_program)?;
         self.logger.stage_success();
 
@@ -121,22 +120,21 @@ impl Compiler {
             .map_err(|e| format!("CFG building failed: {}", e))
     }
 
-    fn compile_scgraph(&mut self, cfg_program: &CfgProgram) -> Result<crate::sc_graph::SCGraph, String> {
+    fn compile_scgraph(
+        &mut self,
+        cfg_program: &CfgProgram,
+    ) -> Result<crate::sc_graph::SCGraph, String> {
         Ok(SCGraphBuilder::build(cfg_program))
     }
 
     /// Handle output based on the CLI configuration
-    pub fn handle_output(
-        &self,
-        result: &CompilationResult,
-        cli: &Cli,
-    ) -> Result<(), String> {
+    pub fn handle_output(&self, result: &CompilationResult, cli: &Cli) -> Result<(), String> {
         let output_manager = OutputManager::new();
         let output_dir = cli.get_output_dir();
-        
+
         // Always write to directory with all artifacts
         output_manager.write_directory_output(result, &output_dir)?;
-        
+
         Ok(())
     }
 }

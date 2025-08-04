@@ -4,19 +4,20 @@
 
 FMitF (Formal Methods in Transaction Framework) is a Rust-based framework for verifying serializability in distributed "chopped" transactions. Key characteristics:
 
-- **Domain**: Distributed transaction verification using formal methods (Boogie)
-- **Architecture**: Multi-stage pipeline: AST → CFG → Optimization → SC-Graph → Verification
+- **Domain**: Distributed transaction verification using formal methods
+- **Architecture**: Multi-stage compilation pipeline: AST → CFG → SC-Graph (Optimization currently disabled, Verification removed)
 - **DSL**: Custom transaction language (.transact files) parsed via Pest grammar
-- **Core Goal**: Prove that concurrent chopped transactions maintain conflict serializability
+- **Core Goal**: Analyze concurrent chopped transactions for conflict serializability
 
 ## Architecture & Data Flow
 
-### 5-Stage Pipeline (src/cli/pipeline.rs)
+### 4-Stage Compilation Pipeline (src/cli/compiler.rs)
 1. **AST Stage**: Parse .transact files using Pest grammar (src/ast/grammar.pest)
 2. **CFG Stage**: Convert AST to Control Flow Graphs with Hop-based execution model
-3. **Optimize Stage**: Apply dataflow optimizations (constant prop, dead code elimination, CSE)
+3. **Optimize Stage**: Apply dataflow optimizations (currently skipped - not yet implemented)
 4. **SC-Graph Stage**: Build Serializability Conflict Graph with S-edges (sequential) and C-edges (conflict)
-5. **Verification Stage**: Generate Boogie code for C-edges to verify commutativity and prune graph, and do final semantic checks
+
+**Note**: Verification stage has been removed from the current implementation
 
 ### Key Data Structures
 - **CfgProgram**: Never clone - use Arena<T> for memory-efficient storage
@@ -82,41 +83,55 @@ table Account {
 - C-edges: Connect hops from different transactions that access same tables (RW or WW conflicts)
 - Use `SCGraphBuilder::build()` - never manually construct
 
-## CLI & Output Modes
+## CLI & Output System
 
-### Mode Hierarchy (each includes previous stages)
+### Simplified CLI Interface
 ```bash
-cargo run -- input.transact --mode ast      # Parse only
-cargo run -- input.transact --mode cfg      # + CFG building  
-cargo run -- input.transact --mode optimize # + Optimizations
-cargo run -- input.transact --mode scgraph  # + Conflict analysis
-cargo run -- input.transact --mode verify   # + Boogie verification (default)
+cargo run -- input.transact                          # Default: creates output directory with input filename
+cargo run -- input.transact --output-dir my_output   # Custom output directory
+cargo run -- input.transact --no-optimize            # Skip optimization passes (currently no-op)
+cargo run -- input.transact --no-color               # Disable colored terminal output
 ```
 
-### Key Flags
-- `--dot`: Generate GraphViz output for CFG/SC-graph visualization
-- `--output-dir`: For verify mode - saves generated Boogie files
-- `--verbose`: Detailed analysis output
+### Output Structure
+- **Always runs full pipeline**: No mode selection - processes through all stages
+- **Directory output**: Creates structured output directory with:
+  - `summary.md`: Compilation report in Markdown format
+  - `compilation.log`: Detailed compilation log
+  - Console summary displayed during compilation
+
+### CLI Flags
+- `--output-dir DIR`: Specify output directory (default: creates directory from input filename)
 - `--no-optimize`: Skip optimization passes for debugging
+- `--no-color`: Disable colored terminal output
 
-## Verification Process (src/verification/)
+## Compilation Process (src/cli/)
 
-### Commutativity Checking
-1. For each C-edge, create `VerificationUnit` with hop prefixes
-2. Generate Boogie code proving hop commutativity
-3. Execute Boogie verifier with timeout
-4. Remove successful C-edges from SC-graph
-5. Final mixed cycles indicate serializability violations
+### Compiler Architecture
+- **Compiler**: Main orchestration struct that runs the 4-stage pipeline
+- **Logger**: Simple console output with stage progress tracking
+- **OutputManager**: Stream-based output system for console, file, and directory output
+- **CompilationResult**: Contains all intermediate products (AST, CFG, SC-Graph) and statistics
 
-### File Naming Convention
-- Boogie files: `edge_{source}_{target}.bpl`
-- Temporary files cleaned up automatically
-- Use `BoogieFileManager` for file operations
+### Output Management
+- Flexible stream-based approach - can write to any `Write` destination
+- Always generates structured directory output with logs and summaries
+- Console progress display with colored output (unless `--no-color`)
+
+### File Structure
+- No pipeline.rs - compilation is handled directly in compiler.rs
+- Removed verification module dependencies
+- Simplified CLI argument processing
 
 ## Testing & Examples
 
 ### Example Files (examples/)
 - `tpcc_distributed.transact`: Complex TPC-C workload with multi-hop transactions
+
+### Current Status Notes
+- AST parsing may have compatibility issues with some existing example files
+- Grammar may need updates for full compatibility with example syntax
+- CLI redesign is complete and functional
 
 ### Runtime REPL (commented out in current version)
 - Interactive mode for testing transaction execution
@@ -127,11 +142,12 @@ cargo run -- input.transact --mode verify   # + Boogie verification (default)
 1. **Don't clone CFG structures** - use ID references
 2. **Dataflow analysis order**: Must run after CFG predecessor building
 3. **SC-Graph edge direction**: S-edges are directed, C-edges are undirected but stored with consistent ordering
-4. **Boogie output**: Only generated in verify mode with `--output-dir`
+4. **Output directory creation**: Always creates structured output with logs and summaries
 5. **Transaction vs Partition**: Transactions have hops, partitions are placement functions
 
 ## Key Dependencies
 - `pest`: Grammar parsing (see src/ast/grammar.pest)
 - `id-arena`: Memory-efficient ID-based storage
 - `petgraph`: For potential cycle detection in SC-graphs
-- External: Boogie verifier (required for verification mode)
+- `colored`: Terminal color output (can be disabled with --no-color)
+- `clap`: CLI argument parsing with derive features

@@ -38,10 +38,17 @@ impl Cli {
     pub fn validate(&self) -> Result<(), String> {
         // Check input file existence
         if !self.input.exists() {
-            return Err(format!("Input file does not exist: {}", self.input.display()));
+            return Err(format!(
+                "Input file does not exist: {}",
+                self.input.display()
+            ));
         }
 
-        if !self.input.extension().map_or(false, |ext| ext == "transact") {
+        if !self
+            .input
+            .extension()
+            .map_or(false, |ext| ext == "transact")
+        {
             return Err("Input file must have .transact extension".to_string());
         }
 
