@@ -134,6 +134,34 @@ pub struct Program {
     pub var_types: HashMap<VarId, TypeName>,
 }
 
+impl Default for Program {
+    fn default() -> Self {
+        Self {
+            partitions: Arena::new(),
+            constants: Arena::new(),
+            tables: Arena::new(),
+            fields: Arena::new(),
+            functions: Arena::new(),
+            hops: Arena::new(),
+            parameters: Arena::new(),
+            statements: Arena::new(),
+            expressions: Arena::new(),
+            variables: Arena::new(),
+            scopes: Arena::new(),
+            root_partitions: Vec::new(),
+            root_constants: Vec::new(),
+            root_tables: Vec::new(),
+            root_functions: Vec::new(),
+            partition_map: HashMap::new(),
+            constant_map: HashMap::new(),
+            table_map: HashMap::new(),
+            function_map: HashMap::new(),
+            resolutions: HashMap::new(),
+            var_types: HashMap::new(),
+        }
+    }
+}
+
 /// Represents a partition function declaration.
 /// Partitions are function-like with typed parameters and always return int.
 #[derive(Debug, Clone, PartialEq)]

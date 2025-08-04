@@ -16,6 +16,7 @@ array_type = { basic_type ~ "[" ~ integer_literal? ~ "]" }
 type_name = { array_type | basic_type }
 ret_type = { type_name | "void" }
 primary_keyword = { "primary" }
+node_keyword = { "node" }
 
 // Grammar Start
 program = {
@@ -47,7 +48,7 @@ table_declaration = {
 
 field_declaration = {
     (primary_keyword? ~ type_name ~ identifier ~ ";")
-  | ("node" ~ identifier ~ "(" ~ expression_list? ~ ")" ~ ";")
+  | (node_keyword ~ identifier ~ "(" ~ expression_list? ~ ")" ~ ";")
 }
 
 // Function Declarations

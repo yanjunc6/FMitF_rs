@@ -83,6 +83,10 @@ table Account {
 - C-edges: Connect hops from different transactions that access same tables (RW or WW conflicts)
 - Use `SCGraphBuilder::build()` - never manually construct
 
+### Testing
+
+Create testing case, tmp file and all the output files in the `tmp/` directory.
+
 ## CLI & Output System
 
 ### Simplified CLI Interface

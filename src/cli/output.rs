@@ -33,6 +33,16 @@ impl OutputManager {
         self.write_markdown_summary(result, &mut summary_file)
             .map_err(|e| format!("Failed to write summary: {}", e))?;
 
+        // Always write debug dumps for debugging purposes
+        self.write_ast_dump(result, &dir.join("ast_dump.txt"))?;
+        self.write_cfg_dump(result, &dir.join("cfg_dump.txt"))?;
+        self.write_scgraph_dump(result, &dir.join("scgraph_dump.txt"))?;
+
+        // Also write pretty-printed versions for human readability
+        self.write_ast_pretty(result, &dir.join("ast_pretty.txt"))?;
+        self.write_cfg_pretty(result, &dir.join("cfg_pretty.txt"))?;
+        self.write_scgraph_pretty(result, &dir.join("scgraph_pretty.txt"))?;
+
         // Write console summary
         self.write_console_summary(result);
 
@@ -171,6 +181,69 @@ impl OutputManager {
         )
         .map_err(|e| format!("Failed to write log: {}", e))?;
 
+        Ok(())
+    }
+
+    /// Write AST debug dump
+    fn write_ast_dump(&self, result: &CompilationResult, path: &PathBuf) -> Result<(), String> {
+        let ast_content = format!("{:#?}", result.ast_program);
+        fs::write(path, ast_content).map_err(|e| format!("Failed to write AST dump: {}", e))?;
+        Ok(())
+    }
+
+    /// Write CFG debug dump  
+    fn write_cfg_dump(&self, result: &CompilationResult, path: &PathBuf) -> Result<(), String> {
+        let cfg_content = format!("{:#?}", result.cfg_program);
+        fs::write(path, cfg_content).map_err(|e| format!("Failed to write CFG dump: {}", e))?;
+        Ok(())
+    }
+
+    /// Write SC-Graph debug dump
+    fn write_scgraph_dump(&self, result: &CompilationResult, path: &PathBuf) -> Result<(), String> {
+        let scgraph_content = format!("{:#?}", result.sc_graph);
+        fs::write(path, scgraph_content)
+            .map_err(|e| format!("Failed to write SC-Graph dump: {}", e))?;
+        Ok(())
+    }
+
+    /// Write pretty-printed AST
+    fn write_ast_pretty(&self, result: &CompilationResult, path: &PathBuf) -> Result<(), String> {
+        use crate::pretty::{AstPrinter, PrettyPrinter};
+
+        let printer = AstPrinter::new();
+        let ast_content = printer
+            .print_to_string(&result.ast_program)
+            .map_err(|e| format!("Failed to pretty-print AST: {}", e))?;
+        fs::write(path, ast_content).map_err(|e| format!("Failed to write AST pretty: {}", e))?;
+        Ok(())
+    }
+
+    /// Write pretty-printed CFG
+    fn write_cfg_pretty(&self, result: &CompilationResult, path: &PathBuf) -> Result<(), String> {
+        use crate::pretty::{CfgPrinter, PrettyPrinter};
+
+        let printer = CfgPrinter::new();
+        let cfg_content = printer
+            .print_to_string(&result.cfg_program)
+            .map_err(|e| format!("Failed to pretty-print CFG: {}", e))?;
+        fs::write(path, cfg_content).map_err(|e| format!("Failed to write CFG pretty: {}", e))?;
+        Ok(())
+    }
+
+    /// Write pretty-printed SC-Graph
+    fn write_scgraph_pretty(
+        &self,
+        result: &CompilationResult,
+        path: &PathBuf,
+    ) -> Result<(), String> {
+        use crate::pretty::{PrettyPrinter, SCGraphPrinter};
+
+        let printer = SCGraphPrinter::new();
+        let scgraph_content = printer
+            .print_to_string(&result.sc_graph)
+            .map_err(|e| format!("Failed to pretty-print SC-Graph: {}", e))?;
+        fs::write(path, scgraph_content)
+            .map_err(|e| format!("Failed to write SC-Graph pretty: {}", e))?;
         Ok(())
     }
 }

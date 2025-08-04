@@ -287,13 +287,14 @@ impl AstBuilder {
                 Rule::primary_keyword => {
                     is_primary = true;
                 }
+                Rule::node_keyword => {
+                    is_node = true;
+                }
                 Rule::type_name => {
                     field_type = Some(self.build_type_name(inner_pair)?);
                 }
                 Rule::identifier => {
-                    if inner_pair.as_str() == "node" {
-                        is_node = true;
-                    } else if is_node && partition_name.is_empty() {
+                    if is_node && partition_name.is_empty() {
                         partition_name = inner_pair.as_str().to_string();
                     } else if field_name.is_empty() {
                         field_name = inner_pair.as_str().to_string();
@@ -1149,6 +1150,10 @@ impl AstBuilder {
                 Rule::logic_and => {
                     operands.push(self.build_logic_and(inner_pair)?);
                 }
+                Rule::logic_or => {
+                    // Handle recursive logic_or by delegating
+                    operands.push(self.build_logic_or(inner_pair)?);
+                }
                 Rule::logic_or_op => {
                     // Operator handled implicitly
                 }
@@ -1156,7 +1161,12 @@ impl AstBuilder {
             }
         }
 
-        if operands.len() == 1 {
+        if operands.is_empty() {
+            return Err(vec![SpannedError {
+                error: AstError::ParseError("No operands found in logic_or expression".to_string()),
+                span: Some(span.clone()),
+            }]);
+        } else if operands.len() == 1 {
             Ok(operands.into_iter().next().unwrap())
         } else {
             // Build left-associative binary operations
@@ -1194,7 +1204,14 @@ impl AstBuilder {
             }
         }
 
-        if operands.len() == 1 {
+        if operands.is_empty() {
+            return Err(vec![SpannedError {
+                error: AstError::ParseError(
+                    "No operands found in logic_and expression".to_string(),
+                ),
+                span: Some(span.clone()),
+            }]);
+        } else if operands.len() == 1 {
             Ok(operands.into_iter().next().unwrap())
         } else {
             // Build left-associative binary operations
@@ -1237,7 +1254,12 @@ impl AstBuilder {
             }
         }
 
-        if operands.len() == 1 {
+        if operands.is_empty() {
+            return Err(vec![SpannedError {
+                error: AstError::ParseError("No operands found in equality expression".to_string()),
+                span: Some(span.clone()),
+            }]);
+        } else if operands.len() == 1 {
             Ok(operands.into_iter().next().unwrap())
         } else {
             // Build left-associative binary operations
@@ -1282,7 +1304,14 @@ impl AstBuilder {
             }
         }
 
-        if operands.len() == 1 {
+        if operands.is_empty() {
+            return Err(vec![SpannedError {
+                error: AstError::ParseError(
+                    "No operands found in comparison expression".to_string(),
+                ),
+                span: Some(span.clone()),
+            }]);
+        } else if operands.len() == 1 {
             Ok(operands.into_iter().next().unwrap())
         } else {
             // Build left-associative binary operations
@@ -1325,7 +1354,12 @@ impl AstBuilder {
             }
         }
 
-        if operands.len() == 1 {
+        if operands.is_empty() {
+            return Err(vec![SpannedError {
+                error: AstError::ParseError("No operands found in addition expression".to_string()),
+                span: Some(span.clone()),
+            }]);
+        } else if operands.len() == 1 {
             Ok(operands.into_iter().next().unwrap())
         } else {
             // Build left-associative binary operations
@@ -1368,7 +1402,14 @@ impl AstBuilder {
             }
         }
 
-        if operands.len() == 1 {
+        if operands.is_empty() {
+            return Err(vec![SpannedError {
+                error: AstError::ParseError(
+                    "No operands found in multiplication expression".to_string(),
+                ),
+                span: Some(span.clone()),
+            }]);
+        } else if operands.len() == 1 {
             Ok(operands.into_iter().next().unwrap())
         } else {
             // Build left-associative binary operations
@@ -1742,16 +1783,39 @@ impl AstBuilder {
         for inner_pair in pair.into_inner() {
             if inner_pair.as_rule() == Rule::expression {
                 // For node arguments, we expect simple identifiers
-                for expr_inner in inner_pair.into_inner() {
-                    if expr_inner.as_rule() == Rule::identifier {
-                        identifiers.push(expr_inner.as_str().to_string());
-                        break;
-                    }
+                // Traverse the expression hierarchy to find the identifier
+                if let Some(identifier) = self.extract_identifier_from_expression(inner_pair) {
+                    identifiers.push(identifier);
                 }
             }
         }
 
         Ok(identifiers)
+    }
+
+    /// Helper function to extract identifier from expression hierarchy
+    fn extract_identifier_from_expression(&self, pair: Pair<Rule>) -> Option<String> {
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::identifier => {
+                    return Some(inner_pair.as_str().to_string());
+                }
+                Rule::logic_or
+                | Rule::logic_and
+                | Rule::equality
+                | Rule::comparison
+                | Rule::addition
+                | Rule::multiplication
+                | Rule::unary
+                | Rule::primary => {
+                    if let Some(id) = self.extract_identifier_from_expression(inner_pair) {
+                        return Some(id);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
     }
 }
 
