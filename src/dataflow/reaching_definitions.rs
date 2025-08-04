@@ -75,19 +75,6 @@ pub struct ReachingDefinitionsTransferWithLocation {
     pub current_stmt_index: usize,
 }
 
-impl ReachingDefinitionsTransferWithLocation {
-    pub fn new(block_id: BasicBlockId) -> Self {
-        Self {
-            current_block: block_id,
-            current_stmt_index: 0,
-        }
-    }
-
-    pub fn set_statement_index(&mut self, index: usize) {
-        self.current_stmt_index = index;
-    }
-}
-
 impl TransferFunction<SetLattice<Definition>> for ReachingDefinitionsTransferWithLocation {
     fn transfer_statement(
         &self,

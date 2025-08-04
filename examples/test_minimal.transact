@@ -1,0 +1,13 @@
+parition f(int x);
+
+table TestTable {
+    primary int ID;
+    node f(ID);
+    int VALUE;
+}
+
+void test_function() {
+    hop {
+        TestTable[ID: 1].VALUE = 42;
+    }
+}
