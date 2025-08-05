@@ -334,6 +334,12 @@ pub enum LValue {
         index: ExpressionId,
         resolved_var: Option<VarId>,
     },
+    FieldAccess {
+        object_name: String,
+        field_name: String,
+        resolved_var: Option<VarId>,
+        resolved_field: Option<FieldId>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -409,6 +415,13 @@ pub enum ExpressionKind {
         array_name: String,
         index: ExpressionId,
         resolved_var: Option<VarId>,
+        resolved_type: Option<TypeName>,
+    },
+    FieldAccess {
+        object_name: String,
+        field_name: String,
+        resolved_var: Option<VarId>,
+        resolved_field: Option<FieldId>,
         resolved_type: Option<TypeName>,
     },
     RecordLiteral {

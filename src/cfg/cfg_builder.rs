@@ -905,6 +905,14 @@ impl<'a> FunctionContextBuilder<'a> {
                     );
                 }
             }
+            ast::LValue::FieldAccess { resolved_var, .. } => {
+                // TODO: Implement field access assignment in CFG
+                // For now, skip unresolved field accesses
+                if resolved_var.is_some() {
+                    // Placeholder implementation - field access not yet fully supported in CFG
+                    // This would need to be expanded based on the target field type and semantics
+                }
+            }
         }
         Ok(())
     }

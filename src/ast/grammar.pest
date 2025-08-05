@@ -12,9 +12,10 @@ string_literal  = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 bool_literal    = @{ "true" | "false" }
 
 basic_type = { "int" | "float" | "string" | "bool" }
-array_type = { basic_type ~ "[" ~ expression? ~ "]" }
-type_name = { array_type | basic_type }
-ret_type = { type_name | "void" }
+user_defined_type = { identifier }
+array_type = { (basic_type | user_defined_type) ~ "[" ~ expression? ~ "]" }
+type_name = { array_type | basic_type | user_defined_type }
+ret_type = { "void" | type_name }
 primary_keyword = { "primary" }
 node_keyword = { "node" }
 
@@ -113,6 +114,7 @@ assignment_operator = {
 
 lvalue = {
     table_field_access
+  | field_access
   | table_access
   | array_access
   | identifier
@@ -205,6 +207,7 @@ unary_op = { "!" | "-" }
 primary = {
     bool_literal
   | table_field_access
+  | field_access
   | table_access
   | array_access
   | array_literal
@@ -214,6 +217,10 @@ primary = {
   | string_literal
   | identifier
   | "(" ~ expression ~ ")"
+}
+
+field_access = {
+    identifier ~ "." ~ identifier
 }
 
 table_field_access = {

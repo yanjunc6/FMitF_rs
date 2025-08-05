@@ -356,6 +356,26 @@ impl<'p> NameResolver<'p> {
                     }
                 }
             }
+            LValue::FieldAccess { object_name, .. } => {
+                // Look up the object variable
+                let var_id = self.lookup_variable(object_name);
+                if var_id.is_none() {
+                    self.error_at(stmt_span, AstError::UndeclaredVariable(object_name.clone()));
+                } else {
+                    // Update the statement with resolved variable
+                    if let StatementKind::Assignment(ref mut assign) =
+                        &mut self.program.statements[stmt_id].node
+                    {
+                        if let LValue::FieldAccess {
+                            ref mut resolved_var,
+                            ..
+                        } = &mut assign.lvalue
+                        {
+                            *resolved_var = var_id;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -749,6 +769,16 @@ impl<'p> NameResolver<'p> {
             ExpressionKind::BinaryOp { left, right, .. } => {
                 self.resolve_expression(left);
                 self.resolve_expression(right);
+            }
+            ExpressionKind::FieldAccess { object_name, .. } => {
+                // Look up the object variable
+                if let Some(var_id) = self.lookup_variable(&object_name) {
+                    // Store the resolution for the object
+                    self.program.resolutions.insert(expr_id, var_id);
+                } else {
+                    self.error_at(&expr_span, AstError::UndeclaredVariable(object_name));
+                }
+                // TODO: Add field resolution within the object type
             }
             ExpressionKind::IntLit(_)
             | ExpressionKind::FloatLit(_)

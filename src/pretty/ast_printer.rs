@@ -552,6 +552,13 @@ impl AstPrinter {
                 }
                 write!(writer, "]")?;
             }
+            LValue::FieldAccess {
+                object_name,
+                field_name,
+                ..
+            } => {
+                write!(writer, "{}.{}", object_name, field_name)?;
+            }
         }
         Ok(())
     }
@@ -651,6 +658,13 @@ impl AstPrinter {
                 if let Some(inner_expr) = program.expressions.get(*expr) {
                     self.print_expression(inner_expr, program, writer)?;
                 }
+            }
+            ExpressionKind::FieldAccess {
+                object_name,
+                field_name,
+                ..
+            } => {
+                write!(writer, "{}.{}", object_name, field_name)?;
             }
             ExpressionKind::BinaryOp {
                 left, op, right, ..
