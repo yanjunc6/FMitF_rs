@@ -351,4 +351,4 @@ src/
 
 # TODO-list
 
-- array literals
+- dataflow & optimization has many TODO

@@ -1,4 +1,6 @@
-use crate::cfg::{ControlFlowEdge, EdgeType, FunctionCfg, Operand, Rvalue, Statement, VarId};
+use crate::cfg::{
+    ControlFlowEdge, EdgeType, FunctionCfg, LValue, Operand, Rvalue, Statement, VarId,
+};
 use crate::dataflow::{
     AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
     TransferFunction,
@@ -19,21 +21,28 @@ impl TransferFunction<SetLattice<VarId>> for LiveVariablesTransfer {
         let mut live_vars = state.set.clone();
 
         match stmt {
-            Statement::Assign { var, rvalue, .. } => {
-                // Kill: Remove the assigned variable (it's defined here)
-                live_vars.remove(var);
+            Statement::Assign { lvalue, rvalue, .. } => {
+                // Handle the lvalue (what's being assigned to)
+                match lvalue {
+                    LValue::Variable { var } => {
+                        // Kill: Remove the assigned variable (it's defined here)
+                        live_vars.remove(var);
+                    }
+                    LValue::ArrayElement { array, index } => {
+                        // Array element assignment: uses the array variable and index
+                        live_vars.insert(*array);
+                        self.add_used_var_from_operand(index, &mut live_vars);
+                    }
+                    LValue::TableField { pk_values, .. } => {
+                        // Table field assignment: uses primary key values
+                        for pk_value in pk_values {
+                            self.add_used_var_from_operand(pk_value, &mut live_vars);
+                        }
+                    }
+                }
 
                 // Gen: Add all variables used in the rvalue
                 self.add_used_vars_from_rvalue(rvalue, &mut live_vars);
-            }
-            Statement::TableAssign {
-                pk_values, value, ..
-            } => {
-                // Gen: Add all variables used in primary key values and the assigned value
-                for pk_value in pk_values {
-                    self.add_used_var_from_operand(pk_value, &mut live_vars);
-                }
-                self.add_used_var_from_operand(value, &mut live_vars);
             }
         }
 

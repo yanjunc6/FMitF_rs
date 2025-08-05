@@ -141,6 +141,11 @@ impl OptimizationPass for DeadCodeEliminationPass {
                         let used_vars = self.get_used_vars_from_operand(value);
                         current_live.extend(used_vars);
                     }
+                    Statement::ArrayAssign { .. } => {
+                        // TODO: Implement dead code elimination for array assignments
+                        // For now, always keep array assignments (they have side effects)
+                        statements_to_keep.push(stmt.clone());
+                    }
                 }
             }
 

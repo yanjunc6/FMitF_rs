@@ -1,7 +1,7 @@
 //! Table modification-reference analysis for tracking table reads and writes per hop.
 //! This analysis determines which tables are read from and written to by each hop.
 
-use crate::cfg::{ControlFlowEdge, FunctionCfg, Rvalue, Statement, TableId};
+use crate::cfg::{ControlFlowEdge, FieldId, FunctionCfg, LValue, Rvalue, Statement, TableId};
 use crate::dataflow::{
     AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
     TransferFunction,
@@ -37,26 +37,26 @@ impl TransferFunction<SetLattice<TableAccess>> for TableModRefTransfer {
         let mut table_accesses = state.set.clone();
 
         match stmt {
-            Statement::Assign { rvalue, .. } => {
+            Statement::Assign { lvalue, rvalue, .. } => {
                 // Check if the assignment reads from a table
                 self.add_table_reads_from_rvalue(rvalue, &mut table_accesses);
-            }
-            Statement::TableAssign {
-                table,
-                pk_fields: _,
-                pk_values: _,
-                field: _,
-                value: _,
-                span: _,
-            } => {
-                // Table assignment is a write
-                table_accesses.insert(TableAccess {
-                    table_id: *table,
-                    access_type: AccessType::Write,
-                });
 
-                // Note: Primary key values and assigned value might read from tables
-                // but we don't track variable->table relationships here
+                // Check if the assignment writes to a table
+                match lvalue {
+                    LValue::Variable { .. } => {
+                        // Variable assignment doesn't modify tables
+                    }
+                    LValue::ArrayElement { .. } => {
+                        // Array element assignment doesn't modify tables
+                    }
+                    LValue::TableField { table, .. } => {
+                        // Table field modification
+                        table_accesses.insert(TableAccess {
+                            table_id: *table,
+                            access_type: AccessType::Write,
+                        });
+                    }
+                }
             }
         }
 

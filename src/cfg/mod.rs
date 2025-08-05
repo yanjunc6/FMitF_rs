@@ -157,17 +157,25 @@ pub enum EdgeType {
 #[derive(Debug, Clone)]
 pub enum Statement {
     Assign {
-        var: VarId,
+        lvalue: LValue,
         rvalue: Rvalue,
         span: Span,
     },
-    TableAssign {
+}
+
+/// Left-hand side values for assignments - unified representation
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum LValue {
+    /// Variable assignment: var = value
+    Variable { var: VarId },
+    /// Array element assignment: array[index] = value  
+    ArrayElement { array: VarId, index: Operand },
+    /// Table field assignment: table[pk_values].field = value
+    TableField {
         table: TableId,
         pk_fields: Vec<FieldId>,
         pk_values: Vec<Operand>,
         field: FieldId,
-        value: Operand,
-        span: Span,
     },
 }
 

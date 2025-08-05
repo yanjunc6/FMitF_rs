@@ -596,7 +596,7 @@ impl<'a> FunctionContextBuilder<'a> {
         self.add_statement(
             entry_block,
             Statement::Assign {
-                var: loop_var_id,
+                lvalue: LValue::Variable { var: loop_var_id },
                 rvalue: Rvalue::Use(Operand::Const(Constant::Int(iteration_value))),
                 span: ast::Span::default(),
             },
@@ -634,16 +634,39 @@ impl<'a> FunctionContextBuilder<'a> {
                 self.var_map.insert(var_decl.var_name.clone(), var_id);
                 self.function.local_variables.push(var_id);
 
-                let init_operand = self.build_expression(program, var_decl.init_value)?;
+                // Check if this is an array initialization with an array literal
+                let init_expr = &program.expressions[var_decl.init_value];
+                if let ast::ExpressionKind::ArrayLiteral { elements, .. } = &init_expr.node {
+                    // For array literals, generate multiple array element assignments
+                    for (index, &element_expr_id) in elements.iter().enumerate() {
+                        let element_operand = self.build_expression(program, element_expr_id)?;
 
-                self.add_statement(
-                    current_block,
-                    Statement::Assign {
-                        var: var_id,
-                        rvalue: Rvalue::Use(init_operand),
-                        span: stmt.span.clone(),
-                    },
-                );
+                        // Generate: array[index] = element
+                        self.add_statement(
+                            current_block,
+                            Statement::Assign {
+                                lvalue: LValue::ArrayElement {
+                                    array: var_id,
+                                    index: Operand::Const(Constant::Int(index as i64)),
+                                },
+                                rvalue: Rvalue::Use(element_operand),
+                                span: stmt.span.clone(),
+                            },
+                        );
+                    }
+                } else {
+                    // Regular initialization
+                    let init_operand = self.build_expression(program, var_decl.init_value)?;
+
+                    self.add_statement(
+                        current_block,
+                        Statement::Assign {
+                            lvalue: LValue::Variable { var: var_id },
+                            rvalue: Rvalue::Use(init_operand),
+                            span: stmt.span.clone(),
+                        },
+                    );
+                }
             }
             ast::StatementKind::Assignment(assign) => {
                 self.build_assignment(program, assign, stmt.span.clone())?;
@@ -726,7 +749,7 @@ impl<'a> FunctionContextBuilder<'a> {
                 self.add_statement(
                     current_block,
                     Statement::Assign {
-                        var: var_id,
+                        lvalue: LValue::Variable { var: var_id },
                         rvalue: Rvalue::Use(rhs_operand),
                         span,
                     },
@@ -776,12 +799,14 @@ impl<'a> FunctionContextBuilder<'a> {
 
                     self.add_statement(
                         current_block,
-                        Statement::TableAssign {
-                            table: table_id,
-                            pk_fields: pk_field_ids,
-                            pk_values: pk_operands,
-                            field: field_id,
-                            value: value_operand,
+                        Statement::Assign {
+                            lvalue: LValue::TableField {
+                                table: table_id,
+                                pk_fields: pk_field_ids,
+                                pk_values: pk_operands,
+                                field: field_id,
+                            },
+                            rvalue: Rvalue::Use(value_operand),
                             span,
                         },
                     );
@@ -832,12 +857,14 @@ impl<'a> FunctionContextBuilder<'a> {
 
                                 self.add_statement(
                                     current_block,
-                                    Statement::TableAssign {
-                                        table: table_id,
-                                        pk_fields: pk_field_ids.clone(),
-                                        pk_values: pk_operands.clone(),
-                                        field: field_id,
-                                        value: value_operand,
+                                    Statement::Assign {
+                                        lvalue: LValue::TableField {
+                                            table: table_id,
+                                            pk_fields: pk_field_ids.clone(),
+                                            pk_values: pk_operands.clone(),
+                                            field: field_id,
+                                        },
+                                        rvalue: Rvalue::Use(value_operand),
                                         span: span.clone(),
                                     },
                                 );
@@ -846,8 +873,33 @@ impl<'a> FunctionContextBuilder<'a> {
                     }
                 }
             }
-            ast::LValue::ArrayElement { .. } => {
-                // Array elements not supported - skip
+            ast::LValue::ArrayElement {
+                index,
+                resolved_var,
+                ..
+            } => {
+                if let Some(var_ast_id) = resolved_var {
+                    let var_ast = &program.variables[*var_ast_id];
+                    let var_id = *self
+                        .var_map
+                        .get(&var_ast.name)
+                        .ok_or_else(|| format!("Variable {} not found in CFG", var_ast.name))?;
+
+                    let index_operand = self.build_expression(program, *index)?;
+                    let value_operand = self.build_expression(program, assign.rhs)?;
+
+                    self.add_statement(
+                        current_block,
+                        Statement::Assign {
+                            lvalue: LValue::ArrayElement {
+                                array: var_id,
+                                index: index_operand,
+                            },
+                            rvalue: Rvalue::Use(value_operand),
+                            span,
+                        },
+                    );
+                }
             }
         }
         Ok(())
@@ -898,7 +950,7 @@ impl<'a> FunctionContextBuilder<'a> {
                     self.add_statement(
                         block_id,
                         Statement::Assign {
-                            var: temp_var,
+                            lvalue: LValue::Variable { var: temp_var },
                             rvalue,
                             span: program.expressions[*expr].span.clone(),
                         },
@@ -979,7 +1031,7 @@ impl<'a> FunctionContextBuilder<'a> {
                     self.add_statement(
                         block_id,
                         Statement::Assign {
-                            var: temp_var,
+                            lvalue: LValue::Variable { var: temp_var },
                             rvalue,
                             span: program.expressions[*left].span.clone(),
                         },

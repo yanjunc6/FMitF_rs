@@ -8,13 +8,14 @@
 use crate::cfg::{CfgProgram, FunctionCfg, FunctionId};
 use std::collections::HashMap;
 
-mod common_subexpression_elimination;
-mod constant_propagation;
-mod dead_code_elimination;
+// TODO: Re-enable after updating to use unified LValue structure
+// mod common_subexpression_elimination;
+// mod constant_propagation;
+// mod dead_code_elimination;
 
-pub use common_subexpression_elimination::CommonSubexpressionEliminationPass;
-pub use constant_propagation::ConstantPropagationPass;
-pub use dead_code_elimination::DeadCodeEliminationPass;
+// pub use common_subexpression_elimination::CommonSubexpressionEliminationPass;
+// pub use constant_propagation::ConstantPropagationPass;
+// pub use dead_code_elimination::DeadCodeEliminationPass;
 
 /// Trait for optimization passes
 pub trait OptimizationPass {
@@ -47,10 +48,11 @@ impl CfgOptimizer {
 
     /// Create a default optimizer with standard passes
     pub fn default_passes() -> Self {
+        // TODO: Re-enable optimization passes after updating to unified LValue structure
         Self::new()
-            .add_pass(Box::new(ConstantPropagationPass::new()))
-            .add_pass(Box::new(CommonSubexpressionEliminationPass::new()))
-            .add_pass(Box::new(DeadCodeEliminationPass::new()))
+        // .add_pass(Box::new(ConstantPropagationPass::new()))
+        // .add_pass(Box::new(CommonSubexpressionEliminationPass::new()))
+        // .add_pass(Box::new(DeadCodeEliminationPass::new()))
     }
 
     /// Optimize an entire CFG program
