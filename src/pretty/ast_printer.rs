@@ -325,6 +325,8 @@ impl AstPrinter {
                 loop_var_type,
                 start,
                 end,
+                start_value: _,
+                end_value: _,
             } => {
                 write!(
                     writer,

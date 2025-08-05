@@ -1077,20 +1077,20 @@ impl<'p> SemanticAnalyzer<'p> {
         match (expected, actual) {
             // For array initialization, allow different sizes as long as element types are compatible
             (
-                TypeName::Array { 
-                    element_type: expected_elem, 
-                    size: _ // Ignore declared size for initialization
+                TypeName::Array {
+                    element_type: expected_elem,
+                    size: _, // Ignore declared size for initialization
                 },
-                TypeName::Array { 
-                    element_type: actual_elem, 
-                    size: _ // Ignore initializer size
-                }
+                TypeName::Array {
+                    element_type: actual_elem,
+                    size: _, // Ignore initializer size
+                },
             ) => {
                 // Recursively check element type compatibility
                 self.types_compatible_for_initialization(expected_elem, actual_elem)
             }
             // For non-array types, use the regular compatibility check
-            _ => self.types_compatible(expected, actual)
+            _ => self.types_compatible(expected, actual),
         }
     }
 }
@@ -1109,8 +1109,65 @@ pub fn analyze_program_with_types(program: &mut Program) -> Results<()> {
         analyzer.analyze()?;
     }
 
-    // For now, we don't do additional type inference
-    // This could be expanded in the future
+    // After validation, evaluate hop loop constants for CFG expansion
+    evaluate_hop_loop_constants(program);
 
     Ok(())
+}
+
+/// Evaluate hop loop constants and store them in the AST for CFG expansion
+fn evaluate_hop_loop_constants(program: &mut Program) {
+    let mut constant_checker = ConstantChecker::new(program);
+
+    // Collect all hop IDs that need constant evaluation
+    let mut hop_updates: Vec<(HopId, Option<i64>, Option<i64>)> = Vec::new();
+
+    // Iterate through all functions to find ForLoop hops
+    for func_id in program.root_functions.clone() {
+        let func = &program.functions[func_id];
+
+        // Iterate through all hops in the function
+        for &hop_id in &func.hops {
+            let hop = &program.hops[hop_id];
+
+            // Only process ForLoop hops
+            if let HopType::ForLoop { start, end, .. } = &hop.hop_type {
+                let mut start_value = None;
+                let mut end_value = None;
+
+                // Try to evaluate start expression
+                if let Some(start_const) = constant_checker.evaluate_constant(*start) {
+                    start_value = start_const.as_int();
+                }
+
+                // Try to evaluate end expression
+                if let Some(end_const) = constant_checker.evaluate_constant(*end) {
+                    end_value = end_const.as_int();
+                }
+
+                // Store the update if we have at least one constant value
+                if start_value.is_some() || end_value.is_some() {
+                    hop_updates.push((hop_id, start_value, end_value));
+                }
+            }
+        }
+    }
+
+    // Apply the updates
+    for (hop_id, start_value, end_value) in hop_updates {
+        let hop = &mut program.hops[hop_id];
+        if let HopType::ForLoop {
+            start_value: ref mut sv,
+            end_value: ref mut ev,
+            ..
+        } = &mut hop.hop_type
+        {
+            if start_value.is_some() {
+                *sv = start_value;
+            }
+            if end_value.is_some() {
+                *ev = end_value;
+            }
+        }
+    }
 }

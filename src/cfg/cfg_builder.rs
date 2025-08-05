@@ -455,17 +455,18 @@ impl<'a> FunctionContextBuilder<'a> {
                 ast::HopType::ForLoop {
                     loop_var,
                     loop_var_type,
-                    start,
-                    end,
+                    start_value,
+                    end_value,
+                    ..
                 } => {
-                    // Flatten "hops for" into deterministic number of hops (since AST is validated)
+                    // Flatten "hops for" into deterministic number of hops using pre-computed constants
                     self.create_flattened_hops_for(
                         program,
                         hop_ast,
                         loop_var,
                         loop_var_type,
-                        *start,
-                        *end,
+                        *start_value,
+                        *end_value,
                     )?;
                 }
             }
@@ -501,12 +502,24 @@ impl<'a> FunctionContextBuilder<'a> {
         hop_ast: &ast::HopBlock,
         loop_var: &str,
         loop_var_type: &ast::TypeName,
-        start: ast::ExpressionId,
-        end: ast::ExpressionId,
+        start_value: Option<i64>,
+        end_value: Option<i64>,
     ) -> Result<(), String> {
+        // Use pre-computed constant values if available
+        let start_val = start_value.ok_or_else(|| {
+            "Cannot expand hops for loop: start value is not a compile-time constant".to_string()
+        })?;
+
+        let end_val = end_value.ok_or_else(|| {
+            "Cannot expand hops for loop: end value is not a compile-time constant".to_string()
+        })?;
+
         // Calculate number of iterations from start to end
-        let num_iterations = self.calculate_loop_iterations(program, start, end)?;
-        let start_value = self.evaluate_constant_expr(program, start)?;
+        let num_iterations = if end_val > start_val {
+            (end_val - start_val) as usize
+        } else {
+            0
+        };
 
         let loop_var_obj = Variable {
             name: loop_var.to_string(),
@@ -533,7 +546,7 @@ impl<'a> FunctionContextBuilder<'a> {
                 self.function.entry_hop = Some(hop_id);
             }
 
-            let iteration_value = start_value + i as i64;
+            let iteration_value = start_val + i as i64;
             self.build_hop_with_loop_iteration(
                 program,
                 hop_id,
@@ -998,40 +1011,6 @@ impl<'a> FunctionContextBuilder<'a> {
         self.var_map.insert(temp_name, var_id);
         self.function.local_variables.push(var_id);
         var_id
-    }
-
-    fn calculate_loop_iterations(
-        &self,
-        program: &ast::Program,
-        start: ast::ExpressionId,
-        end: ast::ExpressionId,
-    ) -> Result<usize, String> {
-        let start_val = self.evaluate_constant_expr(program, start)?;
-        let end_val = self.evaluate_constant_expr(program, end)?;
-
-        if end_val > start_val {
-            Ok((end_val - start_val) as usize)
-        } else {
-            Ok(0)
-        }
-    }
-
-    fn evaluate_constant_expr(
-        &self,
-        program: &ast::Program,
-        expr_id: ast::ExpressionId,
-    ) -> Result<i64, String> {
-        let expr = &program.expressions[expr_id];
-
-        match &expr.node {
-            ast::ExpressionKind::IntLit(val) => Ok(*val),
-            ast::ExpressionKind::Ident(_name) => {
-                // For now, we don't support variable resolution in loop bounds
-                // This could be enhanced later to support compile-time constant evaluation
-                Err("Variable references in loop bounds are not yet supported".to_string())
-            }
-            _ => Err("Only integer literals are supported in loop bounds".to_string()),
-        }
     }
 
     fn new_basic_block(&mut self, hop_id: HopId) -> Result<BasicBlockId, String> {

@@ -731,6 +731,8 @@ impl AstBuilder {
                 loop_var_type,
                 start,
                 end,
+                start_value: None, // Will be populated during semantic analysis
+                end_value: None,   // Will be populated during semantic analysis
             },
         };
 
