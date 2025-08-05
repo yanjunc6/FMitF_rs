@@ -627,6 +627,15 @@ impl<'p> SemanticAnalyzer<'p> {
                     self.error_at(span, AstError::UndeclaredVariable(array_name.clone()));
                 }
             }
+            LValue::FieldAccess {
+                object_name,
+                resolved_var,
+                ..
+            } => {
+                if resolved_var.is_none() {
+                    self.error_at(span, AstError::UndeclaredVariable(object_name.clone()));
+                }
+            }
         }
     }
 
@@ -1010,6 +1019,26 @@ impl<'p> SemanticAnalyzer<'p> {
                         }
                     }
                 }
+            }
+            ExpressionKind::FieldAccess {
+                object_name,
+                field_name: _,
+                resolved_var,
+                resolved_field: _,
+                resolved_type,
+            } => {
+                // Check if object variable exists
+                if resolved_var.is_none() {
+                    self.error_at(
+                        &expr.span,
+                        AstError::UndeclaredVariable(object_name.clone()),
+                    );
+                    return None;
+                }
+
+                // For now, return the resolved type if available
+                // TODO: Add proper field resolution and type checking
+                resolved_type.clone()
             }
             ExpressionKind::BinaryOp {
                 left, op, right, ..

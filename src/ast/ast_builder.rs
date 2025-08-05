@@ -559,6 +559,9 @@ impl AstBuilder {
                 Rule::array_type => {
                     return self.build_array_type(inner_pair);
                 }
+                Rule::user_defined_type => {
+                    return self.build_user_defined_type(inner_pair);
+                }
                 _ => {}
             }
         }
@@ -583,6 +586,24 @@ impl AstBuilder {
         }
     }
 
+    /// Builds a user-defined type (table name).
+    fn build_user_defined_type(&mut self, pair: Pair<Rule>) -> Results<TypeName> {
+        let span = Span::from_pest(pair.as_span());
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::identifier => {
+                    let type_name = inner_pair.as_str().to_string();
+                    return Ok(TypeName::Table(type_name));
+                }
+                _ => {}
+            }
+        }
+        Err(vec![SpannedError {
+            error: AstError::ParseError("Invalid user-defined type".to_string()),
+            span: Some(span),
+        }])
+    }
+
     /// Builds an array type.
     fn build_array_type(&mut self, pair: Pair<Rule>) -> Results<TypeName> {
         let span = Span::from_pest(pair.as_span());
@@ -594,6 +615,9 @@ impl AstBuilder {
             match inner_pair.as_rule() {
                 Rule::basic_type => {
                     base = Some(self.build_basic_type(inner_pair)?);
+                }
+                Rule::user_defined_type => {
+                    base = Some(self.build_user_defined_type(inner_pair)?);
                 }
                 Rule::expression => {
                     // Parse the expression for array size
@@ -918,6 +942,9 @@ impl AstBuilder {
                 Rule::table_field_access => {
                     return self.build_table_field_access_lvalue(inner_pair);
                 }
+                Rule::field_access => {
+                    return self.build_field_access_lvalue(inner_pair);
+                }
                 Rule::table_access => {
                     return self.build_table_access_lvalue(inner_pair);
                 }
@@ -972,6 +999,32 @@ impl AstBuilder {
             field_name,
             resolved_table: None,
             resolved_pk_fields: vec![None; pk_len],
+            resolved_field: None,
+        })
+    }
+
+    /// Builds a field access lvalue.
+    fn build_field_access_lvalue(&mut self, pair: Pair<Rule>) -> Results<LValue> {
+        let mut object_name = String::new();
+        let mut field_name = String::new();
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::identifier => {
+                    if object_name.is_empty() {
+                        object_name = inner_pair.as_str().to_string();
+                    } else {
+                        field_name = inner_pair.as_str().to_string();
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok(LValue::FieldAccess {
+            object_name,
+            field_name,
+            resolved_var: None,
             resolved_field: None,
         })
     }
@@ -1560,6 +1613,9 @@ impl AstBuilder {
                 Rule::table_field_access => {
                     return self.build_table_field_access_expression(inner_pair);
                 }
+                Rule::field_access => {
+                    return self.build_field_access_expression(inner_pair);
+                }
                 Rule::table_access => {
                     return self.build_table_access_expression(inner_pair);
                 }
@@ -1636,6 +1692,39 @@ impl AstBuilder {
                 field_name,
                 resolved_table: None,
                 resolved_pk_fields: vec![None; pk_len],
+                resolved_field: None,
+                resolved_type: None,
+            },
+            span,
+        };
+
+        Ok(self.program.expressions.alloc(expr))
+    }
+
+    /// Builds a field access expression.
+    fn build_field_access_expression(&mut self, pair: Pair<Rule>) -> Results<ExpressionId> {
+        let span = Span::from_pest(pair.as_span());
+        let mut object_name = String::new();
+        let mut field_name = String::new();
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::identifier => {
+                    if object_name.is_empty() {
+                        object_name = inner_pair.as_str().to_string();
+                    } else {
+                        field_name = inner_pair.as_str().to_string();
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let expr = Spanned {
+            node: ExpressionKind::FieldAccess {
+                object_name,
+                field_name,
+                resolved_var: None,
                 resolved_field: None,
                 resolved_type: None,
             },

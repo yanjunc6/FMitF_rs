@@ -154,6 +154,7 @@ impl<'p> ConstantChecker<'p> {
 
             // These expression types are not constant
             ExpressionKind::TableFieldAccess { .. }
+            | ExpressionKind::FieldAccess { .. }
             | ExpressionKind::TableAccess { .. }
             | ExpressionKind::ArrayAccess { .. }
             | ExpressionKind::ArrayLiteral { .. }
@@ -322,6 +323,7 @@ impl<'p> ConstantChecker<'p> {
 
             // These expression types are not constant
             ExpressionKind::TableFieldAccess { .. }
+            | ExpressionKind::FieldAccess { .. }
             | ExpressionKind::TableAccess { .. }
             | ExpressionKind::ArrayAccess { .. }
             | ExpressionKind::ArrayLiteral { .. }
