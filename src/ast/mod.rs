@@ -266,6 +266,9 @@ pub enum HopType {
         loop_var_type: TypeName,
         start: ExpressionId,
         end: ExpressionId,
+        // Optional pre-computed constant values for CFG expansion
+        start_value: Option<i64>,
+        end_value: Option<i64>,
     }, // hops for int var = start to end { ... }
 }
 
