@@ -804,6 +804,9 @@ impl AstBuilder {
                 Rule::abort_statement => StatementKind::Abort(AbortStatement),
                 Rule::break_statement => StatementKind::Break(BreakStatement),
                 Rule::continue_statement => StatementKind::Continue(ContinueStatement),
+                Rule::expression_statement => {
+                    StatementKind::Expression(self.build_expression_statement(inner_pair)?)
+                }
                 Rule::empty_statement => StatementKind::Empty,
                 _ => {
                     return Err(vec![SpannedError {
@@ -1243,6 +1246,23 @@ impl AstBuilder {
         Ok(ReturnStatement { value })
     }
 
+    /// Builds an expression statement.
+    fn build_expression_statement(&mut self, pair: Pair<Rule>) -> Results<ExpressionStatement> {
+        let span = Span::from_pest(pair.as_span());
+
+        for inner_pair in pair.into_inner() {
+            if inner_pair.as_rule() == Rule::expression {
+                let expression = self.build_expression(inner_pair)?;
+                return Ok(ExpressionStatement { expression });
+            }
+        }
+
+        Err(vec![SpannedError {
+            error: AstError::ParseError("Empty expression statement".to_string()),
+            span: Some(span),
+        }])
+    }
+
     /// Builds an expression.
     fn build_expression(&mut self, pair: Pair<Rule>) -> Results<ExpressionId> {
         self.build_logic_or(pair)
@@ -1543,20 +1563,31 @@ impl AstBuilder {
         let span = Span::from_pest(pair.as_span());
         let pairs_vec: Vec<_> = pair.into_inner().collect();
 
-        if pairs_vec.len() == 1 && pairs_vec[0].as_rule() == Rule::primary {
-            return self.build_primary(pairs_vec.into_iter().next().unwrap());
+        if pairs_vec.len() == 1 && pairs_vec[0].as_rule() == Rule::postfix {
+            return self.build_postfix(pairs_vec.into_iter().next().unwrap());
         }
 
         if pairs_vec.len() == 2 {
-            if let (Some(op_pair), Some(expr_pair)) = (pairs_vec.get(0), pairs_vec.get(1)) {
-                if op_pair.as_rule() == Rule::unary_op && expr_pair.as_rule() == Rule::unary {
-                    let op = match op_pair.as_str() {
+            if let (Some(first_pair), Some(second_pair)) = (pairs_vec.get(0), pairs_vec.get(1)) {
+                // Handle prefix unary operations: unary_op unary OR prefix_unary_op postfix
+                if (first_pair.as_rule() == Rule::unary_op && second_pair.as_rule() == Rule::unary)
+                    || (first_pair.as_rule() == Rule::prefix_unary_op
+                        && second_pair.as_rule() == Rule::postfix)
+                {
+                    let op = match first_pair.as_str() {
                         "!" => UnaryOp::Not,
                         "-" => UnaryOp::Neg,
+                        "++" => UnaryOp::PreIncrement,
+                        "--" => UnaryOp::PreDecrement,
                         _ => unreachable!(),
                     };
 
-                    let expr_id = self.build_unary(expr_pair.clone())?;
+                    let expr_id = match second_pair.as_rule() {
+                        Rule::unary => self.build_unary(second_pair.clone())?,
+                        Rule::postfix => self.build_postfix(second_pair.clone())?,
+                        _ => unreachable!(),
+                    };
+
                     let expr = Spanned {
                         node: ExpressionKind::UnaryOp {
                             op,
@@ -1574,6 +1605,53 @@ impl AstBuilder {
             error: AstError::ParseError("Invalid unary expression".to_string()),
             span: Some(span),
         }])
+    }
+
+    /// Builds a postfix expression.
+    fn build_postfix(&mut self, pair: Pair<Rule>) -> Results<ExpressionId> {
+        let span = Span::from_pest(pair.as_span());
+        let pairs_vec: Vec<_> = pair.into_inner().collect();
+
+        if pairs_vec.is_empty() {
+            return Err(vec![SpannedError {
+                error: AstError::ParseError("Empty postfix expression".to_string()),
+                span: Some(span),
+            }]);
+        }
+
+        // First element should be primary
+        let primary_pair = &pairs_vec[0];
+        if primary_pair.as_rule() != Rule::primary {
+            return Err(vec![SpannedError {
+                error: AstError::ParseError("Expected primary in postfix expression".to_string()),
+                span: Some(span),
+            }]);
+        }
+
+        let mut expr_id = self.build_primary(primary_pair.clone())?;
+
+        // Apply postfix operators from left to right
+        for op_pair in &pairs_vec[1..] {
+            if op_pair.as_rule() == Rule::postfix_unary_op {
+                let op = match op_pair.as_str() {
+                    "++" => UnaryOp::PostIncrement,
+                    "--" => UnaryOp::PostDecrement,
+                    _ => unreachable!(),
+                };
+
+                let expr = Spanned {
+                    node: ExpressionKind::UnaryOp {
+                        op,
+                        expr: expr_id,
+                        resolved_type: None,
+                    },
+                    span: span.clone(),
+                };
+                expr_id = self.program.expressions.alloc(expr);
+            }
+        }
+
+        Ok(expr_id)
     }
 
     /// Builds a primary expression.

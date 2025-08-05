@@ -267,6 +267,9 @@ impl<'p> NameResolver<'p> {
                     self.resolve_expression(expr_id);
                 }
             }
+            StatementKind::Expression(expr_stmt) => {
+                self.resolve_expression(expr_stmt.expression);
+            }
             StatementKind::Abort(_)
             | StatementKind::Break(_)
             | StatementKind::Continue(_)

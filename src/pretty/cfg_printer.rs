@@ -507,6 +507,10 @@ impl<'a> CfgPrinter<'a> {
         match op {
             UnaryOp::Not => "!".to_string(),
             UnaryOp::Neg => "-".to_string(),
+            UnaryOp::PreIncrement => "++".to_string(),
+            UnaryOp::PostIncrement => "++".to_string(),
+            UnaryOp::PreDecrement => "--".to_string(),
+            UnaryOp::PostDecrement => "--".to_string(),
         }
     }
 }

@@ -379,6 +379,10 @@ impl<'p> SemanticAnalyzer<'p> {
             }
             StatementKind::Break(_) => self.check_break_statement(&stmt.span),
             StatementKind::Continue(_) => self.check_continue_statement(&stmt.span),
+            StatementKind::Expression(e) => {
+                // Just check the expression for type correctness
+                self.check_expression(e.expression);
+            }
             StatementKind::Empty => {}
         }
     }
@@ -1012,6 +1016,31 @@ impl<'p> SemanticAnalyzer<'p> {
                                 &expr_span,
                                 AstError::InvalidUnaryOp {
                                     op: "logical not".to_string(),
+                                    operand: operand_type,
+                                },
+                            );
+                            None
+                        }
+                    }
+                    UnaryOp::PreIncrement
+                    | UnaryOp::PostIncrement
+                    | UnaryOp::PreDecrement
+                    | UnaryOp::PostDecrement => {
+                        if self.is_numeric_type(&operand_type) {
+                            Some(operand_type)
+                        } else {
+                            let expr_span = expr.span.clone();
+                            let op_name = match op {
+                                UnaryOp::PreIncrement => "pre-increment",
+                                UnaryOp::PostIncrement => "post-increment",
+                                UnaryOp::PreDecrement => "pre-decrement",
+                                UnaryOp::PostDecrement => "post-decrement",
+                                _ => unreachable!(),
+                            };
+                            self.error_at(
+                                &expr_span,
+                                AstError::InvalidUnaryOp {
+                                    op: op_name.to_string(),
                                     operand: operand_type,
                                 },
                             );
