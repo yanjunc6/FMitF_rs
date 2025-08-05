@@ -7,7 +7,7 @@ FMitF (Formal Methods in Transaction Framework) is a Rust-based framework for ve
 - **Domain**: Distributed transaction verification using formal methods
 - **Architecture**: Multi-stage compilation pipeline: AST → CFG → SC-Graph (Optimization currently disabled, Verification removed)
 - **DSL**: Custom transaction language (.transact files) parsed via Pest grammar
-- **Core Goal**: Analyze concurrent chopped transactions for conflict serializability
+- **Core Goal**: Analyze concurrent chopped transactions for conflict serializability with **multiple transaction instances**
 
 ## Architecture & Data Flow
 
@@ -15,14 +15,16 @@ FMitF (Formal Methods in Transaction Framework) is a Rust-based framework for ve
 1. **AST Stage**: Parse .transact files using Pest grammar (src/ast/grammar.pest)
 2. **CFG Stage**: Convert AST to Control Flow Graphs with Hop-based execution model
 3. **Optimize Stage**: Apply dataflow optimizations (currently skipped - not yet implemented)
-4. **SC-Graph Stage**: Build Serializability Conflict Graph with S-edges (sequential) and C-edges (conflict)
+4. **SC-Graph Stage**: Build Serializability Conflict Graph with S-edges (sequential) and C-edges (conflict) for **multiple transaction instances**
 
 **Note**: Verification stage has been removed from the current implementation
 
 ### Key Data Structures
 - **CfgProgram**: Never clone - use Arena<T> for memory-efficient storage
 - **HopId/FunctionId/TableId**: ID-based references via id-arena crate
-- **SCGraph**: Contains directed S-edges (sequential within transactions) and undirected C-edges (conflicts between transactions)
+- **SCGraph**: Contains directed S-edges (sequential within transaction instances) and undirected C-edges (conflicts between transaction instances)
+- **SCGraphNodeId**: Uniquely identifies nodes with `{function_id, hop_id, instance}` triple
+- **Transaction Instances**: Each transaction function can have multiple concurrent instances with different parameters
 
 ## DSL Language (.transact files)
 
@@ -79,9 +81,15 @@ table Account {
 - Results stored in `DataflowResults` with entry/exit states per basic block
 
 ### SC-Graph Building (src/sc_graph/)
-- S-edges: Connect sequential hops within same transaction
-- C-edges: Connect hops from different transactions that access same tables (RW or WW conflicts)
-- Use `SCGraphBuilder::build()` - never manually construct
+- **Multiple Transaction Instances**: Each transaction function creates multiple concurrent instances (configurable via `--instances` CLI flag)
+- **Node Structure**: `SCGraphNodeId {function_id, hop_id, instance}` uniquely identifies each hop instance
+- **S-edges**: Connect sequential hops within the **same transaction instance** only
+- **C-edges**: Connect hops from **any transaction instances** that access same tables (RW or WW conflicts)
+- **Instance Handling**: 
+  - S-edges only within same instance: `transfer_inst1_hop1 → transfer_inst1_hop2`
+  - C-edges between any conflicting instances: `transfer_inst1_hop1 ↔ payment_inst2_hop1`
+- **Edge Deduplication**: C-edges are undirected, so only one edge per pair is created using `node1_id < node2_id` ordering
+- **Builder Pattern**: Use `SCGraphBuilder::new(num_instances).build(cfg_program)` with configurable instance count
 
 ### Testing
 
@@ -89,25 +97,34 @@ Create testing case, tmp file and all the output files in the `tmp/` directory.
 
 ## CLI & Output System
 
-### Simplified CLI Interface
+### Enhanced CLI Interface
 ```bash
-cargo run -- input.transact                          # Default: creates output directory with input filename
+cargo run -- input.transact                          # Default: creates output directory with input filename, 2 instances
 cargo run -- input.transact my_output                # Custom output directory
+cargo run -- input.transact --instances 3           # Create 3 instances of each transaction
+cargo run -- input.transact --instances 1           # Traditional single-instance behavior
 cargo run -- input.transact --no-optimize            # Skip optimization passes (currently no-op)
 cargo run -- input.transact --no-color               # Disable colored terminal output
 ```
+
+### CLI Flags
+- `--instances N`: Number of instances to create for each transaction function (default: 2)
+- `--no-optimize`: Skip optimization passes for debugging
+- `--no-color`: Disable colored terminal output
 
 ### Output Structure
 - **Always runs full pipeline**: No mode selection - processes through all stages
 - **Directory output**: Creates structured output directory with:
   - `summary.md`: Compilation report in Markdown format
   - `compilation.log`: Detailed compilation log
+  - `scgraph.dot`: GraphViz DOT file for SC-Graph visualization with instance labels
+  - `scgraph_pretty.txt`: Human-readable SC-Graph with instance information
   - Console summary displayed during compilation
 
-### CLI Flags
-- `--output-dir DIR`: Specify output directory (default: creates directory from input filename)
-- `--no-optimize`: Skip optimization passes for debugging
-- `--no-color`: Disable colored terminal output
+### Instance Visualization
+- **DOT files**: Nodes labeled as `function_name #N` (e.g., `transfer #1`, `transfer #2`)
+- **Pretty print**: Shows instance numbers in node and edge descriptions
+- **Node naming**: `hop_X_Y_instZ` format for unique identification
 
 ## Compilation Process (src/cli/)
 
@@ -130,12 +147,23 @@ cargo run -- input.transact --no-color               # Disable colored terminal 
 ## Testing & Examples
 
 ### Example Files (examples/)
+- `test_minimal.transact`: Simple two-function example for testing instances
+- `test_1.transact`: Basic transaction example
 - `tpcc_distributed.transact`: Complex TPC-C workload with multi-hop transactions
 
+### Testing Instance Functionality
+```bash
+# Test with different instance counts
+cargo run -- examples/test_minimal.transact /tmp/test_1 --instances 1    # 4 nodes, 2 S-edges, 2 C-edges
+cargo run -- examples/test_minimal.transact /tmp/test_2 --instances 2    # 8 nodes, 4 S-edges, 12 C-edges
+cargo run -- examples/test_minimal.transact /tmp/test_3 --instances 3    # 12 nodes, 6 S-edges, 30 C-edges
+```
+
 ### Current Status Notes
-- AST parsing may have compatibility issues with some existing example files
-- Grammar may need updates for full compatibility with example syntax
-- CLI redesign is complete and functional
+- AST parsing is stable and compatible with example files
+- SC-Graph instance functionality is fully implemented and tested
+- CLI redesign is complete with instance configuration
+- All output formats support instance visualization
 
 ### Runtime REPL (commented out in current version)
 - Interactive mode for testing transaction execution
@@ -146,8 +174,11 @@ cargo run -- input.transact --no-color               # Disable colored terminal 
 1. **Don't clone CFG structures** - use ID references
 2. **Dataflow analysis order**: Must run after CFG predecessor building
 3. **SC-Graph edge direction**: S-edges are directed, C-edges are undirected but stored with consistent ordering
-4. **Output directory creation**: Always creates structured output with logs and summaries
-5. **Transaction vs Partition**: Transactions have hops, partitions are placement functions
+4. **Instance edge creation**: S-edges only within same instance, C-edges between any conflicting instances
+5. **C-edge deduplication**: Use `node1_id < node2_id` condition to avoid duplicate undirected edges
+6. **Output directory creation**: Always creates structured output with logs and summaries
+7. **Transaction vs Partition**: Transactions have hops, partitions are placement functions
+8. **Instance numbering**: Display instances starting from 1 (`#1`, `#2`) but store starting from 0
 
 ## Key Dependencies
 - `pest`: Grammar parsing (see src/ast/grammar.pest)
