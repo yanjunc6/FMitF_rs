@@ -189,8 +189,10 @@ impl<'p> NameResolver<'p> {
 
         match stmt_kind {
             StatementKind::VarDecl(var_decl) => {
-                // Resolve initializer first
-                self.resolve_expression(var_decl.init_value);
+                // Resolve initializer first, if present
+                if let Some(init_expr_id) = var_decl.init_value {
+                    self.resolve_expression(init_expr_id);
+                }
 
                 // Check for duplicate in the current scope (no shadowing within same scope)
                 if let Some(current_scope_id) = self.current_scope {

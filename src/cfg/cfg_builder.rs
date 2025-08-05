@@ -634,38 +634,42 @@ impl<'a> FunctionContextBuilder<'a> {
                 self.var_map.insert(var_decl.var_name.clone(), var_id);
                 self.function.local_variables.push(var_id);
 
-                // Check if this is an array initialization with an array literal
-                let init_expr = &program.expressions[var_decl.init_value];
-                if let ast::ExpressionKind::ArrayLiteral { elements, .. } = &init_expr.node {
-                    // For array literals, generate multiple array element assignments
-                    for (index, &element_expr_id) in elements.iter().enumerate() {
-                        let element_operand = self.build_expression(program, element_expr_id)?;
+                // Only generate initialization if there's an init value
+                if let Some(init_expr_id) = var_decl.init_value {
+                    // Check if this is an array initialization with an array literal
+                    let init_expr = &program.expressions[init_expr_id];
+                    if let ast::ExpressionKind::ArrayLiteral { elements, .. } = &init_expr.node {
+                        // For array literals, generate multiple array element assignments
+                        for (index, &element_expr_id) in elements.iter().enumerate() {
+                            let element_operand =
+                                self.build_expression(program, element_expr_id)?;
 
-                        // Generate: array[index] = element
+                            // Generate: array[index] = element
+                            self.add_statement(
+                                current_block,
+                                Statement::Assign {
+                                    lvalue: LValue::ArrayElement {
+                                        array: var_id,
+                                        index: Operand::Const(Constant::Int(index as i64)),
+                                    },
+                                    rvalue: Rvalue::Use(element_operand),
+                                    span: stmt.span.clone(),
+                                },
+                            );
+                        }
+                    } else {
+                        // Regular initialization
+                        let init_operand = self.build_expression(program, init_expr_id)?;
+
                         self.add_statement(
                             current_block,
                             Statement::Assign {
-                                lvalue: LValue::ArrayElement {
-                                    array: var_id,
-                                    index: Operand::Const(Constant::Int(index as i64)),
-                                },
-                                rvalue: Rvalue::Use(element_operand),
+                                lvalue: LValue::Variable { var: var_id },
+                                rvalue: Rvalue::Use(init_operand),
                                 span: stmt.span.clone(),
                             },
                         );
                     }
-                } else {
-                    // Regular initialization
-                    let init_operand = self.build_expression(program, var_decl.init_value)?;
-
-                    self.add_statement(
-                        current_block,
-                        Statement::Assign {
-                            lvalue: LValue::Variable { var: var_id },
-                            rvalue: Rvalue::Use(init_operand),
-                            span: stmt.span.clone(),
-                        },
-                    );
                 }
             }
             ast::StatementKind::Assignment(assign) => {

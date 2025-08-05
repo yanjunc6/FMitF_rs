@@ -631,16 +631,18 @@ impl<'p> SemanticAnalyzer<'p> {
     }
 
     fn check_var_decl(&mut self, var_decl: &VarDeclStatement, span: &Span) {
-        // Check initializer expression type
-        if let Some(init_type) = self.check_expression(var_decl.init_value) {
-            if !self.types_compatible_for_initialization(&var_decl.var_type, &init_type) {
-                self.error_at(
-                    span,
-                    AstError::TypeMismatch {
-                        expected: var_decl.var_type.clone(),
-                        found: init_type,
-                    },
-                );
+        // Check initializer expression type only if present
+        if let Some(init_expr_id) = var_decl.init_value {
+            if let Some(init_type) = self.check_expression(init_expr_id) {
+                if !self.types_compatible_for_initialization(&var_decl.var_type, &init_type) {
+                    self.error_at(
+                        span,
+                        AstError::TypeMismatch {
+                            expected: var_decl.var_type.clone(),
+                            found: init_type,
+                        },
+                    );
+                }
             }
         }
 
