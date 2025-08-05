@@ -97,6 +97,7 @@ statement = {
   | break_statement
   | continue_statement
   | assignment_statement
+  | expression_statement
   | empty_statement
 }
 
@@ -146,6 +147,10 @@ break_statement = {
 
 continue_statement = {
     "continue" ~ ";"
+}
+
+expression_statement = {
+    expression ~ ";"
 }
 
 block = {
@@ -198,11 +203,18 @@ multiplication = {
 multiplication_op = { "*" | "/" }
 
 unary = {
-    primary
+    postfix
   | (unary_op ~ unary)
+  | (prefix_unary_op ~ postfix)
+}
+
+postfix = {
+    primary ~ postfix_unary_op*
 }
 
 unary_op = { "!" | "-" }
+prefix_unary_op = { "++" | "--" }
+postfix_unary_op = { "++" | "--" }
 
 primary = {
     bool_literal

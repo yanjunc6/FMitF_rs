@@ -486,6 +486,12 @@ impl AstPrinter {
             StatementKind::Continue(_) => {
                 writeln!(writer, "continue;")?;
             }
+            StatementKind::Expression(expr_stmt) => {
+                if let Some(expr) = program.expressions.get(expr_stmt.expression) {
+                    self.print_expression(expr, program, writer)?;
+                }
+                writeln!(writer, ";")?;
+            }
             StatementKind::Empty => {
                 writeln!(writer, ";")?;
             }
@@ -724,6 +730,10 @@ impl AstPrinter {
         match op {
             UnaryOp::Not => "!",
             UnaryOp::Neg => "-",
+            UnaryOp::PreIncrement => "++",
+            UnaryOp::PostIncrement => "++",
+            UnaryOp::PreDecrement => "--",
+            UnaryOp::PostDecrement => "--",
         }
     }
 

@@ -285,6 +285,7 @@ pub enum StatementKind {
     Abort(AbortStatement),
     Break(BreakStatement),
     Continue(ContinueStatement),
+    Expression(ExpressionStatement),
     Empty,
 }
 
@@ -387,6 +388,11 @@ pub struct BreakStatement;
 pub struct ContinueStatement;
 
 #[derive(Debug, Clone)]
+pub struct ExpressionStatement {
+    pub expression: ExpressionId,
+}
+
+#[derive(Debug, Clone)]
 pub enum ExpressionKind {
     Ident(String),
     IntLit(i64),
@@ -457,6 +463,10 @@ pub struct FieldAssignment {
 pub enum UnaryOp {
     Not,
     Neg,
+    PreIncrement,
+    PostIncrement,
+    PreDecrement,
+    PostDecrement,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

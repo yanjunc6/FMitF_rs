@@ -718,6 +718,11 @@ impl<'a> FunctionContextBuilder<'a> {
             ast::StatementKind::Empty => {
                 // No-op
             }
+            ast::StatementKind::Expression(expr_stmt) => {
+                // For expression statements, just evaluate the expression
+                // This is useful for statements like ++x; or function calls
+                self.build_expression(program, expr_stmt.expression)?;
+            }
             ast::StatementKind::IfStmt(_)
             | ast::StatementKind::ForStmt(_)
             | ast::StatementKind::WhileStmt(_) => {
@@ -945,30 +950,100 @@ impl<'a> FunctionContextBuilder<'a> {
             }
             ast::ExpressionKind::BoolLit(val) => Ok(Operand::Const(Constant::Bool(*val))),
             ast::ExpressionKind::UnaryOp { op, expr, .. } => {
-                let operand = self.build_expression(program, *expr)?;
-                let temp_var = self.create_temp_var();
-                let rvalue = match op {
-                    ast::UnaryOp::Not => Rvalue::UnaryOp {
-                        op: UnaryOp::Not,
-                        operand,
-                    },
-                    ast::UnaryOp::Neg => Rvalue::UnaryOp {
-                        op: UnaryOp::Neg,
-                        operand,
-                    },
-                };
+                match op {
+                    ast::UnaryOp::Not => {
+                        let operand = self.build_expression(program, *expr)?;
+                        let temp_var = self.create_temp_var();
+                        let rvalue = Rvalue::UnaryOp {
+                            op: UnaryOp::Not,
+                            operand,
+                        };
 
-                if let Some(block_id) = self.current_block_id {
-                    self.add_statement(
-                        block_id,
-                        Statement::Assign {
-                            lvalue: LValue::Variable { var: temp_var },
-                            rvalue,
-                            span: program.expressions[*expr].span.clone(),
-                        },
-                    );
+                        if let Some(block_id) = self.current_block_id {
+                            self.add_statement(
+                                block_id,
+                                Statement::Assign {
+                                    lvalue: LValue::Variable { var: temp_var },
+                                    rvalue,
+                                    span: program.expressions[*expr].span.clone(),
+                                },
+                            );
+                        }
+                        Ok(Operand::Var(temp_var))
+                    }
+                    ast::UnaryOp::Neg => {
+                        let operand = self.build_expression(program, *expr)?;
+                        let temp_var = self.create_temp_var();
+                        let rvalue = Rvalue::UnaryOp {
+                            op: UnaryOp::Neg,
+                            operand,
+                        };
+
+                        if let Some(block_id) = self.current_block_id {
+                            self.add_statement(
+                                block_id,
+                                Statement::Assign {
+                                    lvalue: LValue::Variable { var: temp_var },
+                                    rvalue,
+                                    span: program.expressions[*expr].span.clone(),
+                                },
+                            );
+                        }
+                        Ok(Operand::Var(temp_var))
+                    }
+                    ast::UnaryOp::PreIncrement
+                    | ast::UnaryOp::PostIncrement
+                    | ast::UnaryOp::PreDecrement
+                    | ast::UnaryOp::PostDecrement => {
+                        // Convert increment/decrement to simple assignment: a = a + 1 or a = a - 1
+                        let operand = self.build_expression(program, *expr)?;
+
+                        // For increment/decrement, we need to know what variable we're operating on
+                        // This should be handled during lvalue processing, but for expressions we need to create temps
+                        let temp_var = self.create_temp_var();
+                        let one_operand = Operand::Const(Constant::Int(1));
+
+                        let binary_op = match op {
+                            ast::UnaryOp::PreIncrement | ast::UnaryOp::PostIncrement => {
+                                BinaryOp::Add
+                            }
+                            ast::UnaryOp::PreDecrement | ast::UnaryOp::PostDecrement => {
+                                BinaryOp::Sub
+                            }
+                            _ => unreachable!(),
+                        };
+
+                        let rvalue = Rvalue::BinaryOp {
+                            left: operand.clone(),
+                            op: binary_op,
+                            right: one_operand,
+                        };
+
+                        if let Some(block_id) = self.current_block_id {
+                            self.add_statement(
+                                block_id,
+                                Statement::Assign {
+                                    lvalue: LValue::Variable { var: temp_var },
+                                    rvalue,
+                                    span: program.expressions[*expr].span.clone(),
+                                },
+                            );
+                        }
+
+                        // For post-increment/decrement, return the original value
+                        // For pre-increment/decrement, return the new value
+                        match op {
+                            ast::UnaryOp::PreIncrement | ast::UnaryOp::PreDecrement => {
+                                Ok(Operand::Var(temp_var))
+                            }
+                            ast::UnaryOp::PostIncrement | ast::UnaryOp::PostDecrement => {
+                                // Return the original operand value
+                                Ok(operand)
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
                 }
-                Ok(Operand::Var(temp_var))
             }
             ast::ExpressionKind::BinaryOp {
                 left, op, right, ..
