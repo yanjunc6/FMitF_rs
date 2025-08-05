@@ -1,4 +1,6 @@
-use crate::cfg::{FieldId, FunctionCfg, Operand, Rvalue, Statement, TableId, VarId};
+use crate::cfg::{
+    BasicBlockId, ControlFlowEdge, FieldId, FunctionCfg, LValue, Operand, Rvalue, Statement, TableId, VarId,
+};
 use crate::dataflow::{analyze_available_expressions, AnalysisLevel};
 use crate::optimization::OptimizationPass;
 use std::collections::{HashMap, HashSet};
@@ -154,6 +156,11 @@ impl OptimizationPass for CommonSubexpressionEliminationPass {
                     Statement::TableAssign { table, field, .. } => {
                         // Table assignments can invalidate expressions that read from the same table/field
                         self.kill_table_expressions(&mut current_available, *table, *field);
+                        new_statements.push(stmt.clone());
+                    }
+                    Statement::ArrayAssign { .. } => {
+                        // TODO: Implement CSE analysis for array assignments
+                        // For now, just pass through unchanged
                         new_statements.push(stmt.clone());
                     }
                 }

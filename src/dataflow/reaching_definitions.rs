@@ -1,4 +1,4 @@
-use crate::cfg::{BasicBlockId, ControlFlowEdge, FunctionCfg, Statement, VarId};
+use crate::cfg::{BasicBlockId, ControlFlowEdge, FunctionCfg, LValue, Statement, VarId};
 use crate::dataflow::{
     AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
     TransferFunction,
@@ -31,17 +31,22 @@ impl TransferFunction<SetLattice<Definition>> for ReachingDefinitionsTransfer {
         let mut reaching_defs = state.set.clone();
 
         match stmt {
-            Statement::Assign { var, .. } => {
-                // KILL: Remove all existing definitions of this variable
-                reaching_defs.retain(|def| def.var_id != *var);
-
-                // GEN: Add new definition (we need context to get proper location)
-                // For the basic transfer function, we'll skip adding the definition
-                // since we don't have the current block context
-                // This is why the enhanced version with location tracking is needed
-            }
-            Statement::TableAssign { .. } => {
-                // Table assignments don't define local variables, so no change
+            Statement::Assign { lvalue, .. } => {
+                match lvalue {
+                    LValue::Variable { var } => {
+                        // KILL: Remove all existing definitions of this variable
+                        reaching_defs.retain(|def| def.var_id != *var);
+                        // GEN: Add new definition (would need location context)
+                    }
+                    LValue::ArrayElement { array, .. } => {
+                        // KILL: Remove all existing definitions of the array variable
+                        reaching_defs.retain(|def| def.var_id != *array);
+                        // GEN: Add new definition of the array variable
+                    }
+                    LValue::TableField { .. } => {
+                        // Table field assignments don't define local variables
+                    }
+                }
             }
         }
 
@@ -88,19 +93,34 @@ impl TransferFunction<SetLattice<Definition>> for ReachingDefinitionsTransferWit
         let mut reaching_defs = state.set.clone();
 
         match stmt {
-            Statement::Assign { var, .. } => {
-                // KILL: Remove all existing definitions of this variable
-                reaching_defs.retain(|def| def.var_id != *var);
+            Statement::Assign { lvalue, .. } => {
+                match lvalue {
+                    LValue::Variable { var } => {
+                        // KILL: Remove all existing definitions of this variable
+                        reaching_defs.retain(|def| def.var_id != *var);
 
-                // GEN: Add new definition at current location
-                reaching_defs.insert(Definition {
-                    var_id: *var,
-                    block_id: self.current_block,
-                    stmt_index: self.current_stmt_index,
-                });
-            }
-            Statement::TableAssign { .. } => {
-                // Table assignments don't define local variables
+                        // GEN: Add new definition at current location
+                        reaching_defs.insert(Definition {
+                            var_id: *var,
+                            block_id: self.current_block,
+                            stmt_index: self.current_stmt_index,
+                        });
+                    }
+                    LValue::ArrayElement { array, .. } => {
+                        // KILL: Remove all existing definitions of the array variable
+                        reaching_defs.retain(|def| def.var_id != *array);
+
+                        // GEN: Add new definition of the array variable
+                        reaching_defs.insert(Definition {
+                            var_id: *array,
+                            block_id: self.current_block,
+                            stmt_index: self.current_stmt_index,
+                        });
+                    }
+                    LValue::TableField { .. } => {
+                        // Table field assignments don't define local variables
+                    }
+                }
             }
         }
 

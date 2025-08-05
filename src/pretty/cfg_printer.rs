@@ -1,6 +1,6 @@
 use super::PrettyPrinter;
 use crate::cfg::{
-    BasicBlock, CfgProgram, EdgeType, FunctionCfg, HopCfg, Operand, Rvalue, Statement,
+    BasicBlock, CfgProgram, EdgeType, FunctionCfg, HopCfg, LValue, Operand, Rvalue, Statement,
 };
 use std::io::Write;
 
@@ -249,38 +249,48 @@ impl CfgPrinter {
     /// Print a statement
     fn print_statement(&self, stmt: &Statement, writer: &mut dyn Write) -> std::io::Result<()> {
         match stmt {
-            Statement::Assign { var, rvalue, .. } => {
-                write!(writer, "var_{:?} = {}", var, self.rvalue_to_string(rvalue))?;
-            }
-            Statement::TableAssign {
-                table,
-                pk_fields,
-                pk_values,
-                field,
-                value,
-                ..
-            } => {
-                write!(writer, "table_{:?}.", table)?;
-                for (i, &pk_field) in pk_fields.iter().enumerate() {
-                    if i > 0 {
-                        write!(writer, ",")?;
-                    }
-                    write!(
-                        writer,
-                        "field_{:?}[{}]",
-                        pk_field,
-                        self.operand_to_string(&pk_values[i])
-                    )?;
-                }
+            Statement::Assign { lvalue, rvalue, .. } => {
                 write!(
                     writer,
-                    ".field_{:?} = {}",
-                    field,
-                    self.operand_to_string(value)
+                    "{} = {}",
+                    self.lvalue_to_string(lvalue),
+                    self.rvalue_to_string(rvalue)
                 )?;
             }
         }
         Ok(())
+    }
+
+    /// Convert LValue to string representation
+    fn lvalue_to_string(&self, lvalue: &LValue) -> String {
+        match lvalue {
+            LValue::Variable { var } => {
+                format!("var_{:?}", var)
+            }
+            LValue::ArrayElement { array, index } => {
+                format!("var_{:?}[{}]", array, self.operand_to_string(index))
+            }
+            LValue::TableField {
+                table,
+                pk_fields,
+                pk_values,
+                field,
+            } => {
+                let mut result = format!("table_{:?}.", table);
+                for (i, &pk_field) in pk_fields.iter().enumerate() {
+                    if i > 0 {
+                        result.push(',');
+                    }
+                    result.push_str(&format!(
+                        "field_{:?}[{}]",
+                        pk_field,
+                        self.operand_to_string(&pk_values[i])
+                    ));
+                }
+                result.push_str(&format!(".field_{:?}", field));
+                result
+            }
+        }
     }
 
     /// Convert edge type to string representation

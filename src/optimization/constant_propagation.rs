@@ -121,6 +121,11 @@ impl OptimizationPass for ConstantPropagationPass {
                             span: span.clone(),
                         });
                     }
+                    Statement::ArrayAssign { .. } => {
+                        // TODO: Implement constant propagation for array assignments
+                        // For now, just pass through unchanged
+                        new_statements.push(stmt.clone());
+                    }
                 }
             }
 

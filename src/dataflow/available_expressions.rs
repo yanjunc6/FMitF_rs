@@ -1,5 +1,6 @@
 use crate::cfg::{
-    ControlFlowEdge, EdgeType, FieldId, FunctionCfg, Operand, Rvalue, Statement, TableId, VarId,
+    ControlFlowEdge, EdgeType, FieldId, FunctionCfg, LValue, Operand, Rvalue, Statement, TableId,
+    VarId,
 };
 use crate::dataflow::{
     AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
@@ -74,22 +75,25 @@ impl TransferFunction<SetLattice<Rvalue>> for AvailableExpressionsTransfer {
         let mut available_exprs = state.set.clone();
 
         match stmt {
-            Statement::Assign { var, rvalue, .. } => {
-                // KILL: Remove any expression that uses the defined variable
-                available_exprs.retain(|expr| !Self::expr_uses_var(expr, *var));
+            Statement::Assign { lvalue, rvalue, .. } => {
+                match lvalue {
+                    LValue::Variable { var } => {
+                        // KILL: Remove any expression that uses the defined variable
+                        available_exprs.retain(|expr| !Self::expr_uses_var(expr, *var));
+                    }
+                    LValue::ArrayElement { array, .. } => {
+                        // KILL: Remove any expression that uses the array variable
+                        available_exprs.retain(|expr| !Self::expr_uses_var(expr, *array));
+                    }
+                    LValue::TableField { .. } => {
+                        // Table field assignments don't kill local variable expressions
+                    }
+                }
 
                 // GEN: Add the computed expression if it's trackable
                 if Self::is_tracked_expression(rvalue) {
                     available_exprs.insert(rvalue.clone());
                 }
-            }
-            Statement::TableAssign { table, field, .. } => {
-                // KILL: Remove any table access to the same table and field
-                available_exprs
-                    .retain(|expr| !Self::expr_killed_by_table_assign(expr, *table, *field));
-
-                // Note: We don't add table assignments as available expressions
-                // since they are not expressions that compute values
             }
         }
 
