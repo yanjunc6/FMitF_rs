@@ -651,14 +651,47 @@ impl<'p> SemanticAnalyzer<'p> {
     /// Validate constraints on types (e.g., array sizes must be constants)
     fn validate_type_constraints(&mut self, type_name: &TypeName, span: &Span) {
         match type_name {
-            TypeName::Array { element_type, size } => {
+            TypeName::Array {
+                element_type,
+                size,
+                size_expr,
+            } => {
                 // Recursively validate the element type
                 self.validate_type_constraints(element_type, span);
 
-                // For fixed-size arrays, we would need the size expression to validate
-                // Currently, the AST stores the computed size, but we'd need the original
-                // expression to validate it's constant. This is a limitation of the current design.
-                if let Some(array_size) = size {
+                // If we have a size expression, validate it's constant and positive
+                if let Some(expr_id) = size_expr {
+                    if !self.constant_checker.is_constant_expression(*expr_id) {
+                        self.error_at(
+                            span,
+                            AstError::NonConstantExpression {
+                                context: "array size".to_string(),
+                            },
+                        );
+                    } else if let Some(const_value) =
+                        self.constant_checker.evaluate_constant(*expr_id)
+                    {
+                        if let Some(size_val) = const_value.as_int() {
+                            if size_val <= 0 {
+                                self.error_at(
+                                    span,
+                                    AstError::ParseError(
+                                        "Array size must be greater than 0".to_string(),
+                                    ),
+                                );
+                            }
+                        } else {
+                            self.error_at(
+                                span,
+                                AstError::TypeMismatch {
+                                    expected: TypeName::Int,
+                                    found: const_value.type_name(),
+                                },
+                            );
+                        }
+                    }
+                } else if let Some(array_size) = size {
+                    // For pre-computed sizes, just validate they're positive
                     if *array_size == 0 {
                         self.error_at(
                             span,
@@ -931,6 +964,7 @@ impl<'p> SemanticAnalyzer<'p> {
                 element_type.map(|elem_type| TypeName::Array {
                     element_type: Box::new(elem_type),
                     size: Some(elements.len()),
+                    size_expr: None, // Array literals don't have explicit size expressions
                 })
             }
             ExpressionKind::UnaryOp {
@@ -1079,11 +1113,13 @@ impl<'p> SemanticAnalyzer<'p> {
             (
                 TypeName::Array {
                     element_type: expected_elem,
-                    size: _, // Ignore declared size for initialization
+                    size: _,      // Ignore declared size for initialization
+                    size_expr: _, // Ignore size expression for initialization
                 },
                 TypeName::Array {
                     element_type: actual_elem,
-                    size: _, // Ignore initializer size
+                    size: _,      // Ignore initializer size
+                    size_expr: _, // Ignore size expression for initialization
                 },
             ) => {
                 // Recursively check element type compatibility
@@ -1109,10 +1145,136 @@ pub fn analyze_program_with_types(program: &mut Program) -> Results<()> {
         analyzer.analyze()?;
     }
 
-    // After validation, evaluate hop loop constants for CFG expansion
+    // After validation, evaluate hop loop constants and array size constants
     evaluate_hop_loop_constants(program);
+    evaluate_array_size_constants(program);
 
     Ok(())
+}
+
+/// Evaluate array size constants and store them in the AST
+fn evaluate_array_size_constants(program: &mut Program) {
+    // First pass: collect all expressions that need evaluation
+    let mut var_updates: Vec<(VarId, usize)> = Vec::new();
+    let mut field_updates: Vec<(FieldId, usize)> = Vec::new();
+    let mut param_updates: Vec<(ParameterId, usize)> = Vec::new();
+
+    // Create constant checker once for all evaluations
+    {
+        let mut constant_checker = ConstantChecker::new(program);
+
+        // Evaluate variable array sizes
+        for (var_id, var_decl) in program.variables.iter() {
+            if let TypeName::Array {
+                size, size_expr, ..
+            } = &var_decl.ty
+            {
+                if size.is_none() && size_expr.is_some() {
+                    if let Some(const_value) =
+                        constant_checker.evaluate_constant(size_expr.unwrap())
+                    {
+                        if let Some(size_val) = const_value.as_int() {
+                            if size_val > 0 {
+                                var_updates.push((var_id, size_val as usize));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Evaluate field array sizes
+        for (field_id, field_decl) in program.fields.iter() {
+            if let TypeName::Array {
+                size, size_expr, ..
+            } = &field_decl.field_type
+            {
+                if size.is_none() && size_expr.is_some() {
+                    if let Some(const_value) =
+                        constant_checker.evaluate_constant(size_expr.unwrap())
+                    {
+                        if let Some(size_val) = const_value.as_int() {
+                            if size_val > 0 {
+                                field_updates.push((field_id, size_val as usize));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Evaluate parameter array sizes
+        for (param_id, param_decl) in program.parameters.iter() {
+            if let TypeName::Array {
+                size, size_expr, ..
+            } = &param_decl.param_type
+            {
+                if size.is_none() && size_expr.is_some() {
+                    if let Some(const_value) =
+                        constant_checker.evaluate_constant(size_expr.unwrap())
+                    {
+                        if let Some(size_val) = const_value.as_int() {
+                            if size_val > 0 {
+                                param_updates.push((param_id, size_val as usize));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } // constant_checker goes out of scope here
+
+    // Second pass: apply all updates
+    for (var_id, computed_size) in var_updates {
+        if let Some(var_decl) = program.variables.get_mut(var_id) {
+            if let TypeName::Array {
+                element_type,
+                size_expr,
+                ..
+            } = &var_decl.ty
+            {
+                var_decl.ty = TypeName::Array {
+                    element_type: element_type.clone(),
+                    size: Some(computed_size),
+                    size_expr: *size_expr,
+                };
+            }
+        }
+    }
+
+    for (field_id, computed_size) in field_updates {
+        if let Some(field_decl) = program.fields.get_mut(field_id) {
+            if let TypeName::Array {
+                element_type,
+                size_expr,
+                ..
+            } = &field_decl.field_type
+            {
+                field_decl.field_type = TypeName::Array {
+                    element_type: element_type.clone(),
+                    size: Some(computed_size),
+                    size_expr: *size_expr,
+                };
+            }
+        }
+    }
+
+    for (param_id, computed_size) in param_updates {
+        if let Some(param_decl) = program.parameters.get_mut(param_id) {
+            if let TypeName::Array {
+                element_type,
+                size_expr,
+                ..
+            } = &param_decl.param_type
+            {
+                param_decl.param_type = TypeName::Array {
+                    element_type: element_type.clone(),
+                    size: Some(computed_size),
+                    size_expr: *size_expr,
+                };
+            }
+        }
+    }
 }
 
 /// Evaluate hop loop constants and store them in the AST for CFG expansion
