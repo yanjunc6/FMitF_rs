@@ -2,7 +2,7 @@
 use super::CompilationResult;
 use colored::*;
 use std::fs;
-use std::io::{self, Write};
+use std::io::Write;
 use std::path::PathBuf;
 
 pub struct OutputManager;
@@ -82,54 +82,6 @@ impl OutputManager {
             "\nCompilation completed in {}ms",
             result.compilation_time_ms
         );
-    }
-
-    fn write_markdown_summary(
-        &self,
-        result: &CompilationResult,
-        writer: &mut dyn Write,
-    ) -> io::Result<()> {
-        let stats = result.get_stats();
-
-        writeln!(writer, "# FMitF Compilation Report\n")?;
-        writeln!(
-            writer,
-            "**Generated:** {}\n",
-            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
-        )?;
-
-        writeln!(writer, "## Compilation Summary\n")?;
-        writeln!(
-            writer,
-            "- **Status:** {}",
-            if result.success {
-                "✅ Success"
-            } else {
-                "❌ Failed"
-            }
-        )?;
-        writeln!(
-            writer,
-            "- **Compilation Time:** {}ms",
-            result.compilation_time_ms
-        )?;
-
-        writeln!(writer, "\n## Stage Results\n")?;
-        writeln!(writer, "| Stage | Result |")?;
-        writeln!(writer, "|-------|--------|")?;
-        writeln!(
-            writer,
-            "| AST | {} functions, {} tables, {} partitions |",
-            stats.functions, stats.tables, stats.partitions
-        )?;
-        writeln!(writer, "| CFG | {} basic blocks |", stats.basic_blocks)?;
-        writeln!(
-            writer,
-            "| SC-Graph | {} nodes, {} S-edges, {} C-edges |",
-            stats.sc_nodes, stats.s_edges, stats.c_edges
-        )?;
-
-        Ok(())
     }
 
     fn write_compilation_log(

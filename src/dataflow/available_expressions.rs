@@ -85,8 +85,11 @@ impl TransferFunction<SetLattice<Rvalue>> for AvailableExpressionsTransfer {
                         // KILL: Remove any expression that uses the array variable
                         available_exprs.retain(|expr| !Self::expr_uses_var(expr, *array));
                     }
-                    LValue::TableField { .. } => {
-                        // Table field assignments don't kill local variable expressions
+                    LValue::TableField { table, field, .. } => {
+                        // KILL: Remove any table access expression that reads from the same table field
+                        available_exprs.retain(|expr| {
+                            !Self::expr_killed_by_table_assign(expr, *table, *field)
+                        });
                     }
                 }
 

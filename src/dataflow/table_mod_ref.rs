@@ -1,7 +1,7 @@
 //! Table modification-reference analysis for tracking table reads and writes per hop.
 //! This analysis determines which tables are read from and written to by each hop.
 
-use crate::cfg::{ControlFlowEdge, FieldId, FunctionCfg, LValue, Rvalue, Statement, TableId};
+use crate::cfg::{ControlFlowEdge, FunctionCfg, LValue, Rvalue, Statement, TableId};
 use crate::dataflow::{
     AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
     TransferFunction,
