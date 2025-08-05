@@ -633,7 +633,7 @@ impl<'p> SemanticAnalyzer<'p> {
     fn check_var_decl(&mut self, var_decl: &VarDeclStatement, span: &Span) {
         // Check initializer expression type
         if let Some(init_type) = self.check_expression(var_decl.init_value) {
-            if !self.types_compatible(&var_decl.var_type, &init_type) {
+            if !self.types_compatible_for_initialization(&var_decl.var_type, &init_type) {
                 self.error_at(
                     span,
                     AstError::TypeMismatch {
@@ -1069,6 +1069,29 @@ impl<'p> SemanticAnalyzer<'p> {
 
     fn types_compatible(&self, expected: &TypeName, actual: &TypeName) -> bool {
         expected == actual || (self.is_float_type(expected) && self.is_int_type(actual))
+    }
+
+    /// Check type compatibility specifically for variable initialization.
+    /// For arrays, this allows initialization with different sizes than the declared array size.
+    fn types_compatible_for_initialization(&self, expected: &TypeName, actual: &TypeName) -> bool {
+        match (expected, actual) {
+            // For array initialization, allow different sizes as long as element types are compatible
+            (
+                TypeName::Array { 
+                    element_type: expected_elem, 
+                    size: _ // Ignore declared size for initialization
+                },
+                TypeName::Array { 
+                    element_type: actual_elem, 
+                    size: _ // Ignore initializer size
+                }
+            ) => {
+                // Recursively check element type compatibility
+                self.types_compatible_for_initialization(expected_elem, actual_elem)
+            }
+            // For non-array types, use the regular compatibility check
+            _ => self.types_compatible(expected, actual)
+        }
     }
 }
 
