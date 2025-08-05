@@ -778,6 +778,15 @@ impl<'p> NameResolver<'p> {
                 if let Some(var_id) = self.lookup_variable(&object_name) {
                     // Store the resolution for the object
                     self.program.resolutions.insert(expr_id, var_id);
+
+                    // Update the AST with the resolved variable
+                    if let ExpressionKind::FieldAccess {
+                        ref mut resolved_var,
+                        ..
+                    } = &mut self.program.expressions[expr_id].node
+                    {
+                        *resolved_var = Some(var_id);
+                    }
                 } else {
                     self.error_at(&expr_span, AstError::UndeclaredVariable(object_name));
                 }
@@ -827,7 +836,9 @@ impl<'p> NameResolver<'p> {
                 return Some(var_id);
             }
         }
-        None
+
+        // If not found in scope stack, check global constants
+        self.program.constant_map.get(name).copied()
     }
 
     /// Pushes a new scope onto the stack.

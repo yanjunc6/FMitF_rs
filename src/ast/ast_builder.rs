@@ -2058,6 +2058,7 @@ impl AstBuilder {
                 | Rule::addition
                 | Rule::multiplication
                 | Rule::unary
+                | Rule::postfix
                 | Rule::primary => {
                     if let Some(id) = self.extract_identifier_from_expression(inner_pair) {
                         return Some(id);

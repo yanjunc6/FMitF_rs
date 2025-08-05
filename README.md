@@ -352,3 +352,4 @@ src/
 # TODO-list
 
 - dataflow & optimization has many TODO
+- hops for creates variable scope

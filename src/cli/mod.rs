@@ -31,6 +31,10 @@ pub struct Cli {
     /// Disable colored output
     #[arg(long = "no-color")]
     pub no_color: bool,
+
+    /// Number of instances to create for each transaction (default: 2)
+    #[arg(long = "instances", default_value = "2")]
+    pub instances: u32,
 }
 
 impl Cli {
