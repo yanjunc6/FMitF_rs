@@ -100,7 +100,7 @@ statement = {
 }
 
 var_decl_statement = {
-    type_name ~ identifier ~ "=" ~ expression ~ ";"
+    type_name ~ identifier ~ ("=" ~ expression)? ~ ";"
 }
 
 assignment_statement = {

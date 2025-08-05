@@ -384,12 +384,15 @@ impl AstPrinter {
             StatementKind::VarDecl(var_decl) => {
                 write!(
                     writer,
-                    "{} {} = ",
+                    "{} {}",
                     self.format_type(&var_decl.var_type),
                     var_decl.var_name
                 )?;
-                if let Some(init) = program.expressions.get(var_decl.init_value) {
-                    self.print_expression(init, program, writer)?;
+                if let Some(init_expr_id) = var_decl.init_value {
+                    if let Some(init) = program.expressions.get(init_expr_id) {
+                        write!(writer, " = ")?;
+                        self.print_expression(init, program, writer)?;
+                    }
                 }
                 writeln!(writer, ";")?;
             }

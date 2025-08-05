@@ -835,13 +835,6 @@ impl AstBuilder {
             }]
         })?;
 
-        let init_value = init_value.ok_or_else(|| {
-            vec![SpannedError {
-                error: AstError::ParseError("Missing variable initialization".to_string()),
-                span: Some(span),
-            }]
-        })?;
-
         Ok(VarDeclStatement {
             var_type,
             var_name,

@@ -340,7 +340,7 @@ pub enum LValue {
 pub struct VarDeclStatement {
     pub var_type: TypeName,
     pub var_name: String,
-    pub init_value: ExpressionId,
+    pub init_value: Option<ExpressionId>,
 }
 
 #[derive(Debug, Clone)]

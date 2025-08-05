@@ -1,7 +1,7 @@
 use super::PrettyPrinter;
 use crate::cfg::{
     BasicBlock, CfgProgram, EdgeType, FunctionCfg, HopCfg, LValue, Operand, Rvalue, Statement,
-    VariableKind, VarId,
+    VarId, VariableKind,
 };
 use std::collections::HashMap;
 use std::io::Write;
@@ -105,12 +105,12 @@ impl<'a> CfgPrinter<'a> {
             TypeName::Float => "float".to_string(),
             TypeName::String => "string".to_string(),
             TypeName::Bool => "bool".to_string(),
-            TypeName::Array { element_type, size, .. } => {
-                match size {
-                    Some(n) => format!("{}[{}]", self.format_type(element_type), n),
-                    None => format!("{}[]", self.format_type(element_type)),
-                }
-            }
+            TypeName::Array {
+                element_type, size, ..
+            } => match size {
+                Some(n) => format!("{}[{}]", self.format_type(element_type), n),
+                None => format!("{}[]", self.format_type(element_type)),
+            },
             TypeName::Table(name) => name.clone(),
         }
     }
@@ -345,7 +345,7 @@ impl<'a> CfgPrinter<'a> {
                     self.lvalue_to_string(lvalue),
                     self.rvalue_to_string(rvalue)
                 )?;
-                
+
                 // Add type information if available
                 if let LValue::Variable { var } = lvalue {
                     if let Some(ty_str) = self.get_variable_type(*var) {
@@ -360,11 +360,13 @@ impl<'a> CfgPrinter<'a> {
     /// Convert LValue to string representation
     fn lvalue_to_string(&self, lvalue: &LValue) -> String {
         match lvalue {
-            LValue::Variable { var } => {
-                self.get_variable_name(*var)
-            }
+            LValue::Variable { var } => self.get_variable_name(*var),
             LValue::ArrayElement { array, index } => {
-                format!("{}[{}]", self.get_variable_name(*array), self.operand_to_string(index))
+                format!(
+                    "{}[{}]",
+                    self.get_variable_name(*array),
+                    self.operand_to_string(index)
+                )
             }
             LValue::TableField {
                 table,
@@ -447,7 +449,11 @@ impl<'a> CfgPrinter<'a> {
                 )
             }
             Rvalue::UnaryOp { op, operand } => {
-                format!("({}{})", self.unary_op_to_string(op), self.operand_to_string(operand))
+                format!(
+                    "({}{})",
+                    self.unary_op_to_string(op),
+                    self.operand_to_string(operand)
+                )
             }
             Rvalue::TableAccess {
                 table,
