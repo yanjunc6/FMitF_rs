@@ -188,11 +188,11 @@ void newOrder(int w_id, int d_id, int c_id, int o_all_local, int date,
         };
         
         // Insert NewOrder
-        New_Order[NO_W_ID: w_id, NO_D_ID: d_id, NO_ID: d_next_oid] = {};
+        New_Order[NO_W_ID: w_id, NO_D_ID: d_id, NO_O_ID: d_next_oid] = {};
 
         // Insert order line
         for (int ol_number = 0; ol_number < O_OL_CNT; ol_number ++) {
-            Order_Line[O_W_ID: w_id, O_D_ID: d_id, O_ID: d_next_oid, OL_NUMBER: ol_number] = {
+            Order_Line[OL_W_ID: w_id, OL_D_ID: d_id, OL_O_ID: d_next_oid, OL_NUMBER: ol_number] = {
                 OL_I_ID: itemIDs[ol_number],
                 OL_SUPPLY_W_ID: supplierWarehouseIDs[ol_number],
                 OL_QUANTITY: orderQuantities[ol_number],
@@ -211,13 +211,13 @@ void Delivery(int w_id, int o_carrier_id, int date) {
         // Read Order table, update carrier id
         int c_id = Order[O_W_ID: w_id, O_D_ID: d_id, O_ID: no_o_id].O_C_ID;
         int ol_cnt = Order[O_W_ID: w_id, O_D_ID: d_id, O_ID: no_o_id].O_OL_CNT;
-        Order[O_W_ID: w_id, O_D_ID: d_id, O_ID: no_o_id].O_C_ID.O_CARRIER_ID = o_carrier_id;
+        Order[O_W_ID: w_id, O_D_ID: d_id, O_ID: no_o_id].O_CARRIER_ID = o_carrier_id;
         
         // Read Order Lines to get total order price, and update delivery date
         float ol_total = 0;
         for (int ol_number = 0; ol_number < ol_cnt; ol_number ++) {
-            Order_Line[O_W_ID: w_id, O_D_ID: d_id, O_ID: no_o_id, OL_NUMBER: ol_number].OL_DELIVERY_DATE = date;
-            ol_total += Order_Line[O_W_ID: w_id, O_D_ID: d_id, O_ID: no_o_id, OL_NUMBER: ol_number].OL_AMOUNT;
+            Order_Line[OL_W_ID: w_id, OL_D_ID: d_id, OL_O_ID: no_o_id, OL_NUMBER: ol_number].OL_DELIVERY_DATE = date;
+            ol_total += Order_Line[OL_W_ID: w_id, OL_D_ID: d_id, OL_O_ID: no_o_id, OL_NUMBER: ol_number].OL_AMOUNT;
         }
 
         // Update Customer 
@@ -245,7 +245,7 @@ void Payment(int w_id, int d_id, int c_w_id, int c_d_id, int c_id, float amount)
         c.C_PAYMENT_CNT += 1;
 
         if (c.C_CREDIT == "BC") {
-            C.C_DATA = c.C_ID + " " + c.C_D_ID + " " + c.C_W_ID + " " + d_id + " " + w_id 
+            c.C_DATA = c.C_ID + " " + c.C_D_ID + " " + c.C_W_ID + " " + d_id + " " + w_id 
                 + " " + amount + " | " + c.C_DATA;
         }
         Customer[C_W_ID: c_w_id, C_D_ID: c_d_id, C_ID: c_id] = c;
