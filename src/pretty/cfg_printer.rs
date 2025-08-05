@@ -1,24 +1,46 @@
 use super::PrettyPrinter;
 use crate::cfg::{
     BasicBlock, CfgProgram, EdgeType, FunctionCfg, HopCfg, LValue, Operand, Rvalue, Statement,
+    VariableKind, VarId,
 };
+use std::collections::HashMap;
 use std::io::Write;
 
 /// Pretty printer for CFG structures.
 /// Provides human-readable output of the control flow graph.
-pub struct CfgPrinter {
+pub struct CfgPrinter<'a> {
     /// Indentation level for nested structures
     indent_size: usize,
     /// Whether to show detailed block information
     show_details: bool,
+    /// Reference to the full program for variable name lookup
+    program: Option<&'a CfgProgram>,
+    /// Counter for generating temporary variable names
+    temp_counter: std::cell::RefCell<usize>,
+    /// Map from VarId to generated names for temporaries
+    temp_name_map: std::cell::RefCell<HashMap<VarId, String>>,
 }
 
-impl CfgPrinter {
+impl<'a> CfgPrinter<'a> {
     /// Creates a new CFG printer with default settings.
     pub fn new() -> Self {
         Self {
             indent_size: 2,
             show_details: true,
+            program: None,
+            temp_counter: std::cell::RefCell::new(1),
+            temp_name_map: std::cell::RefCell::new(HashMap::new()),
+        }
+    }
+
+    /// Creates a new CFG printer with a program reference for variable name lookup.
+    pub fn with_program(program: &'a CfgProgram) -> Self {
+        Self {
+            indent_size: 2,
+            show_details: true,
+            program: Some(program),
+            temp_counter: std::cell::RefCell::new(1),
+            temp_name_map: std::cell::RefCell::new(HashMap::new()),
         }
     }
 
@@ -27,9 +49,71 @@ impl CfgPrinter {
         Self {
             indent_size,
             show_details,
+            program: None,
+            temp_counter: std::cell::RefCell::new(1),
+            temp_name_map: std::cell::RefCell::new(HashMap::new()),
         }
     }
 
+    /// Get a human-readable name for a variable
+    fn get_variable_name(&self, var_id: VarId) -> String {
+        if let Some(program) = self.program {
+            if let Some(var) = program.variables.get(var_id) {
+                // Use the actual variable name if available
+                if var.name.is_empty() || var.kind == VariableKind::Temporary {
+                    // Generate a temporary name for unnamed or temporary variables
+                    let mut temp_map = self.temp_name_map.borrow_mut();
+                    if let Some(name) = temp_map.get(&var_id) {
+                        name.clone()
+                    } else {
+                        let mut counter = self.temp_counter.borrow_mut();
+                        let temp_name = format!("t{}", *counter);
+                        *counter += 1;
+                        temp_map.insert(var_id, temp_name.clone());
+                        temp_name
+                    }
+                } else {
+                    var.name.clone()
+                }
+            } else {
+                format!("var_{:?}", var_id)
+            }
+        } else {
+            // Fallback when no program reference is available
+            format!("var_{:?}", var_id)
+        }
+    }
+
+    /// Get type information for a variable
+    fn get_variable_type(&self, var_id: VarId) -> Option<String> {
+        if let Some(program) = self.program {
+            if let Some(var) = program.variables.get(var_id) {
+                Some(self.format_type(&var.ty))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Format a type name
+    fn format_type(&self, ty: &crate::ast::TypeName) -> String {
+        use crate::ast::TypeName;
+        match ty {
+            TypeName::Int => "int".to_string(),
+            TypeName::Float => "float".to_string(),
+            TypeName::String => "string".to_string(),
+            TypeName::Bool => "bool".to_string(),
+            TypeName::Array { element_type, size, .. } => {
+                match size {
+                    Some(n) => format!("{}[{}]", self.format_type(element_type), n),
+                    None => format!("{}[]", self.format_type(element_type)),
+                }
+            }
+            TypeName::Table(name) => name.clone(),
+        }
+    }
     /// Helper to write indentation
     fn write_indent(&self, writer: &mut dyn Write, level: usize) -> std::io::Result<()> {
         for _ in 0..(level * self.indent_size) {
@@ -123,7 +207,12 @@ impl CfgPrinter {
                 if i > 0 {
                     write!(writer, ", ")?;
                 }
-                write!(writer, "var_{:?}", param_id)?;
+                let param_name = self.get_variable_name(param_id);
+                if let Some(param_type) = self.get_variable_type(param_id) {
+                    write!(writer, "{}: {}", param_name, param_type)?;
+                } else {
+                    write!(writer, "{}", param_name)?;
+                }
             }
             writeln!(writer)?;
         }
@@ -136,7 +225,7 @@ impl CfgPrinter {
                 if i > 0 {
                     write!(writer, " -> ")?;
                 }
-                write!(writer, "hop_{:?}", hop_id)?;
+                write!(writer, "hop{}", hop_id.index())?;
             }
             writeln!(writer)?;
             writeln!(writer)?;
@@ -167,7 +256,7 @@ impl CfgPrinter {
 
         if let Some(entry_block) = hop.entry_block {
             self.write_indent(writer, level + 1)?;
-            writeln!(writer, "entry_block: block_{:?}", entry_block)?;
+            writeln!(writer, "entry_block: block{}", entry_block.index())?;
         }
 
         // Print all blocks in this hop
@@ -191,7 +280,7 @@ impl CfgPrinter {
         level: usize,
     ) -> std::io::Result<()> {
         self.write_indent(writer, level)?;
-        writeln!(writer, "block_{:?} {{", block_id)?;
+        writeln!(writer, "block{} {{", block_id.index())?;
 
         // Print statements
         if !block.statements.is_empty() {
@@ -215,8 +304,8 @@ impl CfgPrinter {
                 }
                 write!(
                     writer,
-                    "block_{:?} ({})",
-                    edge.from,
+                    "block{} ({})",
+                    edge.from.index(),
                     self.edge_type_to_string(&edge.edge_type)
                 )?;
             }
@@ -233,8 +322,8 @@ impl CfgPrinter {
                 }
                 write!(
                     writer,
-                    "block_{:?} ({})",
-                    edge.to,
+                    "block{} ({})",
+                    edge.to.index(),
                     self.edge_type_to_string(&edge.edge_type)
                 )?;
             }
@@ -256,6 +345,13 @@ impl CfgPrinter {
                     self.lvalue_to_string(lvalue),
                     self.rvalue_to_string(rvalue)
                 )?;
+                
+                // Add type information if available
+                if let LValue::Variable { var } = lvalue {
+                    if let Some(ty_str) = self.get_variable_type(*var) {
+                        write!(writer, "  // : {}", ty_str)?;
+                    }
+                }
             }
         }
         Ok(())
@@ -265,10 +361,10 @@ impl CfgPrinter {
     fn lvalue_to_string(&self, lvalue: &LValue) -> String {
         match lvalue {
             LValue::Variable { var } => {
-                format!("var_{:?}", var)
+                self.get_variable_name(*var)
             }
             LValue::ArrayElement { array, index } => {
-                format!("var_{:?}[{}]", array, self.operand_to_string(index))
+                format!("{}[{}]", self.get_variable_name(*array), self.operand_to_string(index))
             }
             LValue::TableField {
                 table,
@@ -324,8 +420,17 @@ impl CfgPrinter {
     /// Convert operand to string representation
     fn operand_to_string(&self, operand: &Operand) -> String {
         match operand {
-            Operand::Var(var_id) => format!("var_{:?}", var_id),
-            Operand::Const(constant) => format!("{:?}", constant),
+            Operand::Var(var_id) => self.get_variable_name(*var_id),
+            Operand::Const(constant) => {
+                use crate::cfg::Constant;
+                match constant {
+                    Constant::Int(n) => n.to_string(),
+                    Constant::Float(f) => f.to_string(),
+                    Constant::String(s) => format!("\"{}\"", s),
+                    Constant::Bool(b) => b.to_string(),
+                    Constant::Array(arr) => format!("{:?}", arr), // Fallback for arrays
+                }
+            }
         }
     }
 
@@ -335,14 +440,14 @@ impl CfgPrinter {
             Rvalue::Use(operand) => self.operand_to_string(operand),
             Rvalue::BinaryOp { op, left, right } => {
                 format!(
-                    "({} {:?} {})",
+                    "({} {} {})",
                     self.operand_to_string(left),
-                    op,
+                    self.binary_op_to_string(op),
                     self.operand_to_string(right)
                 )
             }
             Rvalue::UnaryOp { op, operand } => {
-                format!("({:?} {})", op, self.operand_to_string(operand))
+                format!("({}{})", self.unary_op_to_string(op), self.operand_to_string(operand))
             }
             Rvalue::TableAccess {
                 table,
@@ -370,21 +475,51 @@ impl CfgPrinter {
             }
         }
     }
+
+    /// Convert binary operator to string
+    fn binary_op_to_string(&self, op: &crate::ast::BinaryOp) -> String {
+        use crate::ast::BinaryOp;
+        match op {
+            BinaryOp::Add => "+".to_string(),
+            BinaryOp::Sub => "-".to_string(),
+            BinaryOp::Mul => "*".to_string(),
+            BinaryOp::Div => "/".to_string(),
+            BinaryOp::Eq => "==".to_string(),
+            BinaryOp::Neq => "!=".to_string(),
+            BinaryOp::Lt => "<".to_string(),
+            BinaryOp::Lte => "<=".to_string(),
+            BinaryOp::Gt => ">".to_string(),
+            BinaryOp::Gte => ">=".to_string(),
+            BinaryOp::And => "&&".to_string(),
+            BinaryOp::Or => "||".to_string(),
+        }
+    }
+
+    /// Convert unary operator to string
+    fn unary_op_to_string(&self, op: &crate::ast::UnaryOp) -> String {
+        use crate::ast::UnaryOp;
+        match op {
+            UnaryOp::Not => "!".to_string(),
+            UnaryOp::Neg => "-".to_string(),
+        }
+    }
 }
 
-impl Default for CfgPrinter {
+impl<'a> Default for CfgPrinter<'a> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl PrettyPrinter<CfgProgram> for CfgPrinter {
+impl<'a> PrettyPrinter<CfgProgram> for CfgPrinter<'a> {
     fn print(&self, program: &CfgProgram, writer: &mut dyn Write) -> std::io::Result<()> {
-        self.print_program(program, writer)
+        // Create a new printer with program reference for proper variable name lookup
+        let printer = CfgPrinter::with_program(program);
+        printer.print_program(program, writer)
     }
 }
 
-impl PrettyPrinter<FunctionCfg> for CfgPrinter {
+impl<'a> PrettyPrinter<FunctionCfg> for CfgPrinter<'a> {
     fn print(&self, function: &FunctionCfg, writer: &mut dyn Write) -> std::io::Result<()> {
         // For standalone function printing, we'll use a placeholder function ID
         // This is a workaround since we need a valid FunctionId but don't have one
@@ -403,7 +538,12 @@ impl PrettyPrinter<FunctionCfg> for CfgPrinter {
                 if i > 0 {
                     write!(writer, ", ")?;
                 }
-                write!(writer, "var_{:?}", param_id)?;
+                let param_name = self.get_variable_name(param_id);
+                if let Some(param_type) = self.get_variable_type(param_id) {
+                    write!(writer, "{}: {}", param_name, param_type)?;
+                } else {
+                    write!(writer, "{}", param_name)?;
+                }
             }
             writeln!(writer)?;
         }
