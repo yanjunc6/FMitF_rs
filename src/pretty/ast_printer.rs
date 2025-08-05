@@ -673,7 +673,9 @@ impl AstPrinter {
             TypeName::Float => "float".to_string(),
             TypeName::String => "string".to_string(),
             TypeName::Bool => "bool".to_string(),
-            TypeName::Array { element_type, size } => match size {
+            TypeName::Array {
+                element_type, size, ..
+            } => match size {
                 Some(n) => format!("{}[{}]", self.format_type(element_type), n),
                 None => format!("{}[]", self.format_type(element_type)),
             },

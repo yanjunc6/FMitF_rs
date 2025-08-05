@@ -588,6 +588,7 @@ impl AstBuilder {
         let span = Span::from_pest(pair.as_span());
         let mut base = None;
         let mut size = None;
+        let mut size_expr = None;
 
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
@@ -597,6 +598,7 @@ impl AstBuilder {
                 Rule::expression => {
                     // Parse the expression for array size
                     let expr_id = self.build_expression(inner_pair)?;
+                    size_expr = Some(expr_id);
 
                     // Try to evaluate simple integer literals at parse time
                     if let Some(expr) = self.program.expressions.get(expr_id) {
@@ -625,6 +627,7 @@ impl AstBuilder {
         Ok(TypeName::Array {
             element_type: Box::new(element_type),
             size,
+            size_expr,
         })
     }
 

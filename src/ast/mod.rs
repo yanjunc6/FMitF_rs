@@ -220,6 +220,7 @@ pub enum TypeName {
     Array {
         element_type: Box<TypeName>,
         size: Option<usize>, // None for dynamic arrays, Some(n) for fixed-size
+        size_expr: Option<ExpressionId>, // The original size expression for semantic analysis
     },
     Table(String), // For table variable declarations like "Stock s"
 }
