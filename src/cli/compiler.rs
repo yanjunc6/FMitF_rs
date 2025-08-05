@@ -136,7 +136,7 @@ impl Compiler {
         if let Some(ref cfg) = cfg_program {
             self.logger
                 .stage_start(4, 4, "Building Serializability Conflict Graph");
-            match self.compile_scgraph(cfg) {
+            match self.compile_scgraph(cfg, cli) {
                 Ok(graph) => {
                     self.logger.stage_success();
                     sc_graph = Some(graph);
@@ -195,8 +195,11 @@ impl Compiler {
     fn compile_scgraph(
         &mut self,
         cfg_program: &CfgProgram,
+        cli: &Cli,
     ) -> Result<crate::sc_graph::SCGraph, String> {
-        Ok(SCGraphBuilder::build(cfg_program))
+        // Use the number of instances specified in CLI
+        let builder = SCGraphBuilder::new(cli.instances);
+        Ok(builder.build(cfg_program))
     }
 
     /// Handle output based on the CLI configuration

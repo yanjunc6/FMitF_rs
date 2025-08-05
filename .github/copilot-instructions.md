@@ -92,7 +92,7 @@ Create testing case, tmp file and all the output files in the `tmp/` directory.
 ### Simplified CLI Interface
 ```bash
 cargo run -- input.transact                          # Default: creates output directory with input filename
-cargo run -- input.transact --output-dir my_output   # Custom output directory
+cargo run -- input.transact my_output                # Custom output directory
 cargo run -- input.transact --no-optimize            # Skip optimization passes (currently no-op)
 cargo run -- input.transact --no-color               # Disable colored terminal output
 ```

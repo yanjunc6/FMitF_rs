@@ -6,10 +6,13 @@ pub use sc_graph_builder::SCGraphBuilder;
 
 /// Represents a unique node identifier in the SC-Graph.
 /// Since HopId is only unique within a function, we need both FunctionId and HopId.
+/// We also include an instance number to handle multiple concurrent instances
+/// of the same transaction running with different parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SCGraphNodeId {
     pub function_id: FunctionId,
     pub hop_id: HopId,
+    pub instance: u32,
 }
 
 /// Represents an edge type in the SC-Graph.

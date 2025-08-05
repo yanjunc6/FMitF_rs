@@ -127,17 +127,19 @@ impl DotPrinter {
         if self.show_details {
             writeln!(
                 writer,
-                "    {} [label=\"Hop {}\\n{}\"];",
+                "    {} [label=\"Hop {}\\n{} #{}\"];",
                 node_name,
                 self.format_hop_id(node_id.hop_id),
-                function_name
+                function_name,
+                node_id.instance + 1 // Display instance starting from 1
             )?;
         } else {
             writeln!(
                 writer,
-                "    {} [label=\"Hop {}\"];",
+                "    {} [label=\"Hop {} #{}\"];",
                 node_name,
-                self.format_hop_id(node_id.hop_id)
+                self.format_hop_id(node_id.hop_id),
+                node_id.instance + 1 // Display instance starting from 1
             )?;
         }
 
@@ -191,9 +193,10 @@ impl DotPrinter {
     /// Generate a unique node name for DOT format
     fn node_name(&self, node_id: SCGraphNodeId) -> String {
         format!(
-            "hop_{}_{}",
+            "hop_{}_{}_inst{}",
             self.format_function_id(node_id.function_id),
-            self.format_hop_id(node_id.hop_id)
+            self.format_hop_id(node_id.hop_id),
+            node_id.instance
         )
     }
 

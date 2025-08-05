@@ -125,11 +125,18 @@ impl SCGraphPrinter {
         if self.show_details {
             writeln!(
                 writer,
-                "hop_{:?} (function_{:?})",
-                node_id.hop_id, node_id.function_id
+                "hop_{:?} (function_{:?}, instance_{})",
+                node_id.hop_id,
+                node_id.function_id,
+                node_id.instance + 1
             )?;
         } else {
-            writeln!(writer, "hop_{:?}", node_id.hop_id)?;
+            writeln!(
+                writer,
+                "hop_{:?}_inst{}",
+                node_id.hop_id,
+                node_id.instance + 1
+            )?;
         }
         Ok(())
     }
@@ -147,14 +154,20 @@ impl SCGraphPrinter {
         if self.use_symbols {
             writeln!(
                 writer,
-                "hop_{:?} → hop_{:?}",
-                edge.source.hop_id, edge.target.hop_id
+                "hop_{:?}_inst{} → hop_{:?}_inst{}",
+                edge.source.hop_id,
+                edge.source.instance + 1,
+                edge.target.hop_id,
+                edge.target.instance + 1
             )?;
         } else {
             writeln!(
                 writer,
-                "hop_{:?} -> hop_{:?}",
-                edge.source.hop_id, edge.target.hop_id
+                "hop_{:?}_inst{} -> hop_{:?}_inst{}",
+                edge.source.hop_id,
+                edge.source.instance + 1,
+                edge.target.hop_id,
+                edge.target.instance + 1
             )?;
         }
 
@@ -162,9 +175,11 @@ impl SCGraphPrinter {
             self.write_indent(writer, level + 1)?;
             writeln!(
                 writer,
-                "(hop_{:?} → hop_{:?} within functions {:?}→{:?})",
+                "(hop_{:?}_inst{} → hop_{:?}_inst{} within functions {:?}→{:?})",
                 edge.source.hop_id,
+                edge.source.instance + 1,
                 edge.target.hop_id,
+                edge.target.instance + 1,
                 edge.source.function_id,
                 edge.target.function_id
             )?;
@@ -186,14 +201,20 @@ impl SCGraphPrinter {
         if self.use_symbols {
             writeln!(
                 writer,
-                "hop_{:?} ↔ hop_{:?}",
-                edge.source.hop_id, edge.target.hop_id
+                "hop_{:?}_inst{} ↔ hop_{:?}_inst{}",
+                edge.source.hop_id,
+                edge.source.instance + 1,
+                edge.target.hop_id,
+                edge.target.instance + 1
             )?;
         } else {
             writeln!(
                 writer,
-                "hop_{:?} <-> hop_{:?}",
-                edge.source.hop_id, edge.target.hop_id
+                "hop_{:?}_inst{} <-> hop_{:?}_inst{}",
+                edge.source.hop_id,
+                edge.source.instance + 1,
+                edge.target.hop_id,
+                edge.target.instance + 1
             )?;
         }
 
@@ -201,9 +222,11 @@ impl SCGraphPrinter {
             self.write_indent(writer, level + 1)?;
             writeln!(
                 writer,
-                "(hop_{:?} ↔ hop_{:?} between function_{:?} and function_{:?})",
+                "(hop_{:?}_inst{} ↔ hop_{:?}_inst{} between function_{:?} and function_{:?})",
                 edge.source.hop_id,
+                edge.source.instance + 1,
                 edge.target.hop_id,
+                edge.target.instance + 1,
                 edge.source.function_id,
                 edge.target.function_id
             )?;
