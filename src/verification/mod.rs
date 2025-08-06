@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use crate::cfg::{self, CfgProgram, HopId};
 
-pub mod errors;
 pub mod boogie;
+pub mod errors;
 pub mod partition_soundness;
 
 use self::boogie::BoogieProgram;
@@ -28,7 +28,8 @@ impl Verifier {
 
     /// Add a partition soundness verification unit for the given function
     pub fn add_partition_soundness(&mut self, function_id: cfg::FunctionId) {
-        self.units.push(Box::new(PartitionSoundnessUnit { function_id }));
+        self.units
+            .push(Box::new(PartitionSoundnessUnit { function_id }));
     }
 
     /// Run all verification units and collect results
@@ -39,7 +40,7 @@ impl Verifier {
         for unit in &self.units {
             // Generate Boogie program for this unit
             let _boogie_program = unit.generate(cfg_program);
-            
+
             // For now, we'll just collect the generated programs
             // Later we'll add actual Boogie verification
             match unit.property() {
@@ -76,7 +77,7 @@ pub enum Property {
         function_b: cfg::FunctionId,
         hops_a: Vec<HopId>,
         hops_b: Vec<HopId>,
-    }
+    },
 }
 
 /// All verification units conform to this interface.
@@ -84,10 +85,7 @@ pub trait VerificationUnit {
     /// Human-readable name used in logs
     fn property(&self) -> Property;
 
-    fn generate(
-        &self,
-        cfg_program: &CfgProgram,
-    ) -> BoogieProgram;
+    fn generate(&self, cfg_program: &CfgProgram) -> BoogieProgram;
 }
 
 pub struct VerificationResult {
@@ -109,11 +107,12 @@ impl VerificationManager {
 
     /// Run partition soundness verification on all transaction functions
     pub fn run_partition_verification(
-        &mut self, 
+        &mut self,
         cfg_program: &CfgProgram,
-        output_dir: Option<&str>
+        output_dir: Option<&str>,
     ) -> PartitionVerificationResult {
-        self.partition_verifier.verify_all_functions(cfg_program, output_dir)
+        self.partition_verifier
+            .verify_all_functions(cfg_program, output_dir)
     }
 }
 
@@ -135,9 +134,9 @@ impl PartitionVerifier {
 
     /// Verify partition soundness for all transaction functions
     pub fn verify_all_functions(
-        &self, 
+        &self,
         cfg_program: &CfgProgram,
-        _output_dir: Option<&str>
+        _output_dir: Option<&str>,
     ) -> PartitionVerificationResult {
         let mut functions_verified = 0;
         let mut functions_failed = 0;
@@ -151,7 +150,7 @@ impl PartitionVerifier {
 
                 // Create verification unit for this function
                 let unit = PartitionSoundnessUnit { function_id };
-                
+
                 // Generate Boogie program
                 match self.generate_and_save_boogie(&unit, cfg_program) {
                     Ok(_) => {
@@ -176,16 +175,16 @@ impl PartitionVerifier {
     fn generate_and_save_boogie(
         &self,
         unit: &PartitionSoundnessUnit,
-        cfg_program: &CfgProgram
+        cfg_program: &CfgProgram,
     ) -> Result<(), VerificationError> {
         // Generate the Boogie program
         let boogie_program = unit.generate(cfg_program);
-        
+
         // Save to file if output directory is set
         if let Some(ref output_dir) = self.boogie_output_dir {
             let function_name = &cfg_program.functions[unit.function_id].name;
             let filename = format!("{}/partition_soundness_{}.bpl", output_dir, function_name);
-            
+
             // Create directory if it doesn't exist
             if let Some(parent) = std::path::Path::new(&filename).parent() {
                 std::fs::create_dir_all(parent).map_err(|e| {
@@ -218,4 +217,3 @@ pub struct PartitionVerificationResult {
     pub boogie_files_generated: usize,
     pub errors: Vec<VerificationError>,
 }
-

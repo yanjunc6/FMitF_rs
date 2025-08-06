@@ -1,6 +1,5 @@
-
+use super::{boogie::*, Property, VerificationUnit};
 use crate::cfg::{self, CfgProgram, FunctionType};
-use super::{Property, VerificationUnit, boogie::*};
 
 pub struct PartitionSoundnessUnit {
     /// The function ID to verify.
@@ -14,12 +13,9 @@ impl VerificationUnit for PartitionSoundnessUnit {
         }
     }
 
-    fn generate(
-        &self,
-        cfg_program: &CfgProgram,
-    ) -> BoogieProgram {
+    fn generate(&self, cfg_program: &CfgProgram) -> BoogieProgram {
         let function_cfg = &cfg_program.functions[self.function_id];
-        
+
         // Only verify transaction functions
         if function_cfg.function_type != FunctionType::Transaction {
             return BoogieProgram {
@@ -28,13 +24,13 @@ impl VerificationUnit for PartitionSoundnessUnit {
         }
 
         let mut declarations = Vec::new();
-        
+
         // Generate table map declarations
         self.generate_table_declarations(cfg_program, &mut declarations);
-        
+
         // Generate the main verification procedure
         self.generate_verification_procedure(cfg_program, function_cfg, &mut declarations);
-        
+
         BoogieProgram { declarations }
     }
 }
@@ -47,17 +43,17 @@ impl PartitionSoundnessUnit {
             for field_id in &table_info.fields {
                 let field_info = &cfg_program.fields[*field_id];
                 let map_name = format!("{}_{}", table_info.name, field_info.name);
-                
+
                 // Create map type: [int]int for simplicity (should be more sophisticated)
                 let map_type = Ty::map(Ty::int(), self.field_type_to_boogie(&field_info.ty));
-                
+
                 declarations.push(Decl::Var(VarDecl {
                     name: Ident(map_name),
                     ty: map_type,
                 }));
             }
         }
-        
+
         // Add accessed_keys as a global variable
         declarations.push(Decl::Var(VarDecl {
             name: Ident("accessed_keys".to_string()),
@@ -70,15 +66,15 @@ impl PartitionSoundnessUnit {
         &self,
         cfg_program: &CfgProgram,
         function_cfg: &cfg::FunctionCfg,
-        declarations: &mut Vec<Decl>
+        declarations: &mut Vec<Decl>,
     ) {
         let proc_name = format!("verify_partition_soundness_{}", function_cfg.name);
-        
+
         let mut locals = Vec::new();
         let mut blocks = Vec::new();
-        
+
         // No local variables needed now - accessed_keys is global
-        
+
         // Generate parameter declarations
         let mut params = Vec::new();
         for param_id in &function_cfg.parameters {
@@ -88,10 +84,10 @@ impl PartitionSoundnessUnit {
                 ty: self.type_name_to_boogie(&param.ty),
             });
         }
-        
+
         // Generate main verification logic
         self.generate_hop_verification_blocks(cfg_program, function_cfg, &mut blocks, &mut locals);
-        
+
         // Add modifies clause for table maps
         let mut modifies = Vec::new();
         for (_table_id, table_info) in cfg_program.tables.iter() {
@@ -102,7 +98,7 @@ impl PartitionSoundnessUnit {
             }
         }
         modifies.push(Ident("accessed_keys".to_string()));
-        
+
         let procedure = ProcedureDecl {
             name: Ident(proc_name),
             params,
@@ -110,7 +106,7 @@ impl PartitionSoundnessUnit {
             modifies,
             body: blocks,
         };
-        
+
         declarations.push(Decl::Procedure(procedure));
     }
 
@@ -120,14 +116,14 @@ impl PartitionSoundnessUnit {
         cfg_program: &CfgProgram,
         function_cfg: &cfg::FunctionCfg,
         blocks: &mut Vec<Block>,
-        _locals: &mut Vec<VarDecl>
+        _locals: &mut Vec<VarDecl>,
     ) {
         let mut _block_counter = 0;
-        
+
         // Entry block - havoc all tables and parameters
         let entry_label = Label(format!("entry"));
         let mut entry_stmts = Vec::new();
-        
+
         // Havoc all table maps
         for (_table_id, table_info) in cfg_program.tables.iter() {
             for field_id in &table_info.fields {
@@ -136,14 +132,14 @@ impl PartitionSoundnessUnit {
                 entry_stmts.push(Stmt::Havoc(Expr::Var(Ident(map_name))));
             }
         }
-        
+
         // Initialize accessed_keys map
         entry_stmts.push(Stmt::Havoc(Expr::Var(Ident("accessed_keys".to_string()))));
-        
+
         // Add assumptions for testing partition soundness violations
         // Assume that different parameters have different values
         self.add_simple_assumptions(cfg_program, function_cfg, &mut entry_stmts);
-        
+
         blocks.push(Block {
             label: entry_label,
             stmts: entry_stmts,
@@ -153,26 +149,26 @@ impl PartitionSoundnessUnit {
                 Terminator::Goto(vec![Label(format!("hop_0"))])
             },
         });
-        
+
         // Generate blocks for each hop
         for (hop_index, hop_id) in function_cfg.hop_order.iter().enumerate() {
             _block_counter += 1;
-            
+
             let hop_label = Label(format!("hop_{}", hop_index));
             let mut hop_stmts = Vec::new();
-            
+
             // Track table accesses in this hop
             self.generate_hop_access_tracking(cfg_program, function_cfg, *hop_id, &mut hop_stmts);
-            
+
             // Add partition soundness assertion for this hop
             self.generate_partition_soundness_assertion(cfg_program, *hop_id, &mut hop_stmts);
-            
+
             let next_terminator = if hop_index + 1 < function_cfg.hop_order.len() {
                 Terminator::Goto(vec![Label(format!("hop_{}", hop_index + 1))])
             } else {
                 Terminator::Return
             };
-            
+
             blocks.push(Block {
                 label: hop_label,
                 stmts: hop_stmts,
@@ -187,24 +183,30 @@ impl PartitionSoundnessUnit {
         cfg_program: &CfgProgram,
         function_cfg: &cfg::FunctionCfg,
         hop_id: cfg::HopId,
-        stmts: &mut Vec<Stmt>
+        stmts: &mut Vec<Stmt>,
     ) {
         let hop_cfg = &function_cfg.hops[hop_id];
-        
+
         // Analyze all basic blocks in this hop for table accesses
         for &block_id in &hop_cfg.blocks {
             let basic_block = &function_cfg.blocks[block_id];
-            
+
             for statement in &basic_block.statements {
                 match statement {
                     cfg::Statement::Assign { lvalue, rvalue, .. } => {
                         // Check if lvalue is a table access
-                        if let cfg::LValue::TableField { table, pk_values, .. } = lvalue {
+                        if let cfg::LValue::TableField {
+                            table, pk_values, ..
+                        } = lvalue
+                        {
                             self.track_table_access(cfg_program, *table, pk_values, stmts);
                         }
-                        
+
                         // Check if rvalue contains table accesses
-                        if let cfg::Rvalue::TableAccess { table, pk_values, .. } = rvalue {
+                        if let cfg::Rvalue::TableAccess {
+                            table, pk_values, ..
+                        } = rvalue
+                        {
                             self.track_table_access(cfg_program, *table, pk_values, stmts);
                         }
                     }
@@ -219,13 +221,13 @@ impl PartitionSoundnessUnit {
         cfg_program: &CfgProgram,
         _table_id: cfg::TableId,
         pk_values: &[cfg::Operand],
-        stmts: &mut Vec<Stmt>
+        stmts: &mut Vec<Stmt>,
     ) {
         // For simplicity, we'll track the first primary key value
         // In a real implementation, we'd need to handle composite keys properly
         if let Some(first_pk_value) = pk_values.first() {
             let key_expr = self.operand_to_boogie_expr_with_cfg(first_pk_value, cfg_program);
-            
+
             // accessed_keys := accessed_keys[key := true]
             let access_stmt = Stmt::Assign(
                 Expr::Var(Ident("accessed_keys".to_string())),
@@ -235,7 +237,7 @@ impl PartitionSoundnessUnit {
                     val: Box::new(Expr::Const(Constant::Bool(true))),
                 },
             );
-            
+
             stmts.push(access_stmt);
         }
     }
@@ -245,61 +247,69 @@ impl PartitionSoundnessUnit {
         &self,
         cfg_program: &CfgProgram,
         hop_id: cfg::HopId,
-        stmts: &mut Vec<Stmt>
+        stmts: &mut Vec<Stmt>,
     ) {
         let function_cfg = &cfg_program.functions[self.function_id];
         let hop_cfg = &function_cfg.hops[hop_id];
-        
+
         // Collect all table accesses in this hop
         let mut table_accesses = Vec::new();
-        
+
         for &block_id in &hop_cfg.blocks {
             let basic_block = &function_cfg.blocks[block_id];
-            
+
             for statement in &basic_block.statements {
                 match statement {
                     cfg::Statement::Assign { lvalue, rvalue, .. } => {
                         // Check if lvalue is a table access
-                        if let cfg::LValue::TableField { table, pk_values, .. } = lvalue {
+                        if let cfg::LValue::TableField {
+                            table, pk_values, ..
+                        } = lvalue
+                        {
                             table_accesses.push((*table, pk_values.clone()));
                         }
-                        
+
                         // Check if rvalue contains table accesses
-                        if let cfg::Rvalue::TableAccess { table, pk_values, .. } = rvalue {
+                        if let cfg::Rvalue::TableAccess {
+                            table, pk_values, ..
+                        } = rvalue
+                        {
                             table_accesses.push((*table, pk_values.clone()));
                         }
                     }
                 }
             }
         }
-        
+
         if table_accesses.is_empty() {
-            stmts.push(Stmt::Comment("No table accesses in this hop - partition soundness trivially holds".to_string()));
+            stmts.push(Stmt::Comment(
+                "No table accesses in this hop - partition soundness trivially holds".to_string(),
+            ));
             return;
         }
-        
+
         // Generate assertions comparing primary keys for all pairs of accesses
         for i in 0..table_accesses.len() {
             for j in (i + 1)..table_accesses.len() {
                 let (table1, pk_values1) = &table_accesses[i];
                 let (table2, pk_values2) = &table_accesses[j];
-                
+
                 // Get table information
                 let table1_info = &cfg_program.tables[*table1];
                 let table2_info = &cfg_program.tables[*table2];
-                
+
                 // For simplicity, just check that primary key values are equal
                 // This ensures all accesses in the hop use the same key (same partition)
                 if let (Some(pk1), Some(pk2)) = (pk_values1.first(), pk_values2.first()) {
                     let pk1_expr = self.operand_to_boogie_expr_with_cfg(pk1, cfg_program);
                     let pk2_expr = self.operand_to_boogie_expr_with_cfg(pk2, cfg_program);
-                    
+
                     let assertion = Expr::Binary {
                         op: BinOp::Eq,
                         l: Box::new(pk1_expr),
                         r: Box::new(pk2_expr),
                     };
-                    
+
                     stmts.push(Stmt::Assert(assertion));
                     stmts.push(Stmt::Comment(format!(
                         "Partition soundness: {}.{} and {}.{} must use same primary key",
@@ -311,41 +321,32 @@ impl PartitionSoundnessUnit {
                 }
             }
         }
-        
+
         // If we only have one table access, the partition soundness is trivially satisfied
         if table_accesses.len() == 1 {
-            stmts.push(Stmt::Comment("Only one table access - partition soundness trivially satisfied".to_string()));
+            stmts.push(Stmt::Comment(
+                "Only one table access - partition soundness trivially satisfied".to_string(),
+            ));
         }
-        
+
         stmts.push(Stmt::Comment(format!(
-            "End partition soundness verification for hop {:?}", 
+            "End partition soundness verification for hop {:?}",
             hop_id
         )));
     }
 
     /// Convert CFG operand to Boogie expression
-    fn operand_to_boogie_expr_with_cfg(&self, operand: &cfg::Operand, cfg_program: &CfgProgram) -> Expr {
+    fn operand_to_boogie_expr_with_cfg(
+        &self,
+        operand: &cfg::Operand,
+        cfg_program: &CfgProgram,
+    ) -> Expr {
         match operand {
             cfg::Operand::Var(var_id) => {
                 let var_info = &cfg_program.variables[*var_id];
                 Expr::Var(Ident(var_info.name.clone()))
             }
-            cfg::Operand::Const(constant) => {
-                self.constant_to_boogie_expr(constant)
-            }
-        }
-    }
-
-    /// Convert CFG operand to Boogie expression (fallback without CFG access)
-    fn operand_to_boogie_expr(&self, operand: &cfg::Operand) -> Expr {
-        match operand {
-            cfg::Operand::Var(var_id) => {
-                // Use index-based placeholder when CFG program not available
-                Expr::Var(Ident(format!("var_{}", var_id.index())))
-            }
-            cfg::Operand::Const(constant) => {
-                self.constant_to_boogie_expr(constant)
-            }
+            cfg::Operand::Const(constant) => self.constant_to_boogie_expr(constant),
         }
     }
 
@@ -385,85 +386,34 @@ impl PartitionSoundnessUnit {
     fn field_type_to_boogie(&self, ty: &cfg::TypeName) -> Ty {
         self.type_name_to_boogie(ty)
     }
-    
-    /// Generate a call to a partition function with given arguments
-    fn generate_partition_function_call(
-        &self,
-        cfg_program: &CfgProgram,
-        partition_function_id: cfg::FunctionId,
-        pk_values: &[cfg::Operand]
-    ) -> Expr {
-        let partition_function = &cfg_program.functions[partition_function_id];
-        
-        // Handle different types of partition functions
-        match partition_function.implementation {
-            cfg::FunctionImplementation::Abstract => {
-                // For abstract partition functions, use uninterpreted function symbol
-                let func_name = partition_function.name.clone();
-                
-                // For simplicity, assume single argument for now
-                if let Some(first_arg) = pk_values.first() {
-                    let arg_expr = self.operand_to_boogie_expr_with_cfg(first_arg, cfg_program);
-                    
-                    // Create function call expression (simplified as binary operation for demonstration)
-                    // In full implementation, we'd need proper function call support in Boogie AST
-                    Expr::Binary {
-                        op: BinOp::Add, // Placeholder operation representing function call
-                        l: Box::new(Expr::Var(Ident(func_name))),
-                        r: Box::new(arg_expr),
-                    }
-                } else {
-                    // No arguments, return function as constant
-                    Expr::Var(Ident(partition_function.name.clone()))
-                }
-            }
-            cfg::FunctionImplementation::Concrete => {
-                // For concrete partition functions, we could inline the implementation
-                // For now, treat as uninterpreted function
-                let func_name = partition_function.name.clone();
-                
-                if let Some(first_arg) = pk_values.first() {
-                    let arg_expr = self.operand_to_boogie_expr_with_cfg(first_arg, cfg_program);
-                    
-                    // For concrete functions like "x * 10", we could generate the actual expression
-                    // For now, use placeholder
-                    Expr::Binary {
-                        op: BinOp::Mul,
-                        l: Box::new(arg_expr),
-                        r: Box::new(Expr::Const(Constant::Int(10))), // Simplified example
-                    }
-                } else {
-                    Expr::Var(Ident(func_name))
-                }
-            }
-        }
-    }
-    
+
     /// Add simple assumptions to help Boogie detect violations
     fn add_simple_assumptions(
         &self,
         cfg_program: &CfgProgram,
         function_cfg: &cfg::FunctionCfg,
-        stmts: &mut Vec<Stmt>
+        stmts: &mut Vec<Stmt>,
     ) {
         // For functions with multiple parameters, assume they are different
         // This helps detect when different primary keys are used in the same hop
-        
+
         if function_cfg.parameters.len() >= 2 {
             // Get first two parameters (often from_id and to_id in transfer functions)
             let param1_id = function_cfg.parameters[0];
             let param2_id = function_cfg.parameters[1];
             let param1 = &cfg_program.variables[param1_id];
             let param2 = &cfg_program.variables[param2_id];
-            
+
             // Assume parameters are different
             let param_diff_assumption = Expr::Binary {
                 op: BinOp::Neq,
                 l: Box::new(Expr::Var(Ident(param1.name.clone()))),
                 r: Box::new(Expr::Var(Ident(param2.name.clone()))),
             };
-            
-            stmts.push(Stmt::Comment("Assume parameters are different to test partition soundness".to_string()));
+
+            stmts.push(Stmt::Comment(
+                "Assume parameters are different to test partition soundness".to_string(),
+            ));
             stmts.push(Stmt::Assume(param_diff_assumption));
         }
     }

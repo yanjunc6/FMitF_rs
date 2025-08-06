@@ -300,39 +300,41 @@ impl Logger {
     }
 
     // Partition verification results
-    pub fn partition_verification_results(&self, result: &crate::verification::PartitionVerificationResult) {
+    pub fn partition_verification_results(
+        &self,
+        result: &crate::verification::PartitionVerificationResult,
+    ) {
         if self.level.should_show(LogLevel::Normal) {
-            println!("\n{}", "Partition Verification Results".bright_white().bold());
-            
-            // Show functions verified
-            println!(" - {}: {}", 
-                "Functions verified", 
-                result.functions_verified
+            println!(
+                "\n{}",
+                "Partition Verification Results".bright_white().bold()
             );
+
+            // Show functions verified
+            println!(" - {}: {}", "Functions verified", result.functions_verified);
 
             // Show verification errors
             if result.functions_failed > 0 {
-                println!(" - {}: {}", 
-                    "Functions failed".red().bold(), 
+                println!(
+                    " - {}: {}",
+                    "Functions failed".red().bold(),
                     result.functions_failed
                 );
-                
+
                 if self.level.should_show(LogLevel::Verbose) {
                     for error in &result.errors {
                         println!("   {} {:?}", "ERROR:".red().bold(), error);
                     }
                 }
             } else {
-                println!(" - {}: {}", 
-                    "Functions failed", 
-                    "0".green()
-                );
+                println!(" - {}: {}", "Functions failed", "0".green());
             }
 
             // Show Boogie files generated
             if result.boogie_files_generated > 0 {
-                println!(" - {}: {}", 
-                    "Boogie files generated", 
+                println!(
+                    " - {}: {}",
+                    "Boogie files generated",
                     result.boogie_files_generated.to_string().bright_blue()
                 );
             }

@@ -29,5 +29,5 @@ pub use cfg::{
 pub use sc_graph::{EdgeType as SCGraphEdgeType, SCGraph};
 
 // Re-export verification
-pub use verification::{VerificationManager, PartitionVerificationResult};
 pub use optimization::CfgOptimizer;
+pub use verification::{PartitionVerificationResult, VerificationManager};

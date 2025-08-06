@@ -28,21 +28,21 @@ impl fmt::Display for BoogieResult {
         } else {
             writeln!(f, "✗ Verification failed")?;
         }
-        
+
         if !self.errors.is_empty() {
             writeln!(f, "Errors:")?;
             for error in &self.errors {
                 writeln!(f, "  - {}", error)?;
             }
         }
-        
+
         if !self.warnings.is_empty() {
             writeln!(f, "Warnings:")?;
             for warning in &self.warnings {
                 writeln!(f, "  - {}", warning)?;
             }
         }
-        
+
         writeln!(f, "Verified procedures: {}", self.verified_procedures)?;
         writeln!(f, "Runtime: {}ms", self.runtime_ms)?;
         Ok(())
@@ -51,13 +51,14 @@ impl fmt::Display for BoogieResult {
 
 pub fn parse_boogie_result(output: &str, stderr: &str, exit_code: i32) -> BoogieResult {
     let mut result = BoogieResult::default();
-    
+
     // Parse exit code
     result.success = exit_code == 0;
-    
+
     // Parse output for timing information
     if let Some(line) = output.lines().find(|line| line.contains("ms")) {
-        if let Some(time_str) = line.split_whitespace()
+        if let Some(time_str) = line
+            .split_whitespace()
             .find(|word| word.ends_with("ms"))
             .and_then(|s| s.strip_suffix("ms"))
         {
@@ -66,7 +67,7 @@ pub fn parse_boogie_result(output: &str, stderr: &str, exit_code: i32) -> Boogie
             }
         }
     }
-    
+
     // Parse final summary line: "Boogie program verifier finished with X verified, Y error"
     for line in output.lines() {
         if line.contains("Boogie program verifier finished with") {
@@ -78,28 +79,34 @@ pub fn parse_boogie_result(output: &str, stderr: &str, exit_code: i32) -> Boogie
                     }
                 }
             }
-            
+
             // Check for errors in the summary
             if line.contains("1 error") || line.contains("errors") && !line.contains("0 error") {
                 result.success = false;
             }
         }
     }
-    
+
     // Parse errors and warnings from both stdout and stderr
     let combined = format!("{}\n{}", output, stderr);
-    
+
     for line in combined.lines() {
         let line = line.trim();
-        
+
         // Boogie error patterns
         if line.contains("Error:") {
             if line.contains("this assertion could not be proved") {
-                result.errors.push("Assertion violation: Partition soundness check failed".to_string());
+                result
+                    .errors
+                    .push("Assertion violation: Partition soundness check failed".to_string());
             } else if line.contains("postcondition might not hold") {
-                result.errors.push(format!("Postcondition violation: {}", line));
+                result
+                    .errors
+                    .push(format!("Postcondition violation: {}", line));
             } else if line.contains("precondition might not hold") {
-                result.errors.push(format!("Precondition violation: {}", line));
+                result
+                    .errors
+                    .push(format!("Precondition violation: {}", line));
             } else {
                 result.errors.push(line.to_string());
             }
@@ -107,6 +114,6 @@ pub fn parse_boogie_result(output: &str, stderr: &str, exit_code: i32) -> Boogie
             result.warnings.push(line.to_string());
         }
     }
-    
+
     result
 }
