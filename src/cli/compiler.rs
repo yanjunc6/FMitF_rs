@@ -3,7 +3,7 @@
 
 use super::{Cli, Logger, OutputManager};
 use crate::{
-    ast::parse_and_analyze, cfg::CfgBuilder, sc_graph::SCGraphBuilder, 
+    ast::parse_and_analyze, cfg::CfgBuilder, sc_graph::SCGraphBuilder,
     verification::PartitionVerificationResult, AstProgram, CfgProgram,
 };
 
@@ -159,8 +159,7 @@ impl Compiler {
 
         // Stage 5: Formal Verification (only if CFG succeeded)
         if let Some(ref cfg) = cfg_program {
-            self.logger
-                .stage_start(5, 5, "Partition Verification");
+            self.logger.stage_start(5, 5, "Partition Verification");
             match self.run_partition_verification(cfg, cli) {
                 Ok(result) => {
                     self.logger.stage_success();
@@ -234,7 +233,7 @@ impl Compiler {
         cli: &Cli,
     ) -> Result<PartitionVerificationResult, String> {
         let output_dir = cli.get_output_dir();
-        
+
         // Use our new verification CLI interface
         let mut verification_cli = super::VerificationCli::new();
         verification_cli.run_partition_verification(cfg_program, &output_dir)

@@ -1,7 +1,8 @@
 use std::fmt;
 mod result;
 
-pub use result::{parse_boogie_result, BoogieResult};#[derive(Debug, Clone)]
+pub use result::{parse_boogie_result, BoogieResult};
+#[derive(Debug, Clone)]
 pub struct BoogieProgram {
     pub declarations: Vec<Decl>,
 }
@@ -22,11 +23,21 @@ pub enum Ty {
 }
 
 impl Ty {
-    pub fn int() -> Self  { Ty::Int  }
-    pub fn real() -> Self { Ty::Real }
-    pub fn bool() -> Self { Ty::Bool }
-    pub fn str() -> Self  { Ty::Str  }
-    pub fn map(k: Ty, v: Ty) -> Self { Ty::Map(Box::new(k), Box::new(v)) }
+    pub fn int() -> Self {
+        Ty::Int
+    }
+    pub fn real() -> Self {
+        Ty::Real
+    }
+    pub fn bool() -> Self {
+        Ty::Bool
+    }
+    pub fn str() -> Self {
+        Ty::Str
+    }
+    pub fn map(k: Ty, v: Ty) -> Self {
+        Ty::Map(Box::new(k), Box::new(v))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -35,7 +46,7 @@ pub struct Ident(pub String);
 #[derive(Debug, Clone)]
 pub struct VarDecl {
     pub name: Ident,
-    pub ty:   Ty,
+    pub ty: Ty,
 }
 
 #[derive(Debug, Clone)]
@@ -44,7 +55,7 @@ pub struct ProcedureDecl {
     pub params: Vec<VarDecl>,
     pub locals: Vec<VarDecl>,
     pub modifies: Vec<Ident>,
-    pub body:   Vec<Block>,
+    pub body: Vec<Block>,
 }
 
 #[derive(Debug, Clone)]
@@ -69,7 +80,11 @@ pub enum Stmt {
 #[derive(Debug, Clone)]
 pub enum Terminator {
     Goto(Vec<Label>),
-    If { cond: Expr, then_lbl: Label, else_lbl: Label },
+    If {
+        cond: Expr,
+        then_lbl: Label,
+        else_lbl: Label,
+    },
     Return,
     Abort,
 }
@@ -78,11 +93,28 @@ pub enum Terminator {
 pub enum Expr {
     Var(Ident),
     Const(Constant),
-    Unary { op: UnOp, e: Box<Expr> },
-    Binary { op: BinOp, l: Box<Expr>, r: Box<Expr> },
-    MapSelect { map: Box<Expr>, index: Box<Expr> },
-    MapStore  { map: Box<Expr>, index: Box<Expr>, val: Box<Expr> },
-    Forall { binders: Vec<(Ident, Ty)>, body: Box<Expr> },
+    Unary {
+        op: UnOp,
+        e: Box<Expr>,
+    },
+    Binary {
+        op: BinOp,
+        l: Box<Expr>,
+        r: Box<Expr>,
+    },
+    MapSelect {
+        map: Box<Expr>,
+        index: Box<Expr>,
+    },
+    MapStore {
+        map: Box<Expr>,
+        index: Box<Expr>,
+        val: Box<Expr>,
+    },
+    Forall {
+        binders: Vec<(Ident, Ty)>,
+        body: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -94,14 +126,25 @@ pub enum Constant {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum UnOp  { Not, Neg }
+pub enum UnOp {
+    Not,
+    Neg,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum BinOp {
-    Add, Sub, Mul, Div,
-    Lt, Lte, Gt, Gte,
-    Eq, Neq,
-    And, Or,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Lt,
+    Lte,
+    Gt,
+    Gte,
+    Eq,
+    Neq,
+    And,
+    Or,
 }
 
 impl fmt::Display for BoogieProgram {
@@ -139,30 +182,34 @@ impl fmt::Display for ProcedureDecl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "procedure {}(", self.name.0)?;
         for (i, param) in self.params.iter().enumerate() {
-            if i > 0 { write!(f, ", ")?; }
+            if i > 0 {
+                write!(f, ", ")?;
+            }
             write!(f, "{}: {}", param.name.0, param.ty)?;
         }
         write!(f, ")")?;
-        
+
         if !self.modifies.is_empty() {
             write!(f, "\n  modifies ")?;
             for (i, var) in self.modifies.iter().enumerate() {
-                if i > 0 { write!(f, ", ")?; }
+                if i > 0 {
+                    write!(f, ", ")?;
+                }
                 write!(f, "{}", var.0)?;
             }
             write!(f, ";")?;
         }
-        
+
         for local in &self.locals {
             writeln!(f, "\n  var {}: {};", local.name.0, local.ty)?;
         }
-        
+
         writeln!(f, "\n{{")?;
         for block in &self.body {
             writeln!(f, "{}", block)?;
         }
         writeln!(f, "}}")?;
-        
+
         Ok(())
     }
 }
@@ -196,13 +243,23 @@ impl fmt::Display for Terminator {
             Terminator::Goto(labels) => {
                 write!(f, "goto ")?;
                 for (i, label) in labels.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}", label.0)?;
                 }
                 write!(f, ";")
             }
-            Terminator::If { cond, then_lbl, else_lbl } => {
-                write!(f, "if ({}) goto {}; else goto {};", cond, then_lbl.0, else_lbl.0)
+            Terminator::If {
+                cond,
+                then_lbl,
+                else_lbl,
+            } => {
+                write!(
+                    f,
+                    "if ({}) goto {}; else goto {};",
+                    cond, then_lbl.0, else_lbl.0
+                )
             }
             Terminator::Return => write!(f, "return;"),
             Terminator::Abort => write!(f, "abort;"),
@@ -222,7 +279,9 @@ impl fmt::Display for Expr {
             Expr::Forall { binders, body } => {
                 write!(f, "(forall ")?;
                 for (i, (ident, ty)) in binders.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}: {}", ident.0, ty)?;
                 }
                 write!(f, " :: {})", body)
@@ -269,4 +328,3 @@ impl fmt::Display for BinOp {
         }
     }
 }
-

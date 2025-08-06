@@ -1,13 +1,13 @@
 // src/cli/verification.rs
 //! CLI interface for verification operations
 
+use colored::*;
 use std::path::Path;
 use std::process::Command;
-use colored::*;
 
 use crate::cfg::CfgProgram;
-use crate::verification::{VerificationManager, PartitionVerificationResult};
 use crate::verification::boogie::parse_boogie_result;
+use crate::verification::{PartitionVerificationResult, VerificationManager};
 
 /// High-level interface for running verification from CLI
 pub struct VerificationCli {
@@ -29,15 +29,14 @@ impl VerificationCli {
     ) -> Result<PartitionVerificationResult, String> {
         // Set up the boogie output directory
         let boogie_dir = output_dir.join("boogie");
-        self.manager.partition_verifier.set_boogie_output_dir(
-            boogie_dir.to_str().unwrap_or("tmp/boogie").to_string()
-        );
+        self.manager
+            .partition_verifier
+            .set_boogie_output_dir(boogie_dir.to_str().unwrap_or("tmp/boogie").to_string());
 
         // Run the verification
-        let result = self.manager.run_partition_verification(
-            cfg_program,
-            output_dir.to_str()
-        );
+        let result = self
+            .manager
+            .run_partition_verification(cfg_program, output_dir.to_str());
 
         // If Boogie files were generated, try to run Boogie on them
         if result.boogie_files_generated > 0 {
@@ -65,7 +64,10 @@ impl VerificationCli {
 
         // Check if Boogie is available
         if !self.is_boogie_available() {
-            return Err("Boogie verifier not found in PATH. Install Boogie to run formal verification.".to_string());
+            return Err(
+                "Boogie verifier not found in PATH. Install Boogie to run formal verification."
+                    .to_string(),
+            );
         }
 
         // Find all .bpl files
@@ -82,7 +84,10 @@ impl VerificationCli {
             })
             .collect();
 
-        println!("\n{}", "Running Boogie verification...".bright_white().bold());
+        println!(
+            "\n{}",
+            "Running Boogie verification...".bright_white().bold()
+        );
 
         // Run Boogie on each file
         for bpl_file in bpl_files {
@@ -95,22 +100,20 @@ impl VerificationCli {
 
     /// Check if Boogie is available in the system PATH
     fn is_boogie_available(&self) -> bool {
-        Command::new("boogie")
-            .arg("--version")
-            .output()
-            .is_ok()
+        Command::new("boogie").arg("--version").output().is_ok()
     }
 
     /// Run Boogie on a single .bpl file
     fn run_boogie_on_file(&self, bpl_file: &Path) -> BoogieFileResult {
-        let filename = bpl_file.file_name()
+        let filename = bpl_file
+            .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown")
             .to_string();
 
         let output = Command::new("boogie")
             .arg(bpl_file)
-            .arg("/timeLimit:30")  // 30 second timeout
+            .arg("/timeLimit:30") // 30 second timeout
             .output();
 
         match output {
@@ -149,16 +152,18 @@ impl VerificationCli {
         let failed_files = total_files - successful_files;
 
         println!("\n{}", "Boogie Verification Summary".bright_white().bold());
-        
+
         if failed_files == 0 {
-            println!(" - {}: {} files verified successfully", 
-                "Result".green().bold(), 
+            println!(
+                " - {}: {} files verified successfully",
+                "Result".green().bold(),
                 total_files
             );
         } else {
-            println!(" - {}: {} successful, {} failed", 
-                "Result".red().bold(), 
-                successful_files, 
+            println!(
+                " - {}: {} successful, {} failed",
+                "Result".red().bold(),
+                successful_files,
                 failed_files
             );
         }
@@ -174,8 +179,9 @@ impl VerificationCli {
         // Show summary for successful files
         let total_verified: usize = results.iter().map(|r| r.verified_procedures).sum();
         if total_verified > 0 {
-            println!(" - {}: {} procedures verified", 
-                "Total".bright_blue().bold(), 
+            println!(
+                " - {}: {} procedures verified",
+                "Total".bright_blue().bold(),
                 total_verified
             );
         }
