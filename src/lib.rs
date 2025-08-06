@@ -8,7 +8,7 @@ pub mod optimization;
 pub mod pretty;
 // pub mod runtime;
 pub mod sc_graph;
-// pub mod verification;
+pub mod verification;
 // Re-export AST functionality
 pub use ast::{parse_and_analyze, Program as AstProgram, Span as AstSpan};
 pub use ast::{AstError, Results as AstResults, SpannedError as AstSpannedError};
@@ -28,6 +28,6 @@ pub use cfg::{
 // Re-export SC-Graph functionality
 pub use sc_graph::{EdgeType as SCGraphEdgeType, SCGraph};
 
-// Re-export verification (currently commented out)
-// pub use verification::{AutoVerifier, VerificationError, VerificationOptions};
+// Re-export verification
+pub use verification::{VerificationManager, PartitionVerificationResult};
 pub use optimization::CfgOptimizer;
