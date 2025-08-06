@@ -304,38 +304,29 @@ impl Logger {
         if self.level.should_show(LogLevel::Normal) {
             println!("\n{}", "Partition Verification Results".bright_white().bold());
             
-            // Show verification errors (compiler-like errors)
-            if !result.verification_errors.is_empty() {
+            // Show functions verified
+            println!(" - {}: {}", 
+                "Functions verified", 
+                result.functions_verified
+            );
+
+            // Show verification errors
+            if result.functions_failed > 0 {
                 println!(" - {}: {}", 
-                    "Verification errors".red().bold(), 
-                    result.verification_errors.len()
+                    "Functions failed".red().bold(), 
+                    result.functions_failed
                 );
                 
                 if self.level.should_show(LogLevel::Verbose) {
-                    for error in &result.verification_errors {
-                        println!("   {} {}", "ERROR:".red().bold(), error.error_message);
-                        println!("     Access 1: {}", error.access1.line_info);
-                        println!("     Access 2: {}", error.access2.line_info);
-                        println!("     Partition function: {}", error.partition_function_name);
+                    for error in &result.errors {
+                        println!("   {} {:?}", "ERROR:".red().bold(), error);
                     }
                 }
             } else {
                 println!(" - {}: {}", 
-                    "Verification errors", 
+                    "Functions failed", 
                     "0".green()
                 );
-            }
-
-            // Show cross-partition accesses (informational)
-            println!(" - {}: {}", 
-                "Cross-partition accesses", 
-                result.cross_partition_accesses.len()
-            );
-            
-            if self.level.should_show(LogLevel::Verbose) && !result.cross_partition_accesses.is_empty() {
-                for access in &result.cross_partition_accesses {
-                    println!("   {}", access.description);
-                }
             }
 
             // Show Boogie files generated
@@ -348,51 +339,6 @@ impl Logger {
         }
     }
 
-    // Boogie verification results
-    pub fn boogie_verification_results(&self, results: &[crate::cli::compiler::BoogieVerificationResult]) {
-        if self.level.should_show(LogLevel::Normal) {
-            println!("\n{}", "Boogie Verification Results".bright_white().bold());
-            
-            let successful = results.iter().filter(|r| r.success).count();
-            let failed = results.len() - successful;
-            
-            if failed > 0 {
-                println!(" - {}: {} successful, {} failed", 
-                    "Results".bright_white(), 
-                    successful.to_string().green(),
-                    failed.to_string().red()
-                );
-            } else {
-                println!(" - {}: {} successful", 
-                    "Results".bright_white(), 
-                    successful.to_string().green()
-                );
-            }
-
-            if self.level.should_show(LogLevel::Verbose) {
-                for result in results {
-                    if result.success {
-                        println!("   {} {}", "✓".green(), result.file);
-                    } else {
-                        println!("   {} {}", "✗".red(), result.file);
-                        if !result.stderr.is_empty() {
-                            // Show first few lines of stderr
-                            for line in result.stderr.lines().take(3) {
-                                println!("     {}", line.dimmed());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn boogie_verification_failed(&self, error: &str) {
-        if self.level.should_show(LogLevel::Normal) {
-            println!(" - {}: {}", 
-                "Boogie verification".red(), 
-                error
-            );
-        }
-    }
+    // Boogie verification is now handled by the verification CLI module
+    // which prints its own results directly
 }

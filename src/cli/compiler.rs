@@ -30,15 +30,6 @@ pub struct CompilationStats {
     pub c_edges: usize,
 }
 
-/// Result of running Boogie verification on a single file
-#[derive(Debug)]
-pub struct BoogieVerificationResult {
-    pub file: String,
-    pub success: bool,
-    pub stdout: String,
-    pub stderr: String,
-}
-
 impl CompilationResult {
     pub fn get_stats(&self) -> CompilationStats {
         let s_edges = self
@@ -242,86 +233,11 @@ impl Compiler {
         cfg_program: &CfgProgram,
         cli: &Cli,
     ) -> Result<PartitionVerificationResult, String> {
-        let mut verification_manager = crate::verification::VerificationManager::new();
         let output_dir = cli.get_output_dir();
         
-        // Set up Boogie output directory
-        let boogie_dir = format!("{}/boogie", output_dir.to_str().unwrap_or("tmp"));
-        verification_manager.partition_verifier.set_boogie_output_dir(boogie_dir.clone());
-        
-        // Run verification
-        let result = verification_manager.run_partition_verification(
-            cfg_program,
-            Some(output_dir.to_str().unwrap_or("tmp")),
-        );
-
-        // Log verification results
-        self.logger.partition_verification_results(&result);
-
-        // Try to run Boogie verification if files were generated
-        if result.boogie_files_generated > 0 {
-            match self.run_boogie_verification(&boogie_dir) {
-                Ok(boogie_results) => {
-                    self.logger.boogie_verification_results(&boogie_results);
-                }
-                Err(e) => {
-                    self.logger.boogie_verification_failed(&e);
-                }
-            }
-        }
-
-        Ok(result)
-    }
-
-    fn run_boogie_verification(&self, boogie_dir: &str) -> Result<Vec<BoogieVerificationResult>, String> {
-        use std::process::Command;
-        use std::fs;
-
-        // Find all .bpl files in the boogie directory
-        let boogie_files: Vec<_> = fs::read_dir(boogie_dir)
-            .map_err(|e| format!("Failed to read Boogie directory: {}", e))?
-            .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let path = entry.path();
-                if path.extension()?.to_str()? == "bpl" {
-                    Some(path)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        let mut results = Vec::new();
-
-        for boogie_file in boogie_files {
-            let output = Command::new("boogie")
-                .arg(boogie_file.to_str().unwrap())
-                .output();
-
-            let result = match output {
-                Ok(output) => {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    
-                    BoogieVerificationResult {
-                        file: boogie_file.to_string_lossy().to_string(),
-                        success: output.status.success(),
-                        stdout: stdout.to_string(),
-                        stderr: stderr.to_string(),
-                    }
-                }
-                Err(e) => BoogieVerificationResult {
-                    file: boogie_file.to_string_lossy().to_string(),
-                    success: false,
-                    stdout: String::new(),
-                    stderr: format!("Failed to run Boogie: {}", e),
-                },
-            };
-
-            results.push(result);
-        }
-
-        Ok(results)
+        // Use our new verification CLI interface
+        let mut verification_cli = super::VerificationCli::new();
+        verification_cli.run_partition_verification(cfg_program, &output_dir)
     }
 
     /// Handle output based on the CLI configuration
