@@ -347,4 +347,52 @@ impl Logger {
             }
         }
     }
+
+    // Boogie verification results
+    pub fn boogie_verification_results(&self, results: &[crate::cli::compiler::BoogieVerificationResult]) {
+        if self.level.should_show(LogLevel::Normal) {
+            println!("\n{}", "Boogie Verification Results".bright_white().bold());
+            
+            let successful = results.iter().filter(|r| r.success).count();
+            let failed = results.len() - successful;
+            
+            if failed > 0 {
+                println!(" - {}: {} successful, {} failed", 
+                    "Results".bright_white(), 
+                    successful.to_string().green(),
+                    failed.to_string().red()
+                );
+            } else {
+                println!(" - {}: {} successful", 
+                    "Results".bright_white(), 
+                    successful.to_string().green()
+                );
+            }
+
+            if self.level.should_show(LogLevel::Verbose) {
+                for result in results {
+                    if result.success {
+                        println!("   {} {}", "✓".green(), result.file);
+                    } else {
+                        println!("   {} {}", "✗".red(), result.file);
+                        if !result.stderr.is_empty() {
+                            // Show first few lines of stderr
+                            for line in result.stderr.lines().take(3) {
+                                println!("     {}", line.dimmed());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn boogie_verification_failed(&self, error: &str) {
+        if self.level.should_show(LogLevel::Normal) {
+            println!(" - {}: {}", 
+                "Boogie verification".red(), 
+                error
+            );
+        }
+    }
 }
