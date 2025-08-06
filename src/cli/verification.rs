@@ -7,6 +7,7 @@ use colored::*;
 
 use crate::cfg::CfgProgram;
 use crate::verification::{VerificationManager, PartitionVerificationResult};
+use crate::verification::boogie::parse_boogie_result;
 
 /// High-level interface for running verification from CLI
 pub struct VerificationCli {
@@ -116,16 +117,16 @@ impl VerificationCli {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                let success = output.status.success();
+                let exit_code = output.status.code().unwrap_or(-1);
 
-                // Parse Boogie output to extract meaningful information
-                let (verified, errors) = self.parse_boogie_output(&stdout);
+                // Use the proper Boogie result parser
+                let boogie_result = parse_boogie_result(&stdout, &stderr, exit_code);
 
                 BoogieFileResult {
                     filename,
-                    success,
-                    verified_procedures: verified,
-                    errors,
+                    success: boogie_result.success,
+                    verified_procedures: boogie_result.verified_procedures,
+                    errors: boogie_result.errors,
                     stdout: stdout.to_string(),
                     stderr: stderr.to_string(),
                 }
@@ -139,29 +140,6 @@ impl VerificationCli {
                 stderr: String::new(),
             },
         }
-    }
-
-    /// Parse Boogie output to extract verification results
-    fn parse_boogie_output(&self, output: &str) -> (usize, Vec<String>) {
-        let mut verified_count = 0;
-        let mut errors = Vec::new();
-
-        for line in output.lines() {
-            if line.contains("Boogie program verifier finished with") {
-                if line.contains("0 errors") {
-                    // Extract number of verified procedures
-                    if let Some(verified_str) = line.split_whitespace()
-                        .find(|&word| word.chars().all(|c| c.is_ascii_digit())) 
-                    {
-                        verified_count = verified_str.parse().unwrap_or(0);
-                    }
-                }
-            } else if line.contains("Error:") || line.contains("assertion violation") {
-                errors.push(line.trim().to_string());
-            }
-        }
-
-        (verified_count, errors)
     }
 
     /// Print the results of Boogie verification
