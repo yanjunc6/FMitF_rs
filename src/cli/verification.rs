@@ -278,18 +278,25 @@ impl VerificationCli {
 
         writeln!(log_file, "\n=== Boogie Verification Results ===")
             .map_err(|e| format!("Failed to write to log: {}", e))?;
-        for result in results {
-            self.logger
-                .record_boogie_result(
-                    &mut log_file,
-                    &result.filename,
-                    &result.stdout,
-                    &result.stderr,
-                    result.success,
-                )
-                .map_err(|e| format!("Failed to record Boogie result: {}", e))?;
+        if results.is_empty() {
+            writeln!(
+                log_file,
+                "No Boogie output was produced or no verification files were generated."
+            )
+            .map_err(|e| format!("Failed to write to log: {}", e))?;
+        } else {
+            for result in results {
+                self.logger
+                    .record_boogie_result(
+                        &mut log_file,
+                        &result.filename,
+                        &result.stdout,
+                        &result.stderr,
+                        result.success,
+                    )
+                    .map_err(|e| format!("Failed to record Boogie result: {}", e))?;
+            }
         }
-
         Ok(())
     }
 

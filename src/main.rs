@@ -36,19 +36,17 @@ fn main() {
     let mut compiler = Compiler::new();
 
     match compiler.compile(source_code, &cli) {
-        Ok(result) => {
-            // Always handle output generation, regardless of compilation success
-            if let Err(e) = compiler.handle_output(&result, &cli) {
-                eprintln!(
-                    "{} Output generation failed: {}",
-                    "ERROR:".red().bold(),
-                    e.bright_red()
-                );
-                std::process::exit(1);
-            }
-
-            // Exit with error code if compilation failed
-            if !result.success {
+        Ok(mut result) => {
+            // Only handle output and print summary if output generation succeeds
+            if let Ok(()) = compiler.handle_output(&mut result, &cli) {
+                if result.success {
+                    compiler.print_compilation_complete(result.compilation_time_ms);
+                } else {
+                    compiler.print_compilation_failed(result.compilation_time_ms, 6);
+                    std::process::exit(1);
+                }
+            } else {
+                // Output generation failed: print nothing, just exit with error
                 std::process::exit(1);
             }
         }
