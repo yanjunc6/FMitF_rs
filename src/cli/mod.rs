@@ -5,12 +5,12 @@ use std::path::PathBuf;
 mod compiler;
 mod logger;
 mod output;
-mod verification;
+// mod verification; // Temporarily disabled due to compilation errors
 
 pub use compiler::*;
-pub use logger::*;
+pub use logger::Logger;
 pub use output::*;
-pub use verification::*;
+// pub use verification::*;
 
 // Re-export error printing function
 pub use output::print_spanned_error;

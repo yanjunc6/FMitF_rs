@@ -365,24 +365,37 @@ impl Logger {
                 "Partition Verification Results".bright_white().bold()
             );
 
-            // Show functions verified
-            println!(" - {}: {}", "Functions verified", result.functions_verified);
+            // Show verified accesses
+            println!(
+                " - {}: {}", 
+                "Verified accesses", 
+                result.verified_accesses.len().to_string().bright_green()
+            );
 
-            // Show verification errors
-            if result.functions_failed > 0 {
+            // Show cross-partition accesses
+            if !result.cross_partition_accesses.is_empty() {
                 println!(
                     " - {}: {}",
-                    "Functions failed".red().bold(),
-                    result.functions_failed
+                    "Cross-partition accesses".yellow().bold(),
+                    result.cross_partition_accesses.len().to_string().yellow()
+                );
+            }
+
+            // Show verification errors
+            if !result.verification_errors.is_empty() {
+                println!(
+                    " - {}: {}",
+                    "Verification errors".red().bold(),
+                    result.verification_errors.len().to_string().red()
                 );
 
                 if self.level.should_show(LogLevel::Verbose) {
-                    for error in &result.errors {
-                        println!("   {} {:?}", "ERROR:".red().bold(), error);
+                    for error in &result.verification_errors {
+                        println!("   {} {}", "ERROR:".red().bold(), error.error_message);
                     }
                 }
             } else {
-                println!(" - {}: {}", "Functions failed", "0".green());
+                println!(" - {}: {}", "Verification errors", "0".green());
             }
 
             // Show Boogie files generated

@@ -8,7 +8,7 @@ use super::Logger;
 use crate::cfg::CfgProgram;
 use crate::verification::boogie::parse_boogie_result;
 use crate::verification::{
-    CommutativityVerificationResult, PartitionVerificationResult, VerificationManager,
+    PartitionVerificationResult, VerificationManager,
 };
 
 /// High-level interface for running verification from CLI

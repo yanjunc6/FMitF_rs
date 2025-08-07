@@ -35,7 +35,7 @@ fn main() {
     // Create and run compiler
     let mut compiler = Compiler::new();
 
-    match compiler.compile(source_code, &cli) {
+    match compiler.compile(&source_code, &cli) {
         Ok(mut result) => {
             // Only handle output and print summary if output generation succeeds
             if let Ok(()) = compiler.handle_output(&mut result, &cli) {
