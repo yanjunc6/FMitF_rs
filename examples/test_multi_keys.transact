@@ -1,0 +1,21 @@
+partition p1(int x, int y);
+
+table Money {
+    primary int ACCOUNT;
+    primary int PASSWORD;
+    int BALANCE;
+    node p1(ACCOUNT, PASSWORD);
+}
+
+void deposit_money(int amount) {
+    hop {
+        Money[ACCOUNT: 1, PASSWORD: 1234].BALANCE += amount;
+    }
+}
+
+void withdraw_money(int amount) {
+    hop {
+        Money[ACCOUNT: 1, PASSWORD: 1234].BALANCE -= amount;
+        Money[PASSWORD: 1234, ACCOUNT: 1].BALANCE = amount;
+    }
+}

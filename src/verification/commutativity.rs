@@ -1,3 +1,20 @@
+/// Given a table, pk_fields, and pk_values, return pk_values in schema (primary_keys) order
+fn order_pk_values(
+    table_info: &crate::cfg::TableInfo,
+    pk_fields: &Vec<crate::cfg::FieldId>,
+    pk_values: &Vec<crate::cfg::Operand>,
+) -> Vec<crate::cfg::Operand> {
+    use crate::cfg::FieldId;
+    let mut field_to_value = std::collections::HashMap::<FieldId, crate::cfg::Operand>::new();
+    for (field, value) in pk_fields.iter().zip(pk_values.iter()) {
+        field_to_value.insert(*field, value.clone());
+    }
+    table_info
+        .primary_keys
+        .iter()
+        .map(|pk| field_to_value[pk].clone())
+        .collect()
+}
 impl CommutativityUnit {
     /// Recursively build nested MapStore for multiple primary keys
     fn nested_map_store(
@@ -739,12 +756,14 @@ impl CommutativityUnit {
         is_slice_a: bool,
         stmts: &mut Vec<Stmt>,
     ) {
+        // Add a comment with the debug representation of the original CFG statement
+        stmts.push(Stmt::Comment(format!("CFG: {:?}", statement)));
         match statement {
             cfg::Statement::Assign { lvalue, rvalue, .. } => {
                 match lvalue {
                     cfg::LValue::TableField {
                         table,
-                        pk_fields: _,
+                        pk_fields,
                         pk_values,
                         field,
                     } => {
@@ -755,10 +774,11 @@ impl CommutativityUnit {
                         let map_var = Expr::Var(Ident(map_name.clone()));
                         let rvalue_expr =
                             self.rvalue_to_boogie_expr(cfg_program, rvalue, is_slice_a, false);
-                        // Recursively build nested MapStore for all pk_values
+                        // Reorder pk_values to match primary_keys order
+                        let ordered_pk_values = order_pk_values(table_info, pk_fields, pk_values);
                         let map_store = self.nested_map_store(
                             map_var,
-                            pk_values,
+                            &ordered_pk_values,
                             rvalue_expr,
                             cfg_program,
                             is_slice_a,
@@ -802,6 +822,7 @@ impl CommutativityUnit {
             }
             cfg::Rvalue::TableAccess {
                 table,
+                pk_fields,
                 pk_values,
                 field,
                 ..
@@ -813,10 +834,11 @@ impl CommutativityUnit {
                     // Return the whole map variable
                     Expr::Var(Ident(map_name))
                 } else {
-                    // Return a scalar (nested MapSelect for all pk_values)
+                    // Always use all primary keys in schema order
+                    let ordered_pk_values = order_pk_values(table_info, pk_fields, pk_values);
                     self.nested_map_select(
                         Expr::Var(Ident(map_name)),
-                        pk_values,
+                        &ordered_pk_values,
                         cfg_program,
                         is_slice_a,
                     )
