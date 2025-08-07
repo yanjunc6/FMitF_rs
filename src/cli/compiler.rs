@@ -1,4 +1,3 @@
-
 // src/cli/compiler.rs
 
 // Clean, modular compiler pipeline for FMitF. No function >20 lines. All error handling explicit.
@@ -108,14 +107,7 @@ impl Compiler {
         let verification_result = match self.run_verification(&cfg, &scg, cli) {
             Ok(result) => Some(result),
             Err(_) => {
-                return Ok(self.fail_result(
-                    start,
-                    Some(ast),
-                    Some(cfg),
-                    Some(scg),
-                    None,
-                    false,
-                ));
+                return Ok(self.fail_result(start, Some(ast), Some(cfg), Some(scg), None, false));
             }
         };
         Ok(CompilationResult {
@@ -155,7 +147,7 @@ impl Compiler {
     ) -> Result<PartitionVerificationResult, String> {
         let mut verification_manager = VerificationManager::new();
         let output_dir = cli.get_output_dir();
-        
+
         Ok(verification_manager.run_partition_verification(
             cfg_program,
             sc_graph,
@@ -181,8 +173,7 @@ impl Compiler {
     }
 
     fn stage_cfg(&mut self, ast: &AstProgram) -> Result<CfgProgram, String> {
-        self.logger
-            .stage_start(2, 5, "Building Control Flow Graph");
+        self.logger.stage_start(2, 5, "Building Control Flow Graph");
         match CfgBuilder::build_from_program(ast) {
             Ok(ctx) => {
                 self.logger.stage_success();

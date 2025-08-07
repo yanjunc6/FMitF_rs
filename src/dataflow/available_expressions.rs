@@ -1,11 +1,7 @@
 use crate::cfg::{
-    ControlFlowEdge, EdgeType, FieldId, FunctionCfg, LValue, Operand, Rvalue, Statement, TableId,
-    VarId,
+    ControlFlowEdge, EdgeType, FieldId, LValue, Operand, Rvalue, Statement, TableId, VarId,
 };
-use crate::dataflow::{
-    AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
-    TransferFunction,
-};
+use crate::dataflow::{AnalysisLevel, DataflowResults, Lattice, SetLattice, TransferFunction};
 
 /// Transfer function for Available Expressions analysis.
 /// Available expressions analysis is a forward analysis that tracks which expressions
@@ -136,9 +132,9 @@ impl TransferFunction<SetLattice<Rvalue>> for AvailableExpressionsTransfer {
 /// Available expressions analysis tracks which expressions are available
 /// (computed and operands not redefined) at each program point.
 pub fn analyze_available_expressions(
-    func: &FunctionCfg,
-    level: AnalysisLevel,
+    _prog: &crate::cfg::CfgProgram,
+    _func_id: crate::cfg::FunctionId,
+    _level: AnalysisLevel,
 ) -> DataflowResults<SetLattice<Rvalue>> {
-    let analysis = DataflowAnalysis::new(level, Direction::Forward, AvailableExpressionsTransfer);
-    analysis.analyze(func)
+    unimplemented!("Available expressions analysis needs to be updated to work with cfg_api")
 }

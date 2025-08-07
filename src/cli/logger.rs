@@ -367,8 +367,8 @@ impl Logger {
 
             // Show verified accesses
             println!(
-                " - {}: {}", 
-                "Verified accesses", 
+                " - {}: {}",
+                "Verified accesses",
                 result.verified_accesses.len().to_string().bright_green()
             );
 

@@ -38,6 +38,8 @@ impl CfgBuilder {
                 fields: id_arena::Arena::new(),
                 functions: id_arena::Arena::new(),
                 variables: id_arena::Arena::new(),
+                hops: id_arena::Arena::new(),
+                blocks: id_arena::Arena::new(),
                 root_tables: Vec::new(),
                 root_functions: Vec::new(),
                 root_variables: Vec::new(),
@@ -63,29 +65,33 @@ impl CfgBuilder {
     /// This is called automatically after all functions are built
     fn build_predecessors(ctx: &mut CfgCtx) {
         for (_, function) in ctx.program.functions.iter_mut() {
-            // Clear existing predecessors
-            for (_, block) in function.blocks.iter_mut() {
-                block.predecessors.clear();
+            // Clear existing predecessors for blocks belonging to this function
+            for &block_id in &function.blocks {
+                if let Some(block) = ctx.program.blocks.get_mut(block_id) {
+                    block.predecessors.clear();
+                }
             }
 
             // Collect all successor relationships first
             let mut predecessor_edges: Vec<(BasicBlockId, ControlFlowEdge)> = Vec::new();
-            for (from_block_id, from_block) in function.blocks.iter() {
-                for successor in &from_block.successors {
-                    predecessor_edges.push((
-                        successor.to,
-                        ControlFlowEdge {
-                            from: from_block_id,
-                            to: successor.to,
-                            edge_type: successor.edge_type.clone(),
-                        },
-                    ));
+            for &from_block_id in &function.blocks {
+                if let Some(from_block) = ctx.program.blocks.get(from_block_id) {
+                    for successor in &from_block.successors {
+                        predecessor_edges.push((
+                            successor.to,
+                            ControlFlowEdge {
+                                from: from_block_id,
+                                to: successor.to,
+                                edge_type: successor.edge_type.clone(),
+                            },
+                        ));
+                    }
                 }
             }
 
             // Add predecessors to target blocks
             for (target_block_id, pred_edge) in predecessor_edges {
-                if let Some(target_block) = function.blocks.get_mut(target_block_id) {
+                if let Some(target_block) = ctx.program.blocks.get_mut(target_block_id) {
                     target_block.predecessors.push(pred_edge);
                 }
             }
@@ -270,8 +276,8 @@ impl<'a> FunctionContextBuilder<'a> {
             span: func_ast.span.clone(),
             parameters: Vec::new(),
             local_variables: Vec::new(),
-            hops: id_arena::Arena::new(),
-            blocks: id_arena::Arena::new(),
+            hops: Vec::new(),
+            blocks: Vec::new(),
             entry_hop: None,
             hop_order: Vec::new(),
         };
@@ -305,8 +311,8 @@ impl<'a> FunctionContextBuilder<'a> {
             span: partition_ast.span.clone(),
             parameters: Vec::new(),
             local_variables: Vec::new(),
-            hops: id_arena::Arena::new(),
-            blocks: id_arena::Arena::new(),
+            hops: Vec::new(),
+            blocks: Vec::new(),
             entry_hop: None,
             hop_order: Vec::new(),
         };
@@ -405,7 +411,8 @@ impl<'a> FunctionContextBuilder<'a> {
             span: program.expressions[expr_id].span.clone(),
         };
 
-        let hop_id = self.function.hops.alloc(hop);
+        let hop_id = self.ctx.program.hops.alloc(hop);
+        self.function.hops.push(hop_id);
         self.function.hop_order.push(hop_id);
         self.function.entry_hop = Some(hop_id);
 
@@ -418,16 +425,17 @@ impl<'a> FunctionContextBuilder<'a> {
             successors: Vec::new(),   // Will be set when we add the return edge
         };
 
-        let block_id = self.function.blocks.alloc(block);
-        self.function.hops[hop_id].blocks.push(block_id);
-        self.function.hops[hop_id].entry_block = Some(block_id);
+        let block_id = self.ctx.program.blocks.alloc(block);
+        self.function.blocks.push(block_id);
+        self.ctx.program.hops[hop_id].blocks.push(block_id);
+        self.ctx.program.hops[hop_id].entry_block = Some(block_id);
         self.current_block_id = Some(block_id);
 
         // Build the expression and convert to return statement
         let result_operand = self.build_expression(program, expr_id)?;
 
         // Add return edge as successor
-        self.function.blocks[block_id]
+        self.ctx.program.blocks[block_id]
             .successors
             .push(ControlFlowEdge {
                 from: block_id,
@@ -485,7 +493,8 @@ impl<'a> FunctionContextBuilder<'a> {
             span: hop_ast.span.clone(),
         };
 
-        let hop_id = self.function.hops.alloc(hop);
+        let hop_id = self.ctx.program.hops.alloc(hop);
+        self.function.hops.push(hop_id);
         self.function.hop_order.push(hop_id);
 
         if self.function.entry_hop.is_none() {
@@ -539,7 +548,8 @@ impl<'a> FunctionContextBuilder<'a> {
                 span: hop_ast.span.clone(),
             };
 
-            let hop_id = self.function.hops.alloc(hop);
+            let hop_id = self.ctx.program.hops.alloc(hop);
+            self.function.hops.push(hop_id);
             self.function.hop_order.push(hop_id);
 
             if self.function.entry_hop.is_none() {
@@ -567,7 +577,7 @@ impl<'a> FunctionContextBuilder<'a> {
         self.current_hop_id = Some(hop_id);
 
         let entry_block = self.new_basic_block(hop_id)?;
-        self.function.hops[hop_id].entry_block = Some(entry_block);
+        self.ctx.program.hops[hop_id].entry_block = Some(entry_block);
         self.current_block_id = Some(entry_block);
 
         for &stmt_id in statements {
@@ -590,7 +600,7 @@ impl<'a> FunctionContextBuilder<'a> {
         self.current_hop_id = Some(hop_id);
 
         let entry_block = self.new_basic_block(hop_id)?;
-        self.function.hops[hop_id].entry_block = Some(entry_block);
+        self.ctx.program.hops[hop_id].entry_block = Some(entry_block);
         self.current_block_id = Some(entry_block);
 
         self.add_statement(
@@ -683,7 +693,7 @@ impl<'a> FunctionContextBuilder<'a> {
                 };
 
                 // Add return edge
-                self.function.blocks[current_block]
+                self.ctx.program.blocks[current_block]
                     .successors
                     .push(ControlFlowEdge {
                         from: current_block,
@@ -697,7 +707,7 @@ impl<'a> FunctionContextBuilder<'a> {
             }
             ast::StatementKind::Abort(_) => {
                 // Add abort edge (no successor)
-                self.function.blocks[current_block]
+                self.ctx.program.blocks[current_block]
                     .successors
                     .push(ControlFlowEdge {
                         from: current_block,
@@ -1170,7 +1180,7 @@ impl<'a> FunctionContextBuilder<'a> {
 
                     // Generate assignment statement
                     if let Some(block_id) = self.current_block_id {
-                        let block = &mut self.function.blocks[block_id];
+                        let block = &mut self.ctx.program.blocks[block_id];
                         block.statements.push(Statement::Assign {
                             lvalue: LValue::Variable { var: temp_var },
                             rvalue,
@@ -1215,12 +1225,13 @@ impl<'a> FunctionContextBuilder<'a> {
             successors: Vec::new(),   // Will be set when adding control flow edges
         };
 
-        let block_id = self.function.blocks.alloc(block);
-        self.function.hops[hop_id].blocks.push(block_id);
+        let block_id = self.ctx.program.blocks.alloc(block);
+        self.function.blocks.push(block_id);
+        self.ctx.program.hops[hop_id].blocks.push(block_id);
         Ok(block_id)
     }
 
     fn add_statement(&mut self, block_id: BasicBlockId, stmt: Statement) {
-        self.function.blocks[block_id].statements.push(stmt);
+        self.ctx.program.blocks[block_id].statements.push(stmt);
     }
 }

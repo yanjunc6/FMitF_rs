@@ -176,7 +176,7 @@ impl<'a> CfgPrinter<'a> {
             self.write_indent(writer, 1)?;
             writeln!(writer, "Functions:")?;
             for (func_id, function) in program.functions.iter() {
-                self.print_function(function, func_id, writer, 2)?;
+                self.print_function(program, function, func_id, writer, 2)?;
                 writeln!(writer)?;
             }
         }
@@ -187,6 +187,7 @@ impl<'a> CfgPrinter<'a> {
     /// Print a function with its hops and control flow
     fn print_function(
         &self,
+        program: &CfgProgram,
         function: &FunctionCfg,
         func_id: crate::cfg::FunctionId,
         writer: &mut dyn Write,
@@ -232,8 +233,8 @@ impl<'a> CfgPrinter<'a> {
         }
 
         // Print hops
-        for (hop_id, hop) in function.hops.iter() {
-            self.print_hop(hop, hop_id, function, writer, level + 1)?;
+        for (hop_id, hop) in crate::cfg::cfg_api::function_hops_iter(program, func_id) {
+            self.print_hop(program, hop, hop_id, function, writer, level + 1)?;
             writeln!(writer)?;
         }
 
@@ -245,9 +246,10 @@ impl<'a> CfgPrinter<'a> {
     /// Print a hop with its basic blocks
     fn print_hop(
         &self,
+        program: &CfgProgram,
         hop: &HopCfg,
         hop_id: crate::cfg::HopId,
-        function: &FunctionCfg,
+        _function: &FunctionCfg,
         writer: &mut dyn Write,
         level: usize,
     ) -> std::io::Result<()> {
@@ -260,10 +262,9 @@ impl<'a> CfgPrinter<'a> {
         }
 
         // Print all blocks in this hop
-        for &block_id in &hop.blocks {
-            if let Some(block) = function.blocks.get(block_id) {
-                self.print_basic_block(block, block_id, writer, level + 1)?;
-            }
+        for &block_id in crate::cfg::cfg_api::get_hop_blocks(program, hop_id) {
+            let block = crate::cfg::cfg_api::get_basic_block(program, block_id);
+            self.print_basic_block(block, block_id, writer, level + 1)?;
         }
 
         self.write_indent(writer, level)?;
@@ -573,10 +574,16 @@ impl<'a> PrettyPrinter<FunctionCfg> for CfgPrinter<'a> {
         }
 
         // Print hops
-        for (hop_id, hop) in function.hops.iter() {
-            self.print_hop(hop, hop_id, function, writer, 1)?;
-            writeln!(writer)?;
-        }
+        // TODO: This needs to be updated to work with cfg_api
+        // The standalone function printer doesn't have access to the full program
+        // for (hop_id, hop) in function.hops.iter() {
+        //     self.print_hop(program, hop, hop_id, function, writer, 1)?;
+        //     writeln!(writer)?;
+        // }
+        writeln!(
+            writer,
+            "    // Hops printing disabled - needs program context"
+        )?;
 
         self.write_indent(writer, 0)?;
         writeln!(writer, "}}")?;
