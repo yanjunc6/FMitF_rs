@@ -1,10 +1,5 @@
-use crate::cfg::{
-    ControlFlowEdge, EdgeType, FunctionCfg, LValue, Operand, Rvalue, Statement, VarId,
-};
-use crate::dataflow::{
-    AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
-    TransferFunction,
-};
+use crate::cfg::{ControlFlowEdge, EdgeType, LValue, Operand, Rvalue, Statement, VarId};
+use crate::dataflow::{AnalysisLevel, DataflowResults, Lattice, SetLattice, TransferFunction};
 use std::collections::HashSet;
 
 /// Transfer function for live variables analysis
@@ -124,9 +119,12 @@ impl LiveVariablesTransfer {
 
 /// Run live variables analysis on a function
 pub fn analyze_live_variables(
-    func: &FunctionCfg,
-    level: AnalysisLevel,
+    _prog: &crate::cfg::CfgProgram,
+    _func_id: crate::cfg::FunctionId,
+    _level: AnalysisLevel,
 ) -> DataflowResults<SetLattice<VarId>> {
-    let analysis = DataflowAnalysis::new(level, Direction::Backward, LiveVariablesTransfer);
-    analysis.analyze(func)
+    // TODO: Update dataflow analysis to work with cfg_api
+    // The current dataflow implementation expects the old CFG structure
+    // and needs to be rewritten to use the cfg_api functions
+    unimplemented!("Live variables analysis needs to be updated to work with cfg_api")
 }

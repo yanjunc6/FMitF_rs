@@ -41,7 +41,7 @@ impl SCGraphBuilder {
         for (function_id, function) in cfg_program.functions.iter() {
             // Only process transaction functions (skip partition functions)
             if function.function_type == FunctionType::Transaction {
-                for (hop_id, _hop) in function.hops.iter() {
+                for &hop_id in crate::cfg::cfg_api::get_function_hops(cfg_program, function_id) {
                     // Create multiple instances of this hop
                     for instance in 0..self.num_instances {
                         let node_id = SCGraphNodeId {
@@ -110,16 +110,20 @@ impl SCGraphBuilder {
         // Analyze table accesses for each hop using hop-level dataflow analysis
         let mut hop_table_accesses: HashMap<HopId, HashSet<TableAccess>> = HashMap::new();
 
-        for (_function_id, function) in cfg_program.functions.iter() {
+        for (function_id, function) in cfg_program.functions.iter() {
             // Only analyze transaction functions
             if function.function_type == FunctionType::Transaction {
                 // Run hop-level table mod-ref analysis
                 let analysis_results = analyze_table_mod_ref(function, AnalysisLevel::Hop);
 
                 // Extract table accesses for each hop
-                for (hop_id, _hop) in function.hops.iter() {
-                    let hop_accesses =
-                        Self::extract_hop_table_accesses(hop_id, function, &analysis_results);
+                for &hop_id in crate::cfg::cfg_api::get_function_hops(cfg_program, function_id) {
+                    let hop_accesses = Self::extract_hop_table_accesses(
+                        cfg_program,
+                        hop_id,
+                        function,
+                        &analysis_results,
+                    );
                     hop_table_accesses.insert(hop_id, hop_accesses);
                 }
             }
@@ -131,21 +135,20 @@ impl SCGraphBuilder {
 
     /// Extracts table accesses for a specific hop from the dataflow analysis results.
     fn extract_hop_table_accesses(
+        prog: &crate::cfg::CfgProgram,
         hop_id: HopId,
-        function: &crate::cfg::FunctionCfg,
+        _function: &crate::cfg::FunctionCfg,
         analysis_results: &DataflowResults<SetLattice<TableAccess>>,
     ) -> HashSet<TableAccess> {
         let mut hop_accesses = HashSet::new();
 
         // Get the hop's blocks
-        if let Some(hop) = function.hops.get(hop_id) {
-            for &block_id in &hop.blocks {
-                // For hop-level analysis, we want the exit values of each block within the hop
-                if let Some(block_exit_lattice) = analysis_results.exit.get(&block_id) {
-                    if let Some(access_set) = block_exit_lattice.as_set() {
-                        for access in access_set {
-                            hop_accesses.insert(access.clone());
-                        }
+        for &block_id in crate::cfg::cfg_api::get_hop_blocks(prog, hop_id) {
+            // For hop-level analysis, we want the exit values of each block within the hop
+            if let Some(block_exit_lattice) = analysis_results.exit.get(&block_id) {
+                if let Some(access_set) = block_exit_lattice.as_set() {
+                    for access in access_set {
+                        hop_accesses.insert(access.clone());
                     }
                 }
             }
@@ -166,7 +169,7 @@ impl SCGraphBuilder {
 
         for (function_id, function) in cfg_program.functions.iter() {
             if function.function_type == FunctionType::Transaction {
-                for (hop_id, _hop) in function.hops.iter() {
+                for &hop_id in crate::cfg::cfg_api::get_function_hops(cfg_program, function_id) {
                     hops_with_functions.push((hop_id, function_id));
                 }
             }

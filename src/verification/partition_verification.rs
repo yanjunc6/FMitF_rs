@@ -1,12 +1,14 @@
 // src/verification/partition_verification.rs
 //! Partition verification for table accesses.
-//! 
+//!
 //! This module verifies that table accesses within the same partition are correct
 //! and logs information about cross-partition accesses.
 
-use crate::cfg::{CfgProgram, FunctionId, HopId, TableId, Operand, Statement, LValue, Rvalue, FunctionType};
-use crate::sc_graph::{SCGraph, SCGraphNodeId};
+use crate::cfg::{
+    CfgProgram, FunctionId, FunctionType, HopId, LValue, Operand, Rvalue, Statement, TableId,
+};
 use crate::dataflow::AccessType;
+use crate::sc_graph::{SCGraph, SCGraphNodeId};
 use std::path::Path;
 
 /// Detailed table access information including partition data
@@ -82,7 +84,7 @@ impl PartitionVerifier {
             }
 
             // Extract table accesses from all hops in the function
-            for (hop_id, hop) in function.hops.iter() {
+            for &hop_id in crate::cfg::cfg_api::get_function_hops(cfg_program, function_id) {
                 // Create a node ID for this hop (using instance 0 as default)
                 let node_id = SCGraphNodeId {
                     function_id,
@@ -91,16 +93,18 @@ impl PartitionVerifier {
                 };
 
                 // Extract table accesses from all basic blocks in the hop
-                for &block_id in &hop.blocks {
-                    if let Some(block) = function.blocks.get(block_id) {
-                        for (stmt_index, statement) in block.statements.iter().enumerate() {
-                            self.extract_accesses_from_statement(
-                                statement,
-                                &node_id,
-                                cfg_program,
-                                format!("{}:{}:{}", function.name, hop_id.index(), stmt_index)
-                            );
-                        }
+                for &block_id in crate::cfg::cfg_api::get_hop_blocks(cfg_program, hop_id) {
+                    for (stmt_index, statement) in
+                        crate::cfg::cfg_api::get_block_statements(cfg_program, block_id)
+                            .iter()
+                            .enumerate()
+                    {
+                        self.extract_accesses_from_statement(
+                            statement,
+                            &node_id,
+                            cfg_program,
+                            format!("{}:{}:{}", function.name, hop_id.index(), stmt_index),
+                        );
                     }
                 }
             }
@@ -135,7 +139,9 @@ impl PartitionVerifier {
         line_info: &str,
     ) {
         match rvalue {
-            Rvalue::TableAccess { table, pk_values, .. } => {
+            Rvalue::TableAccess {
+                table, pk_values, ..
+            } => {
                 self.detailed_accesses.push(DetailedTableAccess {
                     table_id: *table,
                     access_type: AccessType::Read,
@@ -182,7 +188,9 @@ impl PartitionVerifier {
         line_info: &str,
     ) {
         match lvalue {
-            LValue::TableField { table, pk_values, .. } => {
+            LValue::TableField {
+                table, pk_values, ..
+            } => {
                 self.detailed_accesses.push(DetailedTableAccess {
                     table_id: *table,
                     access_type: AccessType::Write,
@@ -205,7 +213,9 @@ impl PartitionVerifier {
         self.verification_errors.clear();
 
         // Find conflicting pairs from C-edges
-        let c_edges: Vec<_> = sc_graph.edges.iter()
+        let c_edges: Vec<_> = sc_graph
+            .edges
+            .iter()
             .filter(|edge| edge.edge_type == crate::sc_graph::EdgeType::C)
             .collect();
 
@@ -243,11 +253,12 @@ impl PartitionVerifier {
 
     /// Get all table accesses for a specific SC-graph node
     fn get_accesses_for_node(&self, node_id: &SCGraphNodeId) -> Vec<DetailedTableAccess> {
-        self.detailed_accesses.iter()
+        self.detailed_accesses
+            .iter()
             .filter(|access| {
-                access.function_id == node_id.function_id &&
-                access.hop_id == node_id.hop_id &&
-                access.instance == node_id.instance
+                access.function_id == node_id.function_id
+                    && access.hop_id == node_id.hop_id
+                    && access.instance == node_id.instance
             })
             .cloned()
             .collect()
@@ -335,10 +346,11 @@ impl PartitionVerifier {
                 let boogie_code = self.generate_boogie_for_verification_error(error, cfg_program);
                 let filename = format!("partition_verification_{}.bpl", index);
                 let filepath = Path::new(output_dir).join(&filename);
-                
-                std::fs::write(&filepath, boogie_code)
-                    .map_err(|e| format!("Failed to write Boogie file {}: {}", filepath.display(), e))?;
-                
+
+                std::fs::write(&filepath, boogie_code).map_err(|e| {
+                    format!("Failed to write Boogie file {}: {}", filepath.display(), e)
+                })?;
+
                 files_generated += 1;
             }
         }
@@ -357,21 +369,31 @@ impl PartitionVerifier {
         let _partition_func = &cfg_program.functions[table1.partition_function];
 
         let mut code = String::new();
-        
+
         // Header comment
         code.push_str(&format!(
             "// Partition verification for {}\n",
             error.partition_function_name
         ));
-        code.push_str(&format!("// Access 1: {} ({})\n", table1.name, error.access1.line_info));
-        code.push_str(&format!("// Access 2: {} ({})\n", table2.name, error.access2.line_info));
+        code.push_str(&format!(
+            "// Access 1: {} ({})\n",
+            table1.name, error.access1.line_info
+        ));
+        code.push_str(&format!(
+            "// Access 2: {} ({})\n",
+            table2.name, error.access2.line_info
+        ));
         code.push_str("// Verifying that partition arguments are equal\n\n");
 
         // Generate procedure
         code.push_str("procedure verify_partition_equality(\n");
-        
+
         // Add parameters for both accesses
-        let param_count = error.access1.pk_values.len().max(error.access2.pk_values.len());
+        let param_count = error
+            .access1
+            .pk_values
+            .len()
+            .max(error.access2.pk_values.len());
         for i in 0..param_count {
             if i > 0 {
                 code.push_str(",\n");
@@ -402,11 +424,10 @@ impl PartitionVerifier {
         self.verify_partition_consistency(cfg_program, sc_graph);
 
         // Step 3: Generate Boogie files
-        let boogie_files_generated = self.generate_boogie_files(cfg_program)
-            .unwrap_or_else(|e| {
-                eprintln!("Warning: Failed to generate Boogie files: {}", e);
-                0
-            });
+        let boogie_files_generated = self.generate_boogie_files(cfg_program).unwrap_or_else(|e| {
+            eprintln!("Warning: Failed to generate Boogie files: {}", e);
+            0
+        });
 
         PartitionVerificationResult {
             verified_accesses: Vec::new(), // Placeholder for successful verifications

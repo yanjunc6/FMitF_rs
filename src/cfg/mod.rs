@@ -4,6 +4,7 @@ pub use crate::ast::{BinaryOp, ReturnType, Span, TypeName, UnaryOp};
 
 mod cfg_builder;
 pub use cfg_builder::CfgBuilder;
+pub mod cfg_api;
 
 // Core ID types
 pub type TableId = Id<TableInfo>;
@@ -16,16 +17,18 @@ pub type VarId = Id<Variable>;
 /// Core CFG Program structure, never clone this structure
 #[derive(Debug)]
 pub struct CfgProgram {
-    // Arena for storing various components
-    pub tables: Arena<TableInfo>,
-    pub fields: Arena<FieldInfo>,
-    pub functions: Arena<FunctionCfg>,
-    pub variables: Arena<Variable>, // Unified: global constants, parameters, locals
+    // Arena for storing various components - package-private to allow cfg_builder access
+    pub(crate) tables: Arena<TableInfo>,
+    pub(crate) fields: Arena<FieldInfo>,
+    pub(crate) functions: Arena<FunctionCfg>,
+    pub(crate) variables: Arena<Variable>, // Unified: global constants, parameters, locals
+    pub(crate) hops: Arena<HopCfg>,        // Centralized hop storage
+    pub(crate) blocks: Arena<BasicBlock>,  // Centralized basic block storage
 
-    // Root collections - public for iteration
-    pub root_tables: Vec<TableId>,
-    pub root_functions: Vec<FunctionId>, // Contains both partitions and transactions
-    pub root_variables: Vec<VarId>,      // Global constants/variables
+    // Root collections - package-private to allow cfg_builder access
+    pub(crate) root_tables: Vec<TableId>,
+    pub(crate) root_functions: Vec<FunctionId>, // Contains both partitions and transactions
+    pub(crate) root_variables: Vec<VarId>,      // Global constants/variables
 }
 
 impl Default for CfgProgram {
@@ -35,6 +38,8 @@ impl Default for CfgProgram {
             fields: Arena::new(),
             functions: Arena::new(),
             variables: Arena::new(),
+            hops: Arena::new(),
+            blocks: Arena::new(),
             root_tables: Vec::new(),
             root_functions: Vec::new(),
             root_variables: Vec::new(),
@@ -95,38 +100,38 @@ pub enum VariableKind {
 /// Function CFG, never clone it
 #[derive(Debug)]
 pub struct FunctionCfg {
-    pub name: String,
-    pub function_type: FunctionType, // Whether this is a partition or transaction
-    pub implementation: FunctionImplementation, // Whether this is abstract or concrete
-    pub return_type: ReturnType,
-    pub span: Span,
+    pub(crate) name: String,
+    pub(crate) function_type: FunctionType, // Whether this is a partition or transaction
+    pub(crate) implementation: FunctionImplementation, // Whether this is abstract or concrete
+    pub(crate) return_type: ReturnType,
+    pub(crate) span: Span,
 
-    pub parameters: Vec<VarId>, // Parameters (stored in program.variables)
-    pub local_variables: Vec<VarId>, // Local variables (stored in program.variables)
+    pub(crate) parameters: Vec<VarId>, // Parameters (stored in program.variables)
+    pub(crate) local_variables: Vec<VarId>, // Local variables (stored in program.variables)
 
-    pub hops: Arena<HopCfg>,
-    pub blocks: Arena<BasicBlock>,
+    pub(crate) hops: Vec<HopId>, // References to hops in program.hops
+    pub(crate) blocks: Vec<BasicBlockId>, // References to blocks in program.blocks
 
-    pub entry_hop: Option<HopId>, // Set after all hops are allocated, None for abstract functions
-    pub hop_order: Vec<HopId>,    // Empty for abstract functions
+    pub(crate) entry_hop: Option<HopId>, // Set after all hops are allocated, None for abstract functions
+    pub(crate) hop_order: Vec<HopId>,    // Empty for abstract functions
 }
 
 /// Hop - execution on a specific node
 #[derive(Debug)]
 pub struct HopCfg {
-    pub entry_block: Option<BasicBlockId>, // Set after its basic block is created
-    pub blocks: Vec<BasicBlockId>,
-    pub span: Span,
+    pub(crate) entry_block: Option<BasicBlockId>, // Set after its basic block is created
+    pub(crate) blocks: Vec<BasicBlockId>,
+    pub(crate) span: Span,
 }
 
 /// Basic block with unified control flow representation
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BasicBlock {
-    pub hop_id: HopId,
-    pub statements: Vec<Statement>,
-    pub span: Span,
-    pub predecessors: Vec<ControlFlowEdge>, // Incoming edges
-    pub successors: Vec<ControlFlowEdge>,   // Outgoing edges
+    pub(crate) hop_id: HopId,
+    pub(crate) statements: Vec<Statement>,
+    pub(crate) span: Span,
+    pub(crate) predecessors: Vec<ControlFlowEdge>, // Incoming edges
+    pub(crate) successors: Vec<ControlFlowEdge>,   // Outgoing edges
 }
 
 /// Represents a control flow edge between basic blocks

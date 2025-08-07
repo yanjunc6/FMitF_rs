@@ -1,8 +1,5 @@
-use crate::cfg::{BasicBlockId, ControlFlowEdge, FunctionCfg, LValue, Statement, VarId};
-use crate::dataflow::{
-    AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
-    TransferFunction,
-};
+use crate::cfg::{BasicBlockId, ControlFlowEdge, LValue, Statement, VarId};
+use crate::dataflow::{AnalysisLevel, DataflowResults, Lattice, SetLattice, TransferFunction};
 
 /// Represents a definition of a variable at a specific program point.
 /// Uses block ID and statement index instead of raw pointers for safety.
@@ -148,9 +145,9 @@ impl TransferFunction<SetLattice<Definition>> for ReachingDefinitionsTransferWit
 
 /// Run reaching definitions analysis on a function
 pub fn analyze_reaching_definitions(
-    func: &FunctionCfg,
-    level: AnalysisLevel,
+    _prog: &crate::cfg::CfgProgram,
+    _func_id: crate::cfg::FunctionId,
+    _level: AnalysisLevel,
 ) -> DataflowResults<SetLattice<Definition>> {
-    let analysis = DataflowAnalysis::new(level, Direction::Forward, ReachingDefinitionsTransfer);
-    analysis.analyze(func)
+    unimplemented!("Reaching definitions analysis needs to be updated to work with cfg_api")
 }

@@ -1,11 +1,8 @@
 pub mod partition_verification;
 
 pub use partition_verification::{
-    PartitionVerificationResult, 
-    PartitionVerifier,
-    DetailedTableAccess,
-    CrossPartitionAccess,
-    PartitionVerificationError,
+    CrossPartitionAccess, DetailedTableAccess, PartitionVerificationError,
+    PartitionVerificationResult, PartitionVerifier,
 };
 
 /// Simple verification manager that orchestrates partition verification
@@ -27,9 +24,11 @@ impl VerificationManager {
         output_dir: Option<&str>,
     ) -> PartitionVerificationResult {
         if let Some(dir) = output_dir {
-            self.partition_verifier.set_boogie_output_dir(dir.to_string());
+            self.partition_verifier
+                .set_boogie_output_dir(dir.to_string());
         }
-        
-        self.partition_verifier.run_verification(cfg_program, sc_graph)
+
+        self.partition_verifier
+            .run_verification(cfg_program, sc_graph)
     }
 }
