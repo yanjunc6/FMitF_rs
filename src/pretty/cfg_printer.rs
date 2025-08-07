@@ -1,103 +1,57 @@
 use super::PrettyPrinter;
 use crate::cfg::{
-    BasicBlock, CfgProgram, EdgeType, FunctionCfg, HopCfg, LValue, Operand, Rvalue, Statement,
-    VarId, VariableKind,
+    BasicBlockId, CfgProgram, CfgVisitor, FunctionCfg, FunctionId, HopId, LValue, Operand, Rvalue,
+    Statement, StmtVisitor, VarId, Variable,
 };
-use std::collections::HashMap;
+use std::cell::RefCell;
 use std::io::Write;
 
-/// Pretty printer for CFG structures.
+/// Pretty printer for CFG structures using visitor pattern.
 /// Provides human-readable output of the control flow graph.
-pub struct CfgPrinter<'a> {
-    /// Indentation level for nested structures
-    indent_size: usize,
-    /// Whether to show detailed block information
-    show_details: bool,
-    /// Reference to the full program for variable name lookup
-    program: Option<&'a CfgProgram>,
-    /// Counter for generating temporary variable names
-    temp_counter: std::cell::RefCell<usize>,
-    /// Map from VarId to generated names for temporaries
-    temp_name_map: std::cell::RefCell<HashMap<VarId, String>>,
+pub struct CfgPrinter;
+
+impl CfgPrinter {
+    /// Creates a new CFG printer.
+    pub fn new() -> Self {
+        Self
+    }
 }
 
-impl<'a> CfgPrinter<'a> {
-    /// Creates a new CFG printer with default settings.
-    pub fn new() -> Self {
+/// Internal visitor implementation with writer context
+struct CfgPrintVisitor<'a> {
+    writer: &'a mut dyn Write,
+    indent_level: RefCell<usize>,
+    indent_size: usize,
+}
+
+impl<'a> CfgPrintVisitor<'a> {
+    fn new(writer: &'a mut dyn Write) -> Self {
         Self {
+            writer,
+            indent_level: RefCell::new(0),
             indent_size: 2,
-            show_details: true,
-            program: None,
-            temp_counter: std::cell::RefCell::new(1),
-            temp_name_map: std::cell::RefCell::new(HashMap::new()),
         }
     }
 
-    /// Creates a new CFG printer with a program reference for variable name lookup.
-    pub fn with_program(program: &'a CfgProgram) -> Self {
-        Self {
-            indent_size: 2,
-            show_details: true,
-            program: Some(program),
-            temp_counter: std::cell::RefCell::new(1),
-            temp_name_map: std::cell::RefCell::new(HashMap::new()),
+    fn write_indent(&mut self) -> std::io::Result<()> {
+        let level = *self.indent_level.borrow();
+        for _ in 0..(level * self.indent_size) {
+            write!(self.writer, " ")?;
+        }
+        Ok(())
+    }
+
+    fn increase_indent(&self) {
+        *self.indent_level.borrow_mut() += 1;
+    }
+
+    fn decrease_indent(&self) {
+        let mut level = self.indent_level.borrow_mut();
+        if *level > 0 {
+            *level -= 1;
         }
     }
 
-    /// Creates a new CFG printer with custom settings.
-    pub fn with_options(indent_size: usize, show_details: bool) -> Self {
-        Self {
-            indent_size,
-            show_details,
-            program: None,
-            temp_counter: std::cell::RefCell::new(1),
-            temp_name_map: std::cell::RefCell::new(HashMap::new()),
-        }
-    }
-
-    /// Get a human-readable name for a variable
-    fn get_variable_name(&self, var_id: VarId) -> String {
-        if let Some(program) = self.program {
-            if let Some(var) = program.variables.get(var_id) {
-                // Use the actual variable name if available
-                if var.name.is_empty() || var.kind == VariableKind::Temporary {
-                    // Generate a temporary name for unnamed or temporary variables
-                    let mut temp_map = self.temp_name_map.borrow_mut();
-                    if let Some(name) = temp_map.get(&var_id) {
-                        name.clone()
-                    } else {
-                        let mut counter = self.temp_counter.borrow_mut();
-                        let temp_name = format!("t{}", *counter);
-                        *counter += 1;
-                        temp_map.insert(var_id, temp_name.clone());
-                        temp_name
-                    }
-                } else {
-                    var.name.clone()
-                }
-            } else {
-                format!("var_{:?}", var_id)
-            }
-        } else {
-            // Fallback when no program reference is available
-            format!("var_{:?}", var_id)
-        }
-    }
-
-    /// Get type information for a variable
-    fn get_variable_type(&self, var_id: VarId) -> Option<String> {
-        if let Some(program) = self.program {
-            if let Some(var) = program.variables.get(var_id) {
-                Some(self.format_type(&var.ty))
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
-
-    /// Format a type name
     fn format_type(&self, ty: &crate::ast::TypeName) -> String {
         use crate::ast::TypeName;
         match ty {
@@ -114,478 +68,274 @@ impl<'a> CfgPrinter<'a> {
             TypeName::Table(name) => name.clone(),
         }
     }
-    /// Helper to write indentation
-    fn write_indent(&self, writer: &mut dyn Write, level: usize) -> std::io::Result<()> {
-        for _ in 0..(level * self.indent_size) {
-            write!(writer, " ")?;
-        }
-        Ok(())
-    }
+}
 
-    /// Print the entire CFG program
-    fn print_program(&self, program: &CfgProgram, writer: &mut dyn Write) -> std::io::Result<()> {
-        writeln!(writer, "CFG Program:")?;
-        writeln!(writer)?;
+impl<'a> CfgVisitor<std::io::Result<()>> for CfgPrintVisitor<'a> {
+    fn visit_program(&mut self, program: &CfgProgram) -> std::io::Result<()> {
+        writeln!(self.writer, "CFG Program:")?;
+        writeln!(self.writer)?;
+
+        // Print global constants
+        self.write_indent()?;
+        writeln!(self.writer, "Global Constants:")?;
+        self.increase_indent();
+        for var_id in &program.root_variables {
+            let var_info = &program.variables[*var_id];
+            self.write_indent()?;
+            writeln!(
+                self.writer,
+                "const {}: {}",
+                var_info.name,
+                self.format_type(&var_info.ty)
+            )?;
+        }
+        self.decrease_indent();
 
         // Print tables
-        if program.tables.len() > 0 {
-            self.write_indent(writer, 1)?;
-            writeln!(writer, "Tables:")?;
-            for (table_id, table_info) in program.tables.iter() {
-                self.write_indent(writer, 2)?;
-                writeln!(writer, "table {} (id: {:?}) {{", table_info.name, table_id)?;
-
-                self.write_indent(writer, 3)?;
-                write!(writer, "fields: ")?;
-                for (i, &field_id) in table_info.fields.iter().enumerate() {
-                    if i > 0 {
-                        write!(writer, ", ")?;
-                    }
-                    if let Some(field) = program.fields.get(field_id) {
-                        write!(writer, "{}", field.name)?;
-                    } else {
-                        write!(writer, "field_{:?}", field_id)?;
-                    }
+        let table_count = program.root_tables.len();
+        if table_count > 0 {
+            self.write_indent()?;
+            writeln!(self.writer, "Tables ({} total):", table_count)?;
+            self.increase_indent();
+            for &table_id in &program.root_tables {
+                if let Some(table_info) = program.tables.get(table_id) {
+                    self.write_indent()?;
+                    writeln!(
+                        self.writer,
+                        "table {} (id: {:?}) {{",
+                        table_info.name, table_id
+                    )?;
+                    self.write_indent()?;
+                    writeln!(self.writer, "}}")?;
                 }
-                writeln!(writer)?;
-
-                if !table_info.primary_keys.is_empty() {
-                    self.write_indent(writer, 3)?;
-                    write!(writer, "primary_keys: ")?;
-                    for (i, &pk_field_id) in table_info.primary_keys.iter().enumerate() {
-                        if i > 0 {
-                            write!(writer, ", ")?;
-                        }
-                        if let Some(field) = program.fields.get(pk_field_id) {
-                            write!(writer, "{}", field.name)?;
-                        } else {
-                            write!(writer, "field_{:?}", pk_field_id)?;
-                        }
-                    }
-                    writeln!(writer)?;
-                }
-
-                self.write_indent(writer, 2)?;
-                writeln!(writer, "}}")?;
             }
-            writeln!(writer)?;
+            self.decrease_indent();
+            writeln!(self.writer)?;
         }
 
         // Print functions
-        if program.functions.len() > 0 {
-            self.write_indent(writer, 1)?;
-            writeln!(writer, "Functions:")?;
-            for (func_id, function) in program.functions.iter() {
-                self.print_function(program, function, func_id, writer, 2)?;
-                writeln!(writer)?;
+        let func_count = program.root_functions.len();
+        if func_count > 0 {
+            self.write_indent()?;
+            writeln!(self.writer, "Functions ({} total):", func_count)?;
+            self.increase_indent();
+            for &func_id in &program.root_functions {
+                if program.functions.get(func_id).is_some() {
+                    self.visit_function(program, func_id)?;
+                    writeln!(self.writer)?;
+                }
             }
+            self.decrease_indent();
         }
 
         Ok(())
     }
 
-    /// Print a function with its hops and control flow
-    fn print_function(
-        &self,
-        program: &CfgProgram,
-        function: &FunctionCfg,
-        func_id: crate::cfg::FunctionId,
-        writer: &mut dyn Write,
-        level: usize,
-    ) -> std::io::Result<()> {
-        self.write_indent(writer, level)?;
+    fn visit_function(&mut self, program: &CfgProgram, id: FunctionId) -> std::io::Result<()> {
+        let function = &program.functions[id];
+
+        self.write_indent()?;
         writeln!(
-            writer,
+            self.writer,
             "function {} (id: {:?}) -> {:?} {{",
-            function.name, func_id, function.return_type
+            function.name, id, function.return_type
         )?;
 
-        // Print parameters
-        if !function.parameters.is_empty() {
-            self.write_indent(writer, level + 1)?;
-            write!(writer, "parameters: ")?;
-            for (i, &param_id) in function.parameters.iter().enumerate() {
-                if i > 0 {
-                    write!(writer, ", ")?;
-                }
-                let param_name = self.get_variable_name(param_id);
-                if let Some(param_type) = self.get_variable_type(param_id) {
-                    write!(writer, "{}: {}", param_name, param_type)?;
-                } else {
-                    write!(writer, "{}", param_name)?;
-                }
-            }
-            writeln!(writer)?;
-        }
-
-        // Print hop order
-        if !function.hop_order.is_empty() {
-            self.write_indent(writer, level + 1)?;
-            write!(writer, "hop_order: ")?;
-            for (i, &hop_id) in function.hop_order.iter().enumerate() {
-                if i > 0 {
-                    write!(writer, " -> ")?;
-                }
-                write!(writer, "hop{}", hop_id.index())?;
-            }
-            writeln!(writer)?;
-            writeln!(writer)?;
-        }
-
         // Print hops
-        for (hop_id, hop) in crate::cfg::cfg_api::function_hops_iter(program, func_id) {
-            self.print_hop(program, hop, hop_id, function, writer, level + 1)?;
-            writeln!(writer)?;
+        self.increase_indent();
+        for &hop_id in &function.hops {
+            self.visit_hop(program, hop_id)?;
         }
+        self.decrease_indent();
 
-        self.write_indent(writer, level)?;
-        writeln!(writer, "}}")?;
+        self.write_indent()?;
+        writeln!(self.writer, "}}")?;
         Ok(())
     }
 
-    /// Print a hop with its basic blocks
-    fn print_hop(
-        &self,
-        program: &CfgProgram,
-        hop: &HopCfg,
-        hop_id: crate::cfg::HopId,
-        _function: &FunctionCfg,
-        writer: &mut dyn Write,
-        level: usize,
-    ) -> std::io::Result<()> {
-        self.write_indent(writer, level)?;
-        writeln!(writer, "hop_{:?} {{", hop_id)?;
+    fn visit_hop(&mut self, program: &CfgProgram, id: HopId) -> std::io::Result<()> {
+        let hop = &program.hops[id];
 
-        if let Some(entry_block) = hop.entry_block {
-            self.write_indent(writer, level + 1)?;
-            writeln!(writer, "entry_block: block{}", entry_block.index())?;
-        }
+        self.write_indent()?;
+        writeln!(self.writer, "hop_{:?} (func: {:?}) {{", id, hop.function_id)?;
 
         // Print all blocks in this hop
-        for &block_id in crate::cfg::cfg_api::get_hop_blocks(program, hop_id) {
-            let block = crate::cfg::cfg_api::get_basic_block(program, block_id);
-            self.print_basic_block(block, block_id, writer, level + 1)?;
+        self.increase_indent();
+        for &block_id in &hop.blocks {
+            self.visit_basic_block(program, block_id)?;
         }
+        self.decrease_indent();
 
-        self.write_indent(writer, level)?;
-        writeln!(writer, "}}")?;
+        self.write_indent()?;
+        writeln!(self.writer, "}}")?;
         Ok(())
     }
 
-    /// Print a basic block with its statements and control flow
-    fn print_basic_block(
-        &self,
-        block: &BasicBlock,
-        block_id: crate::cfg::BasicBlockId,
-        writer: &mut dyn Write,
-        level: usize,
-    ) -> std::io::Result<()> {
-        self.write_indent(writer, level)?;
-        writeln!(writer, "block{} {{", block_id.index())?;
+    fn visit_basic_block(&mut self, program: &CfgProgram, id: BasicBlockId) -> std::io::Result<()> {
+        let block = &program.blocks[id];
 
-        // Print statements
-        if !block.statements.is_empty() {
-            self.write_indent(writer, level + 1)?;
-            writeln!(writer, "statements:")?;
-            for (i, stmt) in block.statements.iter().enumerate() {
-                self.write_indent(writer, level + 2)?;
-                write!(writer, "{}: ", i)?;
-                self.print_statement(stmt, writer)?;
-                writeln!(writer)?;
-            }
+        self.write_indent()?;
+        writeln!(
+            self.writer,
+            "block{} (hop: {:?}) {{",
+            id.index(),
+            block.hop_id
+        )?;
+
+        self.increase_indent();
+
+        // Print all statements in this block using the statement visitor
+        for (stmt_index, stmt) in block.statements.iter().enumerate() {
+            self.write_indent()?;
+            let stmt_str = self.visit_statement(stmt);
+            writeln!(self.writer, "[{}] {}", stmt_index, stmt_str)?;
         }
 
-        // Print predecessors
-        if !block.predecessors.is_empty() && self.show_details {
-            self.write_indent(writer, level + 1)?;
-            write!(writer, "predecessors: ")?;
-            for (i, edge) in block.predecessors.iter().enumerate() {
-                if i > 0 {
-                    write!(writer, ", ")?;
-                }
-                write!(
-                    writer,
-                    "block{} ({})",
-                    edge.from.index(),
-                    self.edge_type_to_string(&edge.edge_type)
-                )?;
-            }
-            writeln!(writer)?;
-        }
-
-        // Print successors
-        if !block.successors.is_empty() && self.show_details {
-            self.write_indent(writer, level + 1)?;
-            write!(writer, "successors: ")?;
-            for (i, edge) in block.successors.iter().enumerate() {
-                if i > 0 {
-                    write!(writer, ", ")?;
-                }
-                write!(
-                    writer,
-                    "block{} ({})",
+        // Print control flow edges
+        if !block.successors.is_empty() {
+            self.write_indent()?;
+            writeln!(self.writer, "successors:")?;
+            self.increase_indent();
+            for edge in &block.successors {
+                self.write_indent()?;
+                writeln!(
+                    self.writer,
+                    "-> block{} ({:?})",
                     edge.to.index(),
-                    self.edge_type_to_string(&edge.edge_type)
+                    edge.edge_type
                 )?;
             }
-            writeln!(writer)?;
+            self.decrease_indent();
         }
 
-        self.write_indent(writer, level)?;
-        writeln!(writer, "}}")?;
+        self.decrease_indent();
+
+        self.write_indent()?;
+        writeln!(self.writer, "}}")?;
         Ok(())
     }
 
-    /// Print a statement
-    fn print_statement(&self, stmt: &Statement, writer: &mut dyn Write) -> std::io::Result<()> {
+    fn visit_global_constants(&mut self, program: &CfgProgram, id: VarId) -> std::io::Result<()> {
+        if let Some(var) = program.variables.get(id) {
+            write!(self.writer, "{}: {}", var.name, self.format_type(&var.ty))?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> StmtVisitor<String> for CfgPrintVisitor<'a> {
+    fn visit_statement(&mut self, stmt: &Statement) -> String {
         match stmt {
             Statement::Assign { lvalue, rvalue, .. } => {
-                write!(
-                    writer,
-                    "{} = {}",
-                    self.lvalue_to_string(lvalue),
-                    self.rvalue_to_string(rvalue)
-                )?;
-
-                // Add type information if available
-                if let LValue::Variable { var } = lvalue {
-                    if let Some(ty_str) = self.get_variable_type(*var) {
-                        write!(writer, "  // : {}", ty_str)?;
-                    }
-                }
+                let lv_str = self.visit_lvalue(lvalue);
+                let rv_str = self.visit_rvalue(rvalue);
+                format!("{} = {}", lv_str, rv_str)
             }
         }
-        Ok(())
     }
 
-    /// Convert LValue to string representation
-    fn lvalue_to_string(&self, lvalue: &LValue) -> String {
-        match lvalue {
-            LValue::Variable { var } => self.get_variable_name(*var),
+    fn visit_lvalue(&mut self, lv: &LValue) -> String {
+        match lv {
+            LValue::Variable { var } => {
+                format!("var_{:?}", var.index())
+            }
             LValue::ArrayElement { array, index } => {
-                format!(
-                    "{}[{}]",
-                    self.get_variable_name(*array),
-                    self.operand_to_string(index)
-                )
+                let index_str = self.visit_operand(index);
+                format!("var_{:?}[{}]", array.index(), index_str)
             }
             LValue::TableField {
                 table,
-                pk_fields,
                 pk_values,
                 field,
+                ..
             } => {
-                let mut result = format!("table_{:?}.", table);
-                for (i, &pk_field) in pk_fields.iter().enumerate() {
-                    if i > 0 {
-                        result.push(',');
-                    }
-                    result.push_str(&format!(
-                        "field_{:?}[{}]",
-                        pk_field,
-                        self.operand_to_string(&pk_values[i])
-                    ));
-                }
-                result.push_str(&format!(".field_{:?}", field));
-                result
-            }
-        }
-    }
-
-    /// Convert edge type to string representation
-    fn edge_type_to_string(&self, edge_type: &EdgeType) -> String {
-        match edge_type {
-            EdgeType::Unconditional => "unconditional".to_string(),
-            EdgeType::ConditionalTrue { condition } => {
-                format!("if {}", self.operand_to_string(condition))
-            }
-            EdgeType::ConditionalFalse { condition } => {
-                format!("if !{}", self.operand_to_string(condition))
-            }
-            EdgeType::Return { value } => {
-                if let Some(val) = value {
-                    format!("return {}", self.operand_to_string(val))
-                } else {
-                    "return".to_string()
-                }
-            }
-            EdgeType::Abort => "abort".to_string(),
-            EdgeType::HopExit { next_hop } => {
-                if let Some(hop_id) = next_hop {
-                    format!("hop_exit -> hop_{:?}", hop_id)
-                } else {
-                    "hop_exit".to_string()
-                }
-            }
-        }
-    }
-
-    /// Convert operand to string representation
-    fn operand_to_string(&self, operand: &Operand) -> String {
-        match operand {
-            Operand::Var(var_id) => self.get_variable_name(*var_id),
-            Operand::Const(constant) => {
-                use crate::cfg::Constant;
-                match constant {
-                    Constant::Int(n) => n.to_string(),
-                    Constant::Float(f) => f.to_string(),
-                    Constant::String(s) => format!("\"{}\"", s),
-                    Constant::Bool(b) => b.to_string(),
-                    Constant::Array(arr) => format!("{:?}", arr), // Fallback for arrays
-                }
-            }
-        }
-    }
-
-    /// Convert rvalue to string representation
-    fn rvalue_to_string(&self, rvalue: &Rvalue) -> String {
-        match rvalue {
-            Rvalue::Use(operand) => self.operand_to_string(operand),
-            Rvalue::BinaryOp { op, left, right } => {
+                let pk_strs: Vec<String> =
+                    pk_values.iter().map(|op| self.visit_operand(op)).collect();
                 format!(
-                    "({} {} {})",
-                    self.operand_to_string(left),
-                    self.binary_op_to_string(op),
-                    self.operand_to_string(right)
+                    "table_{:?}[{}].field_{:?}",
+                    table.index(),
+                    pk_strs.join(", "),
+                    field.index()
                 )
             }
-            Rvalue::UnaryOp { op, operand } => {
-                format!(
-                    "({}{})",
-                    self.unary_op_to_string(op),
-                    self.operand_to_string(operand)
-                )
-            }
+        }
+    }
+
+    fn visit_rvalue(&mut self, rv: &Rvalue) -> String {
+        match rv {
+            Rvalue::Use(operand) => self.visit_operand(operand),
             Rvalue::TableAccess {
                 table,
-                pk_fields,
                 pk_values,
                 field,
+                ..
             } => {
-                let mut access = format!("table_{:?}", table);
-                for (i, &pk_field) in pk_fields.iter().enumerate() {
-                    access.push_str(&format!(
-                        ".field_{:?}[{}]",
-                        pk_field,
-                        self.operand_to_string(&pk_values[i])
-                    ));
-                }
-                access.push_str(&format!(".field_{:?}", field));
-                access
-            }
-            Rvalue::ArrayAccess { array, index } => {
+                let pk_strs: Vec<String> =
+                    pk_values.iter().map(|op| self.visit_operand(op)).collect();
                 format!(
-                    "{}[{}]",
-                    self.operand_to_string(array),
-                    self.operand_to_string(index)
+                    "table_{:?}[{}].field_{:?}",
+                    table.index(),
+                    pk_strs.join(", "),
+                    field.index()
                 )
             }
+            Rvalue::ArrayAccess { array, index } => {
+                let array_str = self.visit_operand(array);
+                let index_str = self.visit_operand(index);
+                format!("{}[{}]", array_str, index_str)
+            }
+            Rvalue::UnaryOp { op, operand } => {
+                let operand_str = self.visit_operand(operand);
+                format!("{:?}({})", op, operand_str)
+            }
+            Rvalue::BinaryOp { op, left, right } => {
+                let left_str = self.visit_operand(left);
+                let right_str = self.visit_operand(right);
+                format!("({} {:?} {})", left_str, op, right_str)
+            }
         }
     }
 
-    /// Convert binary operator to string
-    fn binary_op_to_string(&self, op: &crate::ast::BinaryOp) -> String {
-        use crate::ast::BinaryOp;
+    fn visit_operand(&mut self, op: &Operand) -> String {
         match op {
-            BinaryOp::Add => "+".to_string(),
-            BinaryOp::Sub => "-".to_string(),
-            BinaryOp::Mul => "*".to_string(),
-            BinaryOp::Div => "/".to_string(),
-            BinaryOp::Eq => "==".to_string(),
-            BinaryOp::Neq => "!=".to_string(),
-            BinaryOp::Lt => "<".to_string(),
-            BinaryOp::Lte => "<=".to_string(),
-            BinaryOp::Gt => ">".to_string(),
-            BinaryOp::Gte => ">=".to_string(),
-            BinaryOp::And => "&&".to_string(),
-            BinaryOp::Or => "||".to_string(),
+            Operand::Var(var_id) => format!("var_{:?}", var_id.index()),
+            Operand::Const(constant) => self.visit_constant(constant),
         }
     }
 
-    /// Convert unary operator to string
-    fn unary_op_to_string(&self, op: &crate::ast::UnaryOp) -> String {
-        use crate::ast::UnaryOp;
-        match op {
-            UnaryOp::Not => "!".to_string(),
-            UnaryOp::Neg => "-".to_string(),
-            UnaryOp::PreIncrement => "++".to_string(),
-            UnaryOp::PostIncrement => "++".to_string(),
-            UnaryOp::PreDecrement => "--".to_string(),
-            UnaryOp::PostDecrement => "--".to_string(),
+    fn visit_constant(&mut self, c: &crate::cfg::Constant) -> String {
+        match c {
+            crate::cfg::Constant::Int(i) => i.to_string(),
+            crate::cfg::Constant::Float(f) => f.to_string(),
+            crate::cfg::Constant::Bool(b) => b.to_string(),
+            crate::cfg::Constant::String(s) => format!("\"{}\"", s),
+            crate::cfg::Constant::Array(arr) => {
+                let elements: Vec<String> = arr.iter().map(|c| self.visit_constant(c)).collect();
+                format!("[{}]", elements.join(", "))
+            }
         }
+    }
+
+    fn visit_variable(&mut self, _program: &CfgProgram, v: &Variable) -> String {
+        v.name.clone()
     }
 }
 
-impl<'a> Default for CfgPrinter<'a> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<'a> PrettyPrinter<CfgProgram> for CfgPrinter<'a> {
+impl PrettyPrinter<CfgProgram> for CfgPrinter {
     fn print(&self, program: &CfgProgram, writer: &mut dyn Write) -> std::io::Result<()> {
-        // Create a new printer with program reference for proper variable name lookup
-        let printer = CfgPrinter::with_program(program);
-        printer.print_program(program, writer)
+        let mut visitor = CfgPrintVisitor::new(writer);
+        visitor.visit_program(program)
     }
 }
 
-impl<'a> PrettyPrinter<FunctionCfg> for CfgPrinter<'a> {
+impl PrettyPrinter<FunctionCfg> for CfgPrinter {
     fn print(&self, function: &FunctionCfg, writer: &mut dyn Write) -> std::io::Result<()> {
-        // For standalone function printing, we'll use a placeholder function ID
-        // This is a workaround since we need a valid FunctionId but don't have one
-        self.write_indent(writer, 0)?;
         writeln!(
             writer,
             "function {} -> {:?} {{",
             function.name, function.return_type
         )?;
-
-        // Print parameters
-        if !function.parameters.is_empty() {
-            self.write_indent(writer, 1)?;
-            write!(writer, "parameters: ")?;
-            for (i, &param_id) in function.parameters.iter().enumerate() {
-                if i > 0 {
-                    write!(writer, ", ")?;
-                }
-                let param_name = self.get_variable_name(param_id);
-                if let Some(param_type) = self.get_variable_type(param_id) {
-                    write!(writer, "{}: {}", param_name, param_type)?;
-                } else {
-                    write!(writer, "{}", param_name)?;
-                }
-            }
-            writeln!(writer)?;
-        }
-
-        // Print hop order
-        if !function.hop_order.is_empty() {
-            self.write_indent(writer, 1)?;
-            write!(writer, "hop_order: ")?;
-            for (i, &hop_id) in function.hop_order.iter().enumerate() {
-                if i > 0 {
-                    write!(writer, " -> ")?;
-                }
-                write!(writer, "hop_{:?}", hop_id)?;
-            }
-            writeln!(writer)?;
-            writeln!(writer)?;
-        }
-
-        // Print hops
-        // TODO: This needs to be updated to work with cfg_api
-        // The standalone function printer doesn't have access to the full program
-        // for (hop_id, hop) in function.hops.iter() {
-        //     self.print_hop(program, hop, hop_id, function, writer, 1)?;
-        //     writeln!(writer)?;
-        // }
-        writeln!(
-            writer,
-            "    // Hops printing disabled - needs program context"
-        )?;
-
-        self.write_indent(writer, 0)?;
+        writeln!(writer, "  // {} hops", function.hops.len())?;
         writeln!(writer, "}}")?;
         Ok(())
     }

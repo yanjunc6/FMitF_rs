@@ -288,18 +288,28 @@ impl RuntimeState {
         self.fields.clear();
 
         // Functions
-        for (func_id, func_info) in cfg.functions.iter() {
-            self.functions.insert(func_info.name.clone(), func_id);
+        for &func_id in &cfg.root_functions {
+            if let Some(func_info) = cfg.functions.get(func_id) {
+                self.functions.insert(func_info.name.clone(), func_id);
+            }
         }
 
         // Tables
-        for (table_id, table_info) in cfg.tables.iter() {
-            self.tables.insert(table_info.name.clone(), table_id);
+        for &table_id in &cfg.root_tables {
+            if let Some(table_info) = cfg.tables.get(table_id) {
+                self.tables.insert(table_info.name.clone(), table_id);
+            }
         }
 
-        // Fields
-        for (field_id, field_info) in cfg.fields.iter() {
-            self.fields.insert(field_info.name.clone(), field_id);
+        // Fields - iterate through tables to find fields
+        for &table_id in &cfg.root_tables {
+            if let Some(table_info) = cfg.tables.get(table_id) {
+                for &field_id in &table_info.fields {
+                    if let Some(field_info) = cfg.fields.get(field_id) {
+                        self.fields.insert(field_info.name.clone(), field_id);
+                    }
+                }
+            }
         }
     }
 
@@ -307,8 +317,10 @@ impl RuntimeState {
     fn initialize_table_storage(&mut self, cfg: &CfgProgram) {
         self.table_data.clear();
 
-        for (table_id, _table_info) in cfg.tables.iter() {
-            self.table_data.insert(table_id, HashMap::new());
+        for &table_id in &cfg.root_tables {
+            if cfg.tables.get(table_id).is_some() {
+                self.table_data.insert(table_id, HashMap::new());
+            }
         }
     }
 
@@ -323,8 +335,10 @@ impl RuntimeState {
 
         // Re-initialize empty table storage for each table
         if let Some(ref cfg) = self.cfg_program {
-            for (table_id, _) in cfg.tables.iter() {
-                self.table_data.insert(table_id, HashMap::new());
+            for &table_id in &cfg.root_tables {
+                if cfg.tables.get(table_id).is_some() {
+                    self.table_data.insert(table_id, HashMap::new());
+                }
             }
         }
 

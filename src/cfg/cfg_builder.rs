@@ -19,6 +19,7 @@ pub struct CfgCtx {
 struct FunctionContextBuilder<'a> {
     ctx: &'a mut CfgCtx,
     function: FunctionCfg,
+    function_id: FunctionId, // Add function_id reference
     var_map: HashMap<String, VarId>,
     current_hop_id: Option<HopId>,
     current_block_id: Option<BasicBlockId>,
@@ -162,10 +163,30 @@ impl CfgBuilder {
         for &partition_id in &program.root_partitions {
             let partition_ast = &program.partitions[partition_id];
 
-            // Use the unified function builder to build partitions
-            let builder = FunctionContextBuilder::new_for_partition(ctx, partition_ast)?;
-            let function = builder.build_partition(program, partition_ast)?;
+            // First allocate an empty function to get the ID
+            let function = FunctionCfg {
+                name: partition_ast.name.clone(),
+                function_type: FunctionType::Partition,
+                implementation: FunctionImplementation::Concrete,
+                return_type: ReturnType::Type(TypeName::Int), // Partitions always return int
+                span: partition_ast.span.clone(),
+                parameters: Vec::new(),
+                local_variables: Vec::new(),
+                hops: Vec::new(),
+                blocks: Vec::new(),
+                entry_hop: None,
+                hop_order: Vec::new(),
+            };
             let cfg_function_id = ctx.program.functions.alloc(function);
+
+            // Now build with the function ID
+            let builder =
+                FunctionContextBuilder::new_for_partition(ctx, cfg_function_id, partition_ast)?;
+            let built_function = builder.build_partition(program, partition_ast)?;
+
+            // Update the allocated function with the built data
+            ctx.program.functions[cfg_function_id] = built_function;
+
             ctx.function_map
                 .insert(partition_ast.name.clone(), cfg_function_id);
             ctx.program.root_functions.push(cfg_function_id);
@@ -253,9 +274,30 @@ impl CfgBuilder {
     fn build_functions(program: &ast::Program, ctx: &mut CfgCtx) -> Result<(), String> {
         for &func_id in &program.root_functions {
             let func_ast = &program.functions[func_id];
-            let builder = FunctionContextBuilder::new_for_function(ctx, func_ast)?;
-            let function = builder.build_function(program, func_ast)?;
+
+            // First allocate an empty function to get the ID
+            let function = FunctionCfg {
+                name: func_ast.name.clone(),
+                function_type: FunctionType::Transaction, // Regular functions are transactions
+                implementation: FunctionImplementation::Concrete, // AST functions are always concrete
+                return_type: func_ast.return_type.clone(),
+                span: func_ast.span.clone(),
+                parameters: Vec::new(),
+                local_variables: Vec::new(),
+                hops: Vec::new(),
+                blocks: Vec::new(),
+                entry_hop: None,
+                hop_order: Vec::new(),
+            };
             let cfg_func_id = ctx.program.functions.alloc(function);
+
+            // Now build with the function ID
+            let builder = FunctionContextBuilder::new_for_function(ctx, cfg_func_id, func_ast)?;
+            let built_function = builder.build_function(program, func_ast)?;
+
+            // Update the allocated function with the built data
+            ctx.program.functions[cfg_func_id] = built_function;
+
             ctx.function_map.insert(func_ast.name.clone(), cfg_func_id);
             ctx.program.root_functions.push(cfg_func_id);
         }
@@ -266,6 +308,7 @@ impl CfgBuilder {
 impl<'a> FunctionContextBuilder<'a> {
     fn new_for_function(
         ctx: &'a mut CfgCtx,
+        function_id: FunctionId,
         func_ast: &ast::FunctionDeclaration,
     ) -> Result<Self, String> {
         let function = FunctionCfg {
@@ -285,6 +328,7 @@ impl<'a> FunctionContextBuilder<'a> {
         Ok(Self {
             ctx,
             function,
+            function_id,
             var_map: HashMap::new(),
             current_hop_id: None,
             current_block_id: None,
@@ -294,6 +338,7 @@ impl<'a> FunctionContextBuilder<'a> {
 
     fn new_for_partition(
         ctx: &'a mut CfgCtx,
+        function_id: FunctionId,
         partition_ast: &ast::PartitionDeclaration,
     ) -> Result<Self, String> {
         // Determine if this partition is abstract or concrete
@@ -320,6 +365,7 @@ impl<'a> FunctionContextBuilder<'a> {
         Ok(Self {
             ctx,
             function,
+            function_id,
             var_map: HashMap::new(),
             current_hop_id: None,
             current_block_id: None,
@@ -406,6 +452,7 @@ impl<'a> FunctionContextBuilder<'a> {
     ) -> Result<(), String> {
         // Create a single hop for the partition implementation
         let hop = HopCfg {
+            function_id: self.function_id,
             entry_block: None,
             blocks: Vec::new(),
             span: program.expressions[expr_id].span.clone(),
@@ -488,6 +535,7 @@ impl<'a> FunctionContextBuilder<'a> {
         hop_ast: &ast::HopBlock,
     ) -> Result<(), String> {
         let hop = HopCfg {
+            function_id: self.function_id,
             entry_block: None,
             blocks: Vec::new(),
             span: hop_ast.span.clone(),
@@ -543,6 +591,7 @@ impl<'a> FunctionContextBuilder<'a> {
 
         for i in 0..num_iterations {
             let hop = HopCfg {
+                function_id: self.function_id,
                 entry_block: None,
                 blocks: Vec::new(),
                 span: hop_ast.span.clone(),

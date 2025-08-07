@@ -2,7 +2,7 @@ use super::{
     AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
     TransferFunction,
 };
-use crate::cfg::{BasicBlock, BasicBlockId, EdgeType, FunctionCfg};
+use crate::cfg::{BasicBlock, BasicBlockId, CfgProgram, EdgeType, FunctionCfg};
 use std::collections::HashMap;
 
 use std::collections::HashSet;
@@ -132,19 +132,20 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
     }
 
     /// Run dataflow analysis on a function using fixed point algorithm
-    pub fn analyze(&self, func: &FunctionCfg) -> DataflowResults<L> {
+    pub fn analyze(&self, func: &FunctionCfg, cfg_program: &CfgProgram) -> DataflowResults<L> {
         let mut entry: HashMap<BasicBlockId, L> = HashMap::new();
         let mut exit: HashMap<BasicBlockId, L> = HashMap::new();
 
         // Initialize all blocks
-        self.initialize_blocks(func, &mut entry, &mut exit);
+        self.initialize_blocks(func, cfg_program, &mut entry, &mut exit);
 
         // Fixed point iteration
         let mut changed = true;
         while changed {
             changed = false;
 
-            for (block_id, block) in func.blocks.iter() {
+            for &block_id in &func.blocks {
+                let block = &cfg_program.blocks[block_id];
                 let (old_in, old_out) = self.get_in_out_values(&entry, &exit, block_id);
                 let new_in = self.compute_in_value(func, block, block_id, &entry, &exit);
                 let new_out = self.transfer_block(block, &new_in);
@@ -163,11 +164,13 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
     fn initialize_blocks(
         &self,
         func: &FunctionCfg,
+        cfg_program: &CfgProgram,
         entry: &mut HashMap<BasicBlockId, L>,
         exit: &mut HashMap<BasicBlockId, L>,
     ) {
-        for (block_id, block) in func.blocks.iter() {
-            let is_boundary = self.is_boundary_block(func, block, block_id);
+        for &block_id in &func.blocks {
+            let block = &cfg_program.blocks[block_id];
+            let is_boundary = self.is_boundary_block(func, cfg_program, block, block_id);
             let default_value = L::bottom().unwrap_or_else(|| self.transfer.initial_value());
 
             match self.direction {
@@ -196,6 +199,7 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
     fn is_boundary_block(
         &self,
         func: &FunctionCfg,
+        cfg_program: &CfgProgram,
         block: &BasicBlock,
         block_id: BasicBlockId,
     ) -> bool {
@@ -203,7 +207,7 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
             Direction::Forward => {
                 // Entry block for forward analysis
                 func.entry_hop
-                    .and_then(|hop_id| func.hops.get(hop_id))
+                    .and_then(|hop_id| cfg_program.hops.get(hop_id))
                     .and_then(|hop| hop.entry_block)
                     .map(|entry_block| entry_block == block_id)
                     .unwrap_or(false)

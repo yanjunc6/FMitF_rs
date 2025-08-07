@@ -20,12 +20,12 @@ pub type VarId = Id<Variable>;
 #[derive(Debug)]
 pub struct CfgProgram {
     // Arena for storing various components
-    pub tables: Arena<TableInfo>,
-    pub fields: Arena<FieldInfo>,
-    pub functions: Arena<FunctionCfg>,
+    pub tables: Arena<TableInfo>, // Never iterate this, use root_tables
+    pub fields: Arena<FieldInfo>, // Never iterate this
+    pub functions: Arena<FunctionCfg>, // Never iterate this, use root_functions
     pub variables: Arena<Variable>, // Unified: global constants, parameters, locals
-    pub hops: Arena<HopCfg>,        // All hops stored here
-    pub blocks: Arena<BasicBlock>,  // All basic blocks stored here
+    pub hops: Arena<HopCfg>,      // Never iterate this
+    pub blocks: Arena<BasicBlock>, // Never iterate this
 
     // Root collections - public for iteration
     pub root_tables: Vec<TableId>,
@@ -111,8 +111,8 @@ pub struct FunctionCfg {
     pub parameters: Vec<VarId>, // Parameters (stored in program.variables)
     pub local_variables: Vec<VarId>, // Local variables (stored in program.variables)
 
-    pub hops: Vec<HopId>,           // Vector of hop IDs (hops stored in program.hops)
-    pub blocks: Vec<BasicBlockId>,  // Vector of block IDs (blocks stored in program.blocks)
+    pub hops: Vec<HopId>, // Vector of hop IDs (hops stored in program.hops)
+    pub blocks: Vec<BasicBlockId>, // Vector of block IDs (blocks stored in program.blocks)
 
     pub entry_hop: Option<HopId>, // Set after all hops are allocated, None for abstract functions
     pub hop_order: Vec<HopId>,    // Empty for abstract functions
@@ -121,9 +121,9 @@ pub struct FunctionCfg {
 /// Hop - execution on a specific node
 #[derive(Debug)]
 pub struct HopCfg {
-    pub function_id: FunctionId,     // Reference to the function this hop belongs to
+    pub function_id: FunctionId, // Reference to the function this hop belongs to
     pub entry_block: Option<BasicBlockId>, // Set after its basic block is created
-    pub blocks: Vec<BasicBlockId>,   // Vector of block IDs (blocks stored in program.blocks)
+    pub blocks: Vec<BasicBlockId>, // Vector of block IDs (blocks stored in program.blocks)
     pub span: Span,
 }
 

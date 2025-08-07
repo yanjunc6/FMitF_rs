@@ -1,7 +1,7 @@
 //! Table modification-reference analysis for tracking table reads and writes per hop.
 //! This analysis determines which tables are read from and written to by each hop.
 
-use crate::cfg::{ControlFlowEdge, FunctionCfg, LValue, Rvalue, Statement, TableId};
+use crate::cfg::{CfgProgram, ControlFlowEdge, FunctionCfg, LValue, Rvalue, Statement, TableId};
 use crate::dataflow::{
     AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
     TransferFunction,
@@ -120,8 +120,9 @@ impl TableModRefTransfer {
 /// Returns the cumulative set of table accesses for each program point
 pub fn analyze_table_mod_ref(
     func: &FunctionCfg,
+    cfg_program: &CfgProgram,
     level: AnalysisLevel,
 ) -> DataflowResults<SetLattice<TableAccess>> {
     let analysis = DataflowAnalysis::new(level, Direction::Forward, TableModRefTransfer);
-    analysis.analyze(func)
+    analysis.analyze(func, cfg_program)
 }
