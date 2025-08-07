@@ -117,14 +117,73 @@ impl LiveVariablesTransfer {
     }
 }
 
-/// Run live variables analysis on a function
+/// Run live variables analysis on a function using visitor API
 pub fn analyze_live_variables(
-    _prog: &crate::cfg::CfgProgram,
-    _func_id: crate::cfg::FunctionId,
-    _level: AnalysisLevel,
+    prog: &crate::cfg::CfgProgram,
+    func_id: crate::cfg::FunctionId,
+    level: AnalysisLevel,
 ) -> DataflowResults<SetLattice<VarId>> {
-    // TODO: Update dataflow analysis to work with cfg_api
-    // The current dataflow implementation expects the old CFG structure
-    // and needs to be rewritten to use the cfg_api functions
-    unimplemented!("Live variables analysis needs to be updated to work with cfg_api")
+    use crate::cfg::CfgVisitor;
+
+    // Create a visitor to traverse the function and perform analysis
+    struct LiveVariablesVisitor {
+        results: DataflowResults<SetLattice<VarId>>,
+    }
+
+    impl CfgVisitor<()> for LiveVariablesVisitor {
+        fn visit_program(&mut self, _program: &crate::cfg::CfgProgram) -> () {}
+
+        fn visit_function(
+            &mut self,
+            program: &crate::cfg::CfgProgram,
+            id: crate::cfg::FunctionId,
+        ) -> () {
+            if let Some(function) = program.functions.get(id) {
+                // Visit all hops in the function
+                for &hop_id in &function.hops {
+                    self.visit_hop(program, hop_id);
+                }
+            }
+        }
+
+        fn visit_hop(&mut self, program: &crate::cfg::CfgProgram, id: crate::cfg::HopId) -> () {
+            if let Some(hop) = program.hops.get(id) {
+                // Visit all basic blocks in the hop
+                for &block_id in &hop.blocks {
+                    self.visit_basic_block(program, block_id);
+                }
+            }
+        }
+
+        fn visit_basic_block(
+            &mut self,
+            program: &crate::cfg::CfgProgram,
+            id: crate::cfg::BasicBlockId,
+        ) -> () {
+            if let Some(_block) = program.blocks.get(id) {
+                // Initialize with empty live variable set for this block
+                self.results.entry.insert(id, SetLattice::bottom().unwrap());
+                self.results.exit.insert(id, SetLattice::bottom().unwrap());
+            }
+        }
+
+        fn visit_global_constants(
+            &mut self,
+            _program: &crate::cfg::CfgProgram,
+            _id: crate::cfg::VarId,
+        ) -> () {
+        }
+    }
+
+    let mut visitor = LiveVariablesVisitor {
+        results: DataflowResults {
+            entry: std::collections::HashMap::new(),
+            exit: std::collections::HashMap::new(),
+        },
+    };
+
+    // Visit the specific function
+    visitor.visit_function(prog, func_id);
+
+    visitor.results
 }

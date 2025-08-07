@@ -10,10 +10,18 @@ void set_balance(int new_balance) {
     hop {
         Account[id: 1].balance = new_balance;
     }
+
+    hop {
+        Account[id: 2].balance = new_balance;
+    }
 }
 
 void multiply_balance(int factor) {
     hop {
         Account[id: 1].balance = Account[id: 1].balance * factor;
+    }
+
+    hop {
+        Account[id: 2].balance = Account[id: 2].balance * factor;
     }
 }

@@ -14,7 +14,7 @@
 
 use super::{
     BasicBlock, BasicBlockId, CfgProgram, Constant, FunctionCfg, FunctionId, HopCfg, HopId, LValue,
-    Operand, Rvalue, Statement, VarId, Variable
+    Operand, Rvalue, Statement, VarId, Variable,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -43,7 +43,7 @@ pub trait StmtVisitor<T> {
     fn visit_operand(&mut self, op: &Operand) -> T;
 
     fn visit_constant(&mut self, _c: &Constant) -> T;
-        
+
     fn visit_variable(&mut self, program: &CfgProgram, v: &Variable) -> T;
 }
 

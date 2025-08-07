@@ -38,18 +38,20 @@ impl SCGraphBuilder {
         };
 
         // Step 1: Create nodes for all hops in transaction functions (with multiple instances)
-        for (function_id, function) in cfg_program.functions.iter() {
-            // Only process transaction functions (skip partition functions)
-            if function.function_type == FunctionType::Transaction {
-                for &hop_id in crate::cfg::cfg_api::get_function_hops(cfg_program, function_id) {
-                    // Create multiple instances of this hop
-                    for instance in 0..self.num_instances {
-                        let node_id = SCGraphNodeId {
-                            function_id,
-                            hop_id,
-                            instance,
-                        };
-                        sc_graph.nodes.insert(node_id);
+        for &function_id in &cfg_program.root_functions {
+            if let Some(function) = cfg_program.functions.get(function_id) {
+                // Only process transaction functions (skip partition functions)
+                if function.function_type == FunctionType::Transaction {
+                    for &hop_id in &function.hops {
+                        // Create multiple instances of this hop
+                        for instance in 0..self.num_instances {
+                            let node_id = SCGraphNodeId {
+                                function_id,
+                                hop_id,
+                                instance,
+                            };
+                            sc_graph.nodes.insert(node_id);
+                        }
                     }
                 }
             }
@@ -66,37 +68,39 @@ impl SCGraphBuilder {
 
     /// Adds S-edges between sequential hops within each transaction function instance.
     fn add_sequential_edges(&self, sc_graph: &mut SCGraph, cfg_program: &CfgProgram) {
-        for (function_id, function) in cfg_program.functions.iter() {
-            // Only process transaction functions
-            if function.function_type == FunctionType::Transaction {
-                let hop_order = &function.hop_order;
+        for &function_id in &cfg_program.root_functions {
+            if let Some(function) = cfg_program.functions.get(function_id) {
+                // Only process transaction functions
+                if function.function_type == FunctionType::Transaction {
+                    let hop_order = &function.hop_order;
 
-                // Add S-edges for each instance
-                for instance in 0..self.num_instances {
-                    // Add S-edges between consecutive hops within the same instance
-                    for window in hop_order.windows(2) {
-                        if let [prev_hop_id, curr_hop_id] = window {
-                            let prev_node_id = SCGraphNodeId {
-                                function_id,
-                                hop_id: *prev_hop_id,
-                                instance,
-                            };
-                            let curr_node_id = SCGraphNodeId {
-                                function_id,
-                                hop_id: *curr_hop_id,
-                                instance,
-                            };
-
-                            // Only add edge if both hops are in the SC-Graph
-                            if sc_graph.nodes.contains(&prev_node_id)
-                                && sc_graph.nodes.contains(&curr_node_id)
-                            {
-                                let edge = super::SCGraphEdge {
-                                    source: prev_node_id,
-                                    target: curr_node_id,
-                                    edge_type: EdgeType::S,
+                    // Add S-edges for each instance
+                    for instance in 0..self.num_instances {
+                        // Add S-edges between consecutive hops within the same instance
+                        for window in hop_order.windows(2) {
+                            if let [prev_hop_id, curr_hop_id] = window {
+                                let prev_node_id = SCGraphNodeId {
+                                    function_id,
+                                    hop_id: *prev_hop_id,
+                                    instance,
                                 };
-                                sc_graph.edges.push(edge);
+                                let curr_node_id = SCGraphNodeId {
+                                    function_id,
+                                    hop_id: *curr_hop_id,
+                                    instance,
+                                };
+
+                                // Only add edge if both hops are in the SC-Graph
+                                if sc_graph.nodes.contains(&prev_node_id)
+                                    && sc_graph.nodes.contains(&curr_node_id)
+                                {
+                                    let edge = super::SCGraphEdge {
+                                        source: prev_node_id,
+                                        target: curr_node_id,
+                                        edge_type: EdgeType::S,
+                                    };
+                                    sc_graph.edges.push(edge);
+                                }
                             }
                         }
                     }
@@ -110,14 +114,16 @@ impl SCGraphBuilder {
         // Analyze table accesses for each hop using hop-level dataflow analysis
         let mut hop_table_accesses: HashMap<HopId, HashSet<TableAccess>> = HashMap::new();
 
-        for (function_id, function) in cfg_program.functions.iter() {
+        for function_id in &cfg_program.root_functions {
+            let function = &cfg_program.functions[function_id.clone()];
             // Only analyze transaction functions
             if function.function_type == FunctionType::Transaction {
                 // Run hop-level table mod-ref analysis
-                let analysis_results = analyze_table_mod_ref(function, AnalysisLevel::Hop);
+                let analysis_results =
+                    analyze_table_mod_ref(function, cfg_program, AnalysisLevel::Hop);
 
                 // Extract table accesses for each hop
-                for &hop_id in crate::cfg::cfg_api::get_function_hops(cfg_program, function_id) {
+                for &hop_id in &function.hops {
                     let hop_accesses = Self::extract_hop_table_accesses(
                         cfg_program,
                         hop_id,
@@ -143,7 +149,8 @@ impl SCGraphBuilder {
         let mut hop_accesses = HashSet::new();
 
         // Get the hop's blocks
-        for &block_id in crate::cfg::cfg_api::get_hop_blocks(prog, hop_id) {
+        let hop = &prog.hops[hop_id];
+        for &block_id in &hop.blocks {
             // For hop-level analysis, we want the exit values of each block within the hop
             if let Some(block_exit_lattice) = analysis_results.exit.get(&block_id) {
                 if let Some(access_set) = block_exit_lattice.as_set() {
@@ -167,10 +174,12 @@ impl SCGraphBuilder {
         // Get all hops with their corresponding transaction functions
         let mut hops_with_functions: Vec<(HopId, crate::cfg::FunctionId)> = Vec::new();
 
-        for (function_id, function) in cfg_program.functions.iter() {
-            if function.function_type == FunctionType::Transaction {
-                for &hop_id in crate::cfg::cfg_api::get_function_hops(cfg_program, function_id) {
-                    hops_with_functions.push((hop_id, function_id));
+        for &function_id in &cfg_program.root_functions {
+            if let Some(function) = cfg_program.functions.get(function_id) {
+                if function.function_type == FunctionType::Transaction {
+                    for &hop_id in &function.hops {
+                        hops_with_functions.push((hop_id, function_id));
+                    }
                 }
             }
         }
