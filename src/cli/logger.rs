@@ -171,6 +171,61 @@ impl Logger {
         }
     }
 
+    // Boogie output recording
+    pub fn boogie_output(&self, filename: &str, stdout: &str, stderr: &str, success: bool) {
+        if self.level.should_show(LogLevel::Verbose) {
+            println!("  Boogie file: {}", filename.bright_blue());
+            if success {
+                println!("  Status: {}", "Success".green().bold());
+            } else {
+                println!("  Status: {}", "Failed".red().bold());
+            }
+            if !stdout.trim().is_empty() {
+                println!("  Output:");
+                for line in stdout.lines() {
+                    println!("    {}", line);
+                }
+            }
+            if !stderr.trim().is_empty() {
+                println!("  Errors:");
+                for line in stderr.lines() {
+                    println!("    {}", line.red());
+                }
+            }
+        }
+    }
+
+    // Save boogie output to log (for file recording)
+    pub fn record_boogie_result(
+        &self,
+        log_writer: &mut dyn Write,
+        filename: &str,
+        stdout: &str,
+        stderr: &str,
+        success: bool,
+    ) -> std::io::Result<()> {
+        writeln!(log_writer, "Boogie file: {}", filename)?;
+        writeln!(
+            log_writer,
+            "Status: {}",
+            if success { "Success" } else { "Failed" }
+        )?;
+        if !stdout.trim().is_empty() {
+            writeln!(log_writer, "Output:")?;
+            for line in stdout.lines() {
+                writeln!(log_writer, "  {}", line)?;
+            }
+        }
+        if !stderr.trim().is_empty() {
+            writeln!(log_writer, "Errors:")?;
+            for line in stderr.lines() {
+                writeln!(log_writer, "  {}", line)?;
+            }
+        }
+        writeln!(log_writer, "")?;
+        Ok(())
+    }
+
     // Results and summaries (Normal level)
     pub fn result_summary(&self, title: &str) {
         if self.level.should_show(LogLevel::Normal) {

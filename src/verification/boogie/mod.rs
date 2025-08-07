@@ -1,7 +1,7 @@
 use std::fmt;
 mod result;
 
-pub use result::{parse_boogie_result, BoogieResult};
+pub use result::{parse_boogie_result, parse_boogie_result_quiet, BoogieFailureType, BoogieResult};
 #[derive(Debug, Clone)]
 pub struct BoogieProgram {
     pub declarations: Vec<Decl>,
@@ -197,14 +197,19 @@ impl fmt::Display for ProcedureDecl {
                 }
                 write!(f, "{}", var.0)?;
             }
-            write!(f, ";")?;
-        }
-
-        for local in &self.locals {
-            writeln!(f, "\n  var {}: {};", local.name.0, local.ty)?;
+            writeln!(f, ";")?;
         }
 
         writeln!(f, "\n{{")?;
+
+        // Local variable declarations go inside the procedure body
+        for local in &self.locals {
+            writeln!(f, "  var {}: {};", local.name.0, local.ty)?;
+        }
+        if !self.locals.is_empty() {
+            writeln!(f)?; // Add blank line after locals
+        }
+
         for block in &self.body {
             writeln!(f, "{}", block)?;
         }

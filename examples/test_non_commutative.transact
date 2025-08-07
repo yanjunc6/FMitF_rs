@@ -1,0 +1,19 @@
+partition p1(int x);
+
+table Account {
+    primary int id;
+    int balance;
+    node p1(id);
+}
+
+void set_balance(int new_balance) {
+    hop {
+        Account[id: 1].balance = new_balance;
+    }
+}
+
+void multiply_balance(int factor) {
+    hop {
+        Account[id: 1].balance = Account[id: 1].balance * factor;
+    }
+}

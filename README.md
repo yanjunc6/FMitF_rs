@@ -353,3 +353,10 @@ src/
 
 - dataflow & optimization has many TODO
 - hops for creates variable scope
+- in compilation log, record boogie output; in cli interface, at commutativity stage, output how many edges elimated.
+- in verification, map table to a map: primary key -> field, if multiple pks, use map[map[]], if multiple fields, create multiple maps
+- in verification, not havoc twice, each interleaving has same starting point (same havoc)
+- two example: examples/test_commutative.transact and examples/test_non_commutative.transact
+- use pretty to handle dot output, no IO in verification module.
+- too many similar code in verifition/mod.rs and cli/verfication.rs, simplify them.
+- Use /quiet flag: Then if there is output, must have error. Then, if error is assertion failed, it is ok for commutativity (not ok for partition). If error is not this, copy the error massage and this is not accpectable anytime. If no output, everything works fine, prove is finished. In that implementation, we no longer needs to parse the output in different way, it is easier to parse the boogie output.
