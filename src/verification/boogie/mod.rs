@@ -1,7 +1,56 @@
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 mod result;
 
 pub use result::{parse_boogie_result, parse_boogie_result_quiet, BoogieFailureType, BoogieResult};
+
+/// Helper structure to track variables used in Boogie procedures
+/// to avoid redeclaration errors
+#[derive(Debug)]
+pub struct VariableTracker {
+    /// Set of variable names already declared
+    declared_vars: HashSet<String>,
+    /// Map from variable name to its type
+    var_types: HashMap<String, Ty>,
+}
+
+impl VariableTracker {
+    pub fn new() -> Self {
+        Self {
+            declared_vars: HashSet::new(),
+            var_types: HashMap::new(),
+        }
+    }
+
+    /// Add a variable to the tracker, returning true if it was newly added
+    pub fn add_variable(&mut self, name: String, ty: Ty) -> bool {
+        if self.declared_vars.contains(&name) {
+            false // Already declared
+        } else {
+            self.declared_vars.insert(name.clone());
+            self.var_types.insert(name, ty);
+            true // Newly added
+        }
+    }
+
+    /// Check if a variable has been declared
+    pub fn is_declared(&self, name: &str) -> bool {
+        self.declared_vars.contains(name)
+    }
+
+    /// Get all variable declarations in order
+    pub fn get_variable_declarations(&self) -> Vec<VarDecl> {
+        let mut vars: Vec<_> = self.var_types.iter().collect();
+        vars.sort_by_key(|(name, _)| name.as_str());
+        vars.into_iter()
+            .map(|(name, ty)| VarDecl {
+                name: Ident(name.clone()),
+                ty: ty.clone(),
+            })
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BoogieProgram {
     pub declarations: Vec<Decl>,
@@ -56,6 +105,25 @@ pub struct ProcedureDecl {
     pub locals: Vec<VarDecl>,
     pub modifies: Vec<Ident>,
     pub body: Vec<Block>,
+}
+
+impl ProcedureDecl {
+    /// Create a new procedure with variable tracking to avoid redeclarations
+    pub fn with_variable_tracking(
+        name: Ident,
+        params: Vec<VarDecl>,
+        modifies: Vec<Ident>,
+        body: Vec<Block>,
+        var_tracker: VariableTracker,
+    ) -> Self {
+        Self {
+            name,
+            params,
+            locals: var_tracker.get_variable_declarations(),
+            modifies,
+            body,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
