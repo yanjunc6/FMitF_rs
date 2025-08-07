@@ -1,3 +1,28 @@
+
+// src/cli/compiler.rs
+
+// Clean, modular compiler pipeline for FMitF. No function >20 lines. All error handling explicit.
+
+use super::{Cli, Logger, OutputManager};
+use crate::{
+    ast::parse_and_analyze,
+    cfg::CfgBuilder,
+    sc_graph::SCGraphBuilder,
+    verification::{partition_verification::PartitionVerificationResult, VerificationManager},
+    AstProgram, CfgProgram,
+};
+use std::time::Instant;
+
+#[derive(Debug, Default)]
+pub struct CompilationResult {
+    pub ast_program: AstProgram,
+    pub cfg_program: CfgProgram,
+    pub sc_graph: crate::sc_graph::SCGraph,
+    pub verification_result: Option<PartitionVerificationResult>,
+    pub success: bool,
+    pub compilation_time_ms: u64,
+}
+
 #[derive(Debug)]
 pub struct CompilationStats {
     pub functions: usize,
@@ -40,30 +65,6 @@ impl CompilationResult {
         }
     }
 }
-// src/cli/compiler.rs
-
-// Clean, modular compiler pipeline for FMitF. No function >20 lines. All error handling explicit.
-
-use super::{Cli, Logger, OutputManager};
-use crate::{
-    ast::parse_and_analyze,
-    cfg::CfgBuilder,
-    sc_graph::SCGraphBuilder,
-    verification::{CommutativityVerificationResult, PartitionVerificationResult},
-    AstProgram, CfgProgram,
-};
-use std::time::Instant;
-
-#[derive(Debug)]
-pub struct CompilationResult {
-    pub ast_program: AstProgram,
-    pub cfg_program: CfgProgram,
-    pub sc_graph: crate::sc_graph::SCGraph,
-    pub partition_verification_result: Option<PartitionVerificationResult>,
-    pub commutativity_verification_result: Option<CommutativityVerificationResult>,
-    pub success: bool,
-    pub compilation_time_ms: u64,
-}
 
 pub struct Compiler {
     logger: Logger,
@@ -83,46 +84,45 @@ impl Compiler {
         }
     }
 
-    pub fn compile(&mut self, source_code: String, cli: &Cli) -> Result<CompilationResult, String> {
+    pub fn compile(&mut self, source_code: &str, cli: &Cli) -> Result<CompilationResult, String> {
         let start = Instant::now();
         self.logger.compilation_start(&cli.input);
-        let ast = match self.stage_ast(&source_code) {
+        let ast = match self.stage_ast(source_code) {
             Ok(ast) => ast,
-            Err(_) => return Ok(self.fail_result(start, None, None, None, None, false)),
+            Err(_) => {
+                return Ok(self.fail_result(start, None, None, None, None, false));
+            }
         };
         let cfg = match self.stage_cfg(&ast) {
             Ok(cfg) => cfg,
-            Err(_) => return Ok(self.fail_result(start, Some(ast), None, None, None, false)),
+            Err(_) => {
+                return Ok(self.fail_result(start, Some(ast), None, None, None, false));
+            }
         };
         let scg = match self.stage_scgraph(&cfg, cli) {
             Ok(scg) => scg,
-            Err(_) => return Ok(self.fail_result(start, Some(ast), Some(cfg), None, None, false)),
-        };
-        let part = match self.stage_partition_verification(&cfg, cli) {
-            Ok(part) => part,
             Err(_) => {
-                return Ok(self.fail_result(start, Some(ast), Some(cfg), Some(scg), None, false))
+                return Ok(self.fail_result(start, Some(ast), Some(cfg), None, None, false));
             }
         };
-        let comm = match self.stage_commutativity_verification(&cfg, &scg, cli) {
-            Ok(comm) => comm,
+        let verification_result = match self.run_verification(&cfg, &scg, cli) {
+            Ok(result) => Some(result),
             Err(_) => {
                 return Ok(self.fail_result(
                     start,
                     Some(ast),
                     Some(cfg),
                     Some(scg),
-                    Some(part),
+                    None,
                     false,
-                ))
+                ));
             }
         };
         Ok(CompilationResult {
             ast_program: ast,
             cfg_program: cfg,
             sc_graph: scg,
-            partition_verification_result: Some(part),
-            commutativity_verification_result: Some(comm),
+            verification_result,
             success: true,
             compilation_time_ms: start.elapsed().as_millis() as u64,
         })
@@ -134,50 +134,63 @@ impl Compiler {
         ast: Option<AstProgram>,
         cfg: Option<CfgProgram>,
         scg: Option<crate::sc_graph::SCGraph>,
-        part: Option<PartitionVerificationResult>,
+        verification_result: Option<PartitionVerificationResult>,
         success: bool,
     ) -> CompilationResult {
         CompilationResult {
             ast_program: ast.unwrap_or_default(),
             cfg_program: cfg.unwrap_or_default(),
             sc_graph: scg.unwrap_or_default(),
-            partition_verification_result: part,
-            commutativity_verification_result: None,
+            verification_result,
             success,
             compilation_time_ms: start.elapsed().as_millis() as u64,
         }
     }
 
+    fn run_verification(
+        &mut self,
+        cfg_program: &CfgProgram,
+        sc_graph: &crate::sc_graph::SCGraph,
+        cli: &Cli,
+    ) -> Result<PartitionVerificationResult, String> {
+        let mut verification_manager = VerificationManager::new();
+        let output_dir = cli.get_output_dir();
+        
+        Ok(verification_manager.run_partition_verification(
+            cfg_program,
+            sc_graph,
+            Some(output_dir.to_str().unwrap_or("tmp")),
+        ))
+    }
+
     fn stage_ast(&mut self, src: &str) -> Result<AstProgram, String> {
-        self.logger.stage_start(1, 6, "Frontend Analysis");
-        let res = parse_and_analyze(src);
-        match res {
+        self.logger.stage_start(1, 5, "Frontend Analysis");
+        match parse_and_analyze(src) {
             Ok(ast) => {
                 self.logger.stage_success();
                 Ok(ast)
             }
             Err(errors) => {
                 self.logger.stage_error(errors.len());
-                for e in &errors {
-                    super::print_spanned_error(e, src);
+                for error in &errors {
+                    super::print_spanned_error(error, src);
                 }
-                self.logger.stage_failed("AST stage failed");
-                Err("AST failed".to_string())
+                Err("AST stage failed".to_string())
             }
         }
     }
 
     fn stage_cfg(&mut self, ast: &AstProgram) -> Result<CfgProgram, String> {
-        self.logger.stage_start(2, 6, "Building Control Flow Graph");
-        let res = CfgBuilder::build_from_program(ast).map(|ctx| ctx.program);
-        match res {
-            Ok(cfg) => {
+        self.logger
+            .stage_start(2, 5, "Building Control Flow Graph");
+        match CfgBuilder::build_from_program(ast) {
+            Ok(ctx) => {
                 self.logger.stage_success();
-                Ok(cfg)
+                Ok(ctx.program)
             }
             Err(e) => {
-                self.logger.stage_failed(&format!("CFG failed: {}", e));
-                Err("CFG failed".to_string())
+                self.logger.stage_failed(&e.to_string());
+                Err(format!("CFG building failed: {}", e))
             }
         }
     }
@@ -188,119 +201,11 @@ impl Compiler {
         cli: &Cli,
     ) -> Result<crate::sc_graph::SCGraph, String> {
         self.logger
-            .stage_start(3, 6, "Building Serializability Conflict Graph");
+            .stage_start(4, 5, "Building Serializability Conflict Graph");
         let builder = SCGraphBuilder::new(cli.instances);
-        let scg = builder.build(cfg);
+        let graph = builder.build(cfg);
         self.logger.stage_success();
-        Ok(scg)
-    }
-
-    fn stage_partition_verification(
-        &mut self,
-        cfg: &CfgProgram,
-        cli: &Cli,
-    ) -> Result<PartitionVerificationResult, String> {
-        self.logger.stage_start(4, 6, "Partition Verification");
-        let output_dir = cli.get_output_dir();
-        let mut verification_cli = super::VerificationCli::new();
-        let res = verification_cli.run_partition_verification(cfg, &output_dir);
-        let log_path = output_dir.join("compilation.log");
-        let _ = verification_cli.record_boogie_results_to_log(&[], &log_path);
-        match res {
-            Ok(r) => {
-                self.logger.stage_success();
-                Ok(r)
-            }
-            Err(e) => {
-                self.logger.stage_failed(&e);
-                Err("Partition verification failed".to_string())
-            }
-        }
-    }
-
-    fn stage_commutativity_verification(
-        &mut self,
-        cfg: &CfgProgram,
-        scg: &crate::sc_graph::SCGraph,
-        cli: &Cli,
-    ) -> Result<CommutativityVerificationResult, String> {
-        self.logger.stage_start(5, 6, "Commutativity Verification");
-        let output_dir = cli.get_output_dir();
-        let mut verification_cli = super::VerificationCli::new();
-        let mut scg_clone = scg.clone();
-        let res = verification_cli.run_commutativity_verification(
-            cfg,
-            &mut scg_clone,
-            Some(output_dir.to_str().unwrap_or("tmp")),
-        );
-        let mut boogie_file_results = Vec::new();
-        let mut generation_errors = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(output_dir.join("boogie")) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().map(|e| e == "bpl").unwrap_or(false) {
-                    let filename = path.file_name().unwrap().to_string_lossy().to_string();
-                    let output = std::process::Command::new("boogie").arg(&path).output();
-                    match output {
-                        Ok(output) => {
-                            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                            let mut errors = Vec::new();
-                            let mut is_generation_error = false;
-                            for line in stdout.lines().chain(stderr.lines()) {
-                                if line.contains("type checking errors")
-                                    || line.contains("syntax error")
-                                    || line.contains("wrong type")
-                                {
-                                    is_generation_error = true;
-                                    errors.push(line.to_string());
-                                }
-                            }
-                            if is_generation_error {
-                                generation_errors.push(crate::verification::errors::VerificationError::BoogieGenerationError {
-                                    function_name: filename.clone(),
-                                    message: errors.join("\n"),
-                                });
-                            }
-                            boogie_file_results.push(super::BoogieFileResult {
-                                filename,
-                                success: !is_generation_error,
-                                verified_procedures: 0,
-                                errors,
-                                stdout,
-                                stderr,
-                            });
-                        }
-                        Err(e) => {
-                            boogie_file_results.push(super::BoogieFileResult {
-                                filename,
-                                success: false,
-                                verified_procedures: 0,
-                                errors: vec![format!("Failed to run Boogie: {}", e)],
-                                stdout: String::new(),
-                                stderr: String::new(),
-                            });
-                        }
-                    }
-                }
-            }
-        }
-        let log_path = output_dir.join("compilation.log");
-        let _ = verification_cli.record_boogie_results_to_log(&boogie_file_results, &log_path);
-        if !generation_errors.is_empty() {
-            self.logger.stage_failed("Boogie/type errors detected");
-            return Err("Boogie/type errors detected".to_string());
-        }
-        match res {
-            Ok(r) => {
-                self.logger.stage_success();
-                Ok(r)
-            }
-            Err(e) => {
-                self.logger.stage_failed(&e);
-                Err("Commutativity verification failed".to_string())
-            }
-        }
+        Ok(graph)
     }
 
     pub fn handle_output(&self, result: &mut CompilationResult, cli: &Cli) -> Result<(), String> {
