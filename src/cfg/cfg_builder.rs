@@ -1126,8 +1126,62 @@ impl<'a> FunctionContextBuilder<'a> {
                 }
                 Ok(Operand::Var(temp_var))
             }
+            ast::ExpressionKind::TableFieldAccess {
+                table_name: _,
+                pk_fields: _,
+                pk_exprs,
+                field_name: _,
+                resolved_table,
+                resolved_pk_fields: _,
+                resolved_field,
+                resolved_type: _,
+            } => {
+                // Create a temporary variable to hold the table access result
+                let temp_var = self.create_temp_var();
+
+                if let (Some(table_ast_id), Some(field_ast_id)) = (resolved_table, resolved_field) {
+                    let table_ast = &program.tables[*table_ast_id];
+                    let field_ast = &program.fields[*field_ast_id];
+
+                    let table_id = *self
+                        .ctx
+                        .table_map
+                        .get(&table_ast.name)
+                        .ok_or("Table not found in CFG")?;
+                    let field_id = *self
+                        .ctx
+                        .field_map
+                        .get(&field_ast.field_name)
+                        .ok_or("Field not found in CFG")?;
+
+                    // Build primary key expressions
+                    let mut pk_values = Vec::new();
+                    for pk_expr in pk_exprs {
+                        pk_values.push(self.build_expression(program, *pk_expr)?);
+                    }
+
+                    // Create table access rvalue
+                    let rvalue = Rvalue::TableAccess {
+                        table: table_id,
+                        pk_fields: vec![], // We don't need the field IDs for the rvalue
+                        pk_values,
+                        field: field_id,
+                    };
+
+                    // Generate assignment statement
+                    if let Some(block_id) = self.current_block_id {
+                        let block = &mut self.function.blocks[block_id];
+                        block.statements.push(Statement::Assign {
+                            lvalue: LValue::Variable { var: temp_var },
+                            rvalue,
+                            span: program.expressions[expr_id].span.clone(),
+                        });
+                    }
+                }
+                Ok(Operand::Var(temp_var))
+            }
             _ => {
-                // For other expression types (table access, etc.), return a default value for now
+                // For other expression types, return a default value for now
                 // This can be expanded later to handle more complex expressions
                 Ok(Operand::Const(Constant::Int(0)))
             }

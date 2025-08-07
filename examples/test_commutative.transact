@@ -1,0 +1,19 @@
+partition p1(int x);
+
+table Account {
+    primary int id;
+    int balance;
+    node p1(id);
+}
+
+void deposit_money(int amount) {
+    hop {
+        Account[id: 1].balance = Account[id: 1].balance + amount;
+    }
+}
+
+void withdraw_money(int amount) {
+    hop {
+        Account[id: 1].balance = Account[id: 1].balance - amount;
+    }
+}

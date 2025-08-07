@@ -3,8 +3,11 @@
 
 use super::{Cli, Logger, OutputManager};
 use crate::{
-    ast::parse_and_analyze, cfg::CfgBuilder, sc_graph::SCGraphBuilder,
-    verification::PartitionVerificationResult, AstProgram, CfgProgram,
+    ast::parse_and_analyze,
+    cfg::CfgBuilder,
+    sc_graph::SCGraphBuilder,
+    verification::{CommutativityVerificationResult, PartitionVerificationResult},
+    AstProgram, CfgProgram,
 };
 
 /// Compilation result containing all intermediate products
@@ -13,7 +16,8 @@ pub struct CompilationResult {
     pub ast_program: AstProgram,
     pub cfg_program: CfgProgram,
     pub sc_graph: crate::sc_graph::SCGraph,
-    pub verification_result: Option<PartitionVerificationResult>,
+    pub partition_verification_result: Option<PartitionVerificationResult>,
+    pub commutativity_verification_result: Option<CommutativityVerificationResult>,
     pub success: bool,
     pub compilation_time_ms: u64,
 }
@@ -85,12 +89,13 @@ impl Compiler {
         let mut ast_program: Option<AstProgram> = None;
         let mut cfg_program: Option<CfgProgram> = None;
         let mut sc_graph: Option<crate::sc_graph::SCGraph> = None;
-        let mut verification_result: Option<PartitionVerificationResult> = None;
+        let mut partition_verification_result: Option<PartitionVerificationResult> = None;
+        let mut commutativity_verification_result: Option<CommutativityVerificationResult> = None;
         let mut compilation_success = true;
         let mut error_stage = None;
 
         // Stage 1: AST
-        self.logger.stage_start(1, 5, "Frontend Analysis");
+        self.logger.stage_start(1, 6, "Frontend Analysis");
         match self.compile_ast(source_code.clone()) {
             Ok(ast) => {
                 self.logger.stage_success();
@@ -105,7 +110,7 @@ impl Compiler {
 
         // Stage 2: CFG (only if AST succeeded)
         if let Some(ref ast) = ast_program {
-            self.logger.stage_start(2, 5, "Building Control Flow Graph");
+            self.logger.stage_start(2, 6, "Building Control Flow Graph");
             match self.compile_cfg(ast) {
                 Ok(cfg) => {
                     self.logger.stage_success();
@@ -121,24 +126,24 @@ impl Compiler {
             }
         } else {
             self.logger
-                .stage_skipped_due_to_error(2, 5, "Building Control Flow Graph");
+                .stage_skipped_due_to_error(2, 6, "Building Control Flow Graph");
         }
 
         // Stage 3: Optimization (skipped for now)
         if cfg_program.is_some() && !cli.no_optimize {
             self.logger
-                .stage_start(3, 5, "Optimizing Control Flow Graph");
+                .stage_start(3, 6, "Optimizing Control Flow Graph");
             self.logger
                 .stage_skipped("optimization not yet implemented");
         } else if cfg_program.is_none() {
             self.logger
-                .stage_skipped_due_to_error(3, 5, "Optimizing Control Flow Graph");
+                .stage_skipped_due_to_error(3, 6, "Optimizing Control Flow Graph");
         }
 
         // Stage 4: SC-Graph (only if CFG succeeded)
         if let Some(ref cfg) = cfg_program {
             self.logger
-                .stage_start(4, 5, "Building Serializability Conflict Graph");
+                .stage_start(4, 6, "Building Serializability Conflict Graph");
             match self.compile_scgraph(cfg, cli) {
                 Ok(graph) => {
                     self.logger.stage_success();
@@ -154,16 +159,16 @@ impl Compiler {
             }
         } else {
             self.logger
-                .stage_skipped_due_to_error(4, 5, "Building Serializability Conflict Graph");
+                .stage_skipped_due_to_error(4, 6, "Building Serializability Conflict Graph");
         }
 
         // Stage 5: Formal Verification (only if CFG succeeded)
         if let Some(ref cfg) = cfg_program {
-            self.logger.stage_start(5, 5, "Partition Verification");
+            self.logger.stage_start(5, 6, "Partition Verification");
             match self.run_partition_verification(cfg, cli) {
                 Ok(result) => {
                     self.logger.stage_success();
-                    verification_result = Some(result);
+                    partition_verification_result = Some(result);
                 }
                 Err(err) => {
                     compilation_success = false;
@@ -175,7 +180,42 @@ impl Compiler {
             }
         } else {
             self.logger
-                .stage_skipped_due_to_error(5, 5, "Partition Verification");
+                .stage_skipped_due_to_error(5, 6, "Partition Verification");
+        }
+
+        // Stage 6: Commutativity Verification (only if CFG and SC-graph succeeded)
+        if let (Some(ref cfg), Some(ref mut sc_graph)) = (&cfg_program, &mut sc_graph) {
+            self.logger.stage_start(6, 6, "Commutativity Verification");
+
+            // Save the original SC-graph before modification
+            let original_sc_graph = sc_graph.clone();
+
+            match self.run_commutativity_verification(cfg, sc_graph, cli) {
+                Ok(result) => {
+                    // Log C-edge elimination results
+                    if result.c_edges_eliminated > 0 || result.c_edges_kept > 0 {
+                        self.logger.detail(&format!(
+                            "{} C-edge(s) eliminated, {} C-edge(s) kept",
+                            result.c_edges_eliminated, result.c_edges_kept
+                        ));
+                    }
+                    self.logger.stage_success();
+                    commutativity_verification_result = Some(result);
+
+                    // Restore original SC-graph for output (so original shows C-edges before elimination)
+                    *sc_graph = original_sc_graph;
+                }
+                Err(err) => {
+                    compilation_success = false;
+                    if error_stage.is_none() {
+                        error_stage = Some(6);
+                    }
+                    self.logger.stage_failed(&err);
+                }
+            }
+        } else {
+            self.logger
+                .stage_skipped_due_to_error(6, 6, "Commutativity Verification");
         }
 
         let compilation_time = start_time.elapsed().as_millis() as u64;
@@ -185,7 +225,8 @@ impl Compiler {
             ast_program: ast_program.unwrap_or_default(),
             cfg_program: cfg_program.unwrap_or_default(),
             sc_graph: sc_graph.unwrap_or_default(),
-            verification_result,
+            partition_verification_result,
+            commutativity_verification_result,
             success: compilation_success,
             compilation_time_ms: compilation_time,
         };
@@ -227,6 +268,7 @@ impl Compiler {
         Ok(builder.build(cfg_program))
     }
 
+    /// Run partition soundness verification across CFG functions
     fn run_partition_verification(
         &mut self,
         cfg_program: &CfgProgram,
@@ -236,7 +278,36 @@ impl Compiler {
 
         // Use our new verification CLI interface
         let mut verification_cli = super::VerificationCli::new();
-        verification_cli.run_partition_verification(cfg_program, &output_dir)
+        let result = verification_cli.run_partition_verification(cfg_program, &output_dir)?;
+
+        // Record Boogie results to compilation log if available
+        let log_path = output_dir.join("compilation.log");
+        if let Err(e) = verification_cli.record_boogie_results_to_log(&[], &log_path) {
+            self.logger
+                .warn(&format!("Failed to record Boogie results: {}", e));
+        }
+
+        Ok(result)
+    }
+
+    fn run_commutativity_verification(
+        &mut self,
+        cfg_program: &CfgProgram,
+        sc_graph: &mut crate::sc_graph::SCGraph,
+        cli: &Cli,
+    ) -> Result<CommutativityVerificationResult, String> {
+        let output_dir = cli.get_output_dir();
+
+        // Use our new verification CLI interface
+        let mut verification_cli = super::VerificationCli::new();
+        let result = verification_cli.run_commutativity_verification(
+            cfg_program,
+            sc_graph,
+            Some(output_dir.to_str().unwrap_or("tmp")),
+        )?;
+
+        // Note: Boogie results will be logged later in handle_output() after the main log is written
+        Ok(result)
     }
 
     /// Handle output based on the CLI configuration
@@ -246,6 +317,37 @@ impl Compiler {
 
         // Always write to directory with all artifacts
         output_manager.write_directory_output(result, &output_dir)?;
+
+        // Append Boogie results to the compilation log (after the main log is written)
+        if let Some(ref comm_result) = result.commutativity_verification_result {
+            if !comm_result.boogie_results.is_empty() {
+                let boogie_file_results: Vec<super::BoogieFileResult> = comm_result
+                    .boogie_results
+                    .iter()
+                    .map(|(filename, boogie_result)| super::BoogieFileResult {
+                        filename: filename.clone(),
+                        success: boogie_result.success,
+                        verified_procedures: boogie_result.verified_procedures,
+                        errors: boogie_result.errors.clone(),
+                        stdout: format!(
+                            "Verified procedures: {}, Assertion failures: {}, Runtime: {}ms",
+                            boogie_result.verified_procedures,
+                            boogie_result.assertion_failures,
+                            boogie_result.runtime_ms
+                        ),
+                        stderr: boogie_result.errors.join("\n"),
+                    })
+                    .collect();
+
+                let log_path = output_dir.join("compilation.log");
+                let verification_cli = super::VerificationCli::new();
+                if let Err(e) =
+                    verification_cli.record_boogie_results_to_log(&boogie_file_results, &log_path)
+                {
+                    eprintln!("Warning: Failed to record Boogie results: {}", e);
+                }
+            }
+        }
 
         Ok(())
     }

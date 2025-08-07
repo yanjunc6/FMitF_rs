@@ -47,7 +47,7 @@ pub struct SCGraphEdge {
 /// Conflicting table accesses occur when:
 /// - One hop reads and another writes the same table, OR
 /// - Both hops write to the same table
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SCGraph {
     /// Set of all node IDs that are nodes in the SC-Graph.
     pub nodes: HashSet<SCGraphNodeId>,
