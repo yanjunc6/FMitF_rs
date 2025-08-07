@@ -1,3 +1,49 @@
+impl CommutativityUnit {
+    /// Recursively build nested MapStore for multiple primary keys
+    fn nested_map_store(
+        &self,
+        map: Expr,
+        pk_values: &Vec<cfg::Operand>,
+        value: Expr,
+        cfg_program: &CfgProgram,
+        is_slice_a: bool,
+    ) -> Expr {
+        if pk_values.is_empty() {
+            value
+        } else {
+            let mut map_expr = map;
+            // For each pk, nest the MapStore
+            for pk in pk_values.iter().rev() {
+                let idx_expr = self.operand_to_boogie_expr(cfg_program, pk, is_slice_a);
+                map_expr = Expr::MapStore {
+                    map: Box::new(map_expr),
+                    index: Box::new(idx_expr),
+                    val: Box::new(value.clone()),
+                };
+            }
+            map_expr
+        }
+    }
+
+    /// Recursively build nested MapSelect for multiple primary keys
+    fn nested_map_select(
+        &self,
+        map: Expr,
+        pk_values: &Vec<cfg::Operand>,
+        cfg_program: &CfgProgram,
+        is_slice_a: bool,
+    ) -> Expr {
+        let mut expr = map;
+        for pk in pk_values {
+            let idx_expr = self.operand_to_boogie_expr(cfg_program, pk, is_slice_a);
+            expr = Expr::MapSelect {
+                map: Box::new(expr),
+                index: Box::new(idx_expr),
+            };
+        }
+        expr
+    }
+}
 use super::{boogie::*, Property, VerificationUnit};
 use crate::cfg::{self, CfgProgram, HopId};
 
@@ -702,42 +748,37 @@ impl CommutativityUnit {
                         pk_values,
                         field,
                     } => {
-                        // Generate table field assignment: table_field[pk] := rvalue
+                        // Table field assignment: table_field[pk1, pk2, ...] := rvalue
                         let table_info = &cfg_program.tables[*table];
                         let field_info = &cfg_program.fields[*field];
                         let map_name = format!("{}_{}", table_info.name, field_info.name);
-
-                        // For simplicity, assume single primary key value
-                        let pk_expr = if let Some(first_pk) = pk_values.first() {
-                            self.operand_to_boogie_expr(cfg_program, first_pk, is_slice_a)
-                        } else {
-                            Expr::Const(Constant::Int(1)) // Default key
-                        };
-
+                        let map_var = Expr::Var(Ident(map_name.clone()));
                         let rvalue_expr =
-                            self.rvalue_to_boogie_expr(cfg_program, rvalue, is_slice_a);
-
-                        // Generate: map_name[pk_expr] := rvalue_expr;
-                        let map_var = Expr::Var(Ident(map_name));
-                        let map_store = Expr::MapStore {
-                            map: Box::new(map_var.clone()),
-                            index: Box::new(pk_expr),
-                            val: Box::new(rvalue_expr),
-                        };
-
-                        stmts.push(Stmt::Assign(map_var, map_store));
+                            self.rvalue_to_boogie_expr(cfg_program, rvalue, is_slice_a, false);
+                        // Recursively build nested MapStore for all pk_values
+                        let map_store = self.nested_map_store(
+                            map_var,
+                            pk_values,
+                            rvalue_expr,
+                            cfg_program,
+                            is_slice_a,
+                        );
+                        stmts.push(Stmt::Assign(Expr::Var(Ident(map_name)), map_store));
                     }
                     cfg::LValue::Variable { var } => {
-                        // Variable assignment
+                        // Variable assignment: check if variable is a map or scalar
                         let var_info = &cfg_program.variables[*var];
                         let var_name = var_info.name.clone();
+                        let var_ty = &var_info.ty;
+                        let want_map = matches!(
+                            var_ty,
+                            cfg::TypeName::Table(_) | cfg::TypeName::Array { .. }
+                        );
                         let rvalue_expr =
-                            self.rvalue_to_boogie_expr(cfg_program, rvalue, is_slice_a);
-
+                            self.rvalue_to_boogie_expr(cfg_program, rvalue, is_slice_a, want_map);
                         stmts.push(Stmt::Assign(Expr::Var(Ident(var_name)), rvalue_expr));
                     }
                     cfg::LValue::ArrayElement { .. } => {
-                        // Array element assignment (simplified)
                         stmts.push(Stmt::Comment(
                             "Array assignment not yet implemented".to_string(),
                         ));
@@ -753,6 +794,7 @@ impl CommutativityUnit {
         cfg_program: &CfgProgram,
         rvalue: &cfg::Rvalue,
         is_slice_a: bool,
+        want_map: bool,
     ) -> Expr {
         match rvalue {
             cfg::Rvalue::Use(operand) => {
@@ -764,27 +806,26 @@ impl CommutativityUnit {
                 field,
                 ..
             } => {
-                // Table field access: table_field[pk]
                 let table_info = &cfg_program.tables[*table];
                 let field_info = &cfg_program.fields[*field];
                 let map_name = format!("{}_{}", table_info.name, field_info.name);
-
-                let pk_expr = if let Some(first_pk) = pk_values.first() {
-                    self.operand_to_boogie_expr(cfg_program, first_pk, is_slice_a)
+                if want_map {
+                    // Return the whole map variable
+                    Expr::Var(Ident(map_name))
                 } else {
-                    Expr::Const(Constant::Int(1)) // Default key
-                };
-
-                Expr::MapSelect {
-                    map: Box::new(Expr::Var(Ident(map_name))),
-                    index: Box::new(pk_expr),
+                    // Return a scalar (nested MapSelect for all pk_values)
+                    self.nested_map_select(
+                        Expr::Var(Ident(map_name)),
+                        pk_values,
+                        cfg_program,
+                        is_slice_a,
+                    )
                 }
             }
             cfg::Rvalue::BinaryOp { op, left, right } => {
                 let left_expr = self.operand_to_boogie_expr(cfg_program, left, is_slice_a);
                 let right_expr = self.operand_to_boogie_expr(cfg_program, right, is_slice_a);
                 let boogie_op = self.binary_op_to_boogie(op);
-
                 Expr::Binary {
                     op: boogie_op,
                     l: Box::new(left_expr),
@@ -794,16 +835,12 @@ impl CommutativityUnit {
             cfg::Rvalue::UnaryOp { op, operand } => {
                 let operand_expr = self.operand_to_boogie_expr(cfg_program, operand, is_slice_a);
                 let boogie_op = self.unary_op_to_boogie(op);
-
                 Expr::Unary {
                     op: boogie_op,
                     e: Box::new(operand_expr),
                 }
             }
-            cfg::Rvalue::ArrayAccess { .. } => {
-                // Array access (simplified)
-                Expr::Const(Constant::Int(0))
-            }
+            cfg::Rvalue::ArrayAccess { .. } => Expr::Const(Constant::Int(0)),
         }
     }
 
