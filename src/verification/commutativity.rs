@@ -223,16 +223,14 @@ impl CommutativityUnit {
         proc_name: &str,
         declarations: &mut Vec<Decl>,
     ) {
-        let mut locals = Vec::new();
+        let mut var_tracker = VariableTracker::new();
         let mut blocks = Vec::new();
 
         // Parameters: No procedure parameters - they will be local variables that are havoc'd
         let params = Vec::new();
-        let function_a = &cfg_program.functions[self.function_a];
-        let function_b = &cfg_program.functions[self.function_b];
 
-        // Generate local variables for outputs
-        self.add_output_variables(cfg_program, &mut locals);
+        // Generate local variables for outputs using the tracker
+        self.add_output_variables(cfg_program, &mut var_tracker);
 
         // Generate modifies clause for non-primary table fields only
         let mut modifies = Vec::new();
@@ -246,22 +244,23 @@ impl CommutativityUnit {
             }
         }
 
-        // Generate procedure body
-        self.generate_procedure_body(cfg_program, interleaving, &mut blocks, &mut locals);
+        // Generate procedure body (this will add variables to tracker)
+        self.generate_procedure_body(cfg_program, interleaving, &mut blocks, &mut var_tracker);
 
-        let procedure = ProcedureDecl {
-            name: Ident(proc_name.to_string()),
+        // Create procedure using variable tracking
+        let procedure = ProcedureDecl::with_variable_tracking(
+            Ident(proc_name.to_string()),
             params,
-            locals,
             modifies,
-            body: blocks,
-        };
+            blocks,
+            var_tracker,
+        );
 
         declarations.push(Decl::Procedure(procedure));
     }
 
     /// Add local variables for capturing output states
-    fn add_output_variables(&self, cfg_program: &CfgProgram, locals: &mut Vec<VarDecl>) {
+    fn add_output_variables(&self, cfg_program: &CfgProgram, var_tracker: &mut VariableTracker) {
         // Add parameter variables from both functions as local variables
         let function_a_cfg = &cfg_program.functions[self.function_a];
         let function_b_cfg = &cfg_program.functions[self.function_b];
@@ -269,19 +268,36 @@ impl CommutativityUnit {
         // Add parameters from function A with 'a_' prefix
         for param_id in &function_a_cfg.parameters {
             let param = &cfg_program.variables[*param_id];
-            locals.push(VarDecl {
-                name: Ident(format!("a_{}", param.name)),
-                ty: self.type_name_to_boogie(&param.ty),
-            });
+            var_tracker.add_variable(
+                format!("a_{}", param.name),
+                self.type_name_to_boogie(&param.ty),
+            );
         }
 
         // Add parameters from function B with 'b_' prefix
         for param_id in &function_b_cfg.parameters {
             let param = &cfg_program.variables[*param_id];
-            locals.push(VarDecl {
-                name: Ident(format!("b_{}", param.name)),
-                ty: self.type_name_to_boogie(&param.ty),
-            });
+            var_tracker.add_variable(
+                format!("b_{}", param.name),
+                self.type_name_to_boogie(&param.ty),
+            );
+        }
+
+        // Add ALL local variables from both functions (they may be used during execution)
+        for var_id in &function_a_cfg.local_variables {
+            let var_info = &cfg_program.variables[*var_id];
+            var_tracker.add_variable(
+                var_info.name.clone(),
+                self.type_name_to_boogie(&var_info.ty),
+            );
+        }
+
+        for var_id in &function_b_cfg.local_variables {
+            let var_info = &cfg_program.variables[*var_id];
+            var_tracker.add_variable(
+                var_info.name.clone(),
+                self.type_name_to_boogie(&var_info.ty),
+            );
         }
 
         // Collect all tables accessed by either function
@@ -302,10 +318,7 @@ impl CommutativityUnit {
                     let var_name = format!("initial_{}_{}", table_info.name, field_info.name);
                     let map_type = self.get_table_field_type(cfg_program, *table_id, *field_id);
 
-                    locals.push(VarDecl {
-                        name: Ident(var_name),
-                        ty: map_type,
-                    });
+                    var_tracker.add_variable(var_name, map_type);
                 }
             }
         }
@@ -320,10 +333,7 @@ impl CommutativityUnit {
                     let var_name = format!("saved_{}_{}", table_info.name, field_info.name);
                     let map_type = self.get_table_field_type(cfg_program, table_id, *field_id);
 
-                    locals.push(VarDecl {
-                        name: Ident(var_name),
-                        ty: map_type,
-                    });
+                    var_tracker.add_variable(var_name, map_type);
                 }
             }
         }
@@ -334,33 +344,30 @@ impl CommutativityUnit {
 
         for var_id in &function_a.local_variables {
             let var_info = &cfg_program.variables[*var_id];
-            locals.push(VarDecl {
-                name: Ident(format!("saved_a_{}", var_info.name)),
-                ty: self.type_name_to_boogie(&var_info.ty),
-            });
+            var_tracker.add_variable(
+                format!("saved_a_{}", var_info.name),
+                self.type_name_to_boogie(&var_info.ty),
+            );
         }
 
         for var_id in &function_b.local_variables {
             let var_info = &cfg_program.variables[*var_id];
-            locals.push(VarDecl {
-                name: Ident(format!("saved_b_{}", var_info.name)),
-                ty: self.type_name_to_boogie(&var_info.ty),
-            });
+            var_tracker.add_variable(
+                format!("saved_b_{}", var_info.name),
+                self.type_name_to_boogie(&var_info.ty),
+            );
         }
 
         // Add temporary variables for intermediate computations
-        locals.push(VarDecl {
-            name: Ident("_temp_0".to_string()),
-            ty: Ty::int(),
-        });
-        locals.push(VarDecl {
-            name: Ident("_temp_1".to_string()),
-            ty: Ty::int(),
-        });
-        locals.push(VarDecl {
-            name: Ident("_temp_2".to_string()),
-            ty: Ty::int(),
-        });
+        // Add basic temp variables
+        for i in 0..20 {
+            var_tracker.add_variable(format!("_temp_{}", i), Ty::int());
+        }
+
+        // Add common variable names that might be generated dynamically
+        var_tracker.add_variable("d_next_oid".to_string(), Ty::int());
+        var_tracker.add_variable("d_tax".to_string(), Ty::real());
+        var_tracker.add_variable("O_OL_CNT".to_string(), Ty::int());
     }
 
     /// Get the correct Boogie type for a table field (handling multiple primary keys)
@@ -408,7 +415,7 @@ impl CommutativityUnit {
         cfg_program: &CfgProgram,
         interleaving: &[(HopId, bool)],
         blocks: &mut Vec<Block>,
-        _locals: &mut Vec<VarDecl>,
+        var_tracker: &mut VariableTracker,
     ) {
         // Entry block
         let entry_label = Label("entry".to_string());
