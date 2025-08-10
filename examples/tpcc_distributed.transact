@@ -146,12 +146,12 @@ void newOrder(int w_id, int d_id, int c_id, int o_all_local, int date,
     // Get warehouse tax
     hop {
         float w_tax = Warehouse[W_ID: w_id].W_TAX;
+        float[10] itemPrices;
     }
     
     // Read item and update stock
     hops for int ol_number = 0 to O_OL_CNT { // grammar "hops for" requires the compile time const iteration
 
-        float[10] itemPrices;
         itemPrices[ol_number] = Item[I_ID: itemIDs[ol_number], W_ID: supplierWarehouseIDs[ol_number]].I_PRICE;
 
         Stock s = Stock[S_W_ID: supplierWarehouseIDs[ol_number], S_I_ID: itemIDs[ol_number]]; // The Stock type is just from the table definition, no need to specify the type again
