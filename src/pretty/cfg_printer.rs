@@ -20,14 +20,16 @@ impl CfgPrinter {
 /// Internal visitor implementation with writer context
 struct CfgPrintVisitor<'a> {
     writer: &'a mut dyn Write,
+    program: &'a crate::cfg::CfgProgram,
     indent_level: RefCell<usize>,
     indent_size: usize,
 }
 
 impl<'a> CfgPrintVisitor<'a> {
-    fn new(writer: &'a mut dyn Write) -> Self {
+    fn new(writer: &'a mut dyn Write, program: &'a crate::cfg::CfgProgram) -> Self {
         Self {
             writer,
+            program,
             indent_level: RefCell::new(0),
             indent_size: 2,
         }
@@ -251,12 +253,19 @@ impl<'a> StmtVisitor<String> for CfgPrintVisitor<'a> {
             } => {
                 let pk_strs: Vec<String> =
                     pk_values.iter().map(|op| self.visit_operand(op)).collect();
-                format!(
-                    "table_{:?}[{}].field_{:?}",
-                    table.index(),
-                    pk_strs.join(", "),
-                    field.index()
-                )
+                let table_name = self
+                    .program
+                    .tables
+                    .get(*table)
+                    .map(|t| t.name.as_str())
+                    .unwrap_or("<unknown_table>");
+                let field_name = self
+                    .program
+                    .fields
+                    .get(*field)
+                    .map(|f| f.name.as_str())
+                    .unwrap_or("<unknown_field>");
+                format!("{}[{}].{}", table_name, pk_strs.join(", "), field_name)
             }
         }
     }
@@ -272,12 +281,19 @@ impl<'a> StmtVisitor<String> for CfgPrintVisitor<'a> {
             } => {
                 let pk_strs: Vec<String> =
                     pk_values.iter().map(|op| self.visit_operand(op)).collect();
-                format!(
-                    "table_{:?}[{}].field_{:?}",
-                    table.index(),
-                    pk_strs.join(", "),
-                    field.index()
-                )
+                let table_name = self
+                    .program
+                    .tables
+                    .get(*table)
+                    .map(|t| t.name.as_str())
+                    .unwrap_or("<unknown_table>");
+                let field_name = self
+                    .program
+                    .fields
+                    .get(*field)
+                    .map(|f| f.name.as_str())
+                    .unwrap_or("<unknown_field>");
+                format!("{}[{}].{}", table_name, pk_strs.join(", "), field_name)
             }
             Rvalue::ArrayAccess { array, index } => {
                 let array_str = self.visit_operand(array);
@@ -323,7 +339,7 @@ impl<'a> StmtVisitor<String> for CfgPrintVisitor<'a> {
 
 impl PrettyPrinter<CfgProgram> for CfgPrinter {
     fn print(&self, program: &CfgProgram, writer: &mut dyn Write) -> std::io::Result<()> {
-        let mut visitor = CfgPrintVisitor::new(writer);
+        let mut visitor = CfgPrintVisitor::new(writer, program);
         visitor.visit_program(program)
     }
 }

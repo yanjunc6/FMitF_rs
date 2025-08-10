@@ -56,6 +56,12 @@ impl<'p> NameResolver<'p> {
         // Resolve table partitions first
         self.resolve_table_partitions();
 
+        // Resolve all partition functions
+        let partition_ids: Vec<_> = self.program.root_partitions.iter().copied().collect();
+        for partition_id in partition_ids {
+            self.resolve_partition(partition_id);
+        }
+
         // Resolve all functions
         let function_ids: Vec<_> = self.program.root_functions.iter().copied().collect();
         for func_id in function_ids {
@@ -89,6 +95,57 @@ impl<'p> NameResolver<'p> {
                 // This will be caught later in semantic analysis
             }
         }
+    }
+
+    /// Resolves names within a partition function.
+    ///
+    /// This includes creating a scope for the partition, resolving parameters,
+    /// and resolving the implementation expression if it exists.
+    fn resolve_partition(&mut self, partition_id: PartitionId) {
+        // Only resolve partitions that have implementations
+        let implementation_expr = self.program.partitions[partition_id].implementation;
+        if implementation_expr.is_none() {
+            return;
+        }
+
+        // Create partition scope
+        let partition_scope = self.program.scopes.alloc(Scope {
+            parent: None,
+            variables: HashMap::new(),
+        });
+
+        self.push_scope(partition_scope);
+
+        // Add parameters to partition scope
+        let param_ids: Vec<ParameterId> = self.program.partitions[partition_id]
+            .parameters
+            .iter()
+            .copied()
+            .collect();
+
+        // Collect parameter data to avoid borrowing issues
+        let params_to_declare: Vec<(String, TypeName, Span)> = param_ids
+            .iter()
+            .map(|&param_id| {
+                let param_decl = &self.program.parameters[param_id];
+                (
+                    param_decl.param_name.clone(),
+                    param_decl.param_type.clone(),
+                    param_decl.span.clone(),
+                )
+            })
+            .collect();
+
+        for (name, ty, span) in params_to_declare {
+            self.declare_variable(&name, ty, VarKind::Parameter, span, partition_scope);
+        }
+
+        // Resolve implementation expression
+        if let Some(impl_expr_id) = implementation_expr {
+            self.resolve_expression(impl_expr_id);
+        }
+
+        self.pop_scope();
     }
 
     /// Resolves names within a function.
@@ -145,36 +202,50 @@ impl<'p> NameResolver<'p> {
     ///
     /// This includes resolving statements within the hop.
     fn resolve_hop(&mut self, hop_id: HopId) {
-        let hop = &self.program.hops[hop_id];
+        let (hop_type, hop_span, stmt_ids) = {
+            let hop = &self.program.hops[hop_id];
+            (
+                hop.hop_type.clone(),
+                hop.span.clone(),
+                hop.statements.clone(),
+            )
+        };
 
         // Check if this is a ForLoop hop that introduces a loop variable
         if let HopType::ForLoop {
             loop_var,
             loop_var_type,
             ..
-        } = &hop.hop_type
+        } = hop_type
         {
-            // Create a variable for the loop variable in the current scope
-            if let Some(current_scope_id) = self.current_scope {
-                let var_id = self.program.variables.alloc(VarDecl {
-                    name: loop_var.clone(),
-                    ty: loop_var_type.clone(),
-                    kind: VarKind::Local,
-                    defined_at: hop.span.clone(),
-                    scope: current_scope_id,
-                });
+            // ForLoop hops create their own scope for each hop instance
+            let hop_scope = self.program.scopes.alloc(Scope {
+                parent: self.current_scope,
+                variables: HashMap::new(),
+            });
 
-                // Add to current scope
-                if let Some(scope) = self.program.scopes.get_mut(current_scope_id) {
-                    scope.variables.insert(loop_var.clone(), var_id);
-                }
+            self.push_scope(hop_scope);
+
+            // Create the loop variable in the hop's scope
+            self.declare_variable(
+                &loop_var,
+                loop_var_type,
+                VarKind::Local,
+                hop_span,
+                hop_scope,
+            );
+
+            // Resolve statements in the hop's scope
+            for stmt_id in stmt_ids {
+                self.resolve_statement(stmt_id);
             }
-        }
 
-        // Hops do NOT create their own scopes - resolve statements in current function scope
-        let stmt_ids: Vec<_> = hop.statements.iter().copied().collect();
-        for stmt_id in stmt_ids {
-            self.resolve_statement(stmt_id);
+            self.pop_scope();
+        } else {
+            // Regular hops do NOT create their own scopes - resolve statements in current function scope
+            for stmt_id in stmt_ids {
+                self.resolve_statement(stmt_id);
+            }
         }
     }
 
