@@ -1,44 +1,29 @@
-use crate::cfg::{BasicBlockId, ControlFlowEdge, LValue, Statement, VarId};
+use crate::cfg::{ControlFlowEdge, LValue, Statement, VarId};
 use crate::dataflow::{AnalysisLevel, DataflowResults, Lattice, SetLattice, TransferFunction};
 
-/// Represents a definition of a variable at a specific program point.
-/// Uses block ID and statement index instead of raw pointers for safety.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Definition {
-    pub var_id: VarId,
-    pub block_id: BasicBlockId,
-    pub stmt_index: usize,
-}
-
 /// Transfer function for Reaching Definitions analysis.
-/// Reaching definitions is a forward analysis that tracks which definitions
-/// of variables can reach each program point.
+/// Reaching definitions is a forward analysis that tracks which variables
+/// have been defined (without location tracking).
 pub struct ReachingDefinitionsTransfer;
 
-impl TransferFunction<SetLattice<Definition>> for ReachingDefinitionsTransfer {
-    fn transfer_statement(
-        &self,
-        stmt: &Statement,
-        state: &SetLattice<Definition>,
-    ) -> SetLattice<Definition> {
+impl TransferFunction<SetLattice<VarId>> for ReachingDefinitionsTransfer {
+    fn transfer_statement(&self, stmt: &Statement, state: &SetLattice<VarId>) -> SetLattice<VarId> {
         if state.is_top {
             return state.clone();
         }
 
-        let mut reaching_defs = state.set.clone();
+        let mut defined_vars = state.set.clone();
 
         match stmt {
             Statement::Assign { lvalue, .. } => {
                 match lvalue {
                     LValue::Variable { var } => {
-                        // KILL: Remove all existing definitions of this variable
-                        reaching_defs.retain(|def| def.var_id != *var);
-                        // GEN: Add new definition (would need location context)
+                        // GEN: Add this variable as defined
+                        defined_vars.insert(*var);
                     }
                     LValue::ArrayElement { array, .. } => {
-                        // KILL: Remove all existing definitions of the array variable
-                        reaching_defs.retain(|def| def.var_id != *array);
-                        // GEN: Add new definition of the array variable
+                        // GEN: Add array variable as defined
+                        defined_vars.insert(*array);
                     }
                     LValue::TableField { .. } => {
                         // Table field assignments don't define local variables
@@ -47,107 +32,48 @@ impl TransferFunction<SetLattice<Definition>> for ReachingDefinitionsTransfer {
             }
         }
 
-        SetLattice::new(reaching_defs)
+        SetLattice::new(defined_vars)
     }
 
     fn transfer_edge(
         &self,
         _edge: &ControlFlowEdge,
-        state: &SetLattice<Definition>,
-    ) -> SetLattice<Definition> {
+        state: &SetLattice<VarId>,
+    ) -> SetLattice<VarId> {
         // Control flow edges don't define variables, so pass through unchanged
         state.clone()
     }
 
-    fn initial_value(&self) -> SetLattice<Definition> {
+    fn initial_value(&self) -> SetLattice<VarId> {
         // Start with empty set for forward analysis
         SetLattice::bottom().unwrap()
     }
 
-    fn boundary_value(&self) -> SetLattice<Definition> {
-        // At function entry, we could model parameter definitions
-        // For now, start with empty set
-        SetLattice::bottom().unwrap()
-    }
-}
-
-/// Enhanced transfer function that tracks statement locations
-pub struct ReachingDefinitionsTransferWithLocation {
-    pub current_block: BasicBlockId,
-    pub current_stmt_index: usize,
-}
-
-impl TransferFunction<SetLattice<Definition>> for ReachingDefinitionsTransferWithLocation {
-    fn transfer_statement(
-        &self,
-        stmt: &Statement,
-        state: &SetLattice<Definition>,
-    ) -> SetLattice<Definition> {
-        if state.is_top {
-            return state.clone();
-        }
-
-        let mut reaching_defs = state.set.clone();
-
-        match stmt {
-            Statement::Assign { lvalue, .. } => {
-                match lvalue {
-                    LValue::Variable { var } => {
-                        // KILL: Remove all existing definitions of this variable
-                        reaching_defs.retain(|def| def.var_id != *var);
-
-                        // GEN: Add new definition at current location
-                        reaching_defs.insert(Definition {
-                            var_id: *var,
-                            block_id: self.current_block,
-                            stmt_index: self.current_stmt_index,
-                        });
-                    }
-                    LValue::ArrayElement { array, .. } => {
-                        // KILL: Remove all existing definitions of the array variable
-                        reaching_defs.retain(|def| def.var_id != *array);
-
-                        // GEN: Add new definition of the array variable
-                        reaching_defs.insert(Definition {
-                            var_id: *array,
-                            block_id: self.current_block,
-                            stmt_index: self.current_stmt_index,
-                        });
-                    }
-                    LValue::TableField { .. } => {
-                        // Table field assignments don't define local variables
-                    }
-                }
-            }
-        }
-
-        SetLattice::new(reaching_defs)
-    }
-
-    fn transfer_edge(
-        &self,
-        _edge: &ControlFlowEdge,
-        state: &SetLattice<Definition>,
-    ) -> SetLattice<Definition> {
-        // Control flow edges don't define variables
-        state.clone()
-    }
-
-    fn initial_value(&self) -> SetLattice<Definition> {
-        SetLattice::bottom().unwrap()
-    }
-
-    fn boundary_value(&self) -> SetLattice<Definition> {
-        // Could model parameter definitions here
+    fn boundary_value(&self) -> SetLattice<VarId> {
+        // At function entry, parameters are considered defined
+        // For now, start with empty set - parameters will be added by caller if needed
         SetLattice::bottom().unwrap()
     }
 }
 
 /// Run reaching definitions analysis on a function
 pub fn analyze_reaching_definitions(
-    _prog: &crate::cfg::CfgProgram,
-    _func_id: crate::cfg::FunctionId,
-    _level: AnalysisLevel,
-) -> DataflowResults<SetLattice<Definition>> {
-    unimplemented!("Reaching definitions analysis needs to be updated to work with cfg_api")
+    prog: &crate::cfg::CfgProgram,
+    func_id: crate::cfg::FunctionId,
+    level: AnalysisLevel,
+) -> DataflowResults<SetLattice<VarId>> {
+    use crate::dataflow::{DataflowAnalysis, Direction};
+
+    // Get the function from the program
+    if let Some(func) = prog.functions.get(func_id) {
+        let analysis =
+            DataflowAnalysis::new(level, Direction::Forward, ReachingDefinitionsTransfer);
+        analysis.analyze(func, prog)
+    } else {
+        // Return empty results if function not found
+        DataflowResults {
+            entry: std::collections::HashMap::new(),
+            exit: std::collections::HashMap::new(),
+        }
+    }
 }
