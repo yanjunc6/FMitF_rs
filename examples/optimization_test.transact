@@ -1,0 +1,50 @@
+// Test file for optimization passes
+
+partition test_partition(int x) = x;
+
+table TestTable {
+    primary int ID;
+    int VALUE;
+    node test_partition(ID);
+}
+
+void test_constant_propagation() {
+    hop {
+        int x = 42;
+        int y = x + 10;  // Should be optimized to y = 52
+        int z = y * 2;   // Should be optimized to z = 104
+        int result = z - 4; // Should be optimized to result = 100
+        TestTable[ID: 1].VALUE = result;
+    }
+}
+
+void test_dead_code_elimination() {
+    hop {
+        int x = 10;
+        int dead_var = x + 5;  // dead_var is never used - should be eliminated
+        int y = x * 2;
+        TestTable[ID: 2].VALUE = y;
+    }
+}
+
+void test_cse() {
+    hop {
+        int x = 5;
+        int y = 10;
+        int a = x + y;
+        int b = x + y;  // Should reuse the result from a = x + y
+        int c = a + b;
+        TestTable[ID: 3].VALUE = c;
+    }
+}
+
+void test_combined() {
+    hop {
+        int constant = 100;
+        int dead_var = constant + 50; // Dead code
+        int expr1 = constant * 2;     // Should be constant folded to 200
+        int expr2 = constant * 2;     // Should use CSE from expr1
+        int result = expr1 + expr2;   // Should be constant folded to 400
+        TestTable[ID: 4].VALUE = result;
+    }
+}
