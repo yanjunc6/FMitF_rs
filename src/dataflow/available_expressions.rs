@@ -132,9 +132,22 @@ impl TransferFunction<SetLattice<Rvalue>> for AvailableExpressionsTransfer {
 /// Available expressions analysis tracks which expressions are available
 /// (computed and operands not redefined) at each program point.
 pub fn analyze_available_expressions(
-    _prog: &crate::cfg::CfgProgram,
-    _func_id: crate::cfg::FunctionId,
-    _level: AnalysisLevel,
+    prog: &crate::cfg::CfgProgram,
+    func_id: crate::cfg::FunctionId,
+    level: AnalysisLevel,
 ) -> DataflowResults<SetLattice<Rvalue>> {
-    unimplemented!("Available expressions analysis needs to be updated to work with cfg_api")
+    use crate::dataflow::{DataflowAnalysis, Direction};
+
+    // Get the function from the program
+    if let Some(func) = prog.functions.get(func_id) {
+        let analysis =
+            DataflowAnalysis::new(level, Direction::Forward, AvailableExpressionsTransfer);
+        analysis.analyze(func, prog)
+    } else {
+        // Return empty results if function not found
+        DataflowResults {
+            entry: std::collections::HashMap::new(),
+            exit: std::collections::HashMap::new(),
+        }
+    }
 }

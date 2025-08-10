@@ -1064,9 +1064,6 @@ impl<'p> SemanticAnalyzer<'p> {
                     );
                     return None;
                 }
-
-                // For now, return the resolved type if available
-                // TODO: Add proper field resolution and type checking
                 resolved_type.clone()
             }
             ExpressionKind::BinaryOp {

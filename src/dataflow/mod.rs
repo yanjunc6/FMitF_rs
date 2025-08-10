@@ -10,7 +10,7 @@ mod liveness;
 pub use liveness::analyze_live_variables;
 
 mod reaching_definitions;
-pub use reaching_definitions::{analyze_reaching_definitions, Definition as ReachingDefinition};
+pub use reaching_definitions::analyze_reaching_definitions;
 
 mod available_expressions;
 pub use available_expressions::analyze_available_expressions;

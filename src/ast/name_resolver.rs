@@ -844,30 +844,111 @@ impl<'p> NameResolver<'p> {
                 self.resolve_expression(left);
                 self.resolve_expression(right);
             }
-            ExpressionKind::FieldAccess { object_name, .. } => {
+            ExpressionKind::FieldAccess {
+                object_name,
+                field_name,
+                ..
+            } => {
                 // Look up the object variable
                 if let Some(var_id) = self.lookup_variable(&object_name) {
                     // Store the resolution for the object
                     self.program.resolutions.insert(expr_id, var_id);
 
-                    // Update the AST with the resolved variable
+                    // Resolve the field within the object's type
+                    let field_id =
+                        if let Some(object_type) = self.program.var_types.get(&var_id).cloned() {
+                            self.resolve_field_in_type(&object_type, &field_name, &expr_span)
+                        } else {
+                            // Object type unknown - can't resolve field
+                            None
+                        };
+
+                    // Update the AST with the resolved variable and field
                     if let ExpressionKind::FieldAccess {
                         ref mut resolved_var,
+                        ref mut resolved_field,
                         ..
                     } = &mut self.program.expressions[expr_id].node
                     {
                         *resolved_var = Some(var_id);
+                        *resolved_field = field_id;
                     }
                 } else {
-                    self.error_at(&expr_span, AstError::UndeclaredVariable(object_name));
+                    self.error_at(
+                        &expr_span,
+                        AstError::UndeclaredVariable(object_name.clone()),
+                    );
                 }
-                // TODO: Add field resolution within the object type
             }
             ExpressionKind::IntLit(_)
             | ExpressionKind::FloatLit(_)
             | ExpressionKind::StringLit(_)
             | ExpressionKind::BoolLit(_) => {
                 // Literals need no resolution
+            }
+        }
+    }
+
+    /// Resolves a field within a given type.
+    /// Returns the FieldId if the field exists in the type, None otherwise.
+    fn resolve_field_in_type(
+        &mut self,
+        object_type: &TypeName,
+        field_name: &str,
+        span: &Span,
+    ) -> Option<FieldId> {
+        match object_type {
+            TypeName::Table(table_name) => {
+                // Look up the table and find the field
+                if let Some(&table_id) = self.program.table_map.get(table_name) {
+                    let table = &self.program.tables[table_id];
+
+                    // Find the field in the table
+                    let field_id = table
+                        .fields
+                        .iter()
+                        .find(|&&field_id| self.program.fields[field_id].field_name == field_name)
+                        .copied();
+
+                    if field_id.is_none() {
+                        self.error_at(
+                            span,
+                            AstError::UndeclaredField {
+                                table: table_name.clone(),
+                                field: field_name.to_string(),
+                            },
+                        );
+                    }
+
+                    field_id
+                } else {
+                    // Table not found - this should have been caught earlier
+                    self.error_at(span, AstError::UndeclaredTable(table_name.clone()));
+                    None
+                }
+            }
+            TypeName::Array { .. } => {
+                // Arrays don't have named fields, this is likely a programming error
+                // Use a generic parse error for unsupported operations
+                self.error_at(
+                    span,
+                    AstError::ParseError(format!(
+                        "Field access '{}' not supported on array types",
+                        field_name
+                    )),
+                );
+                None
+            }
+            TypeName::Int | TypeName::Float | TypeName::String | TypeName::Bool => {
+                // Primitive types don't have fields
+                self.error_at(
+                    span,
+                    AstError::ParseError(format!(
+                        "Field access '{}' not supported on primitive types",
+                        field_name
+                    )),
+                );
+                None
             }
         }
     }

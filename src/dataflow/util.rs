@@ -2,7 +2,7 @@ use super::{
     AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
     TransferFunction,
 };
-use crate::cfg::{BasicBlock, BasicBlockId, CfgProgram, EdgeType, FunctionCfg};
+use crate::cfg::{BasicBlock, BasicBlockId, CfgProgram, EdgeType, FunctionCfg, HopCfg};
 use std::collections::HashMap;
 
 use std::collections::HashSet;
@@ -133,13 +133,25 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
 
     /// Run dataflow analysis on a function using fixed point algorithm
     pub fn analyze(&self, func: &FunctionCfg, cfg_program: &CfgProgram) -> DataflowResults<L> {
+        match self.level {
+            AnalysisLevel::Function => self.analyze_function_level(func, cfg_program),
+            AnalysisLevel::Hop => self.analyze_hop_level(func, cfg_program),
+        }
+    }
+
+    /// Run function-level analysis: data flows across all hops in the function
+    fn analyze_function_level(
+        &self,
+        func: &FunctionCfg,
+        cfg_program: &CfgProgram,
+    ) -> DataflowResults<L> {
         let mut entry: HashMap<BasicBlockId, L> = HashMap::new();
         let mut exit: HashMap<BasicBlockId, L> = HashMap::new();
 
-        // Initialize all blocks
-        self.initialize_blocks(func, cfg_program, &mut entry, &mut exit);
+        // Initialize all blocks in the function
+        self.initialize_blocks_from_list(&func.blocks, func, cfg_program, &mut entry, &mut exit);
 
-        // Fixed point iteration
+        // Fixed point iteration over all function blocks
         let mut changed = true;
         while changed {
             changed = false;
@@ -161,14 +173,61 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
         DataflowResults { entry, exit }
     }
 
-    fn initialize_blocks(
+    /// Run hop-level analysis: each hop analyzed separately, treating hop boundaries as boundaries
+    fn analyze_hop_level(
         &self,
+        func: &FunctionCfg,
+        cfg_program: &CfgProgram,
+    ) -> DataflowResults<L> {
+        let mut entry: HashMap<BasicBlockId, L> = HashMap::new();
+        let mut exit: HashMap<BasicBlockId, L> = HashMap::new();
+
+        // For each hop, run dataflow analysis independently
+        for &hop_id in &func.hops {
+            if let Some(hop) = cfg_program.hops.get(hop_id) {
+                // Initialize blocks in this hop only
+                self.initialize_blocks_from_list(
+                    &hop.blocks,
+                    func,
+                    cfg_program,
+                    &mut entry,
+                    &mut exit,
+                );
+
+                // Fixed point iteration over blocks in this hop only
+                let mut changed = true;
+                while changed {
+                    changed = false;
+
+                    for &block_id in &hop.blocks {
+                        let block = &cfg_program.blocks[block_id];
+                        let (old_in, old_out) = self.get_in_out_values(&entry, &exit, block_id);
+                        let new_in =
+                            self.compute_in_value_hop_level(hop, block, block_id, &entry, &exit);
+                        let new_out = self.transfer_block(block, &new_in);
+
+                        if self.update_and_check_change(
+                            &mut entry, &mut exit, block_id, new_in, new_out, old_in, old_out,
+                        ) {
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        DataflowResults { entry, exit }
+    }
+
+    fn initialize_blocks_from_list(
+        &self,
+        block_list: &[BasicBlockId],
         func: &FunctionCfg,
         cfg_program: &CfgProgram,
         entry: &mut HashMap<BasicBlockId, L>,
         exit: &mut HashMap<BasicBlockId, L>,
     ) {
-        for &block_id in &func.blocks {
+        for &block_id in block_list {
             let block = &cfg_program.blocks[block_id];
             let is_boundary = self.is_boundary_block(func, cfg_program, block, block_id);
             let default_value = L::bottom().unwrap_or_else(|| self.transfer.initial_value());
@@ -251,28 +310,66 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                 Direction::Backward => exit[&block_id].clone(),
             }
         } else {
-            // Join all neighbor values, but filter hop exits for hop-level analysis
+            // For function-level analysis, join all neighbor values
             let mut result: Option<L> = None;
             for edge in neighbors {
-                // For hop-level analysis, ignore hop exit edges (treat as boundaries)
-                if matches!(self.level, AnalysisLevel::Hop)
-                    && matches!(edge.edge_type, EdgeType::HopExit { .. })
-                {
-                    // Use initial value for hop exit boundaries
-                    let initial = self.transfer.initial_value();
-                    result = Some(match result {
-                        None => initial,
-                        Some(acc) => acc.join(&initial),
-                    });
-                } else {
-                    // Normal data flow
+                let neighbor_value = match self.direction {
+                    Direction::Forward => &exit[&edge.from],
+                    Direction::Backward => &entry[&edge.to],
+                };
+                result = Some(match result {
+                    None => neighbor_value.clone(),
+                    Some(acc) => acc.join(neighbor_value),
+                });
+            }
+            result.unwrap_or_else(|| L::bottom().unwrap_or_else(|| self.transfer.initial_value()))
+        }
+    }
+
+    fn compute_in_value_hop_level(
+        &self,
+        hop: &HopCfg,
+        block: &BasicBlock,
+        block_id: BasicBlockId,
+        entry: &HashMap<BasicBlockId, L>,
+        exit: &HashMap<BasicBlockId, L>,
+    ) -> L {
+        let neighbors = match self.direction {
+            Direction::Forward => &block.predecessors,
+            Direction::Backward => &block.successors,
+        };
+
+        if neighbors.is_empty() {
+            // No neighbors - keep current value for boundary blocks
+            match self.direction {
+                Direction::Forward => entry[&block_id].clone(),
+                Direction::Backward => exit[&block_id].clone(),
+            }
+        } else {
+            // Join values from neighbors that are within the same hop
+            let mut result: Option<L> = None;
+            for edge in neighbors {
+                let neighbor_block_id = match self.direction {
+                    Direction::Forward => edge.from,
+                    Direction::Backward => edge.to,
+                };
+
+                // Only consider neighbors that are within the same hop
+                if hop.blocks.contains(&neighbor_block_id) {
                     let neighbor_value = match self.direction {
-                        Direction::Forward => &exit[&edge.from],
-                        Direction::Backward => &entry[&edge.to],
+                        Direction::Forward => &exit[&neighbor_block_id],
+                        Direction::Backward => &entry[&neighbor_block_id],
                     };
                     result = Some(match result {
                         None => neighbor_value.clone(),
                         Some(acc) => acc.join(neighbor_value),
+                    });
+                } else {
+                    // Neighbor is outside this hop - use initial value for boundary
+                    let initial = self.transfer.initial_value();
+                    result = Some(match result {
+                        None => initial,
+                        Some(acc) => acc.join(&initial),
                     });
                 }
             }
