@@ -5,22 +5,21 @@
 //! - Dead code elimination  
 //! - Common subexpression elimination
 
-use crate::cfg::{CfgProgram, FunctionCfg, FunctionId};
+use crate::cfg::{CfgProgram, FunctionId};
 use std::collections::HashMap;
 
-// TODO: Re-enable after updating to use unified LValue structure
-// mod common_subexpression_elimination;
-// mod constant_propagation;
-// mod dead_code_elimination;
+mod common_subexpression_elimination;
+mod constant_propagation;
+mod dead_code_elimination;
 
-// pub use common_subexpression_elimination::CommonSubexpressionEliminationPass;
-// pub use constant_propagation::ConstantPropagationPass;
-// pub use dead_code_elimination::DeadCodeEliminationPass;
+pub use common_subexpression_elimination::CommonSubexpressionEliminationPass;
+pub use constant_propagation::ConstantPropagationPass;
+pub use dead_code_elimination::DeadCodeEliminationPass;
 
 /// Trait for optimization passes
 pub trait OptimizationPass {
     /// Apply the optimization pass to a function
-    fn optimize_function(&self, func: &mut FunctionCfg) -> bool;
+    fn optimize_function(&self, program: &mut CfgProgram, func_id: FunctionId) -> bool;
 
     /// Get the name of this optimization pass
     fn name(&self) -> &'static str;
@@ -48,27 +47,32 @@ impl CfgOptimizer {
 
     /// Create a default optimizer with standard passes
     pub fn default_passes() -> Self {
-        // TODO: Re-enable optimization passes after updating to unified LValue structure
         Self::new()
-        // .add_pass(Box::new(ConstantPropagationPass::new()))
-        // .add_pass(Box::new(CommonSubexpressionEliminationPass::new()))
-        // .add_pass(Box::new(DeadCodeEliminationPass::new()))
+            .add_pass(Box::new(ConstantPropagationPass::new()))
+            .add_pass(Box::new(DeadCodeEliminationPass::new()))
+            .add_pass(Box::new(CommonSubexpressionEliminationPass::new()))
     }
 
     /// Optimize an entire CFG program
     pub fn optimize_program(&self, program: &mut CfgProgram) -> OptimizationResults {
         let mut results = OptimizationResults::new();
 
-        for (func_id, function) in program.functions.iter_mut() {
-            let func_results = self.optimize_function(function);
+        let function_ids: Vec<FunctionId> = program.functions.iter().map(|(id, _)| id).collect();
+
+        for func_id in function_ids {
+            let func_results = self.optimize_function_by_id(program, func_id);
             results.merge_function_results(func_id, func_results);
         }
 
         results
     }
 
-    /// Optimize a single function with iterative application of passes
-    pub fn optimize_function(&self, func: &mut FunctionCfg) -> FunctionOptimizationResults {
+    /// Optimize a single function by ID with iterative application of passes
+    pub fn optimize_function_by_id(
+        &self,
+        program: &mut CfgProgram,
+        func_id: FunctionId,
+    ) -> FunctionOptimizationResults {
         let mut results = FunctionOptimizationResults::new();
         let mut iteration = 0;
 
@@ -80,7 +84,7 @@ impl CfgOptimizer {
             let mut changed_this_iteration = false;
 
             for pass in &self.passes {
-                let changed = pass.optimize_function(func);
+                let changed = pass.optimize_function(program, func_id);
                 if changed {
                     changed_this_iteration = true;
                     results.record_pass_application(pass.name());

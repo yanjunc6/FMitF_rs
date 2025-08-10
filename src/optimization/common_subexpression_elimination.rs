@@ -1,5 +1,5 @@
 use crate::cfg::{
-    BasicBlockId, ControlFlowEdge, FieldId, FunctionCfg, LValue, Operand, Rvalue, Statement, TableId, VarId,
+    CfgProgram, FieldId, FunctionId, LValue, Operand, Rvalue, Statement, TableId, VarId,
 };
 use crate::dataflow::{analyze_available_expressions, AnalysisLevel};
 use crate::optimization::OptimizationPass;
@@ -69,9 +69,9 @@ impl CommonSubexpressionEliminationPass {
         });
     }
 
-    /// Update available expressions after an assignment
+    /// Update available expressions after a variable assignment
     /// Remove expressions that use the defined variable and add the new expression
-    fn update_available_after_assign(
+    fn update_available_after_var_assign(
         &self,
         available: &mut HashSet<Rvalue>,
         defined_var: VarId,
@@ -92,82 +92,98 @@ impl OptimizationPass for CommonSubexpressionEliminationPass {
         "Common Subexpression Elimination"
     }
 
-    fn optimize_function(&self, func: &mut FunctionCfg) -> bool {
-        let available_expr_results = analyze_available_expressions(func, AnalysisLevel::Function);
+    fn optimize_function(&self, program: &mut CfgProgram, func_id: FunctionId) -> bool {
+        // Get function reference for analysis
+        let func = match program.functions.get(func_id) {
+            Some(f) => f,
+            None => return false,
+        };
+
+        let available_expr_results =
+            analyze_available_expressions(program, func_id, AnalysisLevel::Function);
         let mut changed = false;
 
         // Track expressions to their defining variables across the entire function
         let mut expr_to_var: HashMap<Rvalue, VarId> = HashMap::new();
 
         // Process each basic block
-        for (block_id, block) in func.blocks.iter_mut() {
-            // Get available expressions at entry of this block
-            let available_at_entry =
-                if let Some(lattice) = available_expr_results.entry.get(&block_id) {
-                    if let Some(set) = lattice.as_set() {
-                        set.clone()
+        let function_blocks = func.blocks.clone();
+        for block_id in function_blocks {
+            if let Some(block) = program.blocks.get_mut(block_id) {
+                // Get available expressions at entry of this block
+                let available_at_entry =
+                    if let Some(lattice) = available_expr_results.entry.get(&block_id) {
+                        lattice.as_set().unwrap_or(&HashSet::new()).clone()
                     } else {
                         HashSet::new()
-                    }
-                } else {
-                    HashSet::new()
-                };
+                    };
 
-            // Track available expressions through this block
-            let mut current_available = available_at_entry;
-            let mut new_statements = Vec::new();
+                // Track available expressions through this block
+                let mut current_available = available_at_entry;
+                let mut new_statements = Vec::new();
 
-            for stmt in &block.statements {
-                match stmt {
-                    Statement::Assign { var, rvalue, span } => {
-                        // Check if this expression is already available and we have a variable for it
-                        if self.is_cse_candidate(rvalue) && current_available.contains(rvalue) {
-                            if let Some(&existing_var) = expr_to_var.get(rvalue) {
-                                // Replace with a simple variable use
-                                let new_stmt = Statement::Assign {
-                                    var: *var,
-                                    rvalue: Rvalue::Use(Operand::Var(existing_var)),
-                                    span: span.clone(),
-                                };
-                                new_statements.push(new_stmt);
-                                changed = true;
+                for stmt in &block.statements {
+                    let Statement::Assign {
+                        lvalue,
+                        rvalue,
+                        span,
+                    } = stmt;
 
-                                // Update available expressions (the assignment itself doesn't change availability)
-                                self.update_available_after_assign(
-                                    &mut current_available,
-                                    *var,
-                                    &Rvalue::Use(Operand::Var(existing_var)),
-                                );
-                                continue;
+                    match lvalue {
+                        LValue::Variable { var } => {
+                            // Check if this expression is already available and we have a variable for it
+                            if self.is_cse_candidate(rvalue) && current_available.contains(rvalue) {
+                                if let Some(&existing_var) = expr_to_var.get(rvalue) {
+                                    // Replace with a simple variable use
+                                    let new_stmt = Statement::Assign {
+                                        lvalue: lvalue.clone(),
+                                        rvalue: Rvalue::Use(Operand::Var(existing_var)),
+                                        span: span.clone(),
+                                    };
+                                    new_statements.push(new_stmt);
+                                    changed = true;
+
+                                    // Update available expressions (the assignment itself doesn't change availability)
+                                    self.update_available_after_var_assign(
+                                        &mut current_available,
+                                        *var,
+                                        &Rvalue::Use(Operand::Var(existing_var)),
+                                    );
+                                    continue;
+                                }
                             }
+
+                            // Keep the original statement
+                            new_statements.push(stmt.clone());
+
+                            // Track this expression if it's a CSE candidate
+                            if self.is_cse_candidate(rvalue) {
+                                expr_to_var.insert(rvalue.clone(), *var);
+                            }
+
+                            // Update available expressions
+                            self.update_available_after_var_assign(
+                                &mut current_available,
+                                *var,
+                                rvalue,
+                            );
                         }
-
-                        // Keep the original statement
-                        new_statements.push(stmt.clone());
-
-                        // Track this expression if it's a CSE candidate
-                        if self.is_cse_candidate(rvalue) {
-                            expr_to_var.insert(rvalue.clone(), *var);
+                        LValue::TableField { table, field, .. } => {
+                            // Table assignments can invalidate expressions that read from the same table/field
+                            self.kill_table_expressions(&mut current_available, *table, *field);
+                            new_statements.push(stmt.clone());
                         }
-
-                        // Update available expressions
-                        self.update_available_after_assign(&mut current_available, *var, rvalue);
-                    }
-                    Statement::TableAssign { table, field, .. } => {
-                        // Table assignments can invalidate expressions that read from the same table/field
-                        self.kill_table_expressions(&mut current_available, *table, *field);
-                        new_statements.push(stmt.clone());
-                    }
-                    Statement::ArrayAssign { .. } => {
-                        // TODO: Implement CSE analysis for array assignments
-                        // For now, just pass through unchanged
-                        new_statements.push(stmt.clone());
+                        LValue::ArrayElement { array, .. } => {
+                            // Array assignments can invalidate expressions that use the array
+                            current_available.retain(|expr| !self.expr_uses_var(expr, *array));
+                            new_statements.push(stmt.clone());
+                        }
                     }
                 }
-            }
 
-            // Update the block with optimized statements
-            block.statements = new_statements;
+                // Update the block with optimized statements
+                block.statements = new_statements;
+            }
         }
 
         changed
