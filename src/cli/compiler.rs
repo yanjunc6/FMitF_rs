@@ -175,9 +175,9 @@ impl Compiler {
     fn stage_cfg(&mut self, ast: &AstProgram) -> Result<CfgProgram, String> {
         self.logger.stage_start(2, 5, "Building Control Flow Graph");
         match CfgBuilder::build_from_program(ast) {
-            Ok(ctx) => {
+            Ok(cfg_program) => {
                 self.logger.stage_success();
-                Ok(ctx.program)
+                Ok(cfg_program)
             }
             Err(e) => {
                 self.logger.stage_failed(&e.to_string());
