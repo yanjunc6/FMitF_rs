@@ -104,18 +104,36 @@ impl Compiler {
                 return Ok(self.fail_result(start, Some(ast), None, None, None, None, false));
             }
         };
-        self.write_cfg_output(&cfg, cli, "cfg")?;
 
         // Stage 3: Optimization (modifies CFG in place)
-        match self.stage_optimization(&mut cfg, cli) {
-            Ok(_) => {
-                // Optimization succeeded, write optimized version
-                self.write_cfg_output(&cfg, cli, "optimized_cfg")?;
-            }
-            Err(_) => {
-                return Ok(self.fail_result(start, Some(ast), Some(cfg), None, None, None, false));
-            }
-        };
+        if !cli.no_optimize {
+            // Write the original unoptimized CFG BEFORE optimization
+            self.write_cfg_output(&cfg, cli, "cfg")?;
+
+            match self.stage_optimization(&mut cfg, cli) {
+                Ok(_) => {
+                    // Optimization succeeded, write optimized version
+                    self.write_cfg_output(&cfg, cli, "optimized_cfg")?;
+                }
+                Err(_) => {
+                    return Ok(self.fail_result(
+                        start,
+                        Some(ast),
+                        Some(cfg),
+                        None,
+                        None,
+                        None,
+                        false,
+                    ));
+                }
+            };
+        } else {
+            // No optimization, just write the original CFG
+            self.write_cfg_output(&cfg, cli, "cfg")?;
+            self.logger
+                .stage_start(3, 5, "Skipping Optimization Passes");
+            self.logger.stage_success();
+        }
 
         // Stage 4: SC-Graph (using the optimized CFG)
         let scg = match self.stage_scgraph(&cfg, cli) {
