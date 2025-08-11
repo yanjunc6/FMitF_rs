@@ -10,10 +10,12 @@ use std::collections::HashMap;
 
 mod common_subexpression_elimination;
 mod constant_propagation;
+mod copy_propagation;
 mod dead_code_elimination;
 
 pub use common_subexpression_elimination::CommonSubexpressionEliminationPass;
 pub use constant_propagation::ConstantPropagationPass;
+pub use copy_propagation::CopyPropagation;
 pub use dead_code_elimination::DeadCodeEliminationPass;
 
 /// Trait for optimization passes
@@ -49,6 +51,7 @@ impl CfgOptimizer {
     pub fn default_passes() -> Self {
         Self::new()
             .add_pass(Box::new(ConstantPropagationPass::new()))
+            .add_pass(Box::new(CopyPropagation::new().with_debug()))
             .add_pass(Box::new(DeadCodeEliminationPass::new()))
             .add_pass(Box::new(CommonSubexpressionEliminationPass::new()))
     }

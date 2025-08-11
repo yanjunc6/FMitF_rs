@@ -1,101 +1,154 @@
-# FMitF Verification – Requirements & Methodology
-*(consolidated reference – August 2025)*
+# Formal Verification Plan for **FMitF**
+
+_August 2025_
 
 ---
 
-## 1.  Objectives
+## 1  Scope and Objectives
 
-FMitF compiles a transactional language in which every **transaction**
-is split into a sequence of `hop { … }` blocks executed on distinct
-cluster nodes chosen by user-defined `partition` functions.
+This note defines the **verification layer** that will be added on top of the
+current FMitF compilation pipeline.  
+Two independent properties shall be proved:
 
-The compiler must *formally* guarantee one safety properties:
+1. **P-1   Correct Node Placement** – Every `hop { … }` is guaranteed to run
+   on _exactly one_ physical node, determined solely by the declared
+   `partition` functions.
+2. **P-2   Slice Commutativity** – For every pair of hop slices  
+   `Aᵢ → … → Aⱼ` and `Bₖ → … → Bₗ` belonging to (possibly different)
+   transactions, all run-time interleavings permitted by the **IC3**
+   protocol yield **identical final database state** and indistinguishable
+   observable outputs.
 
-| ID | Property | Informal statement |
-|----|-----------|-------------------|
-| P-1 | Partition-soundness | All table accesses that occur inside a single `hop { … }` are routed to **the same cluster partition**. |
-
-Another property is the one we want to prove for hops:
-| ID | Property | Informal statement |
-|----|-----------|-------------------|
-| P-2 | Commutativity | Given two contiguous hop slices selected by the user, *every* order-preserving interleaving of the two slices is observationally equivalent to executing the entire first slice followed by the entire second slice, and vice-versa. |
-
-All proofs are discharged automatically by translating the program plus
-a verification harness to the Boogie IVL and feeding it to the Boogie
-solver.
-
----
-
-## 2.  Common Verification Technique
-
-1. **Symbolic execution of hops**  
-   • Reads, writes, return values and concrete table cells touched by a
-     sequence of hops are collected in a *symbolic I/O summary*  
-   • Tables are modelled as Boogie `map` variables.
-
-2. **Havoc initial state**  
-   Before every proof attempt, all live-in variables and all table maps
-   are *havoced* (assigned arbitrary values) to ensure results hold in
-   every reachable concrete state.
-
-3. **Run, snapshot, compare**  
-   • Execute one candidate execution order inlined into a Boogie
-     procedure.  
-   • Capture the resulting database maps and output variables in
-     snapshot #1.  
-   • Re-havoc the initial state, execute the *other* order, capture
-     snapshot #2.  
-   • `assert snapshot1 == snapshot2`.
-
----
-
-## 3.  Property-specific Harnesses
-
-### 3.1  Partition-soundness  (P-1)
-
-For each individual hop **H**:
-
-1. Havoc tables and hop parameters.  
-2. Inline-execute **H**; simultaneously mark every key `k` that is used
-   to access a table guarded by partition function `p`.  
-3. Emit Boogie assertion  
-   `forall k1, k2 :: Accessed(k1) && Accessed(k2) ==> p(k1) == p(k2)`
-
-A counter-example from Boogie immediately identifies the hop, the first
-two offending keys and their source locations.
-
----
-
-### 3.2  Commutativity (P-2)
-
-User supplies two contiguous hop slices:
-
-Slice-A = A₂ → A₃ Slice-B = B₂
+Together these properties imply _conflict-serialisability_ for the chopped
+transactions produced by the FMitF compiler.
 
 
-Allowed **interleavings** preserve intra-slice order, e.g.
 
-1. `A₂ A₃ B₂`  
-2. `A₂ B₂ A₃`  
-3. `B₂ A₂ A₃`
+## 2  Property P-1 – Correct Use of Partition Functions
 
-For every interleaving `π` and its *mirror* `πʳ` (swap the two slices’
-global order) we generate the same “run, snapshot, compare” harness as
-in P-2.  All interleavings must satisfy the assertions.
+### 2.1  Problem Statement  
 
----
+Inside every hop the compiler inserts remote-execution commands:
 
-## 4.  User Interaction & Reporting
+```
+EXECUTE_AT node_selector(e₁, e₂, …) {
+    // hop body
+}
+```
 
-Results:
+The programmer must guarantee that calls to the same `partition`
+expression with identical arguments denote the same physical node
+throughout the entire program.
 
-* Colour-coded console summary (✔ / ✗ per pass).  
-* For every Boogie obligation:  
-  – `.bpl` file in `verify_out/`  
-  – `.log` with Boogie’s stdout / counter-example model
-* The executor could be part of verification module but all the file IO should be put in cli module.
-* When a proof fails, the console shows the hop(s) and
-  the first offending location, plus a readable interpretation of the
-  model when available.
+_Informally_: if two expressions evaluate to the same tuple of argument
+values at run time, they must designate the same node.
 
----
+### 2.2  Static Proof Strategy  
+
+1. **CFG Simulation**  
+   • Traverse the SSA-form CFG of each hop.  
+   • Simulate the cfg in Boogie and insert the partition argument comparison.
+
+2. **Partition Call Catalogue**  
+   • Whenever the traversal reaches *table access* record the
+     tuple `(hop-id, pf, 〈a, b, …〉)` where `pf` is the partition function.
+   • Find the first tuple recorded as `(hop-id, pf, 〈a', b', …〉)`, feed the following _verification condition_ into Boogie/Z3:
+```
+assert (a == a' and b == b' and ...)
+```
+      If such tuple is not found, skip.
+
+
+## 3  Property P-2 – Commutativity of Hop Slices
+
+### 3.1  Execution Model Recap (IC3)
+
+A transaction _T_ consists of **pieces** (`hop`s).  At runtime IC3
+enforces: TODO: describe the IC3 quickly.
+
+* **S-edges**: program order inside one transaction instance.
+* **C-edges**: conflicts between pieces of different transactions.
+* **depQueue** (per T): list of transactions that must commit before T.
+* **accList** (per record r): all live transactions that touched r.
+
+### 3.2  What “Commutativity” Means Here
+
+Let **S₁ = Aᵢ · … · Aⱼ** and **S₂ = Bₖ · … · Bₗ** be two _contiguous_
+sequences of hops (“slices”).
+We must show:
+
+```
+DB₀, σ₀  ──[ any IC3-allowed interleaving of S₁ ▷ S₂ ]──▶  DB₁, σ₁
+DB₀, σ₀  ──[ same interleaving but with S₂ ▷ S₁ ]──────▶  DB₂, σ₂
+
+           ⇒   (DB₁ = DB₂) ∧ (σ₁ = σ₂)
+```
+
+where `σ` collects all user-observable local variables that are live at that point.
+
+### 3.3  Generating the Interleavings
+
+IC3 sometimes _waits_ for particular pieces. We need to have an algorithm to describe this process. TODO
+
+### 3.4  Static Facts Required
+
+| Fact | Origin | Already available |
+|------|--------|-------------------|
+| Read- & write-set of each hop | CFG construction | **Yes** |
+| Live-in / live-out vars of any slice | Data-flow pass | **Add** |
+| List of hop pairs with C-edge | SC-graph | **Yes** |
+| S-edge ordering inside a transaction | CFG | **Yes** |
+
+### 3.5  Boogie Harness Template
+
+```boogie
+procedure Check_SliceCommut_pi()
+{
+  // 1. Havoc all external state
+  havoc DB0;
+  havoc LiveIns0;
+  DB = DB0;
+  LiveIns = LiveIns0;
+
+  // 2. Execute interleaving  π  under IC3 semantics
+  // Hop_A_i generated inlined code
+  ...
+  // Hop_B_l generated inlined code
+
+  var DB1  := DB;
+  var Out1 := LiveOuts;
+
+  // 3. Reset and run mirror interleaving  πᴿ
+  DB = DB0;
+  LiveIns = LiveIns0;
+
+  ...
+  
+  assert DB1  == DB;
+  assert Out1 == LiveOuts;
+}
+```
+
+A failing assertion signals a genuine serialisation anomaly.
+
+
+
+## 4  Compiler Integration
+
+```
+AST  →  CFG  →  (optimise)  →  SC-graph
+                    │
+                    ▼
+            Data-flow Analysis
+                    │
+                    ▼
+           Verification Artifact
+           (Boogie + SMT-LIB)
+```
+
+* **Verification Backend** – lives in `src/verify/`.
+* **Harness Generator** – attaches to `Compiler::finish()`.
+* **CLI Flag** – `--verify [p1|p2|all]` activates proof emission.  
+  Verification runs _after_ SC-graph construction.
+
+
