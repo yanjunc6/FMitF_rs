@@ -173,14 +173,20 @@ impl OutputManager {
 
     /// Write pretty-printed CFG
     fn write_cfg_pretty(&self, result: &CompilationResult, path: &PathBuf) -> Result<(), String> {
+        let file_path = path.join("cfg_pretty.txt");
+
+        // Skip writing if file already exists (to avoid overwriting manual CFG files)
+        if file_path.exists() {
+            return Ok(());
+        }
+
         use crate::pretty::{CfgPrinter, PrettyPrinter};
 
         let printer = CfgPrinter::new();
         let cfg_content = printer
             .print_to_string(&result.cfg_program)
             .map_err(|e| format!("Failed to pretty-print CFG: {}", e))?;
-        let file_path = path.join("cfg_pretty.txt");
-        fs::write(file_path, cfg_content)
+        std::fs::write(file_path, cfg_content)
             .map_err(|e| format!("Failed to write CFG pretty: {}", e))?;
         Ok(())
     }
