@@ -18,19 +18,16 @@ void test_constant_propagation() {
     }
 }
 
-void test_dead_code_elimination() {
+void test_dead_code_elimination(int x) {
     hop {
-        int x = 10;
         int dead_var = x + 5;  // dead_var is never used - should be eliminated
         int y = x * 2;
         TestTable[ID: 2].VALUE = y;
     }
 }
 
-void test_cse() {
+void test_cse(int x, int y) {
     hop {
-        int x = 5;
-        int y = 10;
         int a = x + y;
         int b = x + y;  // Should reuse the result from a = x + y
         int c = a + b;

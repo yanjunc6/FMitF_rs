@@ -106,45 +106,35 @@ impl Compiler {
         };
         self.write_cfg_output(&cfg, cli, "cfg")?;
 
-        // Stage 3: Optimization
-        let optimized_cfg = match self.stage_optimization(&mut cfg, cli) {
-            Ok(optimized) => optimized,
+        // Stage 3: Optimization (modifies CFG in place)
+        match self.stage_optimization(&mut cfg, cli) {
+            Ok(_) => {
+                // Optimization succeeded, write optimized version
+                self.write_cfg_output(&cfg, cli, "optimized_cfg")?;
+            }
             Err(_) => {
                 return Ok(self.fail_result(start, Some(ast), Some(cfg), None, None, None, false));
             }
         };
-        self.write_cfg_output(&optimized_cfg, cli, "optimized_cfg")?;
 
-        // Stage 4: SC-Graph
-        let scg = match self.stage_scgraph(&optimized_cfg, cli) {
+        // Stage 4: SC-Graph (using the optimized CFG)
+        let scg = match self.stage_scgraph(&cfg, cli) {
             Ok(scg) => scg,
             Err(_) => {
-                // Use default instead of cloning
-                let default_cfg = CfgProgram::default();
-                return Ok(self.fail_result(
-                    start,
-                    Some(ast),
-                    Some(default_cfg),
-                    Some(optimized_cfg),
-                    None,
-                    None,
-                    false,
-                ));
+                return Ok(self.fail_result(start, Some(ast), Some(cfg), None, None, None, false));
             }
         };
-        self.write_scgraph_output(&scg, &optimized_cfg, cli)?;
+        self.write_scgraph_output(&scg, &cfg, cli)?;
 
         // Stage 5: Verification
-        let verification_result = match self.run_verification(&optimized_cfg, &scg, cli) {
+        let verification_result = match self.run_verification(&cfg, &scg, cli) {
             Ok(result) => Some(result),
             Err(_) => {
-                // Use default instead of cloning
-                let default_cfg = CfgProgram::default();
                 return Ok(self.fail_result(
                     start,
                     Some(ast),
-                    Some(default_cfg),
-                    Some(optimized_cfg),
+                    Some(cfg),
+                    None,
                     Some(scg),
                     None,
                     false,
@@ -154,8 +144,8 @@ impl Compiler {
 
         Ok(CompilationResult {
             ast_program: ast,
-            cfg_program: cfg,
-            optimized_cfg_program: Some(optimized_cfg),
+            cfg_program: cfg,            // Store the final CFG (which is optimized)
+            optimized_cfg_program: None, // No separate optimized version
             sc_graph: scg,
             verification_result,
             success: true,
@@ -244,24 +234,16 @@ impl Compiler {
         Ok(graph)
     }
 
-    fn stage_optimization(
-        &mut self,
-        cfg: &mut CfgProgram,
-        _cli: &Cli,
-    ) -> Result<CfgProgram, String> {
+    fn stage_optimization(&mut self, cfg: &mut CfgProgram, _cli: &Cli) -> Result<(), String> {
         self.logger.stage_start(3, 5, "Running Optimization Passes");
 
-        // Return the cfg by moving it out since we can't clone CfgProgram
-        let mut optimized = CfgProgram::default();
-        std::mem::swap(cfg, &mut optimized);
-
-        // Try to actually run optimization passes to debug the issue
+        // Optimize the CFG in place
         use crate::optimization::CfgOptimizer;
         let optimizer = CfgOptimizer::default_passes();
-        let _results = optimizer.optimize_program(&mut optimized);
+        let _results = optimizer.optimize_program(cfg);
 
         self.logger.stage_success();
-        Ok(optimized)
+        Ok(())
     }
 
     fn write_ast_output(&self, ast: &AstProgram, cli: &Cli) -> Result<(), String> {
