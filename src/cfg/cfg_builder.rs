@@ -390,6 +390,20 @@ impl<'a> CfgBuilder<'a> {
                 self.with_hop_context(cfg_hop_id, block_id, |builder| {
                     let _blocks = builder.visit_statement_list(&hop.statements);
                     // Blocks are automatically registered via create_basic_block and visit_statement_list
+
+                    // Add implicit void return if the hop doesn't end with an explicit return
+                    // This is necessary for proper liveness analysis and control flow
+                    if let Some(current_block_id) = builder.current_block {
+                        let current_block = &builder.cfg.blocks[current_block_id];
+                        let has_return_edge = current_block.successors.iter().any(|edge| {
+                            matches!(edge.edge_type, EdgeType::Return { .. } | EdgeType::Abort)
+                        });
+
+                        if !has_return_edge {
+                            // Add implicit void return for transaction functions
+                            builder.add_return_to_current_block(None);
+                        }
+                    }
                 });
 
                 self.finalize_hop_with_entry_block(cfg_hop_id, func_id, block_id);

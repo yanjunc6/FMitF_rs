@@ -1,7 +1,6 @@
 use crate::cfg::{
     CfgProgram, FieldId, FunctionId, LValue, Operand, Rvalue, Statement, TableId, VarId,
 };
-use crate::dataflow::{analyze_available_expressions, AnalysisLevel};
 use crate::optimization::OptimizationPass;
 use std::collections::{HashMap, HashSet};
 
@@ -31,58 +30,59 @@ impl CommonSubexpressionEliminationPass {
         }
     }
 
-    /// Check if an expression uses a specific variable
-    fn expr_uses_var(&self, rvalue: &Rvalue, var_id: VarId) -> bool {
+    /// Normalize an rvalue by following copy chains
+    fn normalize_rvalue(&self, rvalue: &Rvalue, copy_map: &HashMap<VarId, VarId>) -> Rvalue {
         match rvalue {
-            Rvalue::Use(operand) => self.operand_uses_var(operand, var_id),
-            Rvalue::TableAccess { pk_values, .. } => pk_values
-                .iter()
-                .any(|pk_value| self.operand_uses_var(pk_value, var_id)),
-            Rvalue::ArrayAccess { array, index } => {
-                self.operand_uses_var(array, var_id) || self.operand_uses_var(index, var_id)
-            }
-            Rvalue::UnaryOp { operand, .. } => self.operand_uses_var(operand, var_id),
-            Rvalue::BinaryOp { left, right, .. } => {
-                self.operand_uses_var(left, var_id) || self.operand_uses_var(right, var_id)
-            }
+            Rvalue::Use(operand) => Rvalue::Use(self.normalize_operand(operand, copy_map)),
+            Rvalue::TableAccess {
+                table,
+                pk_fields,
+                pk_values,
+                field,
+            } => Rvalue::TableAccess {
+                table: *table,
+                pk_fields: pk_fields.clone(),
+                pk_values: pk_values
+                    .iter()
+                    .map(|pk_value| self.normalize_operand(pk_value, copy_map))
+                    .collect(),
+                field: *field,
+            },
+            Rvalue::ArrayAccess { array, index } => Rvalue::ArrayAccess {
+                array: self.normalize_operand(array, copy_map),
+                index: self.normalize_operand(index, copy_map),
+            },
+            Rvalue::UnaryOp { op, operand } => Rvalue::UnaryOp {
+                op: op.clone(),
+                operand: self.normalize_operand(operand, copy_map),
+            },
+            Rvalue::BinaryOp { op, left, right } => Rvalue::BinaryOp {
+                op: op.clone(),
+                left: self.normalize_operand(left, copy_map),
+                right: self.normalize_operand(right, copy_map),
+            },
         }
     }
 
-    /// Check if an operand uses a specific variable
-    fn operand_uses_var(&self, operand: &Operand, var_id: VarId) -> bool {
+    /// Normalize an operand by following copy chains
+    fn normalize_operand(&self, operand: &Operand, copy_map: &HashMap<VarId, VarId>) -> Operand {
         match operand {
-            Operand::Var(v) => *v == var_id,
-            Operand::Const(_) => false,
-        }
-    }
+            Operand::Var(var_id) => {
+                // Follow the copy chain to get the ultimate source
+                let mut current_var = *var_id;
+                let mut seen = HashSet::new();
 
-    /// Kill expressions that read from a specific table/field
-    fn kill_table_expressions(
-        &self,
-        available: &mut HashSet<Rvalue>,
-        table_id: TableId,
-        field_id: FieldId,
-    ) {
-        available.retain(|expr| match expr {
-            Rvalue::TableAccess { table, field, .. } => !(*table == table_id && *field == field_id),
-            _ => true,
-        });
-    }
+                while let Some(&source_var) = copy_map.get(&current_var) {
+                    if !seen.insert(current_var) {
+                        // Cycle detected, break
+                        break;
+                    }
+                    current_var = source_var;
+                }
 
-    /// Update available expressions after a variable assignment
-    /// Remove expressions that use the defined variable and add the new expression
-    fn update_available_after_var_assign(
-        &self,
-        available: &mut HashSet<Rvalue>,
-        defined_var: VarId,
-        rvalue: &Rvalue,
-    ) {
-        // Kill expressions that use the defined variable
-        available.retain(|expr| !self.expr_uses_var(expr, defined_var));
-
-        // Add the new expression if it's a CSE candidate
-        if self.is_cse_candidate(rvalue) {
-            available.insert(rvalue.clone());
+                Operand::Var(current_var)
+            }
+            Operand::Const(c) => Operand::Const(c.clone()),
         }
     }
 }
@@ -99,30 +99,58 @@ impl OptimizationPass for CommonSubexpressionEliminationPass {
             None => return false,
         };
 
-        let available_expr_results =
-            analyze_available_expressions(program, func_id, AnalysisLevel::Function);
+        eprintln!("        COMMON SUBEXPRESSION ELIMINATION DEBUG:");
+
         let mut changed = false;
 
-        // Track expressions to their defining variables across the entire function
+        // First, build a copy propagation map to normalize expressions
+        // This maps variables to their simple copy sources (var = other_var assignments)
+        let mut copy_map: HashMap<VarId, VarId> = HashMap::new();
+
+        // Process each basic block to find copy assignments
+        for &block_id in &func.blocks {
+            if let Some(block) = program.blocks.get(block_id) {
+                for stmt in &block.statements {
+                    if let Statement::Assign {
+                        lvalue: LValue::Variable { var },
+                        rvalue: Rvalue::Use(Operand::Var(source_var)),
+                        ..
+                    } = stmt
+                    {
+                        // This is a simple copy: var = source_var
+                        // Follow the copy chain to get the ultimate source
+                        let mut ultimate_source = *source_var;
+                        while let Some(&next_source) = copy_map.get(&ultimate_source) {
+                            if next_source == ultimate_source {
+                                break; // Avoid cycles
+                            }
+                            ultimate_source = next_source;
+                        }
+                        copy_map.insert(*var, ultimate_source);
+                        eprintln!("        Copy: {:?} -> {:?}", var, ultimate_source);
+                    }
+                }
+            }
+        }
+
+        eprintln!("        Built copy map with {} entries", copy_map.len());
+
+        // Track normalized expressions to their defining variables
         let mut expr_to_var: HashMap<Rvalue, VarId> = HashMap::new();
 
         // Process each basic block
         let function_blocks = func.blocks.clone();
         for block_id in function_blocks {
             if let Some(block) = program.blocks.get_mut(block_id) {
-                // Get available expressions at entry of this block
-                let available_at_entry =
-                    if let Some(lattice) = available_expr_results.entry.get(&block_id) {
-                        lattice.as_set().unwrap_or(&HashSet::new()).clone()
-                    } else {
-                        HashSet::new()
-                    };
+                eprintln!(
+                    "        Block {:?}: {} statements",
+                    block_id,
+                    block.statements.len()
+                );
 
-                // Track available expressions through this block
-                let mut current_available = available_at_entry;
                 let mut new_statements = Vec::new();
 
-                for stmt in &block.statements {
+                for (stmt_idx, stmt) in block.statements.iter().enumerate() {
                     let Statement::Assign {
                         lvalue,
                         rvalue,
@@ -131,9 +159,15 @@ impl OptimizationPass for CommonSubexpressionEliminationPass {
 
                     match lvalue {
                         LValue::Variable { var } => {
-                            // Check if this expression is already available and we have a variable for it
-                            if self.is_cse_candidate(rvalue) && current_available.contains(rvalue) {
-                                if let Some(&existing_var) = expr_to_var.get(rvalue) {
+                            // Normalize the expression using copy propagation
+                            let normalized_rvalue = self.normalize_rvalue(rvalue, &copy_map);
+
+                            // Check if this normalized expression is already available
+                            if self.is_cse_candidate(&normalized_rvalue) {
+                                if let Some(&existing_var) = expr_to_var.get(&normalized_rvalue) {
+                                    eprintln!("        [{}] CSE OPTIMIZATION: {:?} = {:?} -> {:?} = Use({:?}) [normalized: {:?}]", 
+                                             stmt_idx, lvalue, rvalue, lvalue, existing_var, normalized_rvalue);
+
                                     // Replace with a simple variable use
                                     let new_stmt = Statement::Assign {
                                         lvalue: lvalue.clone(),
@@ -142,46 +176,34 @@ impl OptimizationPass for CommonSubexpressionEliminationPass {
                                     };
                                     new_statements.push(new_stmt);
                                     changed = true;
-
-                                    // Update available expressions (the assignment itself doesn't change availability)
-                                    self.update_available_after_var_assign(
-                                        &mut current_available,
-                                        *var,
-                                        &Rvalue::Use(Operand::Var(existing_var)),
-                                    );
                                     continue;
                                 }
+
+                                // Track this normalized expression
+                                eprintln!(
+                                    "        [{}] Tracking CSE candidate: {:?} -> {:?} [normalized: {:?}]",
+                                    stmt_idx, rvalue, var, normalized_rvalue
+                                );
+                                expr_to_var.insert(normalized_rvalue, *var);
                             }
 
-                            // Keep the original statement
+                            eprintln!("        [{}] KEEP: {:?} = {:?}", stmt_idx, lvalue, rvalue);
+
+                            // Keep the original statement (not the normalized one, to preserve semantics)
                             new_statements.push(stmt.clone());
-
-                            // Track this expression if it's a CSE candidate
-                            if self.is_cse_candidate(rvalue) {
-                                expr_to_var.insert(rvalue.clone(), *var);
-                            }
-
-                            // Update available expressions
-                            self.update_available_after_var_assign(
-                                &mut current_available,
-                                *var,
-                                rvalue,
+                        }
+                        LValue::ArrayElement { .. } | LValue::TableField { .. } => {
+                            // Array and table assignments always kept as-is
+                            eprintln!(
+                                "        [{}] KEEP: {:?} = {:?} (array/table write)",
+                                stmt_idx, lvalue, rvalue
                             );
-                        }
-                        LValue::TableField { table, field, .. } => {
-                            // Table assignments can invalidate expressions that read from the same table/field
-                            self.kill_table_expressions(&mut current_available, *table, *field);
-                            new_statements.push(stmt.clone());
-                        }
-                        LValue::ArrayElement { array, .. } => {
-                            // Array assignments can invalidate expressions that use the array
-                            current_available.retain(|expr| !self.expr_uses_var(expr, *array));
                             new_statements.push(stmt.clone());
                         }
                     }
                 }
 
-                // Update the block with optimized statements
+                // Update the block with the new statements
                 block.statements = new_statements;
             }
         }

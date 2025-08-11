@@ -167,8 +167,19 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
             for &block_id in &func.blocks {
                 let block = &cfg_program.blocks[block_id];
                 let (old_in, old_out) = self.get_in_out_values(&entry, &exit, block_id);
-                let new_in = self.compute_in_value(func, block, block_id, &entry, &exit);
-                let new_out = self.transfer_block(block, &new_in);
+
+                let (new_in, new_out) = match self.direction {
+                    Direction::Forward => {
+                        let new_in = self.compute_in_value(func, block, block_id, &entry, &exit);
+                        let new_out = self.transfer_block(block, &new_in);
+                        (new_in, new_out)
+                    }
+                    Direction::Backward => {
+                        let new_out = self.compute_out_value(func, block, block_id, &entry, &exit);
+                        let new_in = self.transfer_block_backward(block, &new_out);
+                        (new_in, new_out)
+                    }
+                };
 
                 if self.update_and_check_change(
                     &mut entry, &mut exit, block_id, new_in, new_out, old_in, old_out,
@@ -210,9 +221,23 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                     for &block_id in &hop.blocks {
                         let block = &cfg_program.blocks[block_id];
                         let (old_in, old_out) = self.get_in_out_values(&entry, &exit, block_id);
-                        let new_in =
-                            self.compute_in_value_hop_level(hop, block, block_id, &entry, &exit);
-                        let new_out = self.transfer_block(block, &new_in);
+
+                        let (new_in, new_out) = match self.direction {
+                            Direction::Forward => {
+                                let new_in = self.compute_in_value_hop_level(
+                                    hop, block, block_id, &entry, &exit,
+                                );
+                                let new_out = self.transfer_block(block, &new_in);
+                                (new_in, new_out)
+                            }
+                            Direction::Backward => {
+                                let new_out = self.compute_out_value_hop_level(
+                                    hop, block, block_id, &entry, &exit,
+                                );
+                                let new_in = self.transfer_block_backward(block, &new_out);
+                                (new_in, new_out)
+                            }
+                        };
 
                         if self.update_and_check_change(
                             &mut entry, &mut exit, block_id, new_in, new_out, old_in, old_out,
@@ -334,6 +359,33 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
         }
     }
 
+    fn compute_out_value(
+        &self,
+        _func: &FunctionCfg,
+        block: &BasicBlock,
+        block_id: BasicBlockId,
+        entry: &HashMap<BasicBlockId, L>,
+        exit: &HashMap<BasicBlockId, L>,
+    ) -> L {
+        let neighbors = &block.successors;
+
+        if neighbors.is_empty() {
+            // No neighbors - keep current value for boundary blocks
+            exit[&block_id].clone()
+        } else {
+            // For backward analysis, join all successor entry values
+            let mut result: Option<L> = None;
+            for edge in neighbors {
+                let neighbor_value = &entry[&edge.to];
+                result = Some(match result {
+                    None => neighbor_value.clone(),
+                    Some(acc) => acc.join(neighbor_value),
+                });
+            }
+            result.unwrap_or_else(|| L::bottom().unwrap_or_else(|| self.transfer.initial_value()))
+        }
+    }
+
     fn compute_in_value_hop_level(
         &self,
         hop: &HopCfg,
@@ -385,6 +437,45 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
         }
     }
 
+    fn compute_out_value_hop_level(
+        &self,
+        hop: &HopCfg,
+        block: &BasicBlock,
+        block_id: BasicBlockId,
+        entry: &HashMap<BasicBlockId, L>,
+        exit: &HashMap<BasicBlockId, L>,
+    ) -> L {
+        let neighbors = &block.successors;
+
+        if neighbors.is_empty() {
+            // No neighbors - keep current value for boundary blocks
+            exit[&block_id].clone()
+        } else {
+            // Join values from successors that are within the same hop
+            let mut result: Option<L> = None;
+            for edge in neighbors {
+                let neighbor_block_id = edge.to;
+
+                // Only consider neighbors that are within the same hop
+                if hop.blocks.contains(&neighbor_block_id) {
+                    let neighbor_value = &entry[&neighbor_block_id];
+                    result = Some(match result {
+                        None => neighbor_value.clone(),
+                        Some(acc) => acc.join(neighbor_value),
+                    });
+                } else {
+                    // Neighbor is outside this hop - use initial value for boundary
+                    let initial = self.transfer.initial_value();
+                    result = Some(match result {
+                        None => initial,
+                        Some(acc) => acc.join(&initial),
+                    });
+                }
+            }
+            result.unwrap_or_else(|| L::bottom().unwrap_or_else(|| self.transfer.initial_value()))
+        }
+    }
+
     fn transfer_block(&self, block: &BasicBlock, in_value: &L) -> L {
         let mut current = in_value.clone();
 
@@ -407,6 +498,20 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                     current = self.transfer.transfer_statement(stmt, &current);
                 }
             }
+        }
+
+        current
+    }
+
+    fn transfer_block_backward(&self, block: &BasicBlock, out_value: &L) -> L {
+        let mut current = out_value.clone();
+
+        // For backward analysis: apply edges in reverse, then statements in reverse
+        for edge in block.successors.iter().rev() {
+            current = self.transfer.transfer_edge(edge, &current);
+        }
+        for stmt in block.statements.iter().rev() {
+            current = self.transfer.transfer_statement(stmt, &current);
         }
 
         current
