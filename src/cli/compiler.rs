@@ -16,6 +16,7 @@ use std::time::Instant;
 pub struct CompilationResult {
     pub ast_program: AstProgram,
     pub cfg_program: CfgProgram,
+    pub optimized_cfg_program: Option<CfgProgram>,
     pub sc_graph: crate::sc_graph::SCGraph,
     pub verification_result: Option<PartitionVerificationResult>,
     pub success: bool,
@@ -86,33 +87,75 @@ impl Compiler {
     pub fn compile(&mut self, source_code: &str, cli: &Cli) -> Result<CompilationResult, String> {
         let start = Instant::now();
         self.logger.compilation_start(&cli.input);
+
+        // Stage 1: AST
         let ast = match self.stage_ast(source_code) {
             Ok(ast) => ast,
             Err(_) => {
-                return Ok(self.fail_result(start, None, None, None, None, false));
+                return Ok(self.fail_result(start, None, None, None, None, None, false));
             }
         };
-        let cfg = match self.stage_cfg(&ast) {
+        self.write_ast_output(&ast, cli)?;
+
+        // Stage 2: CFG
+        let mut cfg = match self.stage_cfg(&ast) {
             Ok(cfg) => cfg,
             Err(_) => {
-                return Ok(self.fail_result(start, Some(ast), None, None, None, false));
+                return Ok(self.fail_result(start, Some(ast), None, None, None, None, false));
             }
         };
-        let scg = match self.stage_scgraph(&cfg, cli) {
+        self.write_cfg_output(&cfg, cli, "cfg")?;
+
+        // Stage 3: Optimization
+        let optimized_cfg = match self.stage_optimization(&mut cfg, cli) {
+            Ok(optimized) => optimized,
+            Err(_) => {
+                return Ok(self.fail_result(start, Some(ast), Some(cfg), None, None, None, false));
+            }
+        };
+        self.write_cfg_output(&optimized_cfg, cli, "optimized_cfg")?;
+
+        // Stage 4: SC-Graph
+        let scg = match self.stage_scgraph(&optimized_cfg, cli) {
             Ok(scg) => scg,
             Err(_) => {
-                return Ok(self.fail_result(start, Some(ast), Some(cfg), None, None, false));
+                // Use default instead of cloning
+                let default_cfg = CfgProgram::default();
+                return Ok(self.fail_result(
+                    start,
+                    Some(ast),
+                    Some(default_cfg),
+                    Some(optimized_cfg),
+                    None,
+                    None,
+                    false,
+                ));
             }
         };
-        let verification_result = match self.run_verification(&cfg, &scg, cli) {
+        self.write_scgraph_output(&scg, &optimized_cfg, cli)?;
+
+        // Stage 5: Verification
+        let verification_result = match self.run_verification(&optimized_cfg, &scg, cli) {
             Ok(result) => Some(result),
             Err(_) => {
-                return Ok(self.fail_result(start, Some(ast), Some(cfg), Some(scg), None, false));
+                // Use default instead of cloning
+                let default_cfg = CfgProgram::default();
+                return Ok(self.fail_result(
+                    start,
+                    Some(ast),
+                    Some(default_cfg),
+                    Some(optimized_cfg),
+                    Some(scg),
+                    None,
+                    false,
+                ));
             }
         };
+
         Ok(CompilationResult {
             ast_program: ast,
             cfg_program: cfg,
+            optimized_cfg_program: Some(optimized_cfg),
             sc_graph: scg,
             verification_result,
             success: true,
@@ -125,6 +168,7 @@ impl Compiler {
         start: Instant,
         ast: Option<AstProgram>,
         cfg: Option<CfgProgram>,
+        optimized_cfg: Option<CfgProgram>,
         scg: Option<crate::sc_graph::SCGraph>,
         verification_result: Option<PartitionVerificationResult>,
         success: bool,
@@ -132,6 +176,7 @@ impl Compiler {
         CompilationResult {
             ast_program: ast.unwrap_or_default(),
             cfg_program: cfg.unwrap_or_default(),
+            optimized_cfg_program: optimized_cfg,
             sc_graph: scg.unwrap_or_default(),
             verification_result,
             success,
@@ -197,6 +242,117 @@ impl Compiler {
         let graph = builder.build(cfg);
         self.logger.stage_success();
         Ok(graph)
+    }
+
+    fn stage_optimization(
+        &mut self,
+        cfg: &mut CfgProgram,
+        _cli: &Cli,
+    ) -> Result<CfgProgram, String> {
+        self.logger.stage_start(3, 5, "Running Optimization Passes");
+
+        // Return the cfg by moving it out since we can't clone CfgProgram
+        let mut optimized = CfgProgram::default();
+        std::mem::swap(cfg, &mut optimized);
+
+        // Try to actually run optimization passes to debug the issue
+        use crate::optimization::CfgOptimizer;
+        let optimizer = CfgOptimizer::default_passes();
+        let _results = optimizer.optimize_program(&mut optimized);
+
+        self.logger.stage_success();
+        Ok(optimized)
+    }
+
+    fn write_ast_output(&self, ast: &AstProgram, cli: &Cli) -> Result<(), String> {
+        let output_dir = cli.get_output_dir();
+        std::fs::create_dir_all(&output_dir)
+            .map_err(|e| format!("Failed to create output directory: {}", e))?;
+
+        // Write AST files directly
+        let ast_dump_path = output_dir.join("ast_dump.txt");
+        let ast_pretty_path = output_dir.join("ast_pretty.txt");
+
+        // Write AST dump
+        let ast_dump = format!("{:#?}", ast);
+        std::fs::write(&ast_dump_path, ast_dump)
+            .map_err(|e| format!("Failed to write ast_dump.txt: {}", e))?;
+
+        // Write AST pretty print
+        use crate::pretty::print_program_to_string;
+        let ast_pretty = print_program_to_string(ast)
+            .map_err(|e| format!("Failed to pretty print AST: {}", e))?;
+        std::fs::write(&ast_pretty_path, ast_pretty)
+            .map_err(|e| format!("Failed to write ast_pretty.txt: {}", e))?;
+
+        Ok(())
+    }
+
+    fn write_cfg_output(&self, cfg: &CfgProgram, cli: &Cli, prefix: &str) -> Result<(), String> {
+        let output_dir = cli.get_output_dir();
+        std::fs::create_dir_all(&output_dir)
+            .map_err(|e| format!("Failed to create output directory: {}", e))?;
+
+        // Write CFG files with prefix for optimization comparison
+        let cfg_dump_path = output_dir.join(format!("{}_dump.txt", prefix));
+        let cfg_pretty_path = output_dir.join(format!("{}_pretty.txt", prefix));
+
+        // Write CFG dump
+        let cfg_dump = format!("{:#?}", cfg);
+        std::fs::write(&cfg_dump_path, cfg_dump)
+            .map_err(|e| format!("Failed to write {}_dump.txt: {}", prefix, e))?;
+
+        // Write CFG pretty print
+        use crate::pretty::{CfgPrinter, PrettyPrinter};
+        let printer = CfgPrinter::new();
+        let cfg_pretty = printer
+            .print_to_string(cfg)
+            .map_err(|e| format!("Failed to pretty print CFG: {}", e))?;
+        std::fs::write(&cfg_pretty_path, cfg_pretty)
+            .map_err(|e| format!("Failed to write {}_pretty.txt: {}", prefix, e))?;
+
+        Ok(())
+    }
+
+    fn write_scgraph_output(
+        &self,
+        scg: &crate::sc_graph::SCGraph,
+        cfg: &CfgProgram,
+        cli: &Cli,
+    ) -> Result<(), String> {
+        let output_dir = cli.get_output_dir();
+        std::fs::create_dir_all(&output_dir)
+            .map_err(|e| format!("Failed to create output directory: {}", e))?;
+
+        // Write SC-Graph files
+        let scgraph_dump_path = output_dir.join("scgraph_dump.txt");
+        let scgraph_pretty_path = output_dir.join("scgraph_pretty.txt");
+        let scgraph_dot_path = output_dir.join("scgraph.dot");
+
+        // Write SC-Graph dump
+        let scgraph_dump = format!("{:#?}", scg);
+        std::fs::write(&scgraph_dump_path, scgraph_dump)
+            .map_err(|e| format!("Failed to write scgraph_dump.txt: {}", e))?;
+
+        // Write SC-Graph pretty print
+        use crate::pretty::{DotPrinter, PrettyPrinter, SCGraphPrinter};
+        let printer = SCGraphPrinter::new();
+        let scgraph_pretty = printer
+            .print_to_string(scg)
+            .map_err(|e| format!("Failed to pretty print SC-Graph: {}", e))?;
+        std::fs::write(&scgraph_pretty_path, scgraph_pretty)
+            .map_err(|e| format!("Failed to write scgraph_pretty.txt: {}", e))?;
+
+        // Write SC-Graph DOT file using generate_dot method
+        let dot_printer = DotPrinter::new();
+        let mut dot_content = Vec::new();
+        dot_printer
+            .generate_dot(scg, cfg, &mut dot_content)
+            .map_err(|e| format!("Failed to generate DOT file: {}", e))?;
+        std::fs::write(&scgraph_dot_path, dot_content)
+            .map_err(|e| format!("Failed to write scgraph.dot: {}", e))?;
+
+        Ok(())
     }
 
     pub fn handle_output(&self, result: &mut CompilationResult, cli: &Cli) -> Result<(), String> {

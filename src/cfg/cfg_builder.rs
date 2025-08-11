@@ -1557,7 +1557,21 @@ impl<'a> CfgBuilder<'a> {
             predecessors: Vec::new(),
             successors: Vec::new(),
         };
-        self.cfg.blocks.alloc(block)
+        let block_id = self.cfg.blocks.alloc(block);
+
+        // Register the block in the hop's block list if not already present
+        if !self.cfg.hops[hop_id].blocks.contains(&block_id) {
+            self.cfg.hops[hop_id].blocks.push(block_id);
+        }
+
+        // Register the block in the current function's block list if not already present
+        if let Some(func_id) = self.current_function {
+            if !self.cfg.functions[func_id].blocks.contains(&block_id) {
+                self.cfg.functions[func_id].blocks.push(block_id);
+            }
+        }
+
+        block_id
     }
 
     fn add_statements_to_current_block(&mut self, stmts: Vec<Statement>) {
