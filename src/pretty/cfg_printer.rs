@@ -70,6 +70,126 @@ impl<'a> CfgPrintVisitor<'a> {
             TypeName::Table(name) => name.clone(),
         }
     }
+
+    /// Format edge type in a human-readable way
+    fn format_edge_type(&self, edge_type: &crate::cfg::EdgeType) -> String {
+        use crate::cfg::EdgeType;
+        match edge_type {
+            EdgeType::Unconditional => "unconditional".to_string(),
+            EdgeType::ConditionalTrue { condition } => {
+                format!("if {}", self.format_operand(condition))
+            }
+            EdgeType::ConditionalFalse { condition } => {
+                format!("if !{}", self.format_operand(condition))
+            }
+            EdgeType::Return { value } => match value {
+                Some(op) => format!("return {}", self.format_operand(op)),
+                None => "return".to_string(),
+            },
+            EdgeType::Abort => "abort".to_string(),
+            EdgeType::HopExit { next_hop } => match next_hop {
+                Some(hop_id) => format!("hop_exit -> hop_{}", hop_id.index()),
+                None => "hop_exit".to_string(),
+            },
+        }
+    }
+
+    /// Format operand for edge descriptions (immutable version)
+    fn format_operand(&self, op: &Operand) -> String {
+        match op {
+            Operand::Var(var_id) => {
+                if let Some(var) = self.program.variables.get(*var_id) {
+                    self.format_variable_name(var)
+                } else {
+                    format!("var_{}", var_id.index())
+                }
+            }
+            Operand::Const(constant) => self.format_constant(constant),
+        }
+    }
+
+    /// Format variable name based on its kind and name
+    fn format_variable_name(&self, var: &Variable) -> String {
+        use crate::cfg::VariableKind;
+        match var.kind {
+            VariableKind::Temporary => {
+                if var.name.starts_with("_t") {
+                    format!("tmp_{}", var.name.strip_prefix("_t").unwrap_or("?"))
+                } else {
+                    var.name.clone()
+                }
+            }
+            VariableKind::Global => format!("global_{}", var.name),
+            VariableKind::Parameter => format!("param_{}", var.name),
+            VariableKind::Local => var.name.clone(),
+        }
+    }
+
+    /// Format return type in a readable way
+    fn format_return_type(&self, ret_type: &crate::cfg::ReturnType) -> String {
+        use crate::cfg::ReturnType;
+        match ret_type {
+            ReturnType::Void => "void".to_string(),
+            ReturnType::Type(ty) => self.format_type(ty),
+        }
+    }
+
+    /// Format variable kind in a readable way  
+    fn format_variable_kind(&self, kind: &crate::cfg::VariableKind) -> String {
+        use crate::cfg::VariableKind;
+        match kind {
+            VariableKind::Global => "global".to_string(),
+            VariableKind::Parameter => "parameter".to_string(),
+            VariableKind::Local => "local".to_string(),
+            VariableKind::Temporary => "temporary".to_string(),
+        }
+    }
+
+    /// Format binary operators in a readable way
+    fn format_binary_op(&self, op: &crate::ast::BinaryOp) -> String {
+        use crate::ast::BinaryOp;
+        match op {
+            BinaryOp::Add => "+".to_string(),
+            BinaryOp::Sub => "-".to_string(),
+            BinaryOp::Mul => "*".to_string(),
+            BinaryOp::Div => "/".to_string(),
+            BinaryOp::Lt => "<".to_string(),
+            BinaryOp::Lte => "<=".to_string(),
+            BinaryOp::Gt => ">".to_string(),
+            BinaryOp::Gte => ">=".to_string(),
+            BinaryOp::Eq => "==".to_string(),
+            BinaryOp::Neq => "!=".to_string(),
+            BinaryOp::And => "&&".to_string(),
+            BinaryOp::Or => "||".to_string(),
+        }
+    }
+
+    /// Format unary operators in a readable way
+    fn format_unary_op(&self, op: &crate::ast::UnaryOp) -> String {
+        use crate::ast::UnaryOp;
+        match op {
+            UnaryOp::Not => "!".to_string(),
+            UnaryOp::Neg => "-".to_string(),
+            UnaryOp::PreIncrement => "++".to_string(),
+            UnaryOp::PostIncrement => "++".to_string(),
+            UnaryOp::PreDecrement => "--".to_string(),
+            UnaryOp::PostDecrement => "--".to_string(),
+        }
+    }
+
+    /// Format constant for edge descriptions (immutable version)
+    fn format_constant(&self, c: &crate::cfg::Constant) -> String {
+        match c {
+            crate::cfg::Constant::Int(i) => i.to_string(),
+            crate::cfg::Constant::Float(f) => f.to_string(),
+            crate::cfg::Constant::Bool(b) => b.to_string(),
+            crate::cfg::Constant::String(s) => format!("\"{}\"", s),
+            crate::cfg::Constant::Array(arr) => {
+                let elements: Vec<String> = arr.iter().map(|c| self.format_constant(c)).collect();
+                format!("[{}]", elements.join(", "))
+            }
+        }
+    }
 }
 
 impl<'a> CfgVisitor<std::io::Result<()>> for CfgPrintVisitor<'a> {
@@ -139,16 +259,59 @@ impl<'a> CfgVisitor<std::io::Result<()>> for CfgPrintVisitor<'a> {
         self.write_indent()?;
         writeln!(
             self.writer,
-            "function {} (id: {:?}) -> {:?} [hops: {}, blocks: {}] {{",
+            "function {} (id: {}) -> {} [type: {:?}, hops: {}, blocks: {}] {{",
             function.name,
-            id,
-            function.return_type,
+            id.index(),
+            self.format_return_type(&function.return_type),
+            function.function_type,
             function.hops.len(),
             function.blocks.len()
         )?;
 
-        // Print hops
         self.increase_indent();
+
+        // Print parameters
+        if !function.parameters.is_empty() {
+            self.write_indent()?;
+            writeln!(self.writer, "parameters:")?;
+            self.increase_indent();
+            for &param_id in &function.parameters {
+                if let Some(param) = program.variables.get(param_id) {
+                    self.write_indent()?;
+                    writeln!(
+                        self.writer,
+                        "{}: {}",
+                        param.name,
+                        self.format_type(&param.ty)
+                    )?;
+                }
+            }
+            self.decrease_indent();
+            writeln!(self.writer)?;
+        }
+
+        // Print local variables
+        if !function.local_variables.is_empty() {
+            self.write_indent()?;
+            writeln!(self.writer, "local_variables:")?;
+            self.increase_indent();
+            for &var_id in &function.local_variables {
+                if let Some(var) = program.variables.get(var_id) {
+                    self.write_indent()?;
+                    writeln!(
+                        self.writer,
+                        "{}: {} ({})",
+                        self.format_variable_name(var),
+                        self.format_type(&var.ty),
+                        self.format_variable_kind(&var.kind)
+                    )?;
+                }
+            }
+            self.decrease_indent();
+            writeln!(self.writer)?;
+        }
+
+        // Print hops
         for &hop_id in &function.hops {
             self.visit_hop(program, hop_id)?;
         }
@@ -165,9 +328,9 @@ impl<'a> CfgVisitor<std::io::Result<()>> for CfgPrintVisitor<'a> {
         self.write_indent()?;
         writeln!(
             self.writer,
-            "hop_{:?} (func: {:?}) [blocks: {}] {{",
-            id,
-            hop.function_id,
+            "hop_{} (func: {}) [blocks: {}] {{",
+            id.index(),
+            hop.function_id.index(),
             hop.blocks.len()
         )?;
 
@@ -189,9 +352,9 @@ impl<'a> CfgVisitor<std::io::Result<()>> for CfgPrintVisitor<'a> {
         self.write_indent()?;
         writeln!(
             self.writer,
-            "block{} (hop: {:?}) [stmts: {}] {{",
+            "block_{} (hop: hop_{}) [stmts: {}] {{",
             id.index(),
-            block.hop_id,
+            block.hop_id.index(),
             block.statements.len()
         )?;
 
@@ -211,12 +374,8 @@ impl<'a> CfgVisitor<std::io::Result<()>> for CfgPrintVisitor<'a> {
             self.increase_indent();
             for edge in &block.successors {
                 self.write_indent()?;
-                writeln!(
-                    self.writer,
-                    "-> block{} ({:?})",
-                    edge.to.index(),
-                    edge.edge_type
-                )?;
+                let edge_desc = self.format_edge_type(&edge.edge_type);
+                writeln!(self.writer, "-> block_{} ({})", edge.to.index(), edge_desc)?;
             }
             self.decrease_indent();
         }
@@ -250,11 +409,20 @@ impl<'a> StmtVisitor<String> for CfgPrintVisitor<'a> {
     fn visit_lvalue(&mut self, lv: &LValue) -> String {
         match lv {
             LValue::Variable { var } => {
-                format!("var_{:?}", var.index())
+                if let Some(var_info) = self.program.variables.get(*var) {
+                    self.format_variable_name(var_info)
+                } else {
+                    format!("var_{}", var.index())
+                }
             }
             LValue::ArrayElement { array, index } => {
+                let array_name = if let Some(var_info) = self.program.variables.get(*array) {
+                    self.format_variable_name(var_info)
+                } else {
+                    format!("var_{}", array.index())
+                };
                 let index_str = self.visit_operand(index);
-                format!("var_{:?}[{}]", array.index(), index_str)
+                format!("{}[{}]", array_name, index_str)
             }
             LValue::TableField {
                 table,
@@ -313,19 +481,27 @@ impl<'a> StmtVisitor<String> for CfgPrintVisitor<'a> {
             }
             Rvalue::UnaryOp { op, operand } => {
                 let operand_str = self.visit_operand(operand);
-                format!("{:?}({})", op, operand_str)
+                let op_str = self.format_unary_op(op);
+                format!("{}{}", op_str, operand_str)
             }
             Rvalue::BinaryOp { op, left, right } => {
                 let left_str = self.visit_operand(left);
                 let right_str = self.visit_operand(right);
-                format!("({} {:?} {})", left_str, op, right_str)
+                let op_str = self.format_binary_op(op);
+                format!("({} {} {})", left_str, op_str, right_str)
             }
         }
     }
 
     fn visit_operand(&mut self, op: &Operand) -> String {
         match op {
-            Operand::Var(var_id) => format!("var_{:?}", var_id.index()),
+            Operand::Var(var_id) => {
+                if let Some(var_info) = self.program.variables.get(*var_id) {
+                    self.format_variable_name(var_info)
+                } else {
+                    format!("var_{}", var_id.index())
+                }
+            }
             Operand::Const(constant) => self.visit_constant(constant),
         }
     }
@@ -344,7 +520,7 @@ impl<'a> StmtVisitor<String> for CfgPrintVisitor<'a> {
     }
 
     fn visit_variable(&mut self, _program: &CfgProgram, v: &Variable) -> String {
-        v.name.clone()
+        self.format_variable_name(v)
     }
 }
 
