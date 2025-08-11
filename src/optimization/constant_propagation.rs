@@ -19,42 +19,100 @@ impl OptimizationPass for ConstantPropagationPass {
             None => return false,
         };
 
-        let mut changed = false;
+        eprintln!("        CONSTANT PROPAGATION DEBUG:");
 
-        // Build a map of variable constants
-        let mut var_constants: HashMap<VarId, Constant> = HashMap::new();
+        let mut overall_changed = false;
+        let mut iteration = 0;
 
-        // First pass: collect constant values for variables
-        for &block_id in &func.blocks {
-            if let Some(block) = program.blocks.get(block_id) {
-                for stmt in &block.statements {
-                    let Statement::Assign { lvalue, rvalue, .. } = stmt;
-                    if let LValue::Variable { var } = lvalue {
-                        if let Some(constant) = self.extract_constant_from_rvalue(rvalue) {
-                            var_constants.insert(*var, constant);
+        // Iterative constant propagation until fixed point
+        loop {
+            let mut iteration_changed = false;
+
+            // Build a map of variable constants
+            let mut var_constants: HashMap<VarId, Constant> = HashMap::new();
+
+            // First pass: collect constant values for variables
+            for &block_id in &func.blocks {
+                if let Some(block) = program.blocks.get(block_id) {
+                    for stmt in &block.statements {
+                        let Statement::Assign { lvalue, rvalue, .. } = stmt;
+                        if let LValue::Variable { var } = lvalue {
+                            if let Some(constant) =
+                                self.extract_constant_from_rvalue(rvalue, &var_constants)
+                            {
+                                if !var_constants.contains_key(var)
+                                    || var_constants[var] != constant
+                                {
+                                    eprintln!(
+                                        "        Iteration {}: Found constant: {:?} = {:?}",
+                                        iteration, var, constant
+                                    );
+                                    var_constants.insert(*var, constant);
+                                }
+                            }
                         }
                     }
                 }
             }
-        }
 
-        // Second pass: propagate constants
-        let function_blocks = func.blocks.clone();
-        for block_id in function_blocks {
-            if let Some(block) = program.blocks.get_mut(block_id) {
-                let mut new_statements = Vec::new();
+            eprintln!(
+                "        Iteration {}: Total constants found: {}",
+                iteration,
+                var_constants.len()
+            );
 
-                for stmt in &block.statements {
-                    let new_stmt =
-                        self.propagate_constants_in_statement(stmt, &var_constants, &mut changed);
-                    new_statements.push(new_stmt);
+            // Second pass: propagate constants and fold expressions
+            let function_blocks = func.blocks.clone();
+            for block_id in function_blocks {
+                if let Some(block) = program.blocks.get_mut(block_id) {
+                    let mut new_statements = Vec::new();
+
+                    eprintln!(
+                        "        Block {:?}: Processing {} statements",
+                        block_id,
+                        block.statements.len()
+                    );
+
+                    for (stmt_idx, stmt) in block.statements.iter().enumerate() {
+                        let mut stmt_changed = false;
+                        let new_stmt = self.propagate_constants_in_statement(
+                            stmt,
+                            &var_constants,
+                            &mut stmt_changed,
+                        );
+
+                        if stmt_changed {
+                            eprintln!(
+                                "        [{}] CHANGED: {:?} -> {:?}",
+                                stmt_idx, stmt, new_stmt
+                            );
+                            iteration_changed = true;
+                        } else {
+                            eprintln!("        [{}] UNCHANGED: {:?}", stmt_idx, stmt);
+                        }
+
+                        new_statements.push(new_stmt);
+                    }
+
+                    block.statements = new_statements;
                 }
+            }
 
-                block.statements = new_statements;
+            if iteration_changed {
+                overall_changed = true;
+                iteration += 1;
+                if iteration >= 10 {
+                    // Safety limit
+                    eprintln!("        WARNING: Constant propagation iteration limit reached");
+                    break;
+                }
+            } else {
+                eprintln!("        Fixed point reached after {} iterations", iteration);
+                break;
             }
         }
 
-        changed
+        overall_changed
     }
 }
 
@@ -63,10 +121,48 @@ impl ConstantPropagationPass {
         Self
     }
 
-    /// Extract constant value from an rvalue if it's a simple constant
-    fn extract_constant_from_rvalue(&self, rvalue: &Rvalue) -> Option<Constant> {
+    /// Extract constant value from an rvalue, considering known variable constants
+    fn extract_constant_from_rvalue(
+        &self,
+        rvalue: &Rvalue,
+        var_constants: &HashMap<VarId, Constant>,
+    ) -> Option<Constant> {
         match rvalue {
             Rvalue::Use(Operand::Const(c)) => Some(c.clone()),
+            Rvalue::Use(Operand::Var(var_id)) => {
+                // Check if this variable has a constant value
+                var_constants.get(var_id).cloned()
+            }
+            Rvalue::BinaryOp { op, left, right } => {
+                // Try to evaluate constant binary operations
+                let left_const = match left {
+                    Operand::Const(c) => Some(c),
+                    Operand::Var(var_id) => var_constants.get(var_id),
+                };
+                let right_const = match right {
+                    Operand::Const(c) => Some(c),
+                    Operand::Var(var_id) => var_constants.get(var_id),
+                };
+
+                if let (Some(left_c), Some(right_c)) = (left_const, right_const) {
+                    self.evaluate_binary_op(op, left_c, right_c)
+                } else {
+                    None
+                }
+            }
+            Rvalue::UnaryOp { op, operand } => {
+                // Try to evaluate constant unary operations
+                let operand_const = match operand {
+                    Operand::Const(c) => Some(c),
+                    Operand::Var(var_id) => var_constants.get(var_id),
+                };
+
+                if let Some(operand_c) = operand_const {
+                    self.evaluate_unary_op(op, operand_c)
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }
