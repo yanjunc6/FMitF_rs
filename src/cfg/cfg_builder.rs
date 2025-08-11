@@ -389,8 +389,7 @@ impl<'a> CfgBuilder<'a> {
 
                 self.with_hop_context(cfg_hop_id, block_id, |builder| {
                     let _blocks = builder.visit_statement_list(&hop.statements);
-                    // blocks is a list of all blocks created by statements
-                    // The first block is already created and set as current
+                    // Blocks are automatically registered in create_basic_block
                 });
 
                 self.finalize_hop_with_entry_block(cfg_hop_id, func_id, block_id);
@@ -1559,15 +1558,15 @@ impl<'a> CfgBuilder<'a> {
         };
         let block_id = self.cfg.blocks.alloc(block);
 
-        // Register the block in the hop's block list if not already present
+        // Automatically register this block in its hop
         if !self.cfg.hops[hop_id].blocks.contains(&block_id) {
             self.cfg.hops[hop_id].blocks.push(block_id);
         }
 
-        // Register the block in the current function's block list if not already present
-        if let Some(func_id) = self.current_function {
-            if !self.cfg.functions[func_id].blocks.contains(&block_id) {
-                self.cfg.functions[func_id].blocks.push(block_id);
+        // Find the function that contains this hop and register the block there
+        if let Some(function_id) = self.current_function {
+            if !self.cfg.functions[function_id].blocks.contains(&block_id) {
+                self.cfg.functions[function_id].blocks.push(block_id);
             }
         }
 
