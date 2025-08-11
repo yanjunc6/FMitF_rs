@@ -324,10 +324,10 @@ impl<'a> CfgBuilder<'a> {
                     cfg_hops.push(cfg_hop_id);
                 }
 
-                builder.cfg.functions[cfg_func_id].hops = cfg_hops.clone();
+                // Set function's hop information (visit_hop already registers hops properly)
                 if !cfg_hops.is_empty() {
                     builder.cfg.functions[cfg_func_id].entry_hop = Some(cfg_hops[0]);
-                    builder.cfg.functions[cfg_func_id].hop_order = cfg_hops;
+                    // hop_order is maintained by individual hop processing
                 }
             });
         }
@@ -389,10 +389,18 @@ impl<'a> CfgBuilder<'a> {
 
                 self.with_hop_context(cfg_hop_id, block_id, |builder| {
                     let _blocks = builder.visit_statement_list(&hop.statements);
-                    // Blocks are automatically registered in create_basic_block
+                    // Blocks are automatically registered via create_basic_block and visit_statement_list
                 });
 
                 self.finalize_hop_with_entry_block(cfg_hop_id, func_id, block_id);
+
+                // Register hop in function (avoiding duplicates)
+                if !self.cfg.functions[func_id].hops.contains(&cfg_hop_id) {
+                    self.cfg.functions[func_id].hops.push(cfg_hop_id);
+                }
+                if !self.cfg.functions[func_id].hop_order.contains(&cfg_hop_id) {
+                    self.cfg.functions[func_id].hop_order.push(cfg_hop_id);
+                }
             }
             ast::HopType::ForLoop {
                 loop_var,
@@ -405,7 +413,7 @@ impl<'a> CfgBuilder<'a> {
                 match (start_value, end_value) {
                     (Some(start_val), Some(end_val)) => {
                         // Both bounds are compile-time constants - unroll the hop loop
-                        let blocks = self.process_unrolled_hop_loop(
+                        let _blocks = self.process_unrolled_hop_loop(
                             cfg_hop_id,
                             func_id,
                             loop_var,
@@ -414,10 +422,7 @@ impl<'a> CfgBuilder<'a> {
                             *end_val,
                             &hop.statements,
                         );
-
-                        if let Some(entry_block) = blocks.first() {
-                            self.finalize_hop_with_entry_block(cfg_hop_id, func_id, *entry_block);
-                        }
+                        // process_unrolled_hop_loop handles hop registration
                     }
                     (None, _) => {
                         panic!("Hop loop start value must be a compile-time constant, but got dynamic expression");
@@ -439,7 +444,18 @@ impl<'a> CfgBuilder<'a> {
 
         for &stmt_id in stmt_ids {
             let new_blocks = self.visit_statement(stmt_id);
-            all_blocks.extend(new_blocks);
+            all_blocks.extend(new_blocks.iter().cloned());
+
+            // Ensure all newly created blocks are registered in current hop and function
+            // (This handles blocks created by control flow statements like if/for/while)
+            if let Some(current_hop) = self.current_hop {
+                for &block_id in &new_blocks {
+                    self.register_block_in_hop(current_hop, block_id);
+                    if let Some(function_id) = self.current_function {
+                        self.register_block_in_function(function_id, block_id);
+                    }
+                }
+            }
         }
 
         all_blocks
@@ -1558,19 +1574,27 @@ impl<'a> CfgBuilder<'a> {
         };
         let block_id = self.cfg.blocks.alloc(block);
 
-        // Automatically register this block in its hop
-        if !self.cfg.hops[hop_id].blocks.contains(&block_id) {
-            self.cfg.hops[hop_id].blocks.push(block_id);
-        }
-
-        // Find the function that contains this hop and register the block there
+        // Register block immediately in hop and function
+        self.register_block_in_hop(hop_id, block_id);
         if let Some(function_id) = self.current_function {
-            if !self.cfg.functions[function_id].blocks.contains(&block_id) {
-                self.cfg.functions[function_id].blocks.push(block_id);
-            }
+            self.register_block_in_function(function_id, block_id);
         }
 
         block_id
+    }
+
+    /// Register a block in a hop (avoiding duplicates)
+    fn register_block_in_hop(&mut self, hop_id: HopId, block_id: BasicBlockId) {
+        if !self.cfg.hops[hop_id].blocks.contains(&block_id) {
+            self.cfg.hops[hop_id].blocks.push(block_id);
+        }
+    }
+
+    /// Register a block in a function (avoiding duplicates)  
+    fn register_block_in_function(&mut self, func_id: FunctionId, block_id: BasicBlockId) {
+        if !self.cfg.functions[func_id].blocks.contains(&block_id) {
+            self.cfg.functions[func_id].blocks.push(block_id);
+        }
     }
 
     fn add_statements_to_current_block(&mut self, stmts: Vec<Statement>) {
@@ -1654,24 +1678,29 @@ impl<'a> CfgBuilder<'a> {
         hop_id: HopId,
         block_id: BasicBlockId,
     ) {
-        self.cfg.functions[func_id].hops.push(hop_id);
-        self.cfg.functions[func_id].blocks.push(block_id);
+        // Register hop in function
+        if !self.cfg.functions[func_id].hops.contains(&hop_id) {
+            self.cfg.functions[func_id].hops.push(hop_id);
+        }
         self.cfg.functions[func_id].entry_hop = Some(hop_id);
-        self.cfg.functions[func_id].hop_order.push(hop_id);
 
+        // Register hop in function's hop order
+        if !self.cfg.functions[func_id].hop_order.contains(&hop_id) {
+            self.cfg.functions[func_id].hop_order.push(hop_id);
+        }
+
+        // Set hop's entry block (blocks already registered via create_basic_block)
         self.cfg.hops[hop_id].entry_block = Some(block_id);
-        self.cfg.hops[hop_id].blocks.push(block_id);
     }
 
     fn finalize_hop_with_entry_block(
         &mut self,
         hop_id: HopId,
-        func_id: FunctionId,
+        _func_id: FunctionId,
         entry_block: BasicBlockId,
     ) {
+        // Set hop's entry block (block already registered via create_basic_block)
         self.cfg.hops[hop_id].entry_block = Some(entry_block);
-        self.cfg.hops[hop_id].blocks.push(entry_block);
-        self.cfg.functions[func_id].blocks.push(entry_block);
     }
 
     fn resolve_or_create_partition_function(
@@ -1808,9 +1837,16 @@ impl<'a> CfgBuilder<'a> {
             // Finalize this hop iteration
             self.finalize_hop_with_entry_block(iteration_hop_id, func_id, block_id);
 
-            // Add this hop to the function's hop list and hop order
-            self.cfg.functions[func_id].hops.push(iteration_hop_id);
-            self.cfg.functions[func_id].hop_order.push(iteration_hop_id);
+            // Add this hop to the function's hop list and hop order (avoiding duplicates)
+            if !self.cfg.functions[func_id].hops.contains(&iteration_hop_id) {
+                self.cfg.functions[func_id].hops.push(iteration_hop_id);
+            }
+            if !self.cfg.functions[func_id]
+                .hop_order
+                .contains(&iteration_hop_id)
+            {
+                self.cfg.functions[func_id].hop_order.push(iteration_hop_id);
+            }
 
             all_blocks.push(block_id);
         }
@@ -1818,6 +1854,14 @@ impl<'a> CfgBuilder<'a> {
         // Update the original hop to be the container/parent hop
         self.cfg.hops[hop_id].entry_block = all_blocks.first().copied();
         self.cfg.hops[hop_id].blocks = all_blocks.clone();
+
+        // Register the main container hop in function (avoiding duplicates)
+        if !self.cfg.functions[func_id].hops.contains(&hop_id) {
+            self.cfg.functions[func_id].hops.push(hop_id);
+        }
+        if !self.cfg.functions[func_id].hop_order.contains(&hop_id) {
+            self.cfg.functions[func_id].hop_order.push(hop_id);
+        }
 
         all_blocks
     }

@@ -2,7 +2,9 @@ use super::{
     AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
     TransferFunction,
 };
-use crate::cfg::{BasicBlock, BasicBlockId, CfgProgram, EdgeType, FunctionCfg, HopCfg};
+use crate::cfg::{
+    BasicBlock, BasicBlockId, CfgProgram, EdgeType, FunctionCfg, FunctionImplementation, HopCfg,
+};
 use std::collections::HashMap;
 
 use std::collections::HashSet;
@@ -133,6 +135,12 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
 
     /// Run dataflow analysis on a function using fixed point algorithm
     pub fn analyze(&self, func: &FunctionCfg, cfg_program: &CfgProgram) -> DataflowResults<L> {
+        if func.implementation == FunctionImplementation::Abstract {
+            return DataflowResults {
+                entry: HashMap::new(),
+                exit: HashMap::new(),
+            };
+        }
         match self.level {
             AnalysisLevel::Function => self.analyze_function_level(func, cfg_program),
             AnalysisLevel::Hop => self.analyze_hop_level(func, cfg_program),

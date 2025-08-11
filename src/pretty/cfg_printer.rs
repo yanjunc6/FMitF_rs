@@ -139,8 +139,12 @@ impl<'a> CfgVisitor<std::io::Result<()>> for CfgPrintVisitor<'a> {
         self.write_indent()?;
         writeln!(
             self.writer,
-            "function {} (id: {:?}) -> {:?} {{",
-            function.name, id, function.return_type
+            "function {} (id: {:?}) -> {:?} [hops: {}, blocks: {}] {{",
+            function.name,
+            id,
+            function.return_type,
+            function.hops.len(),
+            function.blocks.len()
         )?;
 
         // Print hops
@@ -159,7 +163,13 @@ impl<'a> CfgVisitor<std::io::Result<()>> for CfgPrintVisitor<'a> {
         let hop = &program.hops[id];
 
         self.write_indent()?;
-        writeln!(self.writer, "hop_{:?} (func: {:?}) {{", id, hop.function_id)?;
+        writeln!(
+            self.writer,
+            "hop_{:?} (func: {:?}) [blocks: {}] {{",
+            id,
+            hop.function_id,
+            hop.blocks.len()
+        )?;
 
         // Print all blocks in this hop
         self.increase_indent();
@@ -179,9 +189,10 @@ impl<'a> CfgVisitor<std::io::Result<()>> for CfgPrintVisitor<'a> {
         self.write_indent()?;
         writeln!(
             self.writer,
-            "block{} (hop: {:?}) {{",
+            "block{} (hop: {:?}) [stmts: {}] {{",
             id.index(),
-            block.hop_id
+            block.hop_id,
+            block.statements.len()
         )?;
 
         self.increase_indent();
