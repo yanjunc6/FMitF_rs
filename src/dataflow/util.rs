@@ -369,20 +369,70 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
     ) -> L {
         let neighbors = &block.successors;
 
-        if neighbors.is_empty() {
-            // No neighbors - keep current value for boundary blocks
-            exit[&block_id].clone()
-        } else {
-            // For backward analysis, join all successor entry values
-            let mut result: Option<L> = None;
-            for edge in neighbors {
-                let neighbor_value = &entry[&edge.to];
-                result = Some(match result {
-                    None => neighbor_value.clone(),
-                    Some(acc) => acc.join(neighbor_value),
-                });
+        match self.direction {
+            Direction::Forward => {
+                // For forward analysis, filter out return and abort edges as they represent
+                // function exits, not control flow to other blocks
+                let control_flow_edges: Vec<_> = neighbors
+                    .iter()
+                    .filter(|edge| {
+                        !matches!(edge.edge_type, EdgeType::Return { .. } | EdgeType::Abort)
+                    })
+                    .collect();
+
+                if control_flow_edges.is_empty() {
+                    // No control flow neighbors - this is a boundary block
+                    exit[&block_id].clone()
+                } else {
+                    // Join all successor entry values from control flow edges
+                    let mut result: Option<L> = None;
+                    for edge in control_flow_edges {
+                        let neighbor_value = &entry[&edge.to];
+                        result = Some(match result {
+                            None => neighbor_value.clone(),
+                            Some(acc) => acc.join(neighbor_value),
+                        });
+                    }
+                    result.unwrap_or_else(|| {
+                        L::bottom().unwrap_or_else(|| self.transfer.initial_value())
+                    })
+                }
             }
-            result.unwrap_or_else(|| L::bottom().unwrap_or_else(|| self.transfer.initial_value()))
+            Direction::Backward => {
+                // For backward analysis, we need to handle return/abort edges specially
+                // because they don't point to other blocks but contain liveness information
+                let control_flow_edges: Vec<_> = neighbors
+                    .iter()
+                    .filter(|edge| {
+                        !matches!(edge.edge_type, EdgeType::Return { .. } | EdgeType::Abort)
+                    })
+                    .collect();
+
+                if control_flow_edges.is_empty() {
+                    // No control flow neighbors - this is a boundary block with return/abort edges
+                    // Start with boundary value and apply transfer function for return/abort edges
+                    let mut result = self.transfer.boundary_value();
+                    for edge in neighbors {
+                        if matches!(edge.edge_type, EdgeType::Return { .. } | EdgeType::Abort) {
+                            result = self.transfer.transfer_edge(edge, &result);
+                        }
+                    }
+                    result
+                } else {
+                    // Join all successor entry values from control flow edges
+                    let mut result: Option<L> = None;
+                    for edge in control_flow_edges {
+                        let neighbor_value = &entry[&edge.to];
+                        result = Some(match result {
+                            None => neighbor_value.clone(),
+                            Some(acc) => acc.join(neighbor_value),
+                        });
+                    }
+                    result.unwrap_or_else(|| {
+                        L::bottom().unwrap_or_else(|| self.transfer.initial_value())
+                    })
+                }
+            }
         }
     }
 
