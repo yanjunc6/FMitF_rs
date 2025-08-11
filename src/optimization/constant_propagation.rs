@@ -31,27 +31,34 @@ impl OptimizationPass for ConstantPropagationPass {
             // Build a map of variable constants
             let mut var_constants: HashMap<VarId, Constant> = HashMap::new();
 
-            // First pass: collect constant values for variables
-            for &block_id in &func.blocks {
-                if let Some(block) = program.blocks.get(block_id) {
-                    for stmt in &block.statements {
-                        let Statement::Assign { lvalue, rvalue, .. } = stmt;
-                        if let LValue::Variable { var } = lvalue {
-                            if let Some(constant) =
-                                self.extract_constant_from_rvalue(rvalue, &var_constants)
-                            {
-                                if !var_constants.contains_key(var)
-                                    || var_constants[var] != constant
-                                {
-                                    eprintln!(
-                                        "        Iteration {}: Found constant: {:?} = {:?}",
-                                        iteration, var, constant
-                                    );
-                                    var_constants.insert(*var, constant);
+            // Multiple passes: collect constant values for variables iteratively within this iteration
+            // This handles chains like: tmp_1 = 42; x = tmp_1; tmp_2 = x; y = tmp_2 + 10; etc.
+            for _pass in 0..10 {
+                let mut pass_changed = false;
+                for &block_id in &func.blocks {
+                    if let Some(block) = program.blocks.get(block_id) {
+                        for stmt in &block.statements {
+                            let Statement::Assign { lvalue, rvalue, .. } = stmt;
+                            if let LValue::Variable { var } = lvalue {
+                                // Only update if we don't already have a constant for this variable
+                                if !var_constants.contains_key(var) {
+                                    if let Some(constant) =
+                                        self.extract_constant_from_rvalue(rvalue, &var_constants)
+                                    {
+                                        eprintln!(
+                                            "        Iteration {}: Found constant: {:?} = {:?}",
+                                            iteration, var, constant
+                                        );
+                                        var_constants.insert(*var, constant);
+                                        pass_changed = true;
+                                    }
                                 }
                             }
                         }
                     }
+                }
+                if !pass_changed {
+                    break; // No more constants found in this iteration
                 }
             }
 

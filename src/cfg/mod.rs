@@ -162,7 +162,7 @@ pub enum EdgeType {
     HopExit { next_hop: Option<HopId> },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
     Assign {
         lvalue: LValue,
