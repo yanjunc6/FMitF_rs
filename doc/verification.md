@@ -151,4 +151,6 @@ AST  →  CFG  →  (optimise)  →  SC-graph
 * **CLI Flag** – `--verify [p1|p2|all]` activates proof emission.  
   Verification runs _after_ SC-graph construction.
 
+## 5 Hop level simulation
 
+TODO: we need a pratical part to describe simulation of hops. It should be a one to one translation between the cfg to boogie IVL.
