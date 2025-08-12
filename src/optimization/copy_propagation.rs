@@ -1,11 +1,126 @@
-use crate::cfg::{CfgProgram, FunctionId, Operand, Statement};
-use crate::dataflow::{analyze_copies, AnalysisLevel, CopyMapLattice, StmtLoc};
-use crate::optimization::OptimizationPass;
+//! Copy Propagation Optimization Pass
+//!
+//! This pass replaces uses of variables with their copies when a copy relation exists.
+//! For example, if we have `x = y`, subsequent uses of `x` can be replaced with `y`.
 
-/// Copy Propagation optimization pass
-///
-/// Uses copy analysis to replace variable uses with their copy sources.
+use super::OptimizationPass;
+use crate::cfg::{CfgProgram, FunctionId, Operand, Rvalue, Statement};
+use crate::dataflow::{analyze_copies, CopyMapLattice, CopyRelation, StmtLoc};
+use std::collections::HashSet;
+
 pub struct CopyPropagation;
+
+impl CopyPropagation {
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Extract copy relations from lattice result
+    fn extract_copies(lattice_result: &CopyMapLattice) -> HashSet<CopyRelation> {
+        if let Some(copies) = lattice_result.as_set() {
+            copies.clone()
+        } else {
+            HashSet::new()
+        }
+    }
+
+    /// Find the transitive copy for a variable
+    fn find_copy_source(&self, var: crate::cfg::VarId, copies: &HashSet<CopyRelation>) -> crate::cfg::VarId {
+        let mut current = var;
+        let mut visited = HashSet::new();
+        
+        // Follow copy chain until we find the source or detect a cycle
+        while visited.insert(current) {
+            if let Some(copy_rel) = copies.iter().find(|rel| rel.lhs == current) {
+                current = copy_rel.rhs;
+            } else {
+                break;
+            }
+        }
+        
+        current
+    }
+
+    /// Replace operands with their copy sources if available
+    fn propagate_in_operand(&self, operand: &Operand, copies: &HashSet<CopyRelation>) -> Operand {
+        match operand {
+            Operand::Var(var_id) => {
+                let source = self.find_copy_source(*var_id, copies);
+                if source != *var_id {
+                    Operand::Var(source)
+                } else {
+                    operand.clone()
+                }
+            }
+            Operand::Const(_) => operand.clone(),
+        }
+    }
+
+    /// Propagate copies in an rvalue
+    fn propagate_in_rvalue(&self, rvalue: &Rvalue, copies: &HashSet<CopyRelation>) -> Rvalue {
+        match rvalue {
+            Rvalue::Use(operand) => Rvalue::Use(self.propagate_in_operand(operand, copies)),
+            Rvalue::BinaryOp { op, left, right } => Rvalue::BinaryOp {
+                op: op.clone(),
+                left: self.propagate_in_operand(left, copies),
+                right: self.propagate_in_operand(right, copies),
+            },
+            Rvalue::UnaryOp { op, operand } => Rvalue::UnaryOp {
+                op: op.clone(),
+                operand: self.propagate_in_operand(operand, copies),
+            },
+            Rvalue::ArrayAccess { array, index } => Rvalue::ArrayAccess {
+                array: self.propagate_in_operand(array, copies),
+                index: self.propagate_in_operand(index, copies),
+            },
+            Rvalue::TableAccess {
+                table,
+                pk_fields,
+                pk_values,
+                field,
+            } => Rvalue::TableAccess {
+                table: *table,
+                pk_fields: pk_fields.clone(),
+                pk_values: pk_values
+                    .iter()
+                    .map(|operand| self.propagate_in_operand(operand, copies))
+                    .collect(),
+                field: *field,
+            },
+        }
+    }
+
+    /// Propagate copies in an lvalue (for array indices and table primary key values)
+    fn propagate_in_lvalue(
+        &self,
+        lvalue: &crate::cfg::LValue,
+        copies: &HashSet<CopyRelation>,
+    ) -> crate::cfg::LValue {
+        match lvalue {
+            crate::cfg::LValue::Variable { var } => crate::cfg::LValue::Variable { var: *var },
+            crate::cfg::LValue::ArrayElement { array, index } => {
+                crate::cfg::LValue::ArrayElement {
+                    array: *array,
+                    index: self.propagate_in_operand(index, copies),
+                }
+            }
+            crate::cfg::LValue::TableField {
+                table,
+                pk_fields,
+                pk_values,
+                field,
+            } => crate::cfg::LValue::TableField {
+                table: *table,
+                pk_fields: pk_fields.clone(),
+                pk_values: pk_values
+                    .iter()
+                    .map(|operand| self.propagate_in_operand(operand, copies))
+                    .collect(),
+                field: *field,
+            },
+        }
+    }
+}
 
 impl OptimizationPass for CopyPropagation {
     fn name(&self) -> &'static str {
@@ -13,26 +128,77 @@ impl OptimizationPass for CopyPropagation {
     }
 
     fn optimize_function(&self, program: &mut CfgProgram, func_id: FunctionId) -> bool {
-        let func = match program.functions.get(func_id) {
-            Some(f) => f,
-            None => return false,
-        };
+        let function = &program.functions[func_id];
+
+        // Skip abstract functions
+        if matches!(
+            function.implementation,
+            crate::cfg::FunctionImplementation::Abstract
+        ) {
+            return false;
+        }
 
         // Run copy analysis
-        let copies = analyze_copies(program, func_id, AnalysisLevel::Function);
+        let results = analyze_copies(function, program);
         let mut changed = false;
 
-        // Process each block
-        for &block_id in &func.blocks {
-            if let Some(block) = program.blocks.get_mut(block_id) {
-                for (stmt_idx, stmt) in block.statements.iter_mut().enumerate() {
-                    let stmt_loc = StmtLoc {
-                        block: block_id,
-                        index: stmt_idx,
-                    };
+        // Process each block in the function
+        for &block_id in &function.blocks {
+            let block = &mut program.blocks[block_id];
 
-                    if let Some(copy_state) = copies.stmt_entry.get(&stmt_loc) {
-                        if self.propagate_copies_in_statement(stmt, copy_state) {
+            // Process each statement
+            for (stmt_idx, stmt) in block.statements.iter_mut().enumerate() {
+                let stmt_loc = StmtLoc {
+                    block: block_id,
+                    index: stmt_idx,
+                };
+
+                // Get copies available before this statement
+                if let Some(lattice_result) = results.stmt_entry.get(&stmt_loc) {
+                    let copies = Self::extract_copies(lattice_result);
+
+                    // Apply copy propagation to the statement
+                    match stmt {
+                        Statement::Assign { lvalue, rvalue, .. } => {
+                            let new_lvalue = self.propagate_in_lvalue(lvalue, &copies);
+                            let new_rvalue = self.propagate_in_rvalue(rvalue, &copies);
+
+                            if new_lvalue != *lvalue || new_rvalue != *rvalue {
+                                *lvalue = new_lvalue;
+                                *rvalue = new_rvalue;
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Process conditional edges
+            for edge in block.successors.iter_mut() {
+                if let crate::cfg::EdgeType::ConditionalTrue { condition }
+                | crate::cfg::EdgeType::ConditionalFalse { condition } = &mut edge.edge_type
+                {
+                    // Get copies available at block exit
+                    if let Some(lattice_result) = results.block_exit.get(&block_id) {
+                        let copies = Self::extract_copies(lattice_result);
+                        let new_condition = self.propagate_in_operand(condition, &copies);
+
+                        if new_condition != *condition {
+                            *condition = new_condition;
+                            changed = true;
+                        }
+                    }
+                }
+
+                if let crate::cfg::EdgeType::Return { value: Some(return_val) } = &mut edge.edge_type
+                {
+                    // Get copies available at block exit
+                    if let Some(lattice_result) = results.block_exit.get(&block_id) {
+                        let copies = Self::extract_copies(lattice_result);
+                        let new_return_val = self.propagate_in_operand(return_val, &copies);
+
+                        if new_return_val != *return_val {
+                            *return_val = new_return_val;
                             changed = true;
                         }
                     }
@@ -41,76 +207,5 @@ impl OptimizationPass for CopyPropagation {
         }
 
         changed
-    }
-}
-
-impl CopyPropagation {
-    pub fn new() -> Self {
-        Self
-    }
-
-    /// Propagate copies in a statement, returning true if changed
-    fn propagate_copies_in_statement(&self, stmt: &mut Statement, copies: &CopyMapLattice) -> bool {
-        match stmt {
-            Statement::Assign { rvalue, .. } => self.propagate_copies_in_rvalue(rvalue, copies),
-        }
-    }
-
-    /// Propagate copies in an rvalue, returning true if changed
-    fn propagate_copies_in_rvalue(
-        &self,
-        rvalue: &mut crate::cfg::Rvalue,
-        copies: &CopyMapLattice,
-    ) -> bool {
-        use crate::cfg::Rvalue;
-        match rvalue {
-            Rvalue::Use(operand) => self.propagate_copies_in_operand(operand, copies),
-            Rvalue::TableAccess { pk_values, .. } => {
-                let mut changed = false;
-                for pk_value in pk_values {
-                    if self.propagate_copies_in_operand(pk_value, copies) {
-                        changed = true;
-                    }
-                }
-                changed
-            }
-            Rvalue::ArrayAccess { array, index } => {
-                let mut changed = false;
-                if self.propagate_copies_in_operand(array, copies) {
-                    changed = true;
-                }
-                if self.propagate_copies_in_operand(index, copies) {
-                    changed = true;
-                }
-                changed
-            }
-            Rvalue::UnaryOp { operand, .. } => self.propagate_copies_in_operand(operand, copies),
-            Rvalue::BinaryOp { left, right, .. } => {
-                let mut changed = false;
-                if self.propagate_copies_in_operand(left, copies) {
-                    changed = true;
-                }
-                if self.propagate_copies_in_operand(right, copies) {
-                    changed = true;
-                }
-                changed
-            }
-        }
-    }
-
-    /// Propagate copies in an operand, returning true if changed
-    fn propagate_copies_in_operand(&self, operand: &mut Operand, copies: &CopyMapLattice) -> bool {
-        match operand {
-            Operand::Var(var_id) => {
-                if let Some(source) = copies.get_copy_source(*var_id) {
-                    // Replace with copy source
-                    *operand = Operand::Var(source);
-                    true
-                } else {
-                    false
-                }
-            }
-            Operand::Const(_) => false, // Constants are not copies
-        }
     }
 }

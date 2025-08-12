@@ -1,131 +1,60 @@
-use crate::cfg::{ControlFlowEdge, LValue, Operand, Rvalue, Statement, VarId};
-use crate::dataflow::{AnalysisLevel, DataflowResults, SetLattice, TransferFunction};
-use std::collections::HashMap;
+use super::{
+    AnalysisKind, AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
+    TransferFunction,
+};
+use crate::cfg::{
+    BasicBlockId, ControlFlowEdge, FunctionCfg, Operand, Statement, VarId,
+};
 
-/// Copy data for a single variable
+/// Copy relation: var1 = var2
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CopyMapData {
-    pub var: VarId,
-    pub state: CopyState,
+pub struct CopyRelation {
+    pub lhs: VarId,
+    pub rhs: VarId,
 }
 
-/// States for copy analysis
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CopyState {
-    Bottom,      // Undefined
-    Copy(VarId), // Variable holds same value as another variable
-    Top,         // Unknown (could be any variable)
-}
+/// Copy analysis lattice
+pub type CopyMapLattice = SetLattice<CopyRelation>;
 
-impl CopyMapData {
-    pub fn new(var: VarId, state: CopyState) -> Self {
-        Self { var, state }
-    }
+/// Transfer function for copy propagation analysis
+pub struct CopyTransfer;
 
-    pub fn bottom(var: VarId) -> Self {
-        Self::new(var, CopyState::Bottom)
-    }
-
-    pub fn copy(var: VarId, source: VarId) -> Self {
-        Self::new(var, CopyState::Copy(source))
-    }
-
-    pub fn top(var: VarId) -> Self {
-        Self::new(var, CopyState::Top)
-    }
-}
-
-/// Copy analysis using SetLattice
-pub type CopyMapLattice = SetLattice<CopyMapData>;
-
-impl CopyMapLattice {
-    pub fn get(&self, var: VarId) -> CopyState {
-        // Find the entry for this variable
-        for entry in &self.set {
-            if entry.var == var {
-                return entry.state.clone();
-            }
-        }
-        CopyState::Bottom
-    }
-
-    pub fn set(&mut self, var: VarId, state: CopyState) {
-        // Remove any existing entry for this variable
-        self.set.retain(|entry| entry.var != var);
-
-        // Add the new entry
-        self.set.insert(CopyMapData::new(var, state));
-    }
-
-    pub fn get_copy_source(&self, var: VarId) -> Option<VarId> {
-        match self.get(var) {
-            CopyState::Copy(source) => Some(source),
-            _ => None,
-        }
-    }
-}
-
-/// Transfer function for copy analysis
-pub struct CopyAnalysisTransfer;
-
-impl CopyAnalysisTransfer {
-    fn is_copy_assignment(&self, rvalue: &Rvalue) -> Option<VarId> {
-        match rvalue {
-            Rvalue::Use(Operand::Var(var_id)) => Some(*var_id),
-            _ => None,
-        }
-    }
-
-    fn invalidate_copies_using_var(&self, state: &mut CopyMapLattice, modified_var: VarId) {
-        // Remove any copies that point to the modified variable
-        let vars_to_invalidate: Vec<VarId> = state
-            .set
-            .iter()
-            .filter_map(|entry| match &entry.state {
-                CopyState::Copy(source) if *source == modified_var => Some(entry.var),
-                _ => None,
-            })
-            .collect();
-
-        for var in vars_to_invalidate {
-            self.set(state, var, CopyState::Top);
-        }
-    }
-
-    fn set(&self, state: &mut CopyMapLattice, var: VarId, new_state: CopyState) {
-        state.set(var, new_state);
-    }
-}
-
-impl TransferFunction<CopyMapLattice> for CopyAnalysisTransfer {
+impl TransferFunction<CopyMapLattice> for CopyTransfer {
+    /// For each statement, update copy relations
     fn transfer_statement(&self, stmt: &Statement, state: &CopyMapLattice) -> CopyMapLattice {
+        if state.is_top() {
+            return SetLattice::top_element();
+        }
+
+        let mut result_set = state.as_set().unwrap().clone();
+
         match stmt {
             Statement::Assign { lvalue, rvalue, .. } => {
-                let mut new_state = state.clone();
                 match lvalue {
-                    LValue::Variable { var } => {
-                        // Kill any existing copy information for this variable
-                        self.invalidate_copies_using_var(&mut new_state, *var);
+                    crate::cfg::LValue::Variable { var } => {
+                        // Kill all copy relations involving this variable
+                        result_set.retain(|copy| copy.lhs != *var && copy.rhs != *var);
 
-                        // Check if this is a copy assignment
-                        if let Some(source_var) = self.is_copy_assignment(rvalue) {
-                            self.set(&mut new_state, *var, CopyState::Copy(source_var));
-                        } else {
-                            self.set(&mut new_state, *var, CopyState::Top);
+                        // Gen: If rvalue is a simple variable use, add copy relation
+                        if let crate::cfg::Rvalue::Use(Operand::Var(source_var)) = rvalue {
+                            result_set.insert(CopyRelation {
+                                lhs: *var,
+                                rhs: *source_var,
+                            });
                         }
                     }
-                    LValue::ArrayElement { array, .. } => {
-                        // Array element assignment invalidates copies of the array
-                        self.invalidate_copies_using_var(&mut new_state, *array);
-                        self.set(&mut new_state, *array, CopyState::Top);
+                    crate::cfg::LValue::ArrayElement { array, .. } => {
+                        // Array element assignment kills copy relations involving the array
+                        result_set.retain(|copy| copy.lhs != *array && copy.rhs != *array);
                     }
-                    LValue::TableField { .. } => {
-                        // Table field assignments don't affect local variable copies
+                    crate::cfg::LValue::TableField { .. } => {
+                        // Table field assignments don't affect local copy relations
                     }
                 }
-                new_state
             }
         }
+
+        SetLattice::new(result_set)
     }
 
     fn transfer_edge(&self, _edge: &ControlFlowEdge, state: &CopyMapLattice) -> CopyMapLattice {
@@ -133,31 +62,25 @@ impl TransferFunction<CopyMapLattice> for CopyAnalysisTransfer {
     }
 
     fn initial_value(&self) -> CopyMapLattice {
-        SetLattice::new(std::collections::HashSet::new())
+        SetLattice::bottom().unwrap()
     }
 
-    fn boundary_value(&self) -> CopyMapLattice {
-        SetLattice::new(std::collections::HashSet::new())
+    fn boundary_value(&self, _func: &FunctionCfg, _blockid: BasicBlockId) -> CopyMapLattice {
+        // At function entry, no copy relations exist
+        SetLattice::bottom().unwrap()
     }
 }
 
-/// Run copy analysis on a function
+/// Analyze copy relations in a function (forward, function-level)
 pub fn analyze_copies(
-    prog: &crate::cfg::CfgProgram,
-    func_id: crate::cfg::FunctionId,
-    level: AnalysisLevel,
+    func: &FunctionCfg,
+    cfg_program: &crate::cfg::CfgProgram,
 ) -> DataflowResults<CopyMapLattice> {
-    use crate::dataflow::{DataflowAnalysis, Direction};
-
-    if let Some(func) = prog.functions.get(func_id) {
-        let analysis = DataflowAnalysis::new(level, Direction::Forward, CopyAnalysisTransfer);
-        analysis.analyze(func, prog)
-    } else {
-        DataflowResults {
-            block_entry: HashMap::new(),
-            block_exit: HashMap::new(),
-            stmt_entry: HashMap::new(),
-            stmt_exit: HashMap::new(),
-        }
-    }
+    let analysis = DataflowAnalysis::new(
+        AnalysisLevel::Function,
+        Direction::Forward,
+        AnalysisKind::May,
+        CopyTransfer,
+    );
+    analysis.analyze(func, cfg_program)
 }

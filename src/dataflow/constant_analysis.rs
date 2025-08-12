@@ -1,207 +1,193 @@
-use crate::cfg::{
-    BinaryOp, Constant, ControlFlowEdge, LValue, Operand, Rvalue, Statement, UnaryOp, VarId,
+use super::{
+    AnalysisKind, AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
+    TransferFunction,
 };
-use crate::dataflow::{AnalysisLevel, DataflowResults, SetLattice, TransferFunction};
-use std::collections::HashMap;
+use crate::cfg::{
+    BasicBlockId, Constant, ControlFlowEdge, FunctionCfg, Operand, Statement, VarId,
+};
 
-/// Constant data for a single variable
+/// Constant binding for a variable
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ConstantMapData {
+pub struct ConstantBinding {
     pub var: VarId,
-    pub state: ConstantState,
+    pub value: Constant,
 }
 
-/// States for constant analysis
+/// Constant state - tracks which variables have constant values
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConstantState {
-    Bottom,             // Undefined
-    Constant(Constant), // Known constant value
-    Top,                // Unknown (could be any value)
+    Bottom, // No information
+    Const(Constant),
+    Top,    // Not constant (multiple values)
 }
 
-impl ConstantMapData {
-    pub fn new(var: VarId, state: ConstantState) -> Self {
-        Self { var, state }
-    }
+/// Map from variables to their constant state
+pub type ConstantMapLattice = SetLattice<ConstantBinding>;
 
-    pub fn bottom(var: VarId) -> Self {
-        Self::new(var, ConstantState::Bottom)
-    }
-
-    pub fn constant(var: VarId, value: Constant) -> Self {
-        Self::new(var, ConstantState::Constant(value))
-    }
-
-    pub fn top(var: VarId) -> Self {
-        Self::new(var, ConstantState::Top)
-    }
-}
-
-/// Constant analysis using SetLattice
-pub type ConstantMapLattice = SetLattice<ConstantMapData>;
-
-impl ConstantMapLattice {
-    pub fn get(&self, var: VarId) -> ConstantState {
-        // Find the entry for this variable
-        for entry in &self.set {
-            if entry.var == var {
-                return entry.state.clone();
-            }
-        }
-        ConstantState::Bottom
-    }
-
-    pub fn set(&mut self, var: VarId, state: ConstantState) {
-        // Remove any existing entry for this variable
-        self.set.retain(|entry| entry.var != var);
-
-        // Add the new entry
-        self.set.insert(ConstantMapData::new(var, state));
-    }
-
-    pub fn get_constant_value(&self, var: VarId) -> Option<Constant> {
-        match self.get(var) {
-            ConstantState::Constant(value) => Some(value),
-            _ => None,
-        }
-    }
-}
+/// Simplified constant data for easier use
+pub type ConstantMapData = std::collections::HashMap<VarId, Constant>;
 
 /// Transfer function for constant propagation analysis
-pub struct ConstantAnalysisTransfer;
+pub struct ConstantTransfer;
 
-impl ConstantAnalysisTransfer {
-    pub fn evaluate_unary(&self, op: &UnaryOp, operand: &Constant) -> Option<Constant> {
-        match (op, operand) {
-            (UnaryOp::Neg, Constant::Int(n)) => Some(Constant::Int(-n)),
-            (UnaryOp::Not, Constant::Bool(b)) => Some(Constant::Bool(!b)),
-            _ => None,
+impl TransferFunction<ConstantMapLattice> for ConstantTransfer {
+    /// For each statement, update constant information
+    fn transfer_statement(&self, stmt: &Statement, state: &ConstantMapLattice) -> ConstantMapLattice {
+        if state.is_top() {
+            return SetLattice::top_element();
         }
-    }
 
-    fn evaluate_operand(&self, operand: &Operand, state: &ConstantMapLattice) -> ConstantState {
-        match operand {
-            Operand::Const(c) => ConstantState::Constant(c.clone()),
-            Operand::Var(var) => state.get(*var),
-        }
-    }
+        let mut result_set = state.as_set().unwrap().clone();
 
-    fn evaluate_rvalue(&self, rvalue: &Rvalue, state: &ConstantMapLattice) -> ConstantState {
-        match rvalue {
-            Rvalue::Use(operand) => self.evaluate_operand(operand, state),
-            Rvalue::BinaryOp { op, left, right } => {
-                let left_val = self.evaluate_operand(left, state);
-                let right_val = self.evaluate_operand(right, state);
-                match (left_val, right_val) {
-                    (ConstantState::Constant(c1), ConstantState::Constant(c2)) => {
-                        if let Some(result) = self.eval_binary_op(op, &c1, &c2) {
-                            ConstantState::Constant(result)
-                        } else {
-                            ConstantState::Top
-                        }
-                    }
-                    (ConstantState::Bottom, _) | (_, ConstantState::Bottom) => {
-                        ConstantState::Bottom
-                    }
-                    _ => ConstantState::Top,
-                }
-            }
-            Rvalue::UnaryOp { op, operand } => {
-                let operand_val = self.evaluate_operand(operand, state);
-                match operand_val {
-                    ConstantState::Constant(c) => {
-                        if let Some(result) = self.evaluate_unary(op, &c) {
-                            ConstantState::Constant(result)
-                        } else {
-                            ConstantState::Top
-                        }
-                    }
-                    ConstantState::Bottom => ConstantState::Bottom,
-                    ConstantState::Top => ConstantState::Top,
-                }
-            }
-            _ => ConstantState::Top, // Table access, array access are not constant
-        }
-    }
-
-    fn eval_binary_op(&self, op: &BinaryOp, left: &Constant, right: &Constant) -> Option<Constant> {
-        match (op, left, right) {
-            (BinaryOp::Add, Constant::Int(a), Constant::Int(b)) => Some(Constant::Int(a + b)),
-            (BinaryOp::Sub, Constant::Int(a), Constant::Int(b)) => Some(Constant::Int(a - b)),
-            (BinaryOp::Mul, Constant::Int(a), Constant::Int(b)) => Some(Constant::Int(a * b)),
-            (BinaryOp::Div, Constant::Int(a), Constant::Int(b)) if *b != 0 => {
-                Some(Constant::Int(a / b))
-            }
-            (BinaryOp::Lt, Constant::Int(a), Constant::Int(b)) => Some(Constant::Bool(a < b)),
-            (BinaryOp::Lte, Constant::Int(a), Constant::Int(b)) => Some(Constant::Bool(a <= b)),
-            (BinaryOp::Gt, Constant::Int(a), Constant::Int(b)) => Some(Constant::Bool(a > b)),
-            (BinaryOp::Gte, Constant::Int(a), Constant::Int(b)) => Some(Constant::Bool(a >= b)),
-            (BinaryOp::Eq, a, b) => Some(Constant::Bool(a == b)),
-            (BinaryOp::Neq, a, b) => Some(Constant::Bool(a != b)),
-            (BinaryOp::And, Constant::Bool(a), Constant::Bool(b)) => Some(Constant::Bool(*a && *b)),
-            (BinaryOp::Or, Constant::Bool(a), Constant::Bool(b)) => Some(Constant::Bool(*a || *b)),
-            _ => None, // Division by zero, type mismatch, etc.
-        }
-    }
-}
-
-impl TransferFunction<ConstantMapLattice> for ConstantAnalysisTransfer {
-    fn transfer_statement(
-        &self,
-        stmt: &Statement,
-        state: &ConstantMapLattice,
-    ) -> ConstantMapLattice {
         match stmt {
             Statement::Assign { lvalue, rvalue, .. } => {
-                let mut new_state = state.clone();
                 match lvalue {
-                    LValue::Variable { var } => {
-                        let new_value = self.evaluate_rvalue(rvalue, state);
-                        new_state.set(*var, new_value);
+                    crate::cfg::LValue::Variable { var } => {
+                        // Remove previous constant binding for this variable
+                        result_set.retain(|binding| binding.var != *var);
+
+                        // Try to evaluate rvalue to a constant
+                        if let Some(constant_val) = self.eval_rvalue(rvalue, &result_set) {
+                            result_set.insert(ConstantBinding {
+                                var: *var,
+                                value: constant_val,
+                            });
+                        }
                     }
-                    _ => {
-                        // Array element or table field assignments don't define variables directly
+                    crate::cfg::LValue::ArrayElement { array, .. } => {
+                        // Array element assignment makes array non-constant
+                        result_set.retain(|binding| binding.var != *array);
+                    }
+                    crate::cfg::LValue::TableField { .. } => {
+                        // Table field assignments don't affect local constants
                     }
                 }
-                new_state
             }
         }
+
+        SetLattice::new(result_set)
     }
 
-    fn transfer_edge(
-        &self,
-        _edge: &ControlFlowEdge,
-        state: &ConstantMapLattice,
-    ) -> ConstantMapLattice {
+    fn transfer_edge(&self, _edge: &ControlFlowEdge, state: &ConstantMapLattice) -> ConstantMapLattice {
         state.clone()
     }
 
     fn initial_value(&self) -> ConstantMapLattice {
-        SetLattice::new(std::collections::HashSet::new())
+        SetLattice::bottom().unwrap()
     }
 
-    fn boundary_value(&self) -> ConstantMapLattice {
-        SetLattice::new(std::collections::HashSet::new())
+    fn boundary_value(&self, _func: &FunctionCfg, _blockid: BasicBlockId) -> ConstantMapLattice {
+        // Parameters might have constant values, but we don't know them here
+        // So start with empty set
+        SetLattice::bottom().unwrap()
     }
 }
 
-/// Run constant analysis on a function
-pub fn analyze_constants(
-    prog: &crate::cfg::CfgProgram,
-    func_id: crate::cfg::FunctionId,
-    level: AnalysisLevel,
-) -> DataflowResults<ConstantMapLattice> {
-    use crate::dataflow::{DataflowAnalysis, Direction};
-
-    if let Some(func) = prog.functions.get(func_id) {
-        let analysis = DataflowAnalysis::new(level, Direction::Forward, ConstantAnalysisTransfer);
-        analysis.analyze(func, prog)
-    } else {
-        DataflowResults {
-            block_entry: HashMap::new(),
-            block_exit: HashMap::new(),
-            stmt_entry: HashMap::new(),
-            stmt_exit: HashMap::new(),
+impl ConstantTransfer {
+    fn eval_rvalue(
+        &self,
+        rvalue: &crate::cfg::Rvalue,
+        constants: &std::collections::HashSet<ConstantBinding>,
+    ) -> Option<Constant> {
+        match rvalue {
+            crate::cfg::Rvalue::Use(operand) => self.eval_operand(operand, constants),
+            crate::cfg::Rvalue::BinaryOp { op, left, right } => {
+                let left_val = self.eval_operand(left, constants)?;
+                let right_val = self.eval_operand(right, constants)?;
+                self.eval_binary_op(op.clone(), &left_val, &right_val)
+            }
+            crate::cfg::Rvalue::UnaryOp { op, operand } => {
+                let val = self.eval_operand(operand, constants)?;
+                self.eval_unary_op(op.clone(), &val)
+            }
+            _ => None, // Table/array access not constant-foldable
         }
     }
+
+    fn eval_operand(
+        &self,
+        operand: &Operand,
+        constants: &std::collections::HashSet<ConstantBinding>,
+    ) -> Option<Constant> {
+        match operand {
+            Operand::Const(c) => Some(c.clone()),
+            Operand::Var(var_id) => {
+                constants
+                    .iter()
+                    .find(|binding| binding.var == *var_id)
+                    .map(|binding| binding.value.clone())
+            }
+        }
+    }
+
+    fn eval_binary_op(
+        &self,
+        op: crate::cfg::BinaryOp,
+        left: &Constant,
+        right: &Constant,
+    ) -> Option<Constant> {
+        match (left, right) {
+            (Constant::Int(l), Constant::Int(r)) => {
+                use crate::cfg::BinaryOp;
+                match op {
+                    BinaryOp::Add => Some(Constant::Int(l + r)),
+                    BinaryOp::Sub => Some(Constant::Int(l - r)),
+                    BinaryOp::Mul => Some(Constant::Int(l * r)),
+                    BinaryOp::Div => {
+                        if *r != 0 {
+                            Some(Constant::Int(l / r))
+                        } else {
+                            None
+                        }
+                    }
+                    BinaryOp::Eq => Some(Constant::Bool(l == r)),
+                    BinaryOp::Neq => Some(Constant::Bool(l != r)),
+                    BinaryOp::Lt => Some(Constant::Bool(l < r)),
+                    BinaryOp::Lte => Some(Constant::Bool(l <= r)),
+                    BinaryOp::Gt => Some(Constant::Bool(l > r)),
+                    BinaryOp::Gte => Some(Constant::Bool(l >= r)),
+                    _ => None,
+                }
+            }
+            (Constant::Bool(l), Constant::Bool(r)) => {
+                use crate::cfg::BinaryOp;
+                match op {
+                    BinaryOp::And => Some(Constant::Bool(*l && *r)),
+                    BinaryOp::Or => Some(Constant::Bool(*l || *r)),
+                    BinaryOp::Eq => Some(Constant::Bool(l == r)),
+                    BinaryOp::Neq => Some(Constant::Bool(l != r)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn eval_unary_op(&self, op: crate::cfg::UnaryOp, operand: &Constant) -> Option<Constant> {
+        match operand {
+            Constant::Int(val) => match op {
+                crate::cfg::UnaryOp::Neg => Some(Constant::Int(-val)),
+                _ => None,
+            },
+            Constant::Bool(val) => match op {
+                crate::cfg::UnaryOp::Not => Some(Constant::Bool(!val)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+}
+
+/// Analyze constants in a function (forward, function-level)
+pub fn analyze_constants(
+    func: &FunctionCfg,
+    cfg_program: &crate::cfg::CfgProgram,
+) -> DataflowResults<ConstantMapLattice> {
+    let analysis = DataflowAnalysis::new(
+        AnalysisLevel::Function,
+        Direction::Forward,
+        AnalysisKind::May,
+        ConstantTransfer,
+    );
+    analysis.analyze(func, cfg_program)
 }

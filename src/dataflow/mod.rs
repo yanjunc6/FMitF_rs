@@ -1,6 +1,6 @@
 // dataflow/mod.rs
 // NEVER CHANGE THIS FILE!
-use crate::cfg::{BasicBlockId, ControlFlowEdge, FunctionCfg, Statement};
+use crate::cfg::{BasicBlockId, ControlFlowEdge, FunctionCfg, Statement, BasicBlock};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -8,7 +8,7 @@ use std::hash::Hash;
 mod util;
 
 mod liveness;
-pub use liveness::analyze_live_variables;
+pub use liveness::{analyze_live_variables, LiveVar};
 
 mod reaching_definitions;
 pub use reaching_definitions::analyze_reaching_definitions;
@@ -22,7 +22,7 @@ pub use constant_analysis::{
 };
 
 mod copy_analysis;
-pub use copy_analysis::{analyze_copies, CopyMapLattice};
+pub use copy_analysis::{analyze_copies, CopyMapLattice, CopyRelation};
 
 mod table_mod_ref;
 pub use table_mod_ref::{analyze_table_mod_ref, AccessType, TableAccess};
@@ -82,7 +82,7 @@ pub trait TransferFunction<L: Lattice> {
 
     /// Get boundary value for function parameters (for forward analysis)
     /// or return, abort statements (for backward analysis)
-    fn boundary_value(&self, func: &FunctionCfg, blockid: BasicBlockId) -> L;
+    fn boundary_value(&self, func: &FunctionCfg, block: &BasicBlock) -> L;
 }
 
 /// General monotone dataflow analysis framework

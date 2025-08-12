@@ -2,8 +2,9 @@ use super::{
     AnalysisKind, AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
     TransferFunction,
 };
+use crate::cfg;
 use crate::cfg::{
-    BasicBlock, BasicBlockId, CfgProgram, EdgeType, FunctionCfg, FunctionImplementation, HopCfg,
+    CfgProgram, EdgeType, FunctionCfg, FunctionImplementation,
 };
 use std::collections::HashMap;
 
@@ -166,7 +167,7 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
         // Set entry block with boundary value
         if let Some(entry_hop) = func.entry_hop {
             if let Some(entry_block) = cfg_program.hops[entry_hop].entry_block {
-                block_entry.insert(entry_block, self.transfer.boundary_value(func, entry_block));
+                block_entry.insert(entry_block, self.transfer.boundary_value(func, &cfg_program.blocks[entry_block]));
             }
         }
 
@@ -260,7 +261,7 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                     .iter()
                     .any(|e| matches!(e.edge_type, EdgeType::Return { .. } | EdgeType::Abort))
             {
-                block_exit.insert(block_id, self.transfer.boundary_value(func, block_id));
+                block_exit.insert(block_id, self.transfer.boundary_value(func, block));
             }
         }
 
