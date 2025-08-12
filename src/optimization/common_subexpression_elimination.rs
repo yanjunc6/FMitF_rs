@@ -5,8 +5,8 @@
 
 use super::OptimizationPass;
 use crate::cfg::{CfgProgram, FunctionId, Operand, Rvalue, Statement, VarId};
-use crate::dataflow::{analyze_available_expressions, StmtLoc};
 use crate::dataflow::available_expressions::AvailExpr;
+use crate::dataflow::{analyze_available_expressions, StmtLoc};
 use std::collections::{HashMap, HashSet};
 
 pub struct CommonSubexpressionEliminationPass;
@@ -17,7 +17,9 @@ impl CommonSubexpressionEliminationPass {
     }
 
     /// Extract available expressions from lattice result
-    fn extract_available_exprs(lattice_result: &crate::dataflow::SetLattice<AvailExpr>) -> HashSet<AvailExpr> {
+    fn extract_available_exprs(
+        lattice_result: &crate::dataflow::SetLattice<AvailExpr>,
+    ) -> HashSet<AvailExpr> {
         if let Some(exprs) = lattice_result.as_set() {
             exprs.clone()
         } else {
@@ -60,7 +62,11 @@ impl CommonSubexpressionEliminationPass {
     }
 
     /// Create a mapping from expressions to the variables that hold their results
-    fn build_expr_to_var_map(&self, program: &CfgProgram, func_id: FunctionId) -> HashMap<AvailExpr, VarId> {
+    fn build_expr_to_var_map(
+        &self,
+        program: &CfgProgram,
+        func_id: FunctionId,
+    ) -> HashMap<AvailExpr, VarId> {
         let mut expr_to_var = HashMap::new();
         let function = &program.functions[func_id];
 
@@ -68,10 +74,12 @@ impl CommonSubexpressionEliminationPass {
         for &block_id in &function.blocks {
             let block = &program.blocks[block_id];
             for stmt in &block.statements {
-                if let Statement::Assign { lvalue, rvalue, .. } = stmt {
-                    if let crate::cfg::LValue::Variable { var } = lvalue {
-                        if let Some(expr) = self.rvalue_to_avail_expr(rvalue) {
-                            expr_to_var.insert(expr, *var);
+                match stmt {
+                    Statement::Assign { lvalue, rvalue, .. } => {
+                        if let crate::cfg::LValue::Variable { var } = lvalue {
+                            if let Some(expr) = self.rvalue_to_avail_expr(rvalue) {
+                                expr_to_var.insert(expr, *var);
+                            }
                         }
                     }
                 }
@@ -100,10 +108,10 @@ impl OptimizationPass for CommonSubexpressionEliminationPass {
 
         // Run available expressions analysis
         let results = analyze_available_expressions(function, program);
-        
+
         // Build expression to variable mapping
         let expr_to_var = self.build_expr_to_var_map(program, func_id);
-        
+
         let mut changed = false;
 
         // Process each block in the function
@@ -126,7 +134,9 @@ impl OptimizationPass for CommonSubexpressionEliminationPass {
                         Statement::Assign { rvalue, .. } => {
                             if let Some(expr) = self.rvalue_to_avail_expr(rvalue) {
                                 // Check if this expression is available
-                                if let Some(existing_var) = self.find_existing_computation(&expr, &available, &expr_to_var) {
+                                if let Some(existing_var) =
+                                    self.find_existing_computation(&expr, &available, &expr_to_var)
+                                {
                                     // Replace the computation with a use of the existing variable
                                     *rvalue = Rvalue::Use(Operand::Var(existing_var));
                                     changed = true;

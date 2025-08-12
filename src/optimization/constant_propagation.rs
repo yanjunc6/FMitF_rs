@@ -5,9 +5,7 @@
 
 use super::OptimizationPass;
 use crate::cfg::{CfgProgram, FunctionId, Operand, Rvalue, Statement};
-use crate::dataflow::{
-    analyze_constants, ConstantMapData, ConstantMapLattice, StmtLoc,
-};
+use crate::dataflow::{analyze_constants, ConstantMapData, ConstantMapLattice, StmtLoc};
 use std::collections::HashMap;
 
 pub struct ConstantPropagationPass;
@@ -85,12 +83,10 @@ impl ConstantPropagationPass {
     ) -> crate::cfg::LValue {
         match lvalue {
             crate::cfg::LValue::Variable { var } => crate::cfg::LValue::Variable { var: *var },
-            crate::cfg::LValue::ArrayElement { array, index } => {
-                crate::cfg::LValue::ArrayElement {
-                    array: *array,
-                    index: self.propagate_in_operand(index, constants),
-                }
-            }
+            crate::cfg::LValue::ArrayElement { array, index } => crate::cfg::LValue::ArrayElement {
+                array: *array,
+                index: self.propagate_in_operand(index, constants),
+            },
             crate::cfg::LValue::TableField {
                 table,
                 pk_fields,
@@ -177,7 +173,9 @@ impl OptimizationPass for ConstantPropagationPass {
                     }
                 }
 
-                if let crate::cfg::EdgeType::Return { value: Some(return_val) } = &mut edge.edge_type
+                if let crate::cfg::EdgeType::Return {
+                    value: Some(return_val),
+                } = &mut edge.edge_type
                 {
                     // Get constants available at block exit
                     if let Some(lattice_result) = results.block_exit.get(&block_id) {
