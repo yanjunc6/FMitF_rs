@@ -1,6 +1,6 @@
 // dataflow/mod.rs
 // NEVER CHANGE THIS FILE!
-use crate::cfg::{BasicBlockId, ControlFlowEdge, Statement};
+use crate::cfg::{BasicBlockId, ControlFlowEdge, FunctionCfg, Statement};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -32,6 +32,12 @@ pub use table_mod_ref::{analyze_table_mod_ref, AccessType, TableAccess};
 pub enum Direction {
     Forward,
     Backward,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnalysisKind {
+    May,  // Use join() at merge points
+    Must, // Use meet() at join points
 }
 
 /// Level of dataflow analysis
@@ -75,14 +81,15 @@ pub trait TransferFunction<L: Lattice> {
     fn initial_value(&self) -> L;
 
     /// Get boundary value for function parameters (for forward analysis)
-    /// or return statements (for backward analysis)
-    fn boundary_value(&self) -> L;
+    /// or return, abort statements (for backward analysis)
+    fn boundary_value(&self, func: &FunctionCfg, blockid: BasicBlockId) -> L;
 }
 
 /// General monotone dataflow analysis framework
 pub struct DataflowAnalysis<L: Lattice, T: TransferFunction<L>> {
     pub direction: Direction,
     pub level: AnalysisLevel,
+    pub kind: AnalysisKind,
     pub transfer: T,
     _phantom: std::marker::PhantomData<L>,
 }
