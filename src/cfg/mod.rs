@@ -84,19 +84,17 @@ pub struct FieldInfo {
 pub struct Variable {
     pub name: String,
     pub ty: TypeName,
-    pub kind: VariableKind, // SSA: all variables are immutable once assigned
+    pub kind: VariableKind,      // all variables are immutable once assigned
     pub value: Option<Constant>, // For constants with known values (including computed from expressions)
     pub span: Span,
 }
 
-/// In SSA form, all variables are immutable once assigned
-/// This distinguishes different sources of variables
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VariableKind {
     Global,    // Global constant (from AST constants)
     Parameter, // Function parameter
-    Local,     // Local variable (SSA: assigned exactly once)
-    Temporary, // Temporary variable from expressions (SSA: assigned exactly once)
+    Local,     // Local variable
+    Temporary, // Temporary variable from expressions
 }
 
 /// Function CFG, never clone it

@@ -44,7 +44,7 @@ The **safety obligation** is:
 ### 2.2  Static Proof Strategy  
 
 1. **CFG Simulation**  
-   • Traverse each hop’s SSA-form CFG.  
+   • Traverse each hop’s form CFG.  
    • Translate every basic block into _pure Boogie_ code that **exactly
      mirrors** the semantics of the Rust CFG (see § 5).  
    • Record every occurrence of a *table access* whose placement is

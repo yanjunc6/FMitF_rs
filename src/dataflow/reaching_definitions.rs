@@ -3,7 +3,7 @@ use crate::dataflow::{AnalysisLevel, DataflowResults, Lattice, SetLattice, Trans
 
 /// Transfer function for Reaching Definitions analysis.
 /// Reaching definitions is a forward analysis that tracks which variables
-/// have been defined (without location tracking).
+/// have been defined.
 pub struct ReachingDefinitionsTransfer;
 
 impl TransferFunction<SetLattice<VarId>> for ReachingDefinitionsTransfer {
@@ -72,8 +72,10 @@ pub fn analyze_reaching_definitions(
     } else {
         // Return empty results if function not found
         DataflowResults {
-            entry: std::collections::HashMap::new(),
-            exit: std::collections::HashMap::new(),
+            block_entry: std::collections::HashMap::new(),
+            block_exit: std::collections::HashMap::new(),
+            stmt_entry: std::collections::HashMap::new(),
+            stmt_exit: std::collections::HashMap::new(),
         }
     }
 }

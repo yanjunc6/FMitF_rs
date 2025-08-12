@@ -352,7 +352,7 @@ src/
 # TODO-list
 
 - dataflow & optimization has many TODO
-- hops for creates variable scope
+- for loop grammar is terrible
 - in compilation log, record boogie output; in cli interface, at commutativity stage, output how many edges elimated.
 - in verification, map table to a map: primary key -> field, if multiple pks, use map[map[]], if multiple fields, create multiple maps
 - in verification, not havoc twice, each interleaving has same starting point (same havoc)

@@ -152,7 +152,7 @@ impl SCGraphBuilder {
         let hop = &prog.hops[hop_id];
         for &block_id in &hop.blocks {
             // For hop-level analysis, we want the exit values of each block within the hop
-            if let Some(block_exit_lattice) = analysis_results.exit.get(&block_id) {
+            if let Some(block_exit_lattice) = analysis_results.block_exit.get(&block_id) {
                 if let Some(access_set) = block_exit_lattice.as_set() {
                     for access in access_set {
                         hop_accesses.insert(access.clone());

@@ -1,6 +1,4 @@
-use crate::cfg::{
-    CfgProgram, FieldId, FunctionId, LValue, Operand, Rvalue, Statement, TableId, VarId,
-};
+use crate::cfg::{CfgProgram, FunctionId, LValue, Operand, Rvalue, Statement, VarId};
 use crate::optimization::OptimizationPass;
 use std::collections::{HashMap, HashSet};
 

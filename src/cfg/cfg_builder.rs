@@ -31,7 +31,7 @@ pub struct CfgBuilder<'a> {
     // Loop context stack for break/continue statements
     loop_context_stack: Vec<LoopContext>,
 
-    // For SSA generation
+    // For variable generation
     next_temp_id: usize,
 }
 
