@@ -66,14 +66,8 @@ impl CopyMapLattice {
     }
 
     pub fn set(&mut self, var: VarId, value: CopyLattice) {
-        match value {
-            CopyLattice::Bottom => {
-                self.map.remove(&var);
-            }
-            _ => {
-                self.map.insert(var, value);
-            }
-        }
+        // Always store the value, even if it's Bottom, for consistent representation
+        self.map.insert(var, value);
     }
 
     pub fn get_copy_source(&self, var: VarId) -> Option<VarId> {
@@ -100,9 +94,8 @@ impl Lattice for CopyMapLattice {
         for (&var, value1) in &self.map {
             if let Some(value2) = other.map.get(&var) {
                 let meet_result = value1.meet(value2);
-                if meet_result != CopyLattice::Bottom {
-                    result_map.insert(var, meet_result);
-                }
+                // Always insert the result, even if it's Bottom, to maintain consistent representation
+                result_map.insert(var, meet_result);
             }
         }
 
@@ -120,9 +113,8 @@ impl Lattice for CopyMapLattice {
             let value1 = self.get(var);
             let value2 = other.get(var);
             let join_result = value1.join(&value2);
-            if join_result != CopyLattice::Bottom {
-                result_map.insert(var, join_result);
-            }
+            // Always insert the result, even if it's Bottom, to maintain consistent representation
+            result_map.insert(var, join_result);
         }
 
         CopyMapLattice { map: result_map }

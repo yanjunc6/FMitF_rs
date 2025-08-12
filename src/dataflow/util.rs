@@ -11,6 +11,8 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 
+const MAX_ITERATIONS: usize = 100;
+
 impl<T: Eq + Hash + Clone + Debug> PartialEq for SetLattice<T> {
     fn eq(&self, other: &Self) -> bool {
         match (self.is_top, other.is_top) {
@@ -171,52 +173,46 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
 
         // Fixed point iteration over all function blocks
         let mut changed = true;
-        while changed {
-            changed = false;
 
-            for &block_id in &func.blocks {
-                let block = &cfg_program.blocks[block_id];
-                let (old_in, old_out) = self.get_in_out_values(&block_entry, &block_exit, block_id);
+        changed = false;
 
-                let (new_in, new_out, stmt_states) = match self.direction {
-                    Direction::Forward => {
-                        let new_in =
-                            self.compute_in_value(func, block, block_id, &block_entry, &block_exit);
-                        let (new_out, stmt_states) =
-                            self.transfer_block_with_stmt_states(block, block_id, &new_in);
-                        (new_in, new_out, stmt_states)
-                    }
-                    Direction::Backward => {
-                        let new_out = self.compute_out_value(
-                            func,
-                            block,
-                            block_id,
-                            &block_entry,
-                            &block_exit,
-                        );
-                        let (new_in, stmt_states) = self
-                            .transfer_block_backward_with_stmt_states(block, block_id, &new_out);
-                        (new_in, new_out, stmt_states)
-                    }
-                };
+        for &block_id in &func.blocks {
+            let block = &cfg_program.blocks[block_id];
+            let (old_in, old_out) = self.get_in_out_values(&block_entry, &block_exit, block_id);
 
-                // Update statement-level states
-                for (stmt_loc, (entry_state, exit_state)) in stmt_states {
-                    stmt_entry.insert(stmt_loc, entry_state);
-                    stmt_exit.insert(stmt_loc, exit_state);
+            let (new_in, new_out, stmt_states) = match self.direction {
+                Direction::Forward => {
+                    let new_in =
+                        self.compute_in_value(func, block, block_id, &block_entry, &block_exit);
+                    let (new_out, stmt_states) =
+                        self.transfer_block_with_stmt_states(block, block_id, &new_in);
+                    (new_in, new_out, stmt_states)
                 }
-
-                if self.update_and_check_change(
-                    &mut block_entry,
-                    &mut block_exit,
-                    block_id,
-                    new_in,
-                    new_out,
-                    old_in,
-                    old_out,
-                ) {
-                    changed = true;
+                Direction::Backward => {
+                    let new_out =
+                        self.compute_out_value(func, block, block_id, &block_entry, &block_exit);
+                    let (new_in, stmt_states) =
+                        self.transfer_block_backward_with_stmt_states(block, block_id, &new_out);
+                    (new_in, new_out, stmt_states)
                 }
+            };
+
+            // Update statement-level states
+            for (stmt_loc, (entry_state, exit_state)) in stmt_states {
+                stmt_entry.insert(stmt_loc, entry_state);
+                stmt_exit.insert(stmt_loc, exit_state);
+            }
+
+            if self.update_and_check_change(
+                &mut block_entry,
+                &mut block_exit,
+                block_id,
+                new_in,
+                new_out,
+                old_in,
+                old_out,
+            ) {
+                changed = true;
             }
         }
 
@@ -253,8 +249,10 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
 
                 // Fixed point iteration over blocks in this hop only
                 let mut changed = true;
-                while changed {
+                let mut iteration_count = 0;
+                while changed && iteration_count < MAX_ITERATIONS {
                     changed = false;
+                    iteration_count += 1;
 
                     for &block_id in &hop.blocks {
                         let block = &cfg_program.blocks[block_id];
