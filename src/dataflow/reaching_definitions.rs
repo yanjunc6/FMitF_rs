@@ -8,11 +8,11 @@ pub struct ReachingDefinitionsTransfer;
 
 impl TransferFunction<SetLattice<VarId>> for ReachingDefinitionsTransfer {
     fn transfer_statement(&self, stmt: &Statement, state: &SetLattice<VarId>) -> SetLattice<VarId> {
-        if state.is_top {
+        if state.is_top() {
             return state.clone();
         }
 
-        let mut defined_vars = state.set.clone();
+        let mut defined_vars = state.as_set().unwrap().clone();
 
         match stmt {
             Statement::Assign { lvalue, .. } => {

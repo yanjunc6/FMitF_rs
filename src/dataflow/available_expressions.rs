@@ -64,11 +64,11 @@ impl TransferFunction<SetLattice<Rvalue>> for AvailableExpressionsTransfer {
         stmt: &Statement,
         state: &SetLattice<Rvalue>,
     ) -> SetLattice<Rvalue> {
-        if state.is_top {
+        if state.is_top() {
             return state.clone();
         }
 
-        let mut available_exprs = state.set.clone();
+        let mut available_exprs = state.as_set().unwrap().clone();
 
         match stmt {
             Statement::Assign { lvalue, rvalue, .. } => {

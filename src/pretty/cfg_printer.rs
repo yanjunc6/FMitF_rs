@@ -152,7 +152,8 @@ impl<'a> CfgPrintVisitor<'a> {
             None => return Ok(()), // Skip if function not found
         };
 
-        // Run all dataflow analyses for this function
+        // ============== DATAFLOW ANALYSES SECTION ==============
+        // Comment out any of the following lines to disable specific analyses:
         let liveness_results =
             analyze_live_variables(program, function_id, AnalysisLevel::Function);
         let reaching_def_results =
@@ -161,6 +162,7 @@ impl<'a> CfgPrintVisitor<'a> {
             analyze_available_expressions(program, function_id, AnalysisLevel::Function);
         let table_mod_ref_results =
             analyze_table_mod_ref(function, program, AnalysisLevel::Function);
+        // ======================================================
 
         // Print entry dataflow information
         self.write_indent()?;
@@ -209,7 +211,8 @@ impl<'a> CfgPrintVisitor<'a> {
             None => return Ok(()), // Skip if function not found
         };
 
-        // Run all dataflow analyses for this function
+        // ============== DATAFLOW ANALYSES SECTION ==============
+        // Comment out any of the following lines to disable specific analyses:
         let liveness_results =
             analyze_live_variables(program, function_id, AnalysisLevel::Function);
         let reaching_def_results =
@@ -218,6 +221,7 @@ impl<'a> CfgPrintVisitor<'a> {
             analyze_available_expressions(program, function_id, AnalysisLevel::Function);
         let table_mod_ref_results =
             analyze_table_mod_ref(function, program, AnalysisLevel::Function);
+        // ======================================================
 
         // Print exit dataflow information
         self.write_indent()?;
@@ -264,18 +268,20 @@ impl<'a> CfgPrintVisitor<'a> {
         use super::super::dataflow::StmtLoc;
 
         // Get the function from the program
-        let function = match program.functions.get(function_id) {
+        let _function = match program.functions.get(function_id) {
             Some(func) => func,
             None => return Ok(()), // Skip if function not found
         };
 
-        // Run all dataflow analyses for this function
+        // ============== DATAFLOW ANALYSES SECTION ==============
+        // Comment out any of the following lines to disable specific analyses:
         let liveness_results =
             analyze_live_variables(program, function_id, AnalysisLevel::Function);
         let reaching_def_results =
             analyze_reaching_definitions(program, function_id, AnalysisLevel::Function);
         let available_expr_results =
             analyze_available_expressions(program, function_id, AnalysisLevel::Function);
+        // ======================================================
 
         let stmt_loc = StmtLoc {
             block: block_id,

@@ -1,9 +1,9 @@
 use crate::cfg::{CfgProgram, FunctionId, Operand, Statement};
-use crate::dataflow::{analyze_copies, AnalysisLevel, CopyMapLattice, StmtLoc};
+use crate::dataflow::{analyze_copies, CopyMapLattice, AnalysisLevel, StmtLoc};
 use crate::optimization::OptimizationPass;
 
 /// Copy Propagation optimization pass
-///
+/// 
 /// Uses copy analysis to replace variable uses with their copy sources.
 pub struct CopyPropagation;
 
@@ -26,11 +26,8 @@ impl OptimizationPass for CopyPropagation {
         for &block_id in &func.blocks {
             if let Some(block) = program.blocks.get_mut(block_id) {
                 for (stmt_idx, stmt) in block.statements.iter_mut().enumerate() {
-                    let stmt_loc = StmtLoc {
-                        block: block_id,
-                        index: stmt_idx,
-                    };
-
+                    let stmt_loc = StmtLoc { block: block_id, index: stmt_idx };
+                    
                     if let Some(copy_state) = copies.stmt_entry.get(&stmt_loc) {
                         if self.propagate_copies_in_statement(stmt, copy_state) {
                             changed = true;
@@ -50,9 +47,15 @@ impl CopyPropagation {
     }
 
     /// Propagate copies in a statement, returning true if changed
-    fn propagate_copies_in_statement(&self, stmt: &mut Statement, copies: &CopyMapLattice) -> bool {
+    fn propagate_copies_in_statement(
+        &self,
+        stmt: &mut Statement,
+        copies: &CopyMapLattice,
+    ) -> bool {
         match stmt {
-            Statement::Assign { rvalue, .. } => self.propagate_copies_in_rvalue(rvalue, copies),
+            Statement::Assign { rvalue, .. } => {
+                self.propagate_copies_in_rvalue(rvalue, copies)
+            }
         }
     }
 
@@ -84,7 +87,9 @@ impl CopyPropagation {
                 }
                 changed
             }
-            Rvalue::UnaryOp { operand, .. } => self.propagate_copies_in_operand(operand, copies),
+            Rvalue::UnaryOp { operand, .. } => {
+                self.propagate_copies_in_operand(operand, copies)
+            }
             Rvalue::BinaryOp { left, right, .. } => {
                 let mut changed = false;
                 if self.propagate_copies_in_operand(left, copies) {
@@ -99,7 +104,11 @@ impl CopyPropagation {
     }
 
     /// Propagate copies in an operand, returning true if changed
-    fn propagate_copies_in_operand(&self, operand: &mut Operand, copies: &CopyMapLattice) -> bool {
+    fn propagate_copies_in_operand(
+        &self,
+        operand: &mut Operand,
+        copies: &CopyMapLattice,
+    ) -> bool {
         match operand {
             Operand::Var(var_id) => {
                 if let Some(source) = copies.get_copy_source(*var_id) {
