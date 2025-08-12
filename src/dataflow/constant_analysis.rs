@@ -71,14 +71,8 @@ impl ConstantMapLattice {
     }
 
     pub fn set(&mut self, var: VarId, value: ConstantLattice) {
-        match value {
-            ConstantLattice::Bottom => {
-                self.map.remove(&var);
-            }
-            _ => {
-                self.map.insert(var, value);
-            }
-        }
+        // Always store the value, even if it's Bottom, for consistent representation
+        self.map.insert(var, value);
     }
 }
 
@@ -98,9 +92,8 @@ impl Lattice for ConstantMapLattice {
         for (&var, value1) in &self.map {
             if let Some(value2) = other.map.get(&var) {
                 let meet_result = value1.meet(value2);
-                if meet_result != ConstantLattice::Bottom {
-                    result_map.insert(var, meet_result);
-                }
+                // Always insert the result, even if it's Bottom, to maintain consistent representation
+                result_map.insert(var, meet_result);
             }
         }
 
@@ -118,9 +111,8 @@ impl Lattice for ConstantMapLattice {
             let value1 = self.get(var);
             let value2 = other.get(var);
             let join_result = value1.join(&value2);
-            if join_result != ConstantLattice::Bottom {
-                result_map.insert(var, join_result);
-            }
+            // Always insert the result, even if it's Bottom, to maintain consistent representation
+            result_map.insert(var, join_result);
         }
 
         ConstantMapLattice { map: result_map }
