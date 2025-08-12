@@ -6,7 +6,7 @@ use crate::{
     },
     dataflow::{
         analyze_available_expressions, analyze_live_variables, analyze_reaching_definitions,
-        analyze_table_mod_ref, AnalysisLevel, DataflowResults, SetLattice, TableAccess,
+        analyze_table_mod_ref, AnalysisLevel, SetLattice, TableAccess,
     },
 };
 use std::cell::RefCell;
@@ -62,15 +62,18 @@ impl<'a> CfgPrintVisitor<'a> {
     }
 
     /// Format available expressions set as a human-readable string
-    fn format_available_expressions(&self, expr_set: &std::collections::HashSet<Rvalue>) -> String {
+    fn format_available_expressions(
+        &mut self,
+        expr_set: &std::collections::HashSet<Rvalue>,
+    ) -> String {
         if expr_set.is_empty() {
             "∅".to_string()
         } else {
             let mut exprs: Vec<String> = expr_set
                 .iter()
                 .map(|rvalue| {
-                    // Simple string representation of rvalue
-                    format!("{:?}", rvalue)
+                    // Use visitor pattern to format rvalue properly
+                    self.visit_rvalue(rvalue)
                 })
                 .collect();
             exprs.sort();
@@ -103,16 +106,34 @@ impl<'a> CfgPrintVisitor<'a> {
         }
     }
 
-    /// Format a SetLattice with proper handling of top element
-    fn format_set_lattice<T: Eq + std::hash::Hash + Clone + std::fmt::Debug>(
-        &self,
-        lattice: &SetLattice<T>,
-        formatter: impl Fn(&std::collections::HashSet<T>) -> String,
-    ) -> String {
+    /// Format a SetLattice for variable sets
+    fn format_variable_set_lattice(&self, lattice: &SetLattice<VarId>) -> String {
         if lattice.is_top() {
             "⊤".to_string()
         } else if let Some(set) = lattice.as_set() {
-            formatter(set)
+            self.format_variable_set(set)
+        } else {
+            "⊥".to_string()
+        }
+    }
+
+    /// Format a SetLattice for available expressions
+    fn format_available_expressions_lattice(&mut self, lattice: &SetLattice<Rvalue>) -> String {
+        if lattice.is_top() {
+            "⊤".to_string()
+        } else if let Some(set) = lattice.as_set() {
+            self.format_available_expressions(set)
+        } else {
+            "⊥".to_string()
+        }
+    }
+
+    /// Format a SetLattice for table accesses
+    fn format_table_accesses_lattice(&self, lattice: &SetLattice<TableAccess>) -> String {
+        if lattice.is_top() {
+            "⊤".to_string()
+        } else if let Some(set) = lattice.as_set() {
+            self.format_table_accesses(set)
         } else {
             "⊥".to_string()
         }
@@ -147,30 +168,25 @@ impl<'a> CfgPrintVisitor<'a> {
 
         if let Some(entry_liveness) = liveness_results.entry.get(&block_id) {
             self.write_indent()?;
-            let live_vars =
-                self.format_set_lattice(entry_liveness, |set| self.format_variable_set(set));
+            let live_vars = self.format_variable_set_lattice(entry_liveness);
             writeln!(self.writer, "│ Live Variables: {}", live_vars)?;
         }
 
         if let Some(entry_reaching_defs) = reaching_def_results.entry.get(&block_id) {
             self.write_indent()?;
-            let reaching_defs =
-                self.format_set_lattice(entry_reaching_defs, |set| self.format_variable_set(set));
+            let reaching_defs = self.format_variable_set_lattice(entry_reaching_defs);
             writeln!(self.writer, "│ Reaching Definitions: {}", reaching_defs)?;
         }
 
         if let Some(entry_available_exprs) = available_expr_results.entry.get(&block_id) {
             self.write_indent()?;
-            let available_exprs = self.format_set_lattice(entry_available_exprs, |set| {
-                self.format_available_expressions(set)
-            });
+            let available_exprs = self.format_available_expressions_lattice(entry_available_exprs);
             writeln!(self.writer, "│ Available Expressions: {}", available_exprs)?;
         }
 
         if let Some(entry_table_accesses) = table_mod_ref_results.entry.get(&block_id) {
             self.write_indent()?;
-            let table_accesses = self
-                .format_set_lattice(entry_table_accesses, |set| self.format_table_accesses(set));
+            let table_accesses = self.format_table_accesses_lattice(entry_table_accesses);
             writeln!(self.writer, "│ Table Accesses: {}", table_accesses)?;
         }
 
@@ -209,30 +225,25 @@ impl<'a> CfgPrintVisitor<'a> {
 
         if let Some(exit_liveness) = liveness_results.exit.get(&block_id) {
             self.write_indent()?;
-            let live_vars =
-                self.format_set_lattice(exit_liveness, |set| self.format_variable_set(set));
+            let live_vars = self.format_variable_set_lattice(exit_liveness);
             writeln!(self.writer, "│ Live Variables: {}", live_vars)?;
         }
 
         if let Some(exit_reaching_defs) = reaching_def_results.exit.get(&block_id) {
             self.write_indent()?;
-            let reaching_defs =
-                self.format_set_lattice(exit_reaching_defs, |set| self.format_variable_set(set));
+            let reaching_defs = self.format_variable_set_lattice(exit_reaching_defs);
             writeln!(self.writer, "│ Reaching Definitions: {}", reaching_defs)?;
         }
 
         if let Some(exit_available_exprs) = available_expr_results.exit.get(&block_id) {
             self.write_indent()?;
-            let available_exprs = self.format_set_lattice(exit_available_exprs, |set| {
-                self.format_available_expressions(set)
-            });
+            let available_exprs = self.format_available_expressions_lattice(exit_available_exprs);
             writeln!(self.writer, "│ Available Expressions: {}", available_exprs)?;
         }
 
         if let Some(exit_table_accesses) = table_mod_ref_results.exit.get(&block_id) {
             self.write_indent()?;
-            let table_accesses =
-                self.format_set_lattice(exit_table_accesses, |set| self.format_table_accesses(set));
+            let table_accesses = self.format_table_accesses_lattice(exit_table_accesses);
             writeln!(self.writer, "│ Table Accesses: {}", table_accesses)?;
         }
 
