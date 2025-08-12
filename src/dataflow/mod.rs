@@ -15,6 +15,12 @@ pub use reaching_definitions::analyze_reaching_definitions;
 mod available_expressions;
 pub use available_expressions::analyze_available_expressions;
 
+mod constant_analysis;
+pub use constant_analysis::{analyze_constants, ConstantLattice, ConstantMapLattice};
+
+mod copy_analysis;
+pub use copy_analysis::{analyze_copies, CopyMapLattice};
+
 mod table_mod_ref;
 pub use table_mod_ref::{analyze_table_mod_ref, AccessType, TableAccess};
 
@@ -42,10 +48,10 @@ pub trait Lattice: Clone + Eq + Debug {
     /// Top element of the lattice (for some analyses)
     fn top() -> Option<Self>;
 
-    /// Meet operation (∧)
+    /// Meet operation (∧) - greatest lower bound
     fn meet(&self, other: &Self) -> Self;
 
-    /// Join operation (∨)
+    /// Join operation (∨) - least upper bound
     fn join(&self, other: &Self) -> Self;
 
     /// Check if this value is less than or equal to another in the lattice order
@@ -78,8 +84,7 @@ pub struct DataflowAnalysis<L: Lattice, T: TransferFunction<L>> {
     _phantom: std::marker::PhantomData<L>,
 }
 
-/// Location of a statement inside the CFG.
-/// (We avoid adding an explicit `StatementId` to `cfg` by keeping it local.)
+/// Location of a statement inside the CFG
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StmtLoc {
     /// Basic block that owns the statement
@@ -101,9 +106,9 @@ pub struct DataflowResults<L: Lattice> {
     pub stmt_exit: HashMap<StmtLoc, L>,
 }
 
-/// Powerset lattice based on `HashSet<T>`.
+/// Powerset lattice based on `HashSet<T>`
 #[derive(Clone, Debug)]
 pub struct SetLattice<T: Eq + Hash + Clone + Debug> {
-    set: HashSet<T>, // meaningless when `is_top == true`
+    set: HashSet<T>,
     is_top: bool,
 }
