@@ -72,7 +72,7 @@ pub trait Lattice: Clone + Eq + Debug {
 /// Trait for transfer functions
 pub trait TransferFunction<L: Lattice> {
     /// Apply transfer function for a statement
-    fn transfer_statement(&self, stmt: &Statement, state: &L) -> L;
+    fn transfer_statement(&self, stmt: &Statement, stmt_loc: StmtLoc, state: &L) -> L;
 
     /// Apply transfer function for a control flow edge
     fn transfer_edge(&self, edge: &ControlFlowEdge, state: &L) -> L;

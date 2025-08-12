@@ -1,6 +1,6 @@
 use super::{
     AnalysisKind, AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
-    TransferFunction,
+    StmtLoc, TransferFunction,
 };
 use crate::cfg::{
     BasicBlock, ControlFlowEdge, EdgeType, FunctionCfg, Operand, Rvalue, Statement, VarId,
@@ -18,6 +18,7 @@ impl TransferFunction<SetLattice<LiveVar>> for LivenessTransfer {
     fn transfer_statement(
         &self,
         stmt: &Statement,
+        _stmt_loc: StmtLoc,
         state: &SetLattice<LiveVar>,
     ) -> SetLattice<LiveVar> {
         if state.is_top() {

@@ -1,13 +1,14 @@
 use super::{
     AnalysisKind, AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
-    TransferFunction,
+    StmtLoc, TransferFunction,
 };
-use crate::cfg::{BasicBlockId, ControlFlowEdge, FunctionCfg, Statement, VarId};
+use crate::cfg::{BasicBlock, ControlFlowEdge, FunctionCfg, Statement, VarId};
 
 /// Definition point for a variable (simplified)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Definition {
     pub var: VarId,
+    pub loc: StmtLoc,
 }
 
 /// Transfer function for reaching definitions analysis
@@ -18,6 +19,7 @@ impl TransferFunction<SetLattice<Definition>> for ReachingDefTransfer {
     fn transfer_statement(
         &self,
         stmt: &Statement,
+        stmt_loc: StmtLoc,
         state: &SetLattice<Definition>,
     ) -> SetLattice<Definition> {
         if state.is_top() {
@@ -33,11 +35,17 @@ impl TransferFunction<SetLattice<Definition>> for ReachingDefTransfer {
                         // Kill all previous definitions of this variable
                         result_set.retain(|def| def.var != *var);
                         // Gen: Add new definition (block and stmt_index would be set by caller)
-                        result_set.insert(Definition { var: *var });
+                        result_set.insert(Definition {
+                            var: *var,
+                            loc: stmt_loc,
+                        });
                     }
                     crate::cfg::LValue::ArrayElement { array, .. } => {
                         result_set.retain(|def| def.var != *array);
-                        result_set.insert(Definition { var: *array });
+                        result_set.insert(Definition {
+                            var: *array,
+                            loc: stmt_loc,
+                        });
                     }
                     crate::cfg::LValue::TableField { .. } => {
                         // Table fields don't define local variables
@@ -61,13 +69,9 @@ impl TransferFunction<SetLattice<Definition>> for ReachingDefTransfer {
         SetLattice::bottom().unwrap()
     }
 
-    fn boundary_value(&self, func: &FunctionCfg, _blockid: BasicBlockId) -> SetLattice<Definition> {
-        // At function entry, parameters are defined
-        let mut defs = std::collections::HashSet::new();
-        for &param in &func.parameters {
-            defs.insert(Definition { var: param });
-        }
-        SetLattice::new(defs)
+    fn boundary_value(&self, _func: &FunctionCfg, _block: &BasicBlock) -> SetLattice<Definition> {
+        // At function entry, parameters are defined, but we don't know its definition
+        SetLattice::bottom().unwrap()
     }
 }
 
