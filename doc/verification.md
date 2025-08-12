@@ -226,123 +226,247 @@ AST  →  CFG  →  (optimise)  →  SC-graph
   optional optimisation pass.
 
 
-## 5  Hop-Level CFG → Boogie Translation
-_Building a text file that Boogie can parse_
+## 5  Hop-Level CFG → Boogie Translation  
+*(concise, self-contained recipe)*
 
-The goal is to turn every **HopCfg** into _one_ self-contained Boogie
-procedure whose body is a **straight-line inlining** of all basic blocks
-(BB), without any further procedure calls.  The whole algorithm fits in
-≈300 LOC and can be implemented by walking the CFG with the **visitor
-API** given in `cfg_api.rs`.
+The same printer emits a `.bpl` file for both proofs:
 
-### 5.1  Five-Step Generation Pipeline
+• P-1: single hop, **plain** variable names  
+• P-2: two hop sequences, variables prefixed **a_ / b_**
 
-| Step | Visitor | Output | Note |
-|------|---------|--------|------|
-| 1 | `DeclareVisitor` (outer) | global `type` & `var` decls | run _once_ over `program` |
-| 2 | `HopVisitor` (outer) | one Boogie `procedure` header per hop | collects BB list |
-| 3 | `BlockVisitor` (outer) | labelled Boogie blocks | emits `LABEL_bbX:` |
-| 4 | `StmtVisitor` (inner) | individual Boogie stmts | pure string emit |
-| 5 | Post-pass | fall-through `goto` cleanup | dead-code pruning optional |
+A flag in `PrinterConfig { var_mode: VarMode }` selects the style; all
+other logic is identical.
 
-All visitors merely _append_ strings to an output buffer; there is **no
-mutation** of the CFG.
+--------------------------------------------------------------------
+### 5.1  Front-end information needed
 
-### 5.2  Naming & Declarations
+1. `HopCfg` – basic blocks + successors (execution order already given).  
+2. `VarInfo` – original name & type for every `VarId`.  
+3. `TableInfo` – ordered primary-key list, data fields.  
+4. *Read/write set* per hop, *live-in / live-out* per slice.
 
-1. **Variables**  
-   A fresh Boogie variable is emitted for _every_ `VarId`:
+No optimiser or SC-graph internals are used while printing.
 
-   ```
-   // Boogie fragment
-   var h12_balance: int;    // hop-id 12  —  original name “balance”
-   ```
+--------------------------------------------------------------------
+### 5.2  Variable naming
 
-   Rule: `h<HopId>_<OrigName>`.  
-   Thus two different hops never clash even if they use the same source
-  -level name.
-
-2. **Tables**  
-   A table with _N_ primary keys is encoded as a **nested map** of depth
-   `N`:
-
-   ```
-   // For  (k1, k2, k3)  →  row of type RowT
-   type T_lvl3  = [int] RowT;
-   type T_lvl2  = [int] T_lvl3;
-   type T_lvl1  = [int] T_lvl2;
-   var  T_stash: T_lvl1;     // IC3 “stash” value (last committed)
-   var  T_buf  : T_lvl1;     // per-hop write buffer
-   ```
-
-   Updating `Account[id, branch]` therefore translates to
-
-   ```boogie
-   T_buf[id][branch] := RowT(balance := newBal, owner := owner);
-   ```
-
-3. **Program Counter**  
-   Each basic block gets a label `BB_<HopId>_<Idx>` so we can emit
-   structured `goto`s directly from the CFG edges.
-
-### 5.3  Basic Block Translation Rules (cheat-sheet)
-
-| CFG node | Boogie snippet |
-|----------|----------------|
-| `Assign { x = y }` | `h12_x := h12_y;` |
-| `Assign { x = a + b }` | `h12_x := h12_a + h12_b;` |
-| `Array[i] = v` | `arr := MapUpdate(arr, i, v);` |
-| `TableField = v` | `T_buf[k1]…[kN].f := v;` |
-| `Rvalue::TableAccess` | `tmp := T_stash[k1]…[kN].f;` |
-| `EdgeType::Unconditional` | `goto BB_next;` |
-| `EdgeType::ConditionalTrue{cond}` | `if (cond) { goto BB_t; } else { goto BB_f; }` |
-| `EdgeType::Return` | `goto BB_RET;` |
-| `EdgeType::Abort` | `assert false;` |
-| `EdgeType::HopExit{next}` | `call PieceCommit(); goto BB_entry_nextHop;` |
-
-### 5.4  Piece-Commit (inline macro)
-
-Emit _once_ per hop, **not** a real procedure:
-
-```boogie
-PieceCommit:
-  // validate & lock part – ghost, skip for now
-  // flush buffered writes
-  havoc k1, …, kN;                          // fresh loop indices
-  assume true;                              // (models ∀)
-  T_stash := MapMerge(T_stash, T_buf);      // overwrite touched rows
-  T_buf   := T_buf_empty;
-  return;
+```
+Plain      →  balance
+PrefixedA  →  a_balance
+PrefixedB  →  b_balance
 ```
 
-Because Boogie disallows higher-order updates, `MapMerge` is declared as
-an **uninterpreted function**, making the translation simple yet sound.
+The renaming happens during **emission**; the CFG is kept unchanged.
 
-### 5.5  Putting It All Together (pseudo-code)
+--------------------------------------------------------------------
+### 5.3  Table representation
+
+Each **data field** becomes one nested map.  Depth = number of
+primary keys (`k`).
+
+| k | Boogie type & declaration | Read | Write |
+|---|---------------------------|------|-------|
+| 1 | `type T_f = [int]int;`<br>`var  T_f : T_f;` | `v := T_f[pk1];` | `T_f := T_f[pk1 := v];` |
+| 2 | `type T_f = [int][int]int;` | `v := T_f[pk1][pk2];` | `T_f[pk1] := T_f[pk1][pk2 := v];` |
+| 3 | `type T_f = [int][int][int]int;` | `v := T_f[p1][p2][p3];` | `T_f[p1][p2] := T_f[p1][p2][p3 := v];` |
+| ≥4 | nest further in the obvious pattern |
+
+_No_ stash/buffer arrays: the map itself is the current DB state.
+
+--------------------------------------------------------------------
+### 5.4  CFG → Boogie cheat-sheet
+
+| CFG element | Boogie emitted |
+|-------------|----------------|
+| `x = y` | `x := y;` |
+| `x = a + b` | `x := a + b;` |
+| `array[i] = v` | `array := array[i := v];` |
+| `T[pk].f = v` | use rule in §5.3 |
+| `tmp = T[pk].f` | use rule in §5.3 |
+| `Unconditional` | `goto BB_next;` |
+| `ConditionalTrue{c}` | `if (c) { goto BB_t; } else { goto BB_f; }` |
+| `Return` | `goto BB_RET;` |
+| `Abort` | `goto BB_RET;`  // later asserts skipped |
+| `HopExit{next}` | `goto ENTRY_next;` |
+
+--------------------------------------------------------------------
+### 5.5  Printer skeleton
 
 ```rust
-fn generate_boogie(program: &CfgProgram) -> String {
-    let mut out = String::new();
+fn emit_bpl(cfg:&CfgProgram,
+            hops_a:&[HopId],
+            hops_b:Option<&[HopId]>) -> String {
+    let mut out = BoogieBuilder::new();
 
-    // STEP 1 – global decls
-    DeclareVisitor(&mut out).visit_program(program);
+    DeclareVisitor { out:&mut out }.visit_program(cfg);      // global decls
 
-    for hop_id in each_hop(program) {
-        // STEP 2 – procedure header
-        write!(out, "procedure Hop_{}() {{\n", hop_id);
-
-        // STEP 3/4 – body
-        BlockVisitor(&mut out, hop_id).visit_hop(program, hop_id);
-
-        write!(out, "}\n\n");
+    for h in cfg.hops.indices() {                            // hop bodies
+        HopVisitor { out:&mut out, mode:VarMode::Plain }
+            .visit_hop(cfg, h);
     }
-    out
+
+    HarnessWriter { out:&mut out, hops_a, hops_b }.write(cfg); // P-1 or P-2
+    out.finish()
 }
 ```
 
-Implement `BlockVisitor` by calling `visit_basic_block()` on each BB in
-`FunctionCfg::hop_order` and inside that, iterate over
-`BasicBlock::statements`, sending every statement to `StmtVisitor`.
+`HopVisitor` prints labels `BB_<hop>_<idx>:` and translates every
+statement via the cheat-sheet above.
 
-That’s all: run the generator, dump the resulting `.bpl` file next to
-`scgraph.dot`, and feed it to Boogie from the CLI flag `--verify`.
+### 5.6  Generating Every “Legal” Merge of Two Hop Lists  
+(no database vocabulary – just list shuffling with one simple rule)
+
+We have
+
+```
+sliceA = [a1, a2, …, am]     // all hops of transaction A
+sliceB = [b1, b2, …, bn]     // all hops of transaction B
+```
+
+and one extra input set
+
+```
+C = { (ai , bj) }            // “conflict” pairs taken from the C-edges
+                             // ‑ always between a hop of A and a hop of B
+```
+
+The compiler guarantees S-edges **inside** each slice, so the only
+constraints we must enforce are:
+
+ • keep the original order inside each slice,  
+ • when two conflicting hops appear, the first one that is executed
+   fixes a **global direction** (A-before-B _or_ B-before-A) that every
+   later conflicting pair must respect.
+
+Example  
+```
+sliceA = [a , b]      sliceB = [c , d]
+C = { (a , c) , (b , d) }
+```
+Legal orders: `a b c d`, `a c b d`, `c d a b`, `c a d b` …  
+Illegal: `a b d c` (first conflict gives A→B, later d c would flip).
+
+------------------------------------------------------------------
+High-level idea
+------------------------------------------------------------------
+While we merge the two lists, we remember **one flag**
+
+```
+dir = Unknown | ABeforeB | BBeforeA
+```
+
+• `Unknown` – we have not placed any conflicting pair yet.  
+• `ABeforeB` – at least one (ai … bj) was seen, so **all** future
+  conflicts must keep A before B.  
+• `BBeforeA` – the opposite.
+
+If placing the next hop would contradict the flag, we drop that branch
+of the search immediately.
+
+------------------------------------------------------------------
+Detailed pseudocode
+------------------------------------------------------------------
+
+```pseudocode
+enum Direction { Unknown, ABeforeB, BBeforeA }
+
+function buildConflictSet(C_edges):
+    // returns a fast   isConflict[x][y]   lookup
+    table := empty  // e.g., HashSet of 64-bit keys
+    for (u,v) in C_edges:
+        table.add( (u,v) )
+        table.add( (v,u) )   // store both directions for O(1) test
+    return table
+
+
+procedure generateAllMerges(sliceA, sliceB, C_edges):
+    conflicts := buildConflictSet(C_edges)
+    m := length(sliceA)
+    n := length(sliceB)
+    result := []
+
+    // depth-first helper
+    procedure DFS(i, j, placed, dir):
+        // i = next index in A,  j = next index in B
+        if i == m and j == n:
+            result.append(copy(placed))
+            return
+
+        // ---------------------------------------------------
+        // local function: try to append hop h (from A? = isA)
+        // ---------------------------------------------------
+        procedure tryAppend(hop h, bool isA, int i2, int j2):
+            newDir := dir
+            // scan placed from right to left until we meet a hop
+            // of the *other* transaction that conflicts with h
+            for k from length(placed)-1 down to 0:
+                p := placed[k]
+                if isA != isFromA(p):              // opposite Tx
+                    if (h,p) in conflicts:         // they conflict
+                        if dir == Unknown:
+                            newDir := if isA then ABeforeB else BBeforeA
+                        else if (dir == ABeforeB and not isA) or
+                                (dir == BBeforeA and isA):
+                            return            // violates direction
+                        break                 // first conflicting pred found
+            placed.append(h)
+            DFS(i2, j2, placed, newDir)
+            placed.pop()
+
+        // Option 1 – take next hop from A
+        if i < m:
+            tryAppend(sliceA[i], true, i+1, j)
+
+        // Option 2 – take next hop from B
+        if j < n:
+            tryAppend(sliceB[j], false, i, j+1)
+
+    // kick off the recursion
+    DFS(0, 0, [], Unknown)
+    return result
+```
+
+Helper `isFromA(h)` is `true` if `h` belongs to `sliceA`.
+
+------------------------------------------------------------------
+Why this works
+------------------------------------------------------------------
+• The first time we see a conflicting pair the flag switches from
+  `Unknown` to the chosen global order.  
+• From that point on the inner test
+  ```
+  (dir == ABeforeB and not isA)
+  ```
+  blocks any hop that would flip the direction, so the search never
+  explores illegal schedules.  
+• All other branches (no conflicts or same direction) proceed normally
+  and eventually reach the base-case `i==m && j==n`, adding exactly the
+  legal merges to `result`.
+
+------------------------------------------------------------------
+Complexity
+------------------------------------------------------------------
+Worst case (no conflicts) enumerates the full binomial number of merges
+`C(m+n, m)`.  Every conflict that appears early halves the live branch
+count, so practical slices stay small.
+
+------------------------------------------------------------------
+Output
+------------------------------------------------------------------
+`generateAllMerges` returns a list of vectors; each vector is one legal
+interleaving.  The verification harness will loop over that list and
+feed every vector to Boogie.
+
+
+--------------------------------------------------------------------
+### 5.7  Abort handling
+
+A ghost flag `aborted` is raised when control reaches an `Abort` edge.
+All equality assertions in the harness are guarded with  
+`if (!aborted)`; thus any run that aborts vacuously satisfies the proof.
+
+--------------------------------------------------------------------
+With these rules a developer only needs to ❶ walk the CFG by the visitor
+API, ❷ apply the table and cheat-sheet templates, and ❸ let
+`HarnessWriter` insert the correct assertions.  The produced `.bpl`
+passes Boogie unmodified.
