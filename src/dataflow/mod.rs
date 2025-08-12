@@ -7,19 +7,17 @@ use std::hash::Hash;
 
 mod util;
 
-pub mod liveness;
+mod liveness;
 pub use liveness::{analyze_live_variables, LiveVar};
 
 mod reaching_definitions;
-pub use reaching_definitions::analyze_reaching_definitions;
+pub use reaching_definitions::{analyze_reaching_definitions, Definition};
 
-pub mod available_expressions;
-pub use available_expressions::analyze_available_expressions;
+mod available_expressions;
+pub use available_expressions::{analyze_available_expressions, AvailExpr};
 
 mod constant_analysis;
-pub use constant_analysis::{
-    analyze_constants, ConstantMapData, ConstantMapLattice, ConstantState,
-};
+pub use constant_analysis::{analyze_constants, ConstantMapLattice, ConstantState};
 
 mod copy_analysis;
 pub use copy_analysis::{analyze_copies, CopyMapLattice, CopyRelation};
