@@ -3,7 +3,7 @@ use super::{
     TransferFunction,
 };
 use crate::cfg::{
-    BasicBlock, ControlFlowEdge, FunctionCfg, Operand, Rvalue, Statement, VarId, EdgeType
+    BasicBlock, ControlFlowEdge, EdgeType, FunctionCfg, Operand, Rvalue, Statement, VarId,
 };
 
 /// Variable identifier for liveness analysis
@@ -15,7 +15,11 @@ pub struct LivenessTransfer;
 
 impl TransferFunction<SetLattice<LiveVar>> for LivenessTransfer {
     /// For each statement, remove defined variables and add used variables
-    fn transfer_statement(&self, stmt: &Statement, state: &SetLattice<LiveVar>) -> SetLattice<LiveVar> {
+    fn transfer_statement(
+        &self,
+        stmt: &Statement,
+        state: &SetLattice<LiveVar>,
+    ) -> SetLattice<LiveVar> {
         if state.is_top() {
             return SetLattice::top_element();
         }
@@ -41,14 +45,18 @@ impl TransferFunction<SetLattice<LiveVar>> for LivenessTransfer {
                             self.add_operand_vars(&mut result_set, pk_val);
                         }
                     }
-                }                
+                }
             }
         }
 
         SetLattice::new(result_set)
     }
 
-    fn transfer_edge(&self, edge: &ControlFlowEdge, state: &SetLattice<LiveVar>) -> SetLattice<LiveVar> {
+    fn transfer_edge(
+        &self,
+        edge: &ControlFlowEdge,
+        state: &SetLattice<LiveVar>,
+    ) -> SetLattice<LiveVar> {
         match &edge.edge_type {
             EdgeType::ConditionalTrue { condition } => {
                 let mut result_set = state.as_set().unwrap().clone();
@@ -60,7 +68,9 @@ impl TransferFunction<SetLattice<LiveVar>> for LivenessTransfer {
                 self.add_operand_vars(&mut result_set, &condition);
                 SetLattice::new(result_set)
             }
-            EdgeType::Return { value: Some(return_val) } => {
+            EdgeType::Return {
+                value: Some(return_val),
+            } => {
                 let mut result_set = state.as_set().unwrap().clone();
                 self.add_operand_vars(&mut result_set, &return_val);
                 SetLattice::new(result_set)
@@ -76,7 +86,10 @@ impl TransferFunction<SetLattice<LiveVar>> for LivenessTransfer {
     fn boundary_value(&self, _func: &FunctionCfg, block: &BasicBlock) -> SetLattice<LiveVar> {
         let mut live_vars = std::collections::HashSet::new();
         for edge in &block.successors {
-            if let EdgeType::Return { value: Some(return_val) } = &edge.edge_type {
+            if let EdgeType::Return {
+                value: Some(return_val),
+            } = &edge.edge_type
+            {
                 self.add_operand_vars(&mut live_vars, return_val);
             }
         }

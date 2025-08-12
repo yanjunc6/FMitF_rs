@@ -2,9 +2,7 @@ use super::{
     AnalysisKind, AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
     TransferFunction,
 };
-use crate::cfg::{
-    BasicBlockId, ControlFlowEdge, FunctionCfg, Operand, Statement, VarId,
-};
+use crate::cfg::{BasicBlockId, ControlFlowEdge, FunctionCfg, Operand, Statement, VarId};
 
 /// Copy relation: var1 = var2
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

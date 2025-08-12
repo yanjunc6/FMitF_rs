@@ -2,9 +2,7 @@ use super::{
     AnalysisKind, AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
     TransferFunction,
 };
-use crate::cfg::{
-    BasicBlockId, ControlFlowEdge, FunctionCfg, Operand, Rvalue, Statement, VarId,
-};
+use crate::cfg::{BasicBlockId, ControlFlowEdge, FunctionCfg, Operand, Rvalue, Statement, VarId};
 
 /// Available expression for tracking computations
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -29,7 +27,11 @@ pub struct AvailExprTransfer;
 
 impl TransferFunction<SetLattice<AvailExpr>> for AvailExprTransfer {
     /// For each statement, add generated expressions and kill expressions using redefined variables
-    fn transfer_statement(&self, stmt: &Statement, state: &SetLattice<AvailExpr>) -> SetLattice<AvailExpr> {
+    fn transfer_statement(
+        &self,
+        stmt: &Statement,
+        state: &SetLattice<AvailExpr>,
+    ) -> SetLattice<AvailExpr> {
         if state.is_top() {
             return SetLattice::top_element();
         }
@@ -61,7 +63,11 @@ impl TransferFunction<SetLattice<AvailExpr>> for AvailExprTransfer {
         SetLattice::new(result_set)
     }
 
-    fn transfer_edge(&self, _edge: &ControlFlowEdge, state: &SetLattice<AvailExpr>) -> SetLattice<AvailExpr> {
+    fn transfer_edge(
+        &self,
+        _edge: &ControlFlowEdge,
+        state: &SetLattice<AvailExpr>,
+    ) -> SetLattice<AvailExpr> {
         state.clone()
     }
 

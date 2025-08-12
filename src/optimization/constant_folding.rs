@@ -39,9 +39,15 @@ impl ConstantFoldingPass {
                 BinaryOp::Or => Some(Constant::Int(l | r)),
             },
             (Constant::Float(l), Constant::Float(r)) => match op {
-                BinaryOp::Add => Some(Constant::Float(OrderedFloat(l.into_inner() + r.into_inner()))),
-                BinaryOp::Sub => Some(Constant::Float(OrderedFloat(l.into_inner() - r.into_inner()))),
-                BinaryOp::Mul => Some(Constant::Float(OrderedFloat(l.into_inner() * r.into_inner()))),
+                BinaryOp::Add => Some(Constant::Float(OrderedFloat(
+                    l.into_inner() + r.into_inner(),
+                ))),
+                BinaryOp::Sub => Some(Constant::Float(OrderedFloat(
+                    l.into_inner() - r.into_inner(),
+                ))),
+                BinaryOp::Mul => Some(Constant::Float(OrderedFloat(
+                    l.into_inner() * r.into_inner(),
+                ))),
                 BinaryOp::Div => {
                     let r_val = r.into_inner();
                     if r_val != 0.0 {
@@ -123,7 +129,9 @@ impl ConstantFoldingPass {
                 _ => None,
             },
             Constant::Float(val) => match op {
-                UnaryOp::Neg => Some(Constant::Float(ordered_float::OrderedFloat(-val.into_inner()))),
+                UnaryOp::Neg => Some(Constant::Float(ordered_float::OrderedFloat(
+                    -val.into_inner(),
+                ))),
                 _ => None,
             },
             Constant::Bool(val) => match op {

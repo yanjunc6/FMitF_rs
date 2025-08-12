@@ -2,9 +2,7 @@ use super::{
     AnalysisKind, AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
     TransferFunction,
 };
-use crate::cfg::{
-    BasicBlockId, Constant, ControlFlowEdge, FunctionCfg, Operand, Statement, VarId,
-};
+use crate::cfg::{BasicBlockId, Constant, ControlFlowEdge, FunctionCfg, Operand, Statement, VarId};
 
 /// Constant binding for a variable
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -18,7 +16,7 @@ pub struct ConstantBinding {
 pub enum ConstantState {
     Bottom, // No information
     Const(Constant),
-    Top,    // Not constant (multiple values)
+    Top, // Not constant (multiple values)
 }
 
 /// Map from variables to their constant state
@@ -32,7 +30,11 @@ pub struct ConstantTransfer;
 
 impl TransferFunction<ConstantMapLattice> for ConstantTransfer {
     /// For each statement, update constant information
-    fn transfer_statement(&self, stmt: &Statement, state: &ConstantMapLattice) -> ConstantMapLattice {
+    fn transfer_statement(
+        &self,
+        stmt: &Statement,
+        state: &ConstantMapLattice,
+    ) -> ConstantMapLattice {
         if state.is_top() {
             return SetLattice::top_element();
         }
@@ -68,7 +70,11 @@ impl TransferFunction<ConstantMapLattice> for ConstantTransfer {
         SetLattice::new(result_set)
     }
 
-    fn transfer_edge(&self, _edge: &ControlFlowEdge, state: &ConstantMapLattice) -> ConstantMapLattice {
+    fn transfer_edge(
+        &self,
+        _edge: &ControlFlowEdge,
+        state: &ConstantMapLattice,
+    ) -> ConstantMapLattice {
         state.clone()
     }
 
@@ -111,12 +117,10 @@ impl ConstantTransfer {
     ) -> Option<Constant> {
         match operand {
             Operand::Const(c) => Some(c.clone()),
-            Operand::Var(var_id) => {
-                constants
-                    .iter()
-                    .find(|binding| binding.var == *var_id)
-                    .map(|binding| binding.value.clone())
-            }
+            Operand::Var(var_id) => constants
+                .iter()
+                .find(|binding| binding.var == *var_id)
+                .map(|binding| binding.value.clone()),
         }
     }
 

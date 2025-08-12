@@ -25,10 +25,14 @@ impl CopyPropagation {
     }
 
     /// Find the transitive copy for a variable
-    fn find_copy_source(&self, var: crate::cfg::VarId, copies: &HashSet<CopyRelation>) -> crate::cfg::VarId {
+    fn find_copy_source(
+        &self,
+        var: crate::cfg::VarId,
+        copies: &HashSet<CopyRelation>,
+    ) -> crate::cfg::VarId {
         let mut current = var;
         let mut visited = HashSet::new();
-        
+
         // Follow copy chain until we find the source or detect a cycle
         while visited.insert(current) {
             if let Some(copy_rel) = copies.iter().find(|rel| rel.lhs == current) {
@@ -37,7 +41,7 @@ impl CopyPropagation {
                 break;
             }
         }
-        
+
         current
     }
 
@@ -98,12 +102,10 @@ impl CopyPropagation {
     ) -> crate::cfg::LValue {
         match lvalue {
             crate::cfg::LValue::Variable { var } => crate::cfg::LValue::Variable { var: *var },
-            crate::cfg::LValue::ArrayElement { array, index } => {
-                crate::cfg::LValue::ArrayElement {
-                    array: *array,
-                    index: self.propagate_in_operand(index, copies),
-                }
-            }
+            crate::cfg::LValue::ArrayElement { array, index } => crate::cfg::LValue::ArrayElement {
+                array: *array,
+                index: self.propagate_in_operand(index, copies),
+            },
             crate::cfg::LValue::TableField {
                 table,
                 pk_fields,
@@ -190,7 +192,9 @@ impl OptimizationPass for CopyPropagation {
                     }
                 }
 
-                if let crate::cfg::EdgeType::Return { value: Some(return_val) } = &mut edge.edge_type
+                if let crate::cfg::EdgeType::Return {
+                    value: Some(return_val),
+                } = &mut edge.edge_type
                 {
                     // Get copies available at block exit
                     if let Some(lattice_result) = results.block_exit.get(&block_id) {

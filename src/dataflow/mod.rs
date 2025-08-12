@@ -1,19 +1,19 @@
 // dataflow/mod.rs
 // NEVER CHANGE THIS FILE!
-use crate::cfg::{BasicBlockId, ControlFlowEdge, FunctionCfg, Statement, BasicBlock};
+use crate::cfg::{BasicBlock, BasicBlockId, ControlFlowEdge, FunctionCfg, Statement};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
 
 mod util;
 
-mod liveness;
+pub mod liveness;
 pub use liveness::{analyze_live_variables, LiveVar};
 
 mod reaching_definitions;
 pub use reaching_definitions::analyze_reaching_definitions;
 
-mod available_expressions;
+pub mod available_expressions;
 pub use available_expressions::analyze_available_expressions;
 
 mod constant_analysis;

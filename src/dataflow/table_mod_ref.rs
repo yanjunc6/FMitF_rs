@@ -2,9 +2,7 @@ use super::{
     AnalysisKind, AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
     TransferFunction,
 };
-use crate::cfg::{
-    BasicBlockId, ControlFlowEdge, FunctionCfg, Rvalue, Statement, TableId,
-};
+use crate::cfg::{BasicBlockId, ControlFlowEdge, FunctionCfg, Rvalue, Statement, TableId};
 
 /// Table access tracking
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -24,7 +22,11 @@ pub struct TableModRefTransfer;
 
 impl TransferFunction<SetLattice<TableAccess>> for TableModRefTransfer {
     /// For each statement, accumulate table accesses
-    fn transfer_statement(&self, stmt: &Statement, state: &SetLattice<TableAccess>) -> SetLattice<TableAccess> {
+    fn transfer_statement(
+        &self,
+        stmt: &Statement,
+        state: &SetLattice<TableAccess>,
+    ) -> SetLattice<TableAccess> {
         if state.is_top() {
             return SetLattice::top_element();
         }
@@ -57,7 +59,11 @@ impl TransferFunction<SetLattice<TableAccess>> for TableModRefTransfer {
         SetLattice::new(result_set)
     }
 
-    fn transfer_edge(&self, _edge: &ControlFlowEdge, state: &SetLattice<TableAccess>) -> SetLattice<TableAccess> {
+    fn transfer_edge(
+        &self,
+        _edge: &ControlFlowEdge,
+        state: &SetLattice<TableAccess>,
+    ) -> SetLattice<TableAccess> {
         state.clone()
     }
 
@@ -65,14 +71,22 @@ impl TransferFunction<SetLattice<TableAccess>> for TableModRefTransfer {
         SetLattice::bottom().unwrap()
     }
 
-    fn boundary_value(&self, _func: &FunctionCfg, _blockid: BasicBlockId) -> SetLattice<TableAccess> {
+    fn boundary_value(
+        &self,
+        _func: &FunctionCfg,
+        _blockid: BasicBlockId,
+    ) -> SetLattice<TableAccess> {
         // At hop entry, no table accesses yet
         SetLattice::bottom().unwrap()
     }
 }
 
 impl TableModRefTransfer {
-    fn add_reads_from_rvalue(&self, accesses: &mut std::collections::HashSet<TableAccess>, rvalue: &Rvalue) {
+    fn add_reads_from_rvalue(
+        &self,
+        accesses: &mut std::collections::HashSet<TableAccess>,
+        rvalue: &Rvalue,
+    ) {
         match rvalue {
             Rvalue::Use(_) => {
                 // Variable use doesn't read from tables
@@ -98,7 +112,11 @@ impl TableModRefTransfer {
         }
     }
 
-    fn add_reads_from_operand(&self, _accesses: &mut std::collections::HashSet<TableAccess>, operand: &crate::cfg::Operand) {
+    fn add_reads_from_operand(
+        &self,
+        _accesses: &mut std::collections::HashSet<TableAccess>,
+        operand: &crate::cfg::Operand,
+    ) {
         match operand {
             crate::cfg::Operand::Var(_) => {
                 // Variable use doesn't read from tables directly
