@@ -1,4 +1,5 @@
 // dataflow/mod.rs
+// NEVER CHANGE THIS FILE!
 use crate::cfg::{BasicBlockId, ControlFlowEdge, Statement};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
@@ -16,7 +17,9 @@ mod available_expressions;
 pub use available_expressions::analyze_available_expressions;
 
 mod constant_analysis;
-pub use constant_analysis::{analyze_constants, ConstantLattice, ConstantMapLattice};
+pub use constant_analysis::{
+    analyze_constants, ConstantMapData, ConstantMapLattice, ConstantState,
+};
 
 mod copy_analysis;
 pub use copy_analysis::{analyze_copies, CopyMapLattice};

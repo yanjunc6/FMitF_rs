@@ -36,6 +36,7 @@ impl TransferFunction<SetLattice<TableAccess>> for TableModRefTransfer {
 
         let mut table_accesses = state.set.clone();
 
+        // Process the statement to find table accesses
         match stmt {
             Statement::Assign { lvalue, rvalue, .. } => {
                 // Check if the assignment reads from a table
@@ -51,16 +52,19 @@ impl TransferFunction<SetLattice<TableAccess>> for TableModRefTransfer {
                     }
                     LValue::TableField { table, .. } => {
                         // Table field modification
-                        table_accesses.insert(TableAccess {
+                        let write_access = TableAccess {
                             table_id: *table,
                             access_type: AccessType::Write,
-                        });
+                        };
+                        table_accesses.insert(write_access);
                     }
                 }
             }
         }
 
-        SetLattice::new(table_accesses)
+        let result = SetLattice::new(table_accesses);
+
+        result
     }
 
     fn transfer_edge(
@@ -117,7 +121,9 @@ impl TableModRefTransfer {
 }
 
 /// Analyze table modification and reference patterns for a function
-/// Returns the cumulative set of table accesses for each program point
+/// This is a HOP-LEVEL analysis that determines what tables each hop reads/writes.
+/// Used for verification purposes to understand hop-level table access patterns.
+/// DO NOT change this to function-level analysis.
 pub fn analyze_table_mod_ref(
     func: &FunctionCfg,
     cfg_program: &CfgProgram,
