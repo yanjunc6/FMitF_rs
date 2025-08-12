@@ -2,7 +2,7 @@ use super::{
     AnalysisKind, AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
     TransferFunction,
 };
-use crate::cfg::{BasicBlockId, ControlFlowEdge, FunctionCfg, Rvalue, Statement, TableId};
+use crate::cfg::{BasicBlockId, ControlFlowEdge, FunctionCfg, RValue, Statement, TableId};
 
 /// Table access tracking
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -85,27 +85,27 @@ impl TableModRefTransfer {
     fn add_reads_from_rvalue(
         &self,
         accesses: &mut std::collections::HashSet<TableAccess>,
-        rvalue: &Rvalue,
+        rvalue: &RValue,
     ) {
         match rvalue {
-            Rvalue::Use(_) => {
+            RValue::Use(_) => {
                 // Variable use doesn't read from tables
             }
-            Rvalue::TableAccess { table, .. } => {
+            RValue::TableAccess { table, .. } => {
                 accesses.insert(TableAccess {
                     table: *table,
                     access_type: AccessType::Read,
                 });
             }
-            Rvalue::ArrayAccess { array, index } => {
+            RValue::ArrayAccess { array, index } => {
                 // Check if array or index operands contain table accesses
                 self.add_reads_from_operand(accesses, array);
                 self.add_reads_from_operand(accesses, index);
             }
-            Rvalue::UnaryOp { operand, .. } => {
+            RValue::UnaryOp { operand, .. } => {
                 self.add_reads_from_operand(accesses, operand);
             }
-            Rvalue::BinaryOp { left, right, .. } => {
+            RValue::BinaryOp { left, right, .. } => {
                 self.add_reads_from_operand(accesses, left);
                 self.add_reads_from_operand(accesses, right);
             }

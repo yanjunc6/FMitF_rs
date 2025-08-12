@@ -2,7 +2,7 @@ use super::PrettyPrinter;
 use crate::{
     cfg::{
         BasicBlockId, CfgProgram, CfgVisitor, FunctionCfg, FunctionId, HopId, LValue, Operand,
-        Rvalue, Statement, StmtVisitor, VarId, Variable,
+        RValue, Statement, StmtVisitor, VarId, Variable,
     },
     dataflow::{
         analyze_available_expressions, analyze_live_variables, analyze_reaching_definitions,
@@ -42,7 +42,7 @@ pub struct CfgPrintVisitor<'a> {
     current_function_id: RefCell<Option<FunctionId>>,
     liveness_cache: RefCell<Option<DataflowResults<SetLattice<VarId>>>>,
     reaching_def_cache: RefCell<Option<DataflowResults<SetLattice<VarId>>>>,
-    available_expr_cache: RefCell<Option<DataflowResults<SetLattice<Rvalue>>>>,
+    available_expr_cache: RefCell<Option<DataflowResults<SetLattice<RValue>>>>,
     table_mod_ref_cache: RefCell<Option<DataflowResults<SetLattice<TableAccess>>>>,
 }
 
@@ -193,7 +193,7 @@ impl<'a> CfgPrintVisitor<'a> {
     }
 
     /// Format available expressions using visitor pattern
-    fn format_available_expressions_lattice(&self, lattice: &SetLattice<Rvalue>) -> String {
+    fn format_available_expressions_lattice(&self, lattice: &SetLattice<RValue>) -> String {
         if let Some(expr_set) = lattice.as_set() {
             self.format_available_expressions(expr_set)
         } else {
@@ -202,7 +202,7 @@ impl<'a> CfgPrintVisitor<'a> {
     }
 
     /// Format available expressions set using visitor pattern
-    fn format_available_expressions(&self, expr_set: &std::collections::HashSet<Rvalue>) -> String {
+    fn format_available_expressions(&self, expr_set: &std::collections::HashSet<RValue>) -> String {
         if expr_set.is_empty() {
             "∅".to_string()
         } else {
@@ -749,10 +749,10 @@ impl<'a> StmtVisitor<String> for CfgPrintVisitor<'a> {
         }
     }
 
-    fn visit_rvalue(&mut self, rv: &Rvalue) -> String {
+    fn visit_rvalue(&mut self, rv: &RValue) -> String {
         match rv {
-            Rvalue::Use(operand) => self.visit_operand(operand),
-            Rvalue::TableAccess {
+            RValue::Use(operand) => self.visit_operand(operand),
+            RValue::TableAccess {
                 table,
                 pk_values,
                 field,
@@ -774,17 +774,17 @@ impl<'a> StmtVisitor<String> for CfgPrintVisitor<'a> {
                     .unwrap_or("<unknown_field>");
                 format!("{}[{}].{}", table_name, pk_strs.join(", "), field_name)
             }
-            Rvalue::ArrayAccess { array, index } => {
+            RValue::ArrayAccess { array, index } => {
                 let array_str = self.visit_operand(array);
                 let index_str = self.visit_operand(index);
                 format!("{}[{}]", array_str, index_str)
             }
-            Rvalue::UnaryOp { op, operand } => {
+            RValue::UnaryOp { op, operand } => {
                 let operand_str = self.visit_operand(operand);
                 let op_str = self.format_unary_op(op);
                 format!("{}{}", op_str, operand_str)
             }
-            Rvalue::BinaryOp { op, left, right } => {
+            RValue::BinaryOp { op, left, right } => {
                 let left_str = self.visit_operand(left);
                 let right_str = self.visit_operand(right);
                 let op_str = self.format_binary_op(op);

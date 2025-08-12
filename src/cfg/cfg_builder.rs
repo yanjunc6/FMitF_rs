@@ -527,7 +527,7 @@ impl<'a> CfgBuilder<'a> {
 
         // Handle compound assignment operators
         let final_rvalue = match &assign.operator {
-            ast::AssignmentOperator::Assign => Rvalue::Use(Operand::Var(rhs_var)),
+            ast::AssignmentOperator::Assign => RValue::Use(Operand::Var(rhs_var)),
             compound_op => {
                 let lhs_operand = self.lvalue_to_operand(&lvalue);
                 let result_var = self.create_temp_variable(self.infer_operand_type(&lhs_operand));
@@ -542,7 +542,7 @@ impl<'a> CfgBuilder<'a> {
 
                 let stmt = Statement::Assign {
                     lvalue: LValue::Variable { var: result_var },
-                    rvalue: Rvalue::BinaryOp {
+                    rvalue: RValue::BinaryOp {
                         op: binary_op,
                         left: lhs_operand,
                         right: Operand::Var(rhs_var),
@@ -550,7 +550,7 @@ impl<'a> CfgBuilder<'a> {
                     span: span.clone(),
                 };
                 self.add_statement_to_current_block(stmt);
-                Rvalue::Use(Operand::Var(result_var))
+                RValue::Use(Operand::Var(result_var))
             }
         };
 
@@ -601,7 +601,7 @@ impl<'a> CfgBuilder<'a> {
 
             let stmt = Statement::Assign {
                 lvalue: LValue::Variable { var: cfg_var_id },
-                rvalue: Rvalue::Use(Operand::Var(init_var)),
+                rvalue: RValue::Use(Operand::Var(init_var)),
                 span,
             };
             self.add_statement_to_current_block(stmt);
@@ -698,7 +698,7 @@ impl<'a> CfgBuilder<'a> {
 
         let init_stmt = Statement::Assign {
             lvalue: LValue::Variable { var: loop_var_id },
-            rvalue: Rvalue::Use(Operand::Var(init_var)),
+            rvalue: RValue::Use(Operand::Var(init_var)),
             span: Span::default(),
         };
         self.add_statement_to_current_block(init_stmt);
@@ -739,7 +739,7 @@ impl<'a> CfgBuilder<'a> {
         // Update loop variable with increment
         let update_stmt = Statement::Assign {
             lvalue: LValue::Variable { var: loop_var_id },
-            rvalue: Rvalue::Use(Operand::Var(incr_var)),
+            rvalue: RValue::Use(Operand::Var(incr_var)),
             span: Span::default(),
         };
         self.add_statement_to_current_block(update_stmt);
@@ -881,7 +881,7 @@ impl<'a> CfgBuilder<'a> {
                             self.create_temp_variable(self.cfg.variables[cfg_var_id].ty.clone());
                         let stmt = Statement::Assign {
                             lvalue: LValue::Variable { var: temp },
-                            rvalue: Rvalue::Use(Operand::Var(cfg_var_id)),
+                            rvalue: RValue::Use(Operand::Var(cfg_var_id)),
                             span: expr.span.clone(),
                         };
                         (temp, vec![stmt])
@@ -969,7 +969,7 @@ impl<'a> CfgBuilder<'a> {
         let temp = self.create_temp_variable(ty);
         let stmt = Statement::Assign {
             lvalue: LValue::Variable { var: temp },
-            rvalue: Rvalue::Use(Operand::Const(constant)),
+            rvalue: RValue::Use(Operand::Const(constant)),
             span,
         };
         (temp, vec![stmt])
@@ -1000,7 +1000,7 @@ impl<'a> CfgBuilder<'a> {
         let result = self.create_temp_variable(result_type);
         stmts.push(Statement::Assign {
             lvalue: LValue::Variable { var: result },
-            rvalue: Rvalue::BinaryOp {
+            rvalue: RValue::BinaryOp {
                 op: cfg_op,
                 left: Operand::Var(left_var),
                 right: Operand::Var(right_var),
@@ -1028,7 +1028,7 @@ impl<'a> CfgBuilder<'a> {
 
                 stmts.push(Statement::Assign {
                     lvalue: LValue::Variable { var: result },
-                    rvalue: Rvalue::UnaryOp {
+                    rvalue: RValue::UnaryOp {
                         op: cfg_op,
                         operand: Operand::Var(operand_var),
                     },
@@ -1104,7 +1104,7 @@ impl<'a> CfgBuilder<'a> {
         let result = self.create_temp_variable(field_ty);
         stmts.push(Statement::Assign {
             lvalue: LValue::Variable { var: result },
-            rvalue: Rvalue::TableAccess {
+            rvalue: RValue::TableAccess {
                 table: table_id,
                 pk_fields: primary_keys,
                 pk_values,
@@ -1134,7 +1134,7 @@ impl<'a> CfgBuilder<'a> {
         let result = self.create_temp_variable(elem_type);
         stmts.push(Statement::Assign {
             lvalue: LValue::Variable { var: result },
-            rvalue: Rvalue::ArrayAccess {
+            rvalue: RValue::ArrayAccess {
                 array: Operand::Var(array_var),
                 index: Operand::Var(index_var),
             },
@@ -1183,7 +1183,7 @@ impl<'a> CfgBuilder<'a> {
 
         stmts.push(Statement::Assign {
             lvalue: LValue::Variable { var: result },
-            rvalue: Rvalue::Use(Operand::Const(Constant::Array(element_constants))),
+            rvalue: RValue::Use(Operand::Const(Constant::Array(element_constants))),
             span,
         });
 
@@ -1246,7 +1246,7 @@ impl<'a> CfgBuilder<'a> {
         // Create a placeholder assignment - this would need to be extended with proper table record access
         stmts.push(Statement::Assign {
             lvalue: LValue::Variable { var: result },
-            rvalue: Rvalue::Use(Operand::Var(result)), // Placeholder - needs proper table record access
+            rvalue: RValue::Use(Operand::Var(result)), // Placeholder - needs proper table record access
             span,
         });
 
@@ -1271,7 +1271,7 @@ impl<'a> CfgBuilder<'a> {
         let result = self.create_temp_variable(TypeName::String); // Placeholder type
         stmts.push(Statement::Assign {
             lvalue: LValue::Variable { var: result },
-            rvalue: Rvalue::Use(Operand::Const(Constant::String(
+            rvalue: RValue::Use(Operand::Const(Constant::String(
                 "record_literal".to_string(),
             ))),
             span,
@@ -1323,7 +1323,7 @@ impl<'a> CfgBuilder<'a> {
         // Create a placeholder assignment - this would need proper field access implementation
         stmts.push(Statement::Assign {
             lvalue: LValue::Variable { var: result },
-            rvalue: Rvalue::Use(Operand::Var(object_var)), // Placeholder - needs proper field access
+            rvalue: RValue::Use(Operand::Var(object_var)), // Placeholder - needs proper field access
             span,
         });
 
@@ -1836,7 +1836,7 @@ impl<'a> CfgBuilder<'a> {
                 // Create assignment statement to initialize the loop variable
                 let init_stmt = Statement::Assign {
                     lvalue: LValue::Variable { var: loop_var_id },
-                    rvalue: Rvalue::Use(Operand::Const(Constant::Int(iteration))),
+                    rvalue: RValue::Use(Operand::Const(Constant::Int(iteration))),
                     span: Span::default(),
                 };
                 builder.add_statement_to_current_block(init_stmt);
@@ -1889,7 +1889,7 @@ impl<'a> CfgBuilder<'a> {
                     self.create_temp_variable(self.infer_operand_type(&Operand::Var(*array)));
                 let stmt = Statement::Assign {
                     lvalue: LValue::Variable { var: temp_var },
-                    rvalue: Rvalue::ArrayAccess {
+                    rvalue: RValue::ArrayAccess {
                         array: Operand::Var(*array),
                         index: index.clone(),
                     },
@@ -1909,7 +1909,7 @@ impl<'a> CfgBuilder<'a> {
                 let temp_var = self.create_temp_variable(field_type);
                 let stmt = Statement::Assign {
                     lvalue: LValue::Variable { var: temp_var },
-                    rvalue: Rvalue::TableAccess {
+                    rvalue: RValue::TableAccess {
                         table: *table,
                         pk_fields: pk_fields.clone(),
                         pk_values: pk_values.clone(),
@@ -2054,7 +2054,7 @@ impl<'a> CfgBuilder<'a> {
         // Create the modified value
         stmts.push(Statement::Assign {
             lvalue: LValue::Variable { var: modified_var },
-            rvalue: Rvalue::BinaryOp {
+            rvalue: RValue::BinaryOp {
                 op: binary_op,
                 left: Operand::Var(operand_var),
                 right: Operand::Const(self.get_increment_constant(&operand_type)),
@@ -2065,7 +2065,7 @@ impl<'a> CfgBuilder<'a> {
         // Store the modified value back to the original variable
         stmts.push(Statement::Assign {
             lvalue: LValue::Variable { var: operand_var },
-            rvalue: Rvalue::Use(Operand::Var(modified_var)),
+            rvalue: RValue::Use(Operand::Var(modified_var)),
             span: span.clone(),
         });
 
@@ -2080,7 +2080,7 @@ impl<'a> CfgBuilder<'a> {
                 stmts.len() - 2,
                 Statement::Assign {
                     lvalue: LValue::Variable { var: original_var },
-                    rvalue: Rvalue::Use(Operand::Var(operand_var)),
+                    rvalue: RValue::Use(Operand::Var(operand_var)),
                     span: span.clone(),
                 },
             );

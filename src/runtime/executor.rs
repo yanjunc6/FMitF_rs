@@ -2,7 +2,7 @@
 
 use super::{RuntimeError, RuntimeState, RuntimeValue};
 use crate::cfg::{
-    BasicBlockId, BinaryOp, Constant, FunctionId, HopId, Operand, Rvalue, Statement, Terminator,
+    BasicBlockId, BinaryOp, Constant, FunctionId, HopId, Operand, RValue, Statement, Terminator,
     UnaryOp,
 };
 use std::collections::HashMap;
@@ -191,15 +191,15 @@ fn execute_statement_isolated(
 
 /// Evaluate an rvalue expression
 fn evaluate_rvalue_isolated(
-    rvalue: &Rvalue,
+    rvalue: &RValue,
     local_vars: &HashMap<String, RuntimeValue>,
     state: &RuntimeState,
     func_id: FunctionId,
 ) -> Result<RuntimeValue, RuntimeError> {
     match rvalue {
-        Rvalue::Use(operand) => evaluate_operand_isolated(operand, local_vars, state, func_id),
+        RValue::Use(operand) => evaluate_operand_isolated(operand, local_vars, state, func_id),
 
-        Rvalue::TableAccess {
+        RValue::TableAccess {
             table,
             pk_values,
             field,
@@ -241,7 +241,7 @@ fn evaluate_rvalue_isolated(
             Ok(value)
         }
 
-        Rvalue::BinaryOp { op, left, right } => {
+        RValue::BinaryOp { op, left, right } => {
             let left_val = evaluate_operand_isolated(left, local_vars, state, func_id)?;
             let right_val = evaluate_operand_isolated(right, local_vars, state, func_id)?;
 
@@ -392,7 +392,7 @@ fn evaluate_rvalue_isolated(
             }
         }
 
-        Rvalue::UnaryOp { op, operand } => {
+        RValue::UnaryOp { op, operand } => {
             let val = evaluate_operand_isolated(operand, local_vars, state, func_id)?;
 
             match (op, &val) {

@@ -164,7 +164,7 @@ pub enum EdgeType {
 pub enum Statement {
     Assign {
         lvalue: LValue,
-        rvalue: Rvalue,
+        rvalue: RValue,
         span: Span,
     },
 }
@@ -186,7 +186,7 @@ pub enum LValue {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Rvalue {
+pub enum RValue {
     Use(Operand),
     TableAccess {
         table: TableId,

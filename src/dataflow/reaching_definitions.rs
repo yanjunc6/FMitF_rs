@@ -76,6 +76,7 @@ impl TransferFunction<SetLattice<Definition>> for ReachingDefTransfer {
 }
 
 /// Analyze reaching definitions in a function (forward, function-level)
+/// Which assignments could possibly supply the current value of this variable?
 pub fn analyze_reaching_definitions(
     func: &FunctionCfg,
     cfg_program: &crate::cfg::CfgProgram,

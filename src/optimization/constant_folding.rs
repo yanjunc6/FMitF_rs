@@ -4,7 +4,7 @@
 //! replacing them with their computed constant values.
 
 use super::OptimizationPass;
-use crate::cfg::{BinaryOp, CfgProgram, Constant, FunctionId, Operand, Rvalue, Statement, UnaryOp};
+use crate::cfg::{BinaryOp, CfgProgram, Constant, FunctionId, Operand, RValue, Statement, UnaryOp};
 
 pub struct ConstantFoldingPass;
 
@@ -143,12 +143,12 @@ impl ConstantFoldingPass {
     }
 
     /// Try to fold constants in an rvalue
-    fn fold_rvalue(&self, rvalue: &Rvalue) -> Option<Rvalue> {
+    fn fold_rvalue(&self, rvalue: &RValue) -> Option<RValue> {
         match rvalue {
-            Rvalue::BinaryOp { op, left, right } => {
+            RValue::BinaryOp { op, left, right } => {
                 if let (Operand::Const(left_const), Operand::Const(right_const)) = (left, right) {
                     if let Some(result) = self.eval_binary_op(op, left_const, right_const) {
-                        Some(Rvalue::Use(Operand::Const(result)))
+                        Some(RValue::Use(Operand::Const(result)))
                     } else {
                         None
                     }
@@ -156,10 +156,10 @@ impl ConstantFoldingPass {
                     None
                 }
             }
-            Rvalue::UnaryOp { op, operand } => {
+            RValue::UnaryOp { op, operand } => {
                 if let Operand::Const(operand_const) = operand {
                     if let Some(result) = self.eval_unary_op(op, operand_const) {
-                        Some(Rvalue::Use(Operand::Const(result)))
+                        Some(RValue::Use(Operand::Const(result)))
                     } else {
                         None
                     }

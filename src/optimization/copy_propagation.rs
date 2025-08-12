@@ -4,7 +4,7 @@
 //! For example, if we have `x = y`, subsequent uses of `x` can be replaced with `y`.
 
 use super::OptimizationPass;
-use crate::cfg::{CfgProgram, FunctionId, Operand, Rvalue, Statement};
+use crate::cfg::{CfgProgram, FunctionId, Operand, RValue, Statement};
 use crate::dataflow::{analyze_copies, CopyMapLattice, CopyRelation, StmtLoc};
 use std::collections::HashSet;
 
@@ -61,28 +61,28 @@ impl CopyPropagation {
     }
 
     /// Propagate copies in an rvalue
-    fn propagate_in_rvalue(&self, rvalue: &Rvalue, copies: &HashSet<CopyRelation>) -> Rvalue {
+    fn propagate_in_rvalue(&self, rvalue: &RValue, copies: &HashSet<CopyRelation>) -> RValue {
         match rvalue {
-            Rvalue::Use(operand) => Rvalue::Use(self.propagate_in_operand(operand, copies)),
-            Rvalue::BinaryOp { op, left, right } => Rvalue::BinaryOp {
+            RValue::Use(operand) => RValue::Use(self.propagate_in_operand(operand, copies)),
+            RValue::BinaryOp { op, left, right } => RValue::BinaryOp {
                 op: op.clone(),
                 left: self.propagate_in_operand(left, copies),
                 right: self.propagate_in_operand(right, copies),
             },
-            Rvalue::UnaryOp { op, operand } => Rvalue::UnaryOp {
+            RValue::UnaryOp { op, operand } => RValue::UnaryOp {
                 op: op.clone(),
                 operand: self.propagate_in_operand(operand, copies),
             },
-            Rvalue::ArrayAccess { array, index } => Rvalue::ArrayAccess {
+            RValue::ArrayAccess { array, index } => RValue::ArrayAccess {
                 array: self.propagate_in_operand(array, copies),
                 index: self.propagate_in_operand(index, copies),
             },
-            Rvalue::TableAccess {
+            RValue::TableAccess {
                 table,
                 pk_fields,
                 pk_values,
                 field,
-            } => Rvalue::TableAccess {
+            } => RValue::TableAccess {
                 table: *table,
                 pk_fields: pk_fields.clone(),
                 pk_values: pk_values

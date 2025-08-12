@@ -35,7 +35,7 @@ impl DeadCodeEliminationPass {
 
                     // However, don't eliminate assignments with side effects
                     let has_side_effects = match rvalue {
-                        crate::cfg::Rvalue::TableAccess { .. } => true, // Table access might have side effects
+                        crate::cfg::RValue::TableAccess { .. } => true, // Table access might have side effects
                         _ => false,
                     };
 
