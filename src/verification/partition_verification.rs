@@ -127,16 +127,16 @@ impl PartitionVerifier {
     //         }
     //     }
 
-    //     /// Extract table reads from Rvalue
+    //     /// Extract table reads from RValue
     //     fn extract_reads_from_rvalue(
     //         &mut self,
-    //         rvalue: &Rvalue,
+    //         rvalue: &RValue,
     //         node_id: &SCGraphNodeId,
     //         _cfg_program: &CfgProgram,
     //         line_info: &str,
     //     ) {
     //         match rvalue {
-    //             Rvalue::TableAccess {
+    //             RValue::TableAccess {
     //                 table, pk_values, ..
     //             } => {
     //                 self.detailed_accesses.push(DetailedTableAccess {
@@ -150,12 +150,12 @@ impl PartitionVerifier {
     //                 });
     //             }
     //             // Handle other rvalue types that might contain table accesses
-    //             Rvalue::BinaryOp { left, right, .. } => {
+    //             RValue::BinaryOp { left, right, .. } => {
     //                 // Recursively check operands
     //                 self.extract_reads_from_operand(left, node_id, _cfg_program, line_info);
     //                 self.extract_reads_from_operand(right, node_id, _cfg_program, line_info);
     //             }
-    //             Rvalue::UnaryOp { operand, .. } => {
+    //             RValue::UnaryOp { operand, .. } => {
     //                 self.extract_reads_from_operand(operand, node_id, _cfg_program, line_info);
     //             }
     //             _ => {

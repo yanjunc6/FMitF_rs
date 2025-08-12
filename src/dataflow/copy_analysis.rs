@@ -34,7 +34,7 @@ impl TransferFunction<CopyMapLattice> for CopyTransfer {
                         result_set.retain(|copy| copy.lhs != *var && copy.rhs != *var);
 
                         // Gen: If rvalue is a simple variable use, add copy relation
-                        if let crate::cfg::Rvalue::Use(Operand::Var(source_var)) = rvalue {
+                        if let crate::cfg::RValue::Use(Operand::Var(source_var)) = rvalue {
                             result_set.insert(CopyRelation {
                                 lhs: *var,
                                 rhs: *source_var,

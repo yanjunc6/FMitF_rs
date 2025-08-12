@@ -4,7 +4,7 @@
 //! previously computed values when the same expression is encountered again.
 
 use super::OptimizationPass;
-use crate::cfg::{CfgProgram, FunctionId, Operand, Rvalue, Statement, VarId};
+use crate::cfg::{CfgProgram, FunctionId, Operand, RValue, Statement, VarId};
 use crate::dataflow::available_expressions::AvailExpr;
 use crate::dataflow::{analyze_available_expressions, StmtLoc};
 use std::collections::{HashMap, HashSet};
@@ -27,19 +27,19 @@ impl CommonSubexpressionEliminationPass {
         }
     }
 
-    /// Convert an Rvalue to an AvailExpr if possible
-    fn rvalue_to_avail_expr(&self, rvalue: &Rvalue) -> Option<AvailExpr> {
+    /// Convert an RValue to an AvailExpr if possible
+    fn rvalue_to_avail_expr(&self, rvalue: &RValue) -> Option<AvailExpr> {
         match rvalue {
-            Rvalue::BinaryOp { op, left, right } => Some(AvailExpr::BinaryOp {
+            RValue::BinaryOp { op, left, right } => Some(AvailExpr::BinaryOp {
                 op: op.clone(),
                 left: left.clone(),
                 right: right.clone(),
             }),
-            Rvalue::UnaryOp { op, operand } => Some(AvailExpr::UnaryOp {
+            RValue::UnaryOp { op, operand } => Some(AvailExpr::UnaryOp {
                 op: op.clone(),
                 operand: operand.clone(),
             }),
-            Rvalue::ArrayAccess { array, index } => Some(AvailExpr::ArrayAccess {
+            RValue::ArrayAccess { array, index } => Some(AvailExpr::ArrayAccess {
                 array: array.clone(),
                 index: index.clone(),
             }),
@@ -138,7 +138,7 @@ impl OptimizationPass for CommonSubexpressionEliminationPass {
                                     self.find_existing_computation(&expr, &available, &expr_to_var)
                                 {
                                     // Replace the computation with a use of the existing variable
-                                    *rvalue = Rvalue::Use(Operand::Var(existing_var));
+                                    *rvalue = RValue::Use(Operand::Var(existing_var));
                                     changed = true;
                                 }
                             }

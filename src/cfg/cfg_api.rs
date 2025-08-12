@@ -14,7 +14,7 @@
 
 use super::{
     BasicBlock, BasicBlockId, CfgProgram, Constant, FunctionCfg, FunctionId, HopCfg, HopId, LValue,
-    Operand, Rvalue, Statement, VarId, Variable,
+    Operand, RValue, Statement, VarId, Variable,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -38,7 +38,7 @@ pub trait StmtVisitor<T> {
 
     fn visit_lvalue(&mut self, lv: &LValue) -> T;
 
-    fn visit_rvalue(&mut self, rv: &Rvalue) -> T;
+    fn visit_rvalue(&mut self, rv: &RValue) -> T;
 
     fn visit_operand(&mut self, op: &Operand) -> T;
 
@@ -68,7 +68,7 @@ pub trait StmtFolder {
 
     fn fold_lvalue(&mut self, lv: &mut LValue) -> &mut LValue;
 
-    fn fold_rvalue(&mut self, rv: &mut Rvalue) -> &mut Rvalue;
+    fn fold_rvalue(&mut self, rv: &mut RValue) -> &mut RValue;
 
     fn fold_operand(&mut self, op: &mut Operand) -> &mut Operand;
 

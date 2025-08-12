@@ -92,17 +92,17 @@ impl TransferFunction<ConstantMapLattice> for ConstantTransfer {
 impl ConstantTransfer {
     fn eval_rvalue(
         &self,
-        rvalue: &crate::cfg::Rvalue,
+        rvalue: &crate::cfg::RValue,
         constants: &std::collections::HashSet<ConstantBinding>,
     ) -> Option<Constant> {
         match rvalue {
-            crate::cfg::Rvalue::Use(operand) => self.eval_operand(operand, constants),
-            crate::cfg::Rvalue::BinaryOp { op, left, right } => {
+            crate::cfg::RValue::Use(operand) => self.eval_operand(operand, constants),
+            crate::cfg::RValue::BinaryOp { op, left, right } => {
                 let left_val = self.eval_operand(left, constants)?;
                 let right_val = self.eval_operand(right, constants)?;
                 self.eval_binary_op(op.clone(), &left_val, &right_val)
             }
-            crate::cfg::Rvalue::UnaryOp { op, operand } => {
+            crate::cfg::RValue::UnaryOp { op, operand } => {
                 let val = self.eval_operand(operand, constants)?;
                 self.eval_unary_op(op.clone(), &val)
             }

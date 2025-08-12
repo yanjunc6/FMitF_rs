@@ -3,7 +3,7 @@ use super::{
     StmtLoc, TransferFunction,
 };
 use crate::cfg::{
-    BasicBlock, ControlFlowEdge, EdgeType, FunctionCfg, Operand, Rvalue, Statement, VarId,
+    BasicBlock, ControlFlowEdge, EdgeType, FunctionCfg, Operand, RValue, Statement, VarId,
 };
 
 /// Variable identifier for liveness analysis
@@ -99,24 +99,24 @@ impl TransferFunction<SetLattice<LiveVar>> for LivenessTransfer {
 }
 
 impl LivenessTransfer {
-    fn add_rvalue_vars(&self, vars: &mut std::collections::HashSet<LiveVar>, rvalue: &Rvalue) {
+    fn add_rvalue_vars(&self, vars: &mut std::collections::HashSet<LiveVar>, rvalue: &RValue) {
         match rvalue {
-            Rvalue::Use(operand) => {
+            RValue::Use(operand) => {
                 self.add_operand_vars(vars, operand);
             }
-            Rvalue::TableAccess { pk_values, .. } => {
+            RValue::TableAccess { pk_values, .. } => {
                 for pk_val in pk_values {
                     self.add_operand_vars(vars, pk_val);
                 }
             }
-            Rvalue::ArrayAccess { array, index } => {
+            RValue::ArrayAccess { array, index } => {
                 self.add_operand_vars(vars, array);
                 self.add_operand_vars(vars, index);
             }
-            Rvalue::UnaryOp { operand, .. } => {
+            RValue::UnaryOp { operand, .. } => {
                 self.add_operand_vars(vars, operand);
             }
-            Rvalue::BinaryOp { left, right, .. } => {
+            RValue::BinaryOp { left, right, .. } => {
                 self.add_operand_vars(vars, left);
                 self.add_operand_vars(vars, right);
             }

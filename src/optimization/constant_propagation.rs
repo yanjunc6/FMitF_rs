@@ -4,7 +4,7 @@
 //! that are known to have constant values with their constant values.
 
 use super::OptimizationPass;
-use crate::cfg::{CfgProgram, FunctionId, Operand, Rvalue, Statement};
+use crate::cfg::{CfgProgram, FunctionId, Operand, RValue, Statement};
 use crate::dataflow::{analyze_constants, ConstantMapData, ConstantMapLattice, StmtLoc};
 use std::collections::HashMap;
 
@@ -42,28 +42,28 @@ impl ConstantPropagationPass {
     }
 
     /// Propagate constants in an rvalue
-    fn propagate_in_rvalue(&self, rvalue: &Rvalue, constants: &ConstantMapData) -> Rvalue {
+    fn propagate_in_rvalue(&self, rvalue: &RValue, constants: &ConstantMapData) -> RValue {
         match rvalue {
-            Rvalue::Use(operand) => Rvalue::Use(self.propagate_in_operand(operand, constants)),
-            Rvalue::BinaryOp { op, left, right } => Rvalue::BinaryOp {
+            RValue::Use(operand) => RValue::Use(self.propagate_in_operand(operand, constants)),
+            RValue::BinaryOp { op, left, right } => RValue::BinaryOp {
                 op: op.clone(),
                 left: self.propagate_in_operand(left, constants),
                 right: self.propagate_in_operand(right, constants),
             },
-            Rvalue::UnaryOp { op, operand } => Rvalue::UnaryOp {
+            RValue::UnaryOp { op, operand } => RValue::UnaryOp {
                 op: op.clone(),
                 operand: self.propagate_in_operand(operand, constants),
             },
-            Rvalue::ArrayAccess { array, index } => Rvalue::ArrayAccess {
+            RValue::ArrayAccess { array, index } => RValue::ArrayAccess {
                 array: self.propagate_in_operand(array, constants),
                 index: self.propagate_in_operand(index, constants),
             },
-            Rvalue::TableAccess {
+            RValue::TableAccess {
                 table,
                 pk_fields,
                 pk_values,
                 field,
-            } => Rvalue::TableAccess {
+            } => RValue::TableAccess {
                 table: *table,
                 pk_fields: pk_fields.clone(),
                 pk_values: pk_values
