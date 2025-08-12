@@ -116,7 +116,7 @@ impl ConstantPropagationPass {
             Operand::Var(var_id) => {
                 // Check if this variable has a known constant value
                 match constants.get(*var_id) {
-                    crate::dataflow::ConstantLattice::Constant(constant) => {
+                    crate::dataflow::ConstantState::Constant(constant) => {
                         // Replace variable with constant
                         *operand = Operand::Const(constant);
                         true

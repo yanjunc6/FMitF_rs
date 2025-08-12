@@ -1,123 +1,67 @@
 use crate::cfg::{ControlFlowEdge, LValue, Operand, Rvalue, Statement, VarId};
-use crate::dataflow::{AnalysisLevel, DataflowResults, Lattice, TransferFunction};
+use crate::dataflow::{AnalysisLevel, DataflowResults, SetLattice, TransferFunction};
 use std::collections::HashMap;
 
-/// Copy lattice value for a single variable
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CopyLattice {
+/// Copy data for a single variable
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CopyMapData {
+    pub var: VarId,
+    pub state: CopyState,
+}
+
+/// States for copy analysis
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CopyState {
     Bottom,      // Undefined
     Copy(VarId), // Variable holds same value as another variable
     Top,         // Unknown (could be any variable)
 }
 
-impl Lattice for CopyLattice {
-    fn bottom() -> Option<Self> {
-        Some(CopyLattice::Bottom)
+impl CopyMapData {
+    pub fn new(var: VarId, state: CopyState) -> Self {
+        Self { var, state }
     }
 
-    fn top() -> Option<Self> {
-        Some(CopyLattice::Top)
+    pub fn bottom(var: VarId) -> Self {
+        Self::new(var, CopyState::Bottom)
     }
 
-    fn meet(&self, other: &Self) -> Self {
-        match (self, other) {
-            (CopyLattice::Bottom, _) | (_, CopyLattice::Bottom) => CopyLattice::Bottom,
-            (CopyLattice::Top, x) | (x, CopyLattice::Top) => x.clone(),
-            (CopyLattice::Copy(v1), CopyLattice::Copy(v2)) => {
-                if v1 == v2 {
-                    CopyLattice::Copy(*v1)
-                } else {
-                    CopyLattice::Top
-                }
-            }
-        }
+    pub fn copy(var: VarId, source: VarId) -> Self {
+        Self::new(var, CopyState::Copy(source))
     }
 
-    fn join(&self, other: &Self) -> Self {
-        match (self, other) {
-            (CopyLattice::Top, _) | (_, CopyLattice::Top) => CopyLattice::Top,
-            (CopyLattice::Bottom, x) | (x, CopyLattice::Bottom) => x.clone(),
-            (CopyLattice::Copy(v1), CopyLattice::Copy(v2)) => {
-                if v1 == v2 {
-                    CopyLattice::Copy(*v1)
-                } else {
-                    CopyLattice::Top
-                }
-            }
-        }
+    pub fn top(var: VarId) -> Self {
+        Self::new(var, CopyState::Top)
     }
 }
 
-/// Map lattice for copy analysis (Var -> CopyLattice)
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CopyMapLattice {
-    map: HashMap<VarId, CopyLattice>,
-}
+/// Copy analysis using SetLattice
+pub type CopyMapLattice = SetLattice<CopyMapData>;
 
 impl CopyMapLattice {
-    pub fn new() -> Self {
-        Self {
-            map: HashMap::new(),
+    pub fn get(&self, var: VarId) -> CopyState {
+        // Find the entry for this variable
+        for entry in &self.set {
+            if entry.var == var {
+                return entry.state.clone();
+            }
         }
+        CopyState::Bottom
     }
 
-    pub fn get(&self, var: VarId) -> CopyLattice {
-        self.map.get(&var).cloned().unwrap_or(CopyLattice::Bottom)
-    }
+    pub fn set(&mut self, var: VarId, state: CopyState) {
+        // Remove any existing entry for this variable
+        self.set.retain(|entry| entry.var != var);
 
-    pub fn set(&mut self, var: VarId, value: CopyLattice) {
-        // Always store the value, even if it's Bottom, for consistent representation
-        self.map.insert(var, value);
+        // Add the new entry
+        self.set.insert(CopyMapData::new(var, state));
     }
 
     pub fn get_copy_source(&self, var: VarId) -> Option<VarId> {
         match self.get(var) {
-            CopyLattice::Copy(source) => Some(source),
+            CopyState::Copy(source) => Some(source),
             _ => None,
         }
-    }
-}
-
-impl Lattice for CopyMapLattice {
-    fn bottom() -> Option<Self> {
-        Some(CopyMapLattice::new())
-    }
-
-    fn top() -> Option<Self> {
-        None // Top is infinite map
-    }
-
-    fn meet(&self, other: &Self) -> Self {
-        let mut result_map = HashMap::new();
-
-        // Intersection of keys
-        for (&var, value1) in &self.map {
-            if let Some(value2) = other.map.get(&var) {
-                let meet_result = value1.meet(value2);
-                // Always insert the result, even if it's Bottom, to maintain consistent representation
-                result_map.insert(var, meet_result);
-            }
-        }
-
-        CopyMapLattice { map: result_map }
-    }
-
-    fn join(&self, other: &Self) -> Self {
-        let mut result_map = HashMap::new();
-
-        // Union of keys
-        let all_vars: std::collections::HashSet<VarId> =
-            self.map.keys().chain(other.map.keys()).cloned().collect();
-
-        for var in all_vars {
-            let value1 = self.get(var);
-            let value2 = other.get(var);
-            let join_result = value1.join(&value2);
-            // Always insert the result, even if it's Bottom, to maintain consistent representation
-            result_map.insert(var, join_result);
-        }
-
-        CopyMapLattice { map: result_map }
     }
 }
 
@@ -135,17 +79,21 @@ impl CopyAnalysisTransfer {
     fn invalidate_copies_using_var(&self, state: &mut CopyMapLattice, modified_var: VarId) {
         // Remove any copies that point to the modified variable
         let vars_to_invalidate: Vec<VarId> = state
-            .map
+            .set
             .iter()
-            .filter_map(|(&var, value)| match value {
-                CopyLattice::Copy(source) if *source == modified_var => Some(var),
+            .filter_map(|entry| match &entry.state {
+                CopyState::Copy(source) if *source == modified_var => Some(entry.var),
                 _ => None,
             })
             .collect();
 
         for var in vars_to_invalidate {
-            state.set(var, CopyLattice::Top);
+            self.set(state, var, CopyState::Top);
         }
+    }
+
+    fn set(&self, state: &mut CopyMapLattice, var: VarId, new_state: CopyState) {
+        state.set(var, new_state);
     }
 }
 
@@ -161,15 +109,15 @@ impl TransferFunction<CopyMapLattice> for CopyAnalysisTransfer {
 
                         // Check if this is a copy assignment
                         if let Some(source_var) = self.is_copy_assignment(rvalue) {
-                            new_state.set(*var, CopyLattice::Copy(source_var));
+                            self.set(&mut new_state, *var, CopyState::Copy(source_var));
                         } else {
-                            new_state.set(*var, CopyLattice::Top);
+                            self.set(&mut new_state, *var, CopyState::Top);
                         }
                     }
                     LValue::ArrayElement { array, .. } => {
                         // Array element assignment invalidates copies of the array
                         self.invalidate_copies_using_var(&mut new_state, *array);
-                        new_state.set(*array, CopyLattice::Top);
+                        self.set(&mut new_state, *array, CopyState::Top);
                     }
                     LValue::TableField { .. } => {
                         // Table field assignments don't affect local variable copies
@@ -185,11 +133,11 @@ impl TransferFunction<CopyMapLattice> for CopyAnalysisTransfer {
     }
 
     fn initial_value(&self) -> CopyMapLattice {
-        CopyMapLattice::new()
+        SetLattice::new(std::collections::HashSet::new())
     }
 
     fn boundary_value(&self) -> CopyMapLattice {
-        CopyMapLattice::new()
+        SetLattice::new(std::collections::HashSet::new())
     }
 }
 
