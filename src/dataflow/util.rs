@@ -2,7 +2,7 @@ use super::{
     AnalysisKind, AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
     TransferFunction,
 };
-use crate::cfg;
+
 use crate::cfg::{CfgProgram, EdgeType, FunctionCfg, FunctionImplementation};
 use std::collections::HashMap;
 
@@ -48,7 +48,7 @@ impl<T: Eq + Hash + Clone + Debug> SetLattice<T> {
         }
     }
 
-    /// Check if this is the top element
+    /// Check if this is the top element (if this is universal set)
     pub fn is_top(&self) -> bool {
         self.is_top
     }
@@ -57,6 +57,7 @@ impl<T: Eq + Hash + Clone + Debug> SetLattice<T> {
 impl<T: Eq + Hash + Clone + Debug> Lattice for SetLattice<T> {
     /* ---------- lattice bounds ---------- */
 
+    /// Bottom element (empty set)
     fn bottom() -> Option<Self> {
         Some(Self {
             set: HashSet::new(), // ∅
@@ -64,13 +65,12 @@ impl<T: Eq + Hash + Clone + Debug> Lattice for SetLattice<T> {
         })
     }
 
+    /// Top element (universal set)
     fn top() -> Option<Self> {
         Some(Self::top_element()) // ⊤
     }
 
-    /* ---------- lattice operations ---------- */
-
-    // meet (intersection)
+    /// meet (set intersection)
     fn meet(&self, other: &Self) -> Self {
         match (self.is_top, other.is_top) {
             (true, true) => self.clone(),   // ⊤ ∧ ⊤ = ⊤
@@ -86,7 +86,7 @@ impl<T: Eq + Hash + Clone + Debug> Lattice for SetLattice<T> {
         }
     }
 
-    // join (union)
+    // join (set union)
     fn join(&self, other: &Self) -> Self {
         match (self.is_top, other.is_top) {
             (true, _) | (_, true) => Self::top_element(), // ⊤ ∨ X = ⊤
@@ -99,8 +99,6 @@ impl<T: Eq + Hash + Clone + Debug> Lattice for SetLattice<T> {
             }
         }
     }
-
-    /* ---------- (optional) tighter ≤ than the default ---------- */
 
     // A ⩽ B  ≜  A ⊆ B (with ⊤ on top)
     fn less_equal(&self, other: &Self) -> bool {
@@ -216,7 +214,7 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                         index: idx,
                     };
                     stmt_entry.insert(loc, state.clone());
-                    state = self.transfer.transfer_statement(stmt, &state);
+                    state = self.transfer.transfer_statement(stmt, loc.clone(), &state);
                     stmt_exit.insert(loc, state.clone());
                 }
 
@@ -310,7 +308,7 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                         index: idx,
                     };
                     stmt_exit.insert(loc, state.clone());
-                    state = self.transfer.transfer_statement(stmt, &state);
+                    state = self.transfer.transfer_statement(stmt, loc.clone(), &state);
                     stmt_entry.insert(loc, state.clone());
                 }
 
