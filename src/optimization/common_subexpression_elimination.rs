@@ -1,13 +1,86 @@
-use crate::cfg::{CfgProgram, FunctionId, LValue, Operand, Rvalue, Statement, VarId};
-use crate::dataflow::{analyze_available_expressions, AnalysisLevel, StmtLoc};
-use crate::optimization::OptimizationPass;
-use std::collections::HashMap;
+//! Common Subexpression Elimination Optimization Pass
+//!
+//! This pass identifies and eliminates redundant computations by reusing
+//! previously computed values when the same expression is encountered again.
 
-/// Common Subexpression Elimination optimization pass
-///
-/// Uses available expressions analysis to identify redundant computations
-/// and replace them with temporaries holding the previously computed values.
+use super::OptimizationPass;
+use crate::cfg::{CfgProgram, FunctionId, Operand, Rvalue, Statement, VarId};
+use crate::dataflow::{analyze_available_expressions, StmtLoc};
+use crate::dataflow::available_expressions::AvailExpr;
+use std::collections::{HashMap, HashSet};
+
 pub struct CommonSubexpressionEliminationPass;
+
+impl CommonSubexpressionEliminationPass {
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Extract available expressions from lattice result
+    fn extract_available_exprs(lattice_result: &crate::dataflow::SetLattice<AvailExpr>) -> HashSet<AvailExpr> {
+        if let Some(exprs) = lattice_result.as_set() {
+            exprs.clone()
+        } else {
+            HashSet::new()
+        }
+    }
+
+    /// Convert an Rvalue to an AvailExpr if possible
+    fn rvalue_to_avail_expr(&self, rvalue: &Rvalue) -> Option<AvailExpr> {
+        match rvalue {
+            Rvalue::BinaryOp { op, left, right } => Some(AvailExpr::BinaryOp {
+                op: op.clone(),
+                left: left.clone(),
+                right: right.clone(),
+            }),
+            Rvalue::UnaryOp { op, operand } => Some(AvailExpr::UnaryOp {
+                op: op.clone(),
+                operand: operand.clone(),
+            }),
+            Rvalue::ArrayAccess { array, index } => Some(AvailExpr::ArrayAccess {
+                array: array.clone(),
+                index: index.clone(),
+            }),
+            _ => None, // Use operations and table access don't need CSE
+        }
+    }
+
+    /// Check if an expression matches an available expression and return the variable that holds it
+    fn find_existing_computation(
+        &self,
+        expr: &AvailExpr,
+        available: &HashSet<AvailExpr>,
+        expr_to_var: &HashMap<AvailExpr, VarId>,
+    ) -> Option<VarId> {
+        if available.contains(expr) {
+            expr_to_var.get(expr).copied()
+        } else {
+            None
+        }
+    }
+
+    /// Create a mapping from expressions to the variables that hold their results
+    fn build_expr_to_var_map(&self, program: &CfgProgram, func_id: FunctionId) -> HashMap<AvailExpr, VarId> {
+        let mut expr_to_var = HashMap::new();
+        let function = &program.functions[func_id];
+
+        // Scan all statements to build the mapping
+        for &block_id in &function.blocks {
+            let block = &program.blocks[block_id];
+            for stmt in &block.statements {
+                if let Statement::Assign { lvalue, rvalue, .. } = stmt {
+                    if let crate::cfg::LValue::Variable { var } = lvalue {
+                        if let Some(expr) = self.rvalue_to_avail_expr(rvalue) {
+                            expr_to_var.insert(expr, *var);
+                        }
+                    }
+                }
+            }
+        }
+
+        expr_to_var
+    }
+}
 
 impl OptimizationPass for CommonSubexpressionEliminationPass {
     fn name(&self) -> &'static str {
@@ -15,100 +88,56 @@ impl OptimizationPass for CommonSubexpressionEliminationPass {
     }
 
     fn optimize_function(&self, program: &mut CfgProgram, func_id: FunctionId) -> bool {
-        let func = match program.functions.get(func_id) {
-            Some(f) => f,
-            None => return false,
-        };
+        let function = &program.functions[func_id];
+
+        // Skip abstract functions
+        if matches!(
+            function.implementation,
+            crate::cfg::FunctionImplementation::Abstract
+        ) {
+            return false;
+        }
 
         // Run available expressions analysis
-        let available = analyze_available_expressions(program, func_id, AnalysisLevel::Function);
+        let results = analyze_available_expressions(function, program);
+        
+        // Build expression to variable mapping
+        let expr_to_var = self.build_expr_to_var_map(program, func_id);
+        
         let mut changed = false;
 
-        // Map expressions to variables that compute them
-        let mut expr_to_var: HashMap<Rvalue, VarId> = HashMap::new();
+        // Process each block in the function
+        for &block_id in &function.blocks {
+            let block = &mut program.blocks[block_id];
 
-        // Process each block
-        for &block_id in &func.blocks {
-            if let Some(block) = program.blocks.get_mut(block_id) {
-                let mut new_statements = Vec::new();
+            // Process each statement
+            for (stmt_idx, stmt) in block.statements.iter_mut().enumerate() {
+                let stmt_loc = StmtLoc {
+                    block: block_id,
+                    index: stmt_idx,
+                };
 
-                for (stmt_idx, stmt) in block.statements.iter().enumerate() {
-                    let stmt_loc = StmtLoc {
-                        block: block_id,
-                        index: stmt_idx,
-                    };
+                // Get available expressions before this statement
+                if let Some(lattice_result) = results.stmt_entry.get(&stmt_loc) {
+                    let available = Self::extract_available_exprs(lattice_result);
 
+                    // Apply CSE to the statement
                     match stmt {
-                        Statement::Assign {
-                            lvalue,
-                            rvalue,
-                            span,
-                        } => {
-                            match lvalue {
-                                LValue::Variable { var } => {
-                                    // Check if this expression is available
-                                    if Self::is_cse_candidate(rvalue) {
-                                        if let Some(avail_exprs) =
-                                            available.stmt_entry.get(&stmt_loc)
-                                        {
-                                            if let Some(expr_set) = avail_exprs.as_set() {
-                                                if expr_set.contains(rvalue) {
-                                                    // This expression is available - find the variable that computes it
-                                                    if let Some(&existing_var) =
-                                                        expr_to_var.get(rvalue)
-                                                    {
-                                                        // Replace with simple copy
-                                                        let new_stmt = Statement::Assign {
-                                                            lvalue: lvalue.clone(),
-                                                            rvalue: Rvalue::Use(Operand::Var(
-                                                                existing_var,
-                                                            )),
-                                                            span: span.clone(),
-                                                        };
-                                                        new_statements.push(new_stmt);
-                                                        changed = true;
-                                                        continue;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    // Track this expression
-                                    if Self::is_cse_candidate(rvalue) {
-                                        expr_to_var.insert(rvalue.clone(), *var);
-                                    }
-                                }
-                                _ => {
-                                    // Array/table assignments are kept as-is
+                        Statement::Assign { rvalue, .. } => {
+                            if let Some(expr) = self.rvalue_to_avail_expr(rvalue) {
+                                // Check if this expression is available
+                                if let Some(existing_var) = self.find_existing_computation(&expr, &available, &expr_to_var) {
+                                    // Replace the computation with a use of the existing variable
+                                    *rvalue = Rvalue::Use(Operand::Var(existing_var));
+                                    changed = true;
                                 }
                             }
                         }
                     }
-
-                    new_statements.push(stmt.clone());
                 }
-
-                block.statements = new_statements;
             }
         }
 
         changed
-    }
-}
-
-impl CommonSubexpressionEliminationPass {
-    pub fn new() -> Self {
-        Self
-    }
-
-    /// Check if an rvalue is a candidate for CSE
-    fn is_cse_candidate(rvalue: &Rvalue) -> bool {
-        match rvalue {
-            // Only complex expressions are worth CSE
-            Rvalue::BinaryOp { .. } | Rvalue::UnaryOp { .. } => true,
-            Rvalue::TableAccess { .. } | Rvalue::ArrayAccess { .. } => true,
-            Rvalue::Use(_) => false, // Simple variable uses don't need CSE
-        }
     }
 }

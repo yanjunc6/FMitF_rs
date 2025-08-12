@@ -254,10 +254,10 @@ impl<'a> CfgPrintVisitor<'a> {
 
     /// Format a single table access using visitor pattern
     fn format_table_access(&self, access: &TableAccess) -> String {
-        let table_name = if let Some(table) = self.program.tables.get(access.table_id) {
+        let table_name = if let Some(table) = self.program.tables.get(access.table) {
             table.name.clone()
         } else {
-            format!("table_{}", access.table_id.index())
+            format!("table_{}", access.table.index())
         };
         let access_type = match access.access_type {
             crate::dataflow::AccessType::Read => "R",
