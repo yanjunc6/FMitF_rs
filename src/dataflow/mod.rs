@@ -78,12 +78,27 @@ pub struct DataflowAnalysis<L: Lattice, T: TransferFunction<L>> {
     _phantom: std::marker::PhantomData<L>,
 }
 
+/// Location of a statement inside the CFG.
+/// (We avoid adding an explicit `StatementId` to `cfg` by keeping it local.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StmtLoc {
+    /// Basic block that owns the statement
+    pub block: BasicBlockId,
+    /// Zero-based index inside `BasicBlock::statements`
+    pub index: usize,
+}
+
 /// Results of dataflow analysis
 pub struct DataflowResults<L: Lattice> {
-    /// Values at entry of each basic block
-    pub entry: HashMap<BasicBlockId, L>,
-    /// Values at exit of each basic block
-    pub exit: HashMap<BasicBlockId, L>,
+    /// Value immediately before the first statement of the block
+    pub block_entry: HashMap<BasicBlockId, L>,
+    /// Value immediately after the last statement of the block and after its
+    /// terminator edge(s)
+    pub block_exit: HashMap<BasicBlockId, L>,
+    /// Value just *before* executing a statement
+    pub stmt_entry: HashMap<StmtLoc, L>,
+    /// Value just *after* executing a statement
+    pub stmt_exit: HashMap<StmtLoc, L>,
 }
 
 /// Powerset lattice based on `HashSet<T>`.

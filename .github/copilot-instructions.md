@@ -71,9 +71,10 @@ table Account {
 - Never clone `CfgProgram` or `FunctionCfg` - they contain Arenas
 
 ### CFG Construction (src/cfg/cfg_builder.rs)
-- Convert AST transactions into SSA-form basic blocks
+- Convert AST transactions into basic blocks
 - Each hop becomes a sequence of basic blocks
 - Use `ControlFlowEdge` with `EdgeType` for all control flow
+- If any place says it is SSA, delete this, stop working on the task, start check whether anything is wrong.
 
 ### Dataflow Analysis (src/dataflow/)
 - Hop-level analysis for table modification/reference tracking

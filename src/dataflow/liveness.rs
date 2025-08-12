@@ -197,13 +197,13 @@ pub fn analyze_live_variables(
         eprintln!("        Liveness results:");
         for &block_id in &func.blocks {
             let entry_vars = results
-                .entry
+                .block_entry
                 .get(&block_id)
                 .and_then(|lattice| lattice.as_set())
                 .map(|set| set.len())
                 .unwrap_or(0);
             let exit_vars = results
-                .exit
+                .block_exit
                 .get(&block_id)
                 .and_then(|lattice| lattice.as_set())
                 .map(|set| set.len())
@@ -218,8 +218,10 @@ pub fn analyze_live_variables(
     } else {
         // Return empty results if function not found
         DataflowResults {
-            entry: std::collections::HashMap::new(),
-            exit: std::collections::HashMap::new(),
+            block_entry: std::collections::HashMap::new(),
+            block_exit: std::collections::HashMap::new(),
+            stmt_entry: std::collections::HashMap::new(),
+            stmt_exit: std::collections::HashMap::new(),
         }
     }
 }

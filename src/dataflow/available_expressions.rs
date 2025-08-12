@@ -146,8 +146,10 @@ pub fn analyze_available_expressions(
     } else {
         // Return empty results if function not found
         DataflowResults {
-            entry: std::collections::HashMap::new(),
-            exit: std::collections::HashMap::new(),
+            block_entry: std::collections::HashMap::new(),
+            block_exit: std::collections::HashMap::new(),
+            stmt_entry: std::collections::HashMap::new(),
+            stmt_exit: std::collections::HashMap::new(),
         }
     }
 }

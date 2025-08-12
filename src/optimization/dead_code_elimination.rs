@@ -76,11 +76,12 @@ impl OptimizationPass for DeadCodeEliminationPass {
                 );
 
                 // Get live variables at exit of this block
-                let mut live_vars = if let Some(lattice) = liveness_results.exit.get(&block_id) {
-                    lattice.as_set().unwrap_or(&HashSet::new()).clone()
-                } else {
-                    HashSet::new()
-                };
+                let mut live_vars =
+                    if let Some(lattice) = liveness_results.block_exit.get(&block_id) {
+                        lattice.as_set().unwrap_or(&HashSet::new()).clone()
+                    } else {
+                        HashSet::new()
+                    };
 
                 eprintln!("        Live vars at exit: {:?}", live_vars);
 

@@ -164,34 +164,34 @@ impl<'a> CfgPrintVisitor<'a> {
 
         // Print entry dataflow information
         self.write_indent()?;
-        writeln!(self.writer, "┌─ Dataflow Entry Information ─┐")?;
+        writeln!(self.writer, "╔══ Block Entry Dataflow ══╗")?;
 
-        if let Some(entry_liveness) = liveness_results.entry.get(&block_id) {
+        if let Some(entry_liveness) = liveness_results.block_entry.get(&block_id) {
             self.write_indent()?;
             let live_vars = self.format_variable_set_lattice(entry_liveness);
-            writeln!(self.writer, "│ Live Variables: {}", live_vars)?;
+            writeln!(self.writer, "║ Live Variables: {}", live_vars)?;
         }
 
-        if let Some(entry_reaching_defs) = reaching_def_results.entry.get(&block_id) {
+        if let Some(entry_reaching_defs) = reaching_def_results.block_entry.get(&block_id) {
             self.write_indent()?;
             let reaching_defs = self.format_variable_set_lattice(entry_reaching_defs);
-            writeln!(self.writer, "│ Reaching Definitions: {}", reaching_defs)?;
+            writeln!(self.writer, "║ Reaching Definitions: {}", reaching_defs)?;
         }
 
-        if let Some(entry_available_exprs) = available_expr_results.entry.get(&block_id) {
+        if let Some(entry_available_exprs) = available_expr_results.block_entry.get(&block_id) {
             self.write_indent()?;
             let available_exprs = self.format_available_expressions_lattice(entry_available_exprs);
-            writeln!(self.writer, "│ Available Expressions: {}", available_exprs)?;
+            writeln!(self.writer, "║ Available Expressions: {}", available_exprs)?;
         }
 
-        if let Some(entry_table_accesses) = table_mod_ref_results.entry.get(&block_id) {
+        if let Some(entry_table_accesses) = table_mod_ref_results.block_entry.get(&block_id) {
             self.write_indent()?;
             let table_accesses = self.format_table_accesses_lattice(entry_table_accesses);
-            writeln!(self.writer, "│ Table Accesses: {}", table_accesses)?;
+            writeln!(self.writer, "║ Table Accesses: {}", table_accesses)?;
         }
 
         self.write_indent()?;
-        writeln!(self.writer, "└────────────────────────────────┘")?;
+        writeln!(self.writer, "╚══════════════════════════════╝")?;
 
         Ok(())
     }
@@ -221,34 +221,118 @@ impl<'a> CfgPrintVisitor<'a> {
 
         // Print exit dataflow information
         self.write_indent()?;
-        writeln!(self.writer, "┌─ Dataflow Exit Information ──┐")?;
+        writeln!(self.writer, "╔══ Block Exit Dataflow ═══╗")?;
 
-        if let Some(exit_liveness) = liveness_results.exit.get(&block_id) {
+        if let Some(exit_liveness) = liveness_results.block_exit.get(&block_id) {
             self.write_indent()?;
             let live_vars = self.format_variable_set_lattice(exit_liveness);
-            writeln!(self.writer, "│ Live Variables: {}", live_vars)?;
+            writeln!(self.writer, "║ Live Variables: {}", live_vars)?;
         }
 
-        if let Some(exit_reaching_defs) = reaching_def_results.exit.get(&block_id) {
+        if let Some(exit_reaching_defs) = reaching_def_results.block_exit.get(&block_id) {
             self.write_indent()?;
             let reaching_defs = self.format_variable_set_lattice(exit_reaching_defs);
-            writeln!(self.writer, "│ Reaching Definitions: {}", reaching_defs)?;
+            writeln!(self.writer, "║ Reaching Definitions: {}", reaching_defs)?;
         }
 
-        if let Some(exit_available_exprs) = available_expr_results.exit.get(&block_id) {
+        if let Some(exit_available_exprs) = available_expr_results.block_exit.get(&block_id) {
             self.write_indent()?;
             let available_exprs = self.format_available_expressions_lattice(exit_available_exprs);
-            writeln!(self.writer, "│ Available Expressions: {}", available_exprs)?;
+            writeln!(self.writer, "║ Available Expressions: {}", available_exprs)?;
         }
 
-        if let Some(exit_table_accesses) = table_mod_ref_results.exit.get(&block_id) {
+        if let Some(exit_table_accesses) = table_mod_ref_results.block_exit.get(&block_id) {
             self.write_indent()?;
             let table_accesses = self.format_table_accesses_lattice(exit_table_accesses);
-            writeln!(self.writer, "│ Table Accesses: {}", table_accesses)?;
+            writeln!(self.writer, "║ Table Accesses: {}", table_accesses)?;
         }
 
         self.write_indent()?;
-        writeln!(self.writer, "└────────────────────────────────┘")?;
+        writeln!(self.writer, "╚══════════════════════════════╝")?;
+
+        Ok(())
+    }
+
+    /// Print statement-level dataflow information
+    fn print_stmt_dataflow_info(
+        &mut self,
+        program: &CfgProgram,
+        function_id: FunctionId,
+        block_id: BasicBlockId,
+        stmt_index: usize,
+    ) -> std::io::Result<()> {
+        use super::super::dataflow::StmtLoc;
+
+        // Get the function from the program
+        let function = match program.functions.get(function_id) {
+            Some(func) => func,
+            None => return Ok(()), // Skip if function not found
+        };
+
+        // Run all dataflow analyses for this function
+        let liveness_results =
+            analyze_live_variables(program, function_id, AnalysisLevel::Function);
+        let reaching_def_results =
+            analyze_reaching_definitions(program, function_id, AnalysisLevel::Function);
+        let available_expr_results =
+            analyze_available_expressions(program, function_id, AnalysisLevel::Function);
+
+        let stmt_loc = StmtLoc {
+            block: block_id,
+            index: stmt_index,
+        };
+
+        // Print statement entry info
+        self.increase_indent();
+        self.write_indent()?;
+        writeln!(self.writer, "│ Entry:")?;
+        self.increase_indent();
+
+        if let Some(entry_liveness) = liveness_results.stmt_entry.get(&stmt_loc) {
+            self.write_indent()?;
+            let live_vars = self.format_variable_set_lattice(entry_liveness);
+            writeln!(self.writer, "│ Live: {}", live_vars)?;
+        }
+
+        if let Some(entry_reaching_defs) = reaching_def_results.stmt_entry.get(&stmt_loc) {
+            self.write_indent()?;
+            let reaching_defs = self.format_variable_set_lattice(entry_reaching_defs);
+            writeln!(self.writer, "│ Reaching: {}", reaching_defs)?;
+        }
+
+        if let Some(entry_available_exprs) = available_expr_results.stmt_entry.get(&stmt_loc) {
+            self.write_indent()?;
+            let available_exprs = self.format_available_expressions_lattice(entry_available_exprs);
+            writeln!(self.writer, "│ Available: {}", available_exprs)?;
+        }
+
+        self.decrease_indent();
+
+        // Print statement exit info
+        self.write_indent()?;
+        writeln!(self.writer, "│ Exit:")?;
+        self.increase_indent();
+
+        if let Some(exit_liveness) = liveness_results.stmt_exit.get(&stmt_loc) {
+            self.write_indent()?;
+            let live_vars = self.format_variable_set_lattice(exit_liveness);
+            writeln!(self.writer, "│ Live: {}", live_vars)?;
+        }
+
+        if let Some(exit_reaching_defs) = reaching_def_results.stmt_exit.get(&stmt_loc) {
+            self.write_indent()?;
+            let reaching_defs = self.format_variable_set_lattice(exit_reaching_defs);
+            writeln!(self.writer, "│ Reaching: {}", reaching_defs)?;
+        }
+
+        if let Some(exit_available_exprs) = available_expr_results.stmt_exit.get(&stmt_loc) {
+            self.write_indent()?;
+            let available_exprs = self.format_available_expressions_lattice(exit_available_exprs);
+            writeln!(self.writer, "│ Available: {}", available_exprs)?;
+        }
+
+        self.decrease_indent();
+        self.decrease_indent();
 
         Ok(())
     }
@@ -585,11 +669,17 @@ impl<'a> CfgVisitor<std::io::Result<()>> for CfgPrintVisitor<'a> {
 
         self.increase_indent();
 
-        // Print all statements in this block using the statement visitor
+        // Get the function ID from the hop
+        let function_id = program.hops[block.hop_id].function_id;
+
+        // Print all statements in this block with their dataflow information
         for (stmt_index, stmt) in block.statements.iter().enumerate() {
             self.write_indent()?;
             let stmt_str = self.visit_statement(stmt);
             writeln!(self.writer, "[{}] {}", stmt_index, stmt_str)?;
+
+            // Print statement-level dataflow information
+            self.print_stmt_dataflow_info(program, function_id, id, stmt_index)?;
         }
 
         // Print control flow edges

@@ -137,8 +137,10 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
     pub fn analyze(&self, func: &FunctionCfg, cfg_program: &CfgProgram) -> DataflowResults<L> {
         if func.implementation == FunctionImplementation::Abstract {
             return DataflowResults {
-                entry: HashMap::new(),
-                exit: HashMap::new(),
+                block_entry: HashMap::new(),
+                block_exit: HashMap::new(),
+                stmt_entry: HashMap::new(),
+                stmt_exit: HashMap::new(),
             };
         }
         match self.level {
@@ -153,11 +155,19 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
         func: &FunctionCfg,
         cfg_program: &CfgProgram,
     ) -> DataflowResults<L> {
-        let mut entry: HashMap<BasicBlockId, L> = HashMap::new();
-        let mut exit: HashMap<BasicBlockId, L> = HashMap::new();
+        let mut block_entry: HashMap<BasicBlockId, L> = HashMap::new();
+        let mut block_exit: HashMap<BasicBlockId, L> = HashMap::new();
+        let mut stmt_entry: HashMap<super::StmtLoc, L> = HashMap::new();
+        let mut stmt_exit: HashMap<super::StmtLoc, L> = HashMap::new();
 
         // Initialize all blocks in the function
-        self.initialize_blocks_from_list(&func.blocks, func, cfg_program, &mut entry, &mut exit);
+        self.initialize_blocks_from_list(
+            &func.blocks,
+            func,
+            cfg_program,
+            &mut block_entry,
+            &mut block_exit,
+        );
 
         // Fixed point iteration over all function blocks
         let mut changed = true;
@@ -166,30 +176,56 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
 
             for &block_id in &func.blocks {
                 let block = &cfg_program.blocks[block_id];
-                let (old_in, old_out) = self.get_in_out_values(&entry, &exit, block_id);
+                let (old_in, old_out) = self.get_in_out_values(&block_entry, &block_exit, block_id);
 
-                let (new_in, new_out) = match self.direction {
+                let (new_in, new_out, stmt_states) = match self.direction {
                     Direction::Forward => {
-                        let new_in = self.compute_in_value(func, block, block_id, &entry, &exit);
-                        let new_out = self.transfer_block(block, &new_in);
-                        (new_in, new_out)
+                        let new_in =
+                            self.compute_in_value(func, block, block_id, &block_entry, &block_exit);
+                        let (new_out, stmt_states) =
+                            self.transfer_block_with_stmt_states(block, block_id, &new_in);
+                        (new_in, new_out, stmt_states)
                     }
                     Direction::Backward => {
-                        let new_out = self.compute_out_value(func, block, block_id, &entry, &exit);
-                        let new_in = self.transfer_block_backward(block, &new_out);
-                        (new_in, new_out)
+                        let new_out = self.compute_out_value(
+                            func,
+                            block,
+                            block_id,
+                            &block_entry,
+                            &block_exit,
+                        );
+                        let (new_in, stmt_states) = self
+                            .transfer_block_backward_with_stmt_states(block, block_id, &new_out);
+                        (new_in, new_out, stmt_states)
                     }
                 };
 
+                // Update statement-level states
+                for (stmt_loc, (entry_state, exit_state)) in stmt_states {
+                    stmt_entry.insert(stmt_loc, entry_state);
+                    stmt_exit.insert(stmt_loc, exit_state);
+                }
+
                 if self.update_and_check_change(
-                    &mut entry, &mut exit, block_id, new_in, new_out, old_in, old_out,
+                    &mut block_entry,
+                    &mut block_exit,
+                    block_id,
+                    new_in,
+                    new_out,
+                    old_in,
+                    old_out,
                 ) {
                     changed = true;
                 }
             }
         }
 
-        DataflowResults { entry, exit }
+        DataflowResults {
+            block_entry,
+            block_exit,
+            stmt_entry,
+            stmt_exit,
+        }
     }
 
     /// Run hop-level analysis: each hop analyzed separately, treating hop boundaries as boundaries
@@ -198,8 +234,10 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
         func: &FunctionCfg,
         cfg_program: &CfgProgram,
     ) -> DataflowResults<L> {
-        let mut entry: HashMap<BasicBlockId, L> = HashMap::new();
-        let mut exit: HashMap<BasicBlockId, L> = HashMap::new();
+        let mut block_entry: HashMap<BasicBlockId, L> = HashMap::new();
+        let mut block_exit: HashMap<BasicBlockId, L> = HashMap::new();
+        let mut stmt_entry: HashMap<super::StmtLoc, L> = HashMap::new();
+        let mut stmt_exit: HashMap<super::StmtLoc, L> = HashMap::new();
 
         // For each hop, run dataflow analysis independently
         for &hop_id in &func.hops {
@@ -209,8 +247,8 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                     &hop.blocks,
                     func,
                     cfg_program,
-                    &mut entry,
-                    &mut exit,
+                    &mut block_entry,
+                    &mut block_exit,
                 );
 
                 // Fixed point iteration over blocks in this hop only
@@ -220,27 +258,52 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
 
                     for &block_id in &hop.blocks {
                         let block = &cfg_program.blocks[block_id];
-                        let (old_in, old_out) = self.get_in_out_values(&entry, &exit, block_id);
+                        let (old_in, old_out) =
+                            self.get_in_out_values(&block_entry, &block_exit, block_id);
 
-                        let (new_in, new_out) = match self.direction {
+                        let (new_in, new_out, stmt_states) = match self.direction {
                             Direction::Forward => {
                                 let new_in = self.compute_in_value_hop_level(
-                                    hop, block, block_id, &entry, &exit,
+                                    hop,
+                                    block,
+                                    block_id,
+                                    &block_entry,
+                                    &block_exit,
                                 );
-                                let new_out = self.transfer_block(block, &new_in);
-                                (new_in, new_out)
+                                let (new_out, stmt_states) =
+                                    self.transfer_block_with_stmt_states(block, block_id, &new_in);
+                                (new_in, new_out, stmt_states)
                             }
                             Direction::Backward => {
                                 let new_out = self.compute_out_value_hop_level(
-                                    hop, block, block_id, &entry, &exit,
+                                    hop,
+                                    block,
+                                    block_id,
+                                    &block_entry,
+                                    &block_exit,
                                 );
-                                let new_in = self.transfer_block_backward(block, &new_out);
-                                (new_in, new_out)
+                                let (new_in, stmt_states) = self
+                                    .transfer_block_backward_with_stmt_states(
+                                        block, block_id, &new_out,
+                                    );
+                                (new_in, new_out, stmt_states)
                             }
                         };
 
+                        // Update statement-level states
+                        for (stmt_loc, (entry_state, exit_state)) in stmt_states {
+                            stmt_entry.insert(stmt_loc, entry_state);
+                            stmt_exit.insert(stmt_loc, exit_state);
+                        }
+
                         if self.update_and_check_change(
-                            &mut entry, &mut exit, block_id, new_in, new_out, old_in, old_out,
+                            &mut block_entry,
+                            &mut block_exit,
+                            block_id,
+                            new_in,
+                            new_out,
+                            old_in,
+                            old_out,
                         ) {
                             changed = true;
                         }
@@ -249,7 +312,12 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
             }
         }
 
-        DataflowResults { entry, exit }
+        DataflowResults {
+            block_entry,
+            block_exit,
+            stmt_entry,
+            stmt_exit,
+        }
     }
 
     fn initialize_blocks_from_list(
@@ -257,8 +325,8 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
         block_list: &[BasicBlockId],
         func: &FunctionCfg,
         cfg_program: &CfgProgram,
-        entry: &mut HashMap<BasicBlockId, L>,
-        exit: &mut HashMap<BasicBlockId, L>,
+        block_entry: &mut HashMap<BasicBlockId, L>,
+        block_exit: &mut HashMap<BasicBlockId, L>,
     ) {
         for &block_id in block_list {
             let block = &cfg_program.blocks[block_id];
@@ -272,8 +340,8 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                     } else {
                         default_value.clone()
                     };
-                    entry.insert(block_id, init_entry);
-                    exit.insert(block_id, default_value);
+                    block_entry.insert(block_id, init_entry);
+                    block_exit.insert(block_id, default_value);
                 }
                 Direction::Backward => {
                     let init_exit = if is_boundary {
@@ -281,8 +349,8 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                     } else {
                         default_value.clone()
                     };
-                    entry.insert(block_id, default_value);
-                    exit.insert(block_id, init_exit);
+                    block_entry.insert(block_id, default_value);
+                    block_exit.insert(block_id, init_exit);
                 }
             }
         }
@@ -316,11 +384,14 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
 
     fn get_in_out_values(
         &self,
-        entry: &HashMap<BasicBlockId, L>,
-        exit: &HashMap<BasicBlockId, L>,
+        block_entry: &HashMap<BasicBlockId, L>,
+        block_exit: &HashMap<BasicBlockId, L>,
         block_id: BasicBlockId,
     ) -> (L, L) {
-        (entry[&block_id].clone(), exit[&block_id].clone())
+        (
+            block_entry[&block_id].clone(),
+            block_exit[&block_id].clone(),
+        )
     }
 
     fn compute_in_value(
@@ -328,8 +399,8 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
         _func: &FunctionCfg,
         block: &BasicBlock,
         block_id: BasicBlockId,
-        entry: &HashMap<BasicBlockId, L>,
-        exit: &HashMap<BasicBlockId, L>,
+        block_entry: &HashMap<BasicBlockId, L>,
+        block_exit: &HashMap<BasicBlockId, L>,
     ) -> L {
         let neighbors = match self.direction {
             Direction::Forward => &block.predecessors,
@@ -339,16 +410,16 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
         if neighbors.is_empty() {
             // No neighbors - keep current value for boundary blocks
             match self.direction {
-                Direction::Forward => entry[&block_id].clone(),
-                Direction::Backward => exit[&block_id].clone(),
+                Direction::Forward => block_entry[&block_id].clone(),
+                Direction::Backward => block_exit[&block_id].clone(),
             }
         } else {
             // For function-level analysis, join all neighbor values
             let mut result: Option<L> = None;
             for edge in neighbors {
                 let neighbor_value = match self.direction {
-                    Direction::Forward => &exit[&edge.from],
-                    Direction::Backward => &entry[&edge.to],
+                    Direction::Forward => &block_exit[&edge.from],
+                    Direction::Backward => &block_entry[&edge.to],
                 };
                 result = Some(match result {
                     None => neighbor_value.clone(),
@@ -364,8 +435,8 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
         _func: &FunctionCfg,
         block: &BasicBlock,
         block_id: BasicBlockId,
-        entry: &HashMap<BasicBlockId, L>,
-        exit: &HashMap<BasicBlockId, L>,
+        block_entry: &HashMap<BasicBlockId, L>,
+        block_exit: &HashMap<BasicBlockId, L>,
     ) -> L {
         let neighbors = &block.successors;
 
@@ -382,12 +453,12 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
 
                 if control_flow_edges.is_empty() {
                     // No control flow neighbors - this is a boundary block
-                    exit[&block_id].clone()
+                    block_exit[&block_id].clone()
                 } else {
                     // Join all successor entry values from control flow edges
                     let mut result: Option<L> = None;
                     for edge in control_flow_edges {
-                        let neighbor_value = &entry[&edge.to];
+                        let neighbor_value = &block_entry[&edge.to];
                         result = Some(match result {
                             None => neighbor_value.clone(),
                             Some(acc) => acc.join(neighbor_value),
@@ -422,7 +493,7 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                     // Join all successor entry values from control flow edges
                     let mut result: Option<L> = None;
                     for edge in control_flow_edges {
-                        let neighbor_value = &entry[&edge.to];
+                        let neighbor_value = &block_entry[&edge.to];
                         result = Some(match result {
                             None => neighbor_value.clone(),
                             Some(acc) => acc.join(neighbor_value),
@@ -441,8 +512,8 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
         hop: &HopCfg,
         block: &BasicBlock,
         block_id: BasicBlockId,
-        entry: &HashMap<BasicBlockId, L>,
-        exit: &HashMap<BasicBlockId, L>,
+        block_entry: &HashMap<BasicBlockId, L>,
+        block_exit: &HashMap<BasicBlockId, L>,
     ) -> L {
         let neighbors = match self.direction {
             Direction::Forward => &block.predecessors,
@@ -452,8 +523,8 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
         if neighbors.is_empty() {
             // No neighbors - keep current value for boundary blocks
             match self.direction {
-                Direction::Forward => entry[&block_id].clone(),
-                Direction::Backward => exit[&block_id].clone(),
+                Direction::Forward => block_entry[&block_id].clone(),
+                Direction::Backward => block_exit[&block_id].clone(),
             }
         } else {
             // Join values from neighbors that are within the same hop
@@ -467,8 +538,8 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                 // Only consider neighbors that are within the same hop
                 if hop.blocks.contains(&neighbor_block_id) {
                     let neighbor_value = match self.direction {
-                        Direction::Forward => &exit[&neighbor_block_id],
-                        Direction::Backward => &entry[&neighbor_block_id],
+                        Direction::Forward => &block_exit[&neighbor_block_id],
+                        Direction::Backward => &block_entry[&neighbor_block_id],
                     };
                     result = Some(match result {
                         None => neighbor_value.clone(),
@@ -492,14 +563,14 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
         hop: &HopCfg,
         block: &BasicBlock,
         block_id: BasicBlockId,
-        entry: &HashMap<BasicBlockId, L>,
-        exit: &HashMap<BasicBlockId, L>,
+        block_entry: &HashMap<BasicBlockId, L>,
+        block_exit: &HashMap<BasicBlockId, L>,
     ) -> L {
         let neighbors = &block.successors;
 
         if neighbors.is_empty() {
             // No neighbors - keep current value for boundary blocks
-            exit[&block_id].clone()
+            block_exit[&block_id].clone()
         } else {
             // Join values from successors that are within the same hop
             let mut result: Option<L> = None;
@@ -508,7 +579,7 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
 
                 // Only consider neighbors that are within the same hop
                 if hop.blocks.contains(&neighbor_block_id) {
-                    let neighbor_value = &entry[&neighbor_block_id];
+                    let neighbor_value = &block_entry[&neighbor_block_id];
                     result = Some(match result {
                         None => neighbor_value.clone(),
                         Some(acc) => acc.join(neighbor_value),
@@ -526,51 +597,89 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
         }
     }
 
-    fn transfer_block(&self, block: &BasicBlock, in_value: &L) -> L {
+    fn transfer_block_with_stmt_states(
+        &self,
+        block: &BasicBlock,
+        block_id: BasicBlockId,
+        in_value: &L,
+    ) -> (L, Vec<(super::StmtLoc, (L, L))>) {
         let mut current = in_value.clone();
+        let mut stmt_states = Vec::new();
 
         match self.direction {
             Direction::Forward => {
-                // Apply statements in order, then edges
-                for stmt in &block.statements {
+                // Apply statements in order
+                for (stmt_index, stmt) in block.statements.iter().enumerate() {
+                    let stmt_loc = super::StmtLoc {
+                        block: block_id,
+                        index: stmt_index,
+                    };
+                    let stmt_entry = current.clone();
                     current = self.transfer.transfer_statement(stmt, &current);
+                    let stmt_exit = current.clone();
+                    stmt_states.push((stmt_loc, (stmt_entry, stmt_exit)));
                 }
+
+                // Apply edges
                 for edge in &block.successors {
                     current = self.transfer.transfer_edge(edge, &current);
                 }
             }
             Direction::Backward => {
-                // Apply edges in reverse, then statements in reverse
+                // Apply edges in reverse first
                 for edge in block.successors.iter().rev() {
                     current = self.transfer.transfer_edge(edge, &current);
                 }
-                for stmt in block.statements.iter().rev() {
+
+                // Apply statements in reverse
+                for (stmt_index, stmt) in block.statements.iter().enumerate().rev() {
+                    let stmt_loc = super::StmtLoc {
+                        block: block_id,
+                        index: stmt_index,
+                    };
+                    let stmt_exit = current.clone();
                     current = self.transfer.transfer_statement(stmt, &current);
+                    let stmt_entry = current.clone();
+                    stmt_states.push((stmt_loc, (stmt_entry, stmt_exit)));
                 }
             }
         }
 
-        current
+        (current, stmt_states)
     }
 
-    fn transfer_block_backward(&self, block: &BasicBlock, out_value: &L) -> L {
+    fn transfer_block_backward_with_stmt_states(
+        &self,
+        block: &BasicBlock,
+        block_id: BasicBlockId,
+        out_value: &L,
+    ) -> (L, Vec<(super::StmtLoc, (L, L))>) {
         let mut current = out_value.clone();
+        let mut stmt_states = Vec::new();
 
         // For backward analysis: apply edges in reverse, then statements in reverse
         for edge in block.successors.iter().rev() {
             current = self.transfer.transfer_edge(edge, &current);
         }
-        for stmt in block.statements.iter().rev() {
+
+        for (stmt_index, stmt) in block.statements.iter().enumerate().rev() {
+            let stmt_loc = super::StmtLoc {
+                block: block_id,
+                index: stmt_index,
+            };
+            let stmt_exit = current.clone();
             current = self.transfer.transfer_statement(stmt, &current);
+            let stmt_entry = current.clone();
+            stmt_states.push((stmt_loc, (stmt_entry, stmt_exit)));
         }
 
-        current
+        (current, stmt_states)
     }
 
     fn update_and_check_change(
         &self,
-        entry: &mut HashMap<BasicBlockId, L>,
-        exit: &mut HashMap<BasicBlockId, L>,
+        block_entry: &mut HashMap<BasicBlockId, L>,
+        block_exit: &mut HashMap<BasicBlockId, L>,
         block_id: BasicBlockId,
         new_in: L,
         new_out: L,
@@ -582,21 +691,21 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
         match self.direction {
             Direction::Forward => {
                 if new_in != old_in {
-                    entry.insert(block_id, new_in);
+                    block_entry.insert(block_id, new_in);
                     changed = true;
                 }
                 if new_out != old_out {
-                    exit.insert(block_id, new_out);
+                    block_exit.insert(block_id, new_out);
                     changed = true;
                 }
             }
             Direction::Backward => {
                 if new_out != old_out {
-                    exit.insert(block_id, new_out);
+                    block_exit.insert(block_id, new_out);
                     changed = true;
                 }
                 if new_in != old_in {
-                    entry.insert(block_id, new_in);
+                    block_entry.insert(block_id, new_in);
                     changed = true;
                 }
             }
