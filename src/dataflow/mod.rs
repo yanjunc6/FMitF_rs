@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
 
+mod lattice;
 mod util;
 
 mod liveness;
@@ -17,7 +18,7 @@ mod available_expressions;
 pub use available_expressions::{analyze_available_expressions, AvailExpr};
 
 mod constant_analysis;
-pub use constant_analysis::{analyze_constants, ConstRelation};
+pub use constant_analysis::analyze_constants;
 
 mod copy_analysis;
 pub use copy_analysis::{analyze_copies, CopyRelation};
@@ -118,5 +119,27 @@ pub struct DataflowResults<L: Lattice> {
 #[derive(Clone, Debug)]
 pub struct SetLattice<T: Eq + Hash + Clone + Debug> {
     set: HashSet<T>,
+    is_top: bool,
+}
+
+/// Three-point flat lattice used for each individual key
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Flat<V> {
+    Bottom,   // ⊥ – not yet observed / unreachable
+    Value(V), // single value
+    Top,      // ⊤ – multiple values
+}
+
+/// Whole-map lattice: point-wise lift of `Flat<V>`
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct MapLattice<K, V>
+where
+    K: Eq + Hash + Clone + Debug,
+    V: Clone + Eq + Debug,
+{
+    // NOTE: missing key == Flat::Bottom
+    map: HashMap<K, Flat<V>>,
+    // A single flag for the “global” ⊤ element:
+    // when true we treat *every* key as Flat::Top
     is_top: bool,
 }

@@ -4,7 +4,8 @@
 //! replacing them with their computed constant values.
 
 use super::OptimizationPass;
-use crate::cfg::{BinaryOp, CfgProgram, Constant, FunctionId, Operand, RValue, Statement, UnaryOp};
+use crate::cfg::{CfgProgram, Constant, FunctionId, LValue, Operand, RValue, Statement, VarId};
+use crate::dataflow::{analyze_constants, Flat, MapLattice, StmtLoc};
 
 pub struct ConstantFoldingPass;
 
@@ -13,161 +14,69 @@ impl ConstantFoldingPass {
         Self
     }
 
-    /// Evaluate a binary operation with constant operands
-    fn eval_binary_op(&self, op: &BinaryOp, left: &Constant, right: &Constant) -> Option<Constant> {
-        use ordered_float::OrderedFloat;
-
-        match (left, right) {
-            (Constant::Int(l), Constant::Int(r)) => match op {
-                BinaryOp::Add => Some(Constant::Int(l + r)),
-                BinaryOp::Sub => Some(Constant::Int(l - r)),
-                BinaryOp::Mul => Some(Constant::Int(l * r)),
-                BinaryOp::Div => {
-                    if *r != 0 {
-                        Some(Constant::Int(l / r))
-                    } else {
-                        None // Division by zero
-                    }
+    fn replace_var_in_lvalue(lvalue: &mut LValue, constants: &MapLattice<VarId, Constant>) -> bool {
+        match lvalue {
+            LValue::Variable { .. } => {
+                // For simple variables, we don't replace them in lvalues as they are assignment targets
+                false
+            }
+            LValue::ArrayElement { index, .. } => {
+                // Replace variables in the index operand
+                Self::replace_var_in_operand(index, constants)
+            }
+            LValue::TableField { pk_values, .. } => {
+                // Replace variables in the primary key values
+                let mut changed = false;
+                for pk_value in pk_values.iter_mut() {
+                    changed |= Self::replace_var_in_operand(pk_value, constants);
                 }
-                BinaryOp::Eq => Some(Constant::Bool(l == r)),
-                BinaryOp::Neq => Some(Constant::Bool(l != r)),
-                BinaryOp::Lt => Some(Constant::Bool(l < r)),
-                BinaryOp::Lte => Some(Constant::Bool(l <= r)),
-                BinaryOp::Gt => Some(Constant::Bool(l > r)),
-                BinaryOp::Gte => Some(Constant::Bool(l >= r)),
-                BinaryOp::And => Some(Constant::Int(l & r)),
-                BinaryOp::Or => Some(Constant::Int(l | r)),
-            },
-            (Constant::Float(l), Constant::Float(r)) => match op {
-                BinaryOp::Add => Some(Constant::Float(OrderedFloat(
-                    l.into_inner() + r.into_inner(),
-                ))),
-                BinaryOp::Sub => Some(Constant::Float(OrderedFloat(
-                    l.into_inner() - r.into_inner(),
-                ))),
-                BinaryOp::Mul => Some(Constant::Float(OrderedFloat(
-                    l.into_inner() * r.into_inner(),
-                ))),
-                BinaryOp::Div => {
-                    let r_val = r.into_inner();
-                    if r_val != 0.0 {
-                        Some(Constant::Float(OrderedFloat(l.into_inner() / r_val)))
-                    } else {
-                        None // Division by zero
-                    }
-                }
-                BinaryOp::Eq => Some(Constant::Bool(l == r)),
-                BinaryOp::Neq => Some(Constant::Bool(l != r)),
-                BinaryOp::Lt => Some(Constant::Bool(l < r)),
-                BinaryOp::Lte => Some(Constant::Bool(l <= r)),
-                BinaryOp::Gt => Some(Constant::Bool(l > r)),
-                BinaryOp::Gte => Some(Constant::Bool(l >= r)),
-                _ => None, // Bitwise operations not supported for floats
-            },
-            (Constant::Bool(l), Constant::Bool(r)) => match op {
-                BinaryOp::Eq => Some(Constant::Bool(l == r)),
-                BinaryOp::Neq => Some(Constant::Bool(l != r)),
-                BinaryOp::And => Some(Constant::Bool(*l && *r)),
-                BinaryOp::Or => Some(Constant::Bool(*l || *r)),
-                _ => None,
-            },
-            (Constant::String(l), Constant::String(r)) => match op {
-                BinaryOp::Add => Some(Constant::String(format!("{}{}", l, r))),
-                BinaryOp::Eq => Some(Constant::Bool(l == r)),
-                BinaryOp::Neq => Some(Constant::Bool(l != r)),
-                _ => None,
-            },
-            // Mixed type comparisons
-            (Constant::Int(l), Constant::Float(r)) => match op {
-                BinaryOp::Add => Some(Constant::Float(OrderedFloat(*l as f64 + r.into_inner()))),
-                BinaryOp::Sub => Some(Constant::Float(OrderedFloat(*l as f64 - r.into_inner()))),
-                BinaryOp::Mul => Some(Constant::Float(OrderedFloat(*l as f64 * r.into_inner()))),
-                BinaryOp::Div => {
-                    let r_val = r.into_inner();
-                    if r_val != 0.0 {
-                        Some(Constant::Float(OrderedFloat(*l as f64 / r_val)))
-                    } else {
-                        None
-                    }
-                }
-                BinaryOp::Eq => Some(Constant::Bool(*l as f64 == r.into_inner())),
-                BinaryOp::Neq => Some(Constant::Bool(*l as f64 != r.into_inner())),
-                BinaryOp::Lt => Some(Constant::Bool((*l as f64) < r.into_inner())),
-                BinaryOp::Lte => Some(Constant::Bool((*l as f64) <= r.into_inner())),
-                BinaryOp::Gt => Some(Constant::Bool((*l as f64) > r.into_inner())),
-                BinaryOp::Gte => Some(Constant::Bool((*l as f64) >= r.into_inner())),
-                _ => None,
-            },
-            (Constant::Float(l), Constant::Int(r)) => match op {
-                BinaryOp::Add => Some(Constant::Float(OrderedFloat(l.into_inner() + *r as f64))),
-                BinaryOp::Sub => Some(Constant::Float(OrderedFloat(l.into_inner() - *r as f64))),
-                BinaryOp::Mul => Some(Constant::Float(OrderedFloat(l.into_inner() * *r as f64))),
-                BinaryOp::Div => {
-                    if *r != 0 {
-                        Some(Constant::Float(OrderedFloat(l.into_inner() / *r as f64)))
-                    } else {
-                        None
-                    }
-                }
-                BinaryOp::Eq => Some(Constant::Bool(l.into_inner() == *r as f64)),
-                BinaryOp::Neq => Some(Constant::Bool(l.into_inner() != *r as f64)),
-                BinaryOp::Lt => Some(Constant::Bool(l.into_inner() < *r as f64)),
-                BinaryOp::Lte => Some(Constant::Bool(l.into_inner() <= *r as f64)),
-                BinaryOp::Gt => Some(Constant::Bool(l.into_inner() > *r as f64)),
-                BinaryOp::Gte => Some(Constant::Bool(l.into_inner() >= *r as f64)),
-                _ => None,
-            },
-            _ => None, // Unsupported type combinations
+                changed
+            }
         }
     }
 
-    /// Evaluate a unary operation with a constant operand
-    fn eval_unary_op(&self, op: &UnaryOp, operand: &Constant) -> Option<Constant> {
-        match operand {
-            Constant::Int(val) => match op {
-                UnaryOp::Neg => Some(Constant::Int(-val)),
-                _ => None,
-            },
-            Constant::Float(val) => match op {
-                UnaryOp::Neg => Some(Constant::Float(ordered_float::OrderedFloat(
-                    -val.into_inner(),
-                ))),
-                _ => None,
-            },
-            Constant::Bool(val) => match op {
-                UnaryOp::Not => Some(Constant::Bool(!val)),
-                _ => None,
-            },
-            _ => None,
-        }
-    }
-
-    /// Try to fold constants in an rvalue
-    fn fold_rvalue(&self, rvalue: &RValue) -> Option<RValue> {
+    fn replace_var_in_rvalue(rvalue: &mut RValue, constants: &MapLattice<VarId, Constant>) -> bool {
         match rvalue {
-            RValue::BinaryOp { op, left, right } => {
-                if let (Operand::Const(left_const), Operand::Const(right_const)) = (left, right) {
-                    if let Some(result) = self.eval_binary_op(op, left_const, right_const) {
-                        Some(RValue::Use(Operand::Const(result)))
-                    } else {
-                        None
+            RValue::Use(operand) => Self::replace_var_in_operand(operand, constants),
+            RValue::BinaryOp { left, right, .. } => {
+                let mut changed = false;
+                changed |= Self::replace_var_in_operand(left, constants);
+                changed |= Self::replace_var_in_operand(right, constants);
+                changed
+            }
+            RValue::UnaryOp { operand, .. } => Self::replace_var_in_operand(operand, constants),
+            RValue::TableAccess { pk_values, .. } => {
+                let mut changed = false;
+                for pk_value in pk_values.iter_mut() {
+                    changed |= Self::replace_var_in_operand(pk_value, constants);
+                }
+                changed
+            }
+            RValue::ArrayAccess { array, index } => {
+                let mut changed = false;
+                changed |= Self::replace_var_in_operand(array, constants);
+                changed |= Self::replace_var_in_operand(index, constants);
+                changed
+            }
+        }
+    }
+
+    fn replace_var_in_operand(
+        operand: &mut Operand,
+        constants: &MapLattice<VarId, Constant>,
+    ) -> bool {
+        match operand {
+            Operand::Var(var_id) => {
+                // Look for this variable in the constants
+                match constants.get(var_id) {
+                    Flat::Value(constant_value) => {
+                        *operand = Operand::Const(constant_value);
+                        true
                     }
-                } else {
-                    None
+                    _ => false,
                 }
             }
-            RValue::UnaryOp { op, operand } => {
-                if let Operand::Const(operand_const) = operand {
-                    if let Some(result) = self.eval_unary_op(op, operand_const) {
-                        Some(RValue::Use(Operand::Const(result)))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
-            _ => None, // Other rvalue types don't fold
+            Operand::Const(_) => false, // Already a constant
         }
     }
 }
@@ -188,6 +97,8 @@ impl OptimizationPass for ConstantFoldingPass {
             return false;
         }
 
+        // Run constant analysis first
+        let analysis_result = analyze_constants(function, program);
         let mut changed = false;
 
         // Process each block in the function
@@ -195,19 +106,28 @@ impl OptimizationPass for ConstantFoldingPass {
             let block = &mut program.blocks[block_id];
 
             // Process each statement
-            for stmt in block.statements.iter_mut() {
+            for (idx, stmt) in block.statements.iter_mut().enumerate() {
+                // Get constants analysis result for this statement (use entry state)
+                let stmt_loc = StmtLoc {
+                    block: block_id,
+                    index: idx,
+                };
+
+                let constants = match analysis_result.stmt_entry.get(&stmt_loc) {
+                    Some(lattice) => lattice,
+                    None => continue, // Skip if no analysis result
+                };
+
                 match stmt {
-                    Statement::Assign { rvalue, .. } => {
-                        if let Some(folded_rvalue) = self.fold_rvalue(rvalue) {
-                            *rvalue = folded_rvalue;
-                            changed = true;
-                        }
+                    Statement::Assign { lvalue, rvalue, .. } => {
+                        // Replace variables in rvalue with constants
+                        changed |= Self::replace_var_in_rvalue(rvalue, constants);
+
+                        // Replace variables in lvalue (for complex lvalues like array indices)
+                        changed |= Self::replace_var_in_lvalue(lvalue, constants);
                     }
                 }
             }
-
-            // Process conditional edges - could potentially eliminate conditionals
-            // but that requires more complex control flow analysis
         }
 
         changed

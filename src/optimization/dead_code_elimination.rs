@@ -4,17 +4,13 @@
 
 use super::OptimizationPass;
 use crate::cfg::{CfgProgram, FunctionId, Statement, VarId};
-use crate::dataflow::liveness::LiveVar;
+use crate::dataflow::LiveVar;
 use crate::dataflow::{analyze_live_variables, StmtLoc};
 use std::collections::HashSet;
 
 pub struct DeadCodeEliminationPass;
 
 impl DeadCodeEliminationPass {
-    pub fn new() -> Self {
-        Self
-    }
-
     /// Extract live variables from lattice result
     fn extract_live_vars(lattice_result: &crate::dataflow::SetLattice<LiveVar>) -> HashSet<VarId> {
         if let Some(live_vars) = lattice_result.as_set() {
@@ -50,6 +46,10 @@ impl DeadCodeEliminationPass {
 }
 
 impl OptimizationPass for DeadCodeEliminationPass {
+    fn new() -> Self {
+        Self
+    }
+
     fn name(&self) -> &'static str {
         "Dead Code Elimination"
     }
