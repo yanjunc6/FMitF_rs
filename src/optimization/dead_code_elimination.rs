@@ -1,5 +1,5 @@
 use super::OptimizationPass;
-use crate::cfg::{CfgProgram, FunctionId, LValue, Statement, VarId};
+use crate::cfg::{CfgProgram, FunctionId, LValue, RValue, Statement, VarId};
 use crate::dataflow::{analyze_live_variables, StmtLoc};
 use std::collections::HashSet;
 
@@ -21,7 +21,7 @@ impl DeadCodeElimination {
 
                     // However, don't eliminate assignments with side effects
                     let has_side_effects = match rvalue {
-                        crate::cfg::RValue::TableAccess { .. } => true, // Table access might have side effects
+                        RValue::TableAccess { .. } => true, // Table access might have side effects
                         _ => false,
                     };
 

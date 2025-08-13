@@ -15,9 +15,9 @@ use std::io::Write;
 
 // ============== DATAFLOW OUTPUT CONTROL CONSTANTS ==============
 const SHOW_LIVENESS: bool = true;
-const SHOW_REACHING_DEFINITIONS: bool = true;
-const SHOW_AVAILABLE_EXPRESSIONS: bool = true;
-const SHOW_TABLE_MOD_REF: bool = true;
+const SHOW_REACHING_DEFINITIONS: bool = false;
+const SHOW_AVAILABLE_EXPRESSIONS: bool = false;
+const SHOW_TABLE_MOD_REF: bool = false;
 const SHOW_CONSTANT_ANALYSIS: bool = false; // Usually too verbose
 const SHOW_COPY_ANALYSIS: bool = false; // Usually too verbose
                                         // ===============================================================
@@ -202,8 +202,11 @@ impl<'a> CfgPrintVisitor<'a> {
 
         if SHOW_LIVENESS {
             if let Some(ref results) = *self.liveness_cache.borrow() {
-                if let Some(live_vars) = results.stmt_entry.get(&stmt_loc) {
-                    parts.push(format!("live {}", self.format_liveness_lattice(live_vars)));
+                if let Some(live_vars) = results.stmt_exit.get(&stmt_loc) {
+                    parts.push(format!(
+                        "live-out {}",
+                        self.format_liveness_lattice(live_vars)
+                    ));
                 }
             }
         }
@@ -212,7 +215,7 @@ impl<'a> CfgPrintVisitor<'a> {
             if let Some(ref results) = *self.reaching_def_cache.borrow() {
                 if let Some(reaching_defs) = results.stmt_entry.get(&stmt_loc) {
                     parts.push(format!(
-                        "reaching {}",
+                        "reaching-in {}",
                         self.format_definitions_lattice(reaching_defs)
                     ));
                 }
@@ -223,7 +226,7 @@ impl<'a> CfgPrintVisitor<'a> {
             if let Some(ref results) = *self.available_expr_cache.borrow() {
                 if let Some(avail_exprs) = results.stmt_entry.get(&stmt_loc) {
                     parts.push(format!(
-                        "available {}",
+                        "available-in {}",
                         self.format_avail_expr_lattice(avail_exprs)
                     ));
                 }
@@ -234,7 +237,7 @@ impl<'a> CfgPrintVisitor<'a> {
             if let Some(ref results) = *self.table_mod_ref_cache.borrow() {
                 if let Some(table_accesses) = results.stmt_entry.get(&stmt_loc) {
                     parts.push(format!(
-                        "tables {}",
+                        "tables-in {}",
                         self.format_table_accesses_lattice(table_accesses)
                     ));
                 }
@@ -245,7 +248,7 @@ impl<'a> CfgPrintVisitor<'a> {
             if let Some(ref results) = *self.constant_cache.borrow() {
                 if let Some(constants) = results.stmt_entry.get(&stmt_loc) {
                     parts.push(format!(
-                        "constants {}",
+                        "constants-in {}",
                         self.format_constants_lattice(constants)
                     ));
                 }
@@ -255,7 +258,7 @@ impl<'a> CfgPrintVisitor<'a> {
         if SHOW_COPY_ANALYSIS {
             if let Some(ref results) = *self.copy_cache.borrow() {
                 if let Some(copies) = results.stmt_entry.get(&stmt_loc) {
-                    parts.push(format!("copies {}", self.format_copies_lattice(copies)));
+                    parts.push(format!("copies-in {}", self.format_copies_lattice(copies)));
                 }
             }
         }
