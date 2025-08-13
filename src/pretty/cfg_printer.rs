@@ -5,21 +5,22 @@ use crate::{
         RValue, Statement, StmtVisitor, VarId, Variable,
     },
     dataflow::{
-        analyze_available_expressions, analyze_live_variables, analyze_reaching_definitions,
-        analyze_table_mod_ref, AnalysisLevel, DataflowResults, SetLattice, StmtLoc, TableAccess,
+        analyze_available_expressions, analyze_constants, analyze_copies, analyze_live_variables,
+        analyze_reaching_definitions, analyze_table_mod_ref, AvailExpr, ConstRelation,
+        CopyRelation, DataflowResults, Definition, LiveVar, SetLattice, StmtLoc, TableAccess,
     },
 };
 use std::cell::RefCell;
 use std::io::Write;
 
 // ============== DATAFLOW OUTPUT CONTROL CONSTANTS ==============
-const SHOW_LIVENESS: bool = false;
-const SHOW_REACHING_DEFINITIONS: bool = false;
-const SHOW_AVAILABLE_EXPRESSIONS: bool = false;
-const SHOW_TABLE_MOD_REF: bool = false;
+const SHOW_LIVENESS: bool = true;
+const SHOW_REACHING_DEFINITIONS: bool = true;
+const SHOW_AVAILABLE_EXPRESSIONS: bool = true;
+const SHOW_TABLE_MOD_REF: bool = true;
 const SHOW_CONSTANT_ANALYSIS: bool = false; // Usually too verbose
 const SHOW_COPY_ANALYSIS: bool = false; // Usually too verbose
-                                        // ===============================================================
+// ===============================================================
 
 /// Pretty printer for CFG structures using visitor pattern.
 /// Provides human-readable output of the control flow graph.
@@ -40,10 +41,12 @@ pub struct CfgPrintVisitor<'a> {
     indent_size: usize,
     // Cache dataflow results per function to avoid recomputation
     current_function_id: RefCell<Option<FunctionId>>,
-    liveness_cache: RefCell<Option<DataflowResults<SetLattice<VarId>>>>,
-    reaching_def_cache: RefCell<Option<DataflowResults<SetLattice<VarId>>>>,
-    available_expr_cache: RefCell<Option<DataflowResults<SetLattice<RValue>>>>,
+    liveness_cache: RefCell<Option<DataflowResults<SetLattice<LiveVar>>>>,
+    reaching_def_cache: RefCell<Option<DataflowResults<SetLattice<Definition>>>>,
+    available_expr_cache: RefCell<Option<DataflowResults<SetLattice<AvailExpr>>>>,
     table_mod_ref_cache: RefCell<Option<DataflowResults<SetLattice<TableAccess>>>>,
+    constant_cache: RefCell<Option<DataflowResults<SetLattice<ConstRelation>>>>,
+    copy_cache: RefCell<Option<DataflowResults<SetLattice<CopyRelation>>>>,
 }
 
 impl<'a> CfgPrintVisitor<'a> {
@@ -58,6 +61,8 @@ impl<'a> CfgPrintVisitor<'a> {
             reaching_def_cache: RefCell::new(None),
             available_expr_cache: RefCell::new(None),
             table_mod_ref_cache: RefCell::new(None),
+            constant_cache: RefCell::new(None),
+            copy_cache: RefCell::new(None),
         }
     }
 
@@ -68,37 +73,29 @@ impl<'a> CfgPrintVisitor<'a> {
             // Function changed, recompute all analyses
             *current_id = Some(function_id);
 
-            if SHOW_LIVENESS {
-                *self.liveness_cache.borrow_mut() = Some(analyze_live_variables(
-                    self.program,
-                    function_id,
-                    AnalysisLevel::Function,
-                ));
-            }
+            if let Some(function) = self.program.functions.get(function_id) {
+                if SHOW_LIVENESS {
+                    *self.liveness_cache.borrow_mut() = Some(analyze_live_variables(function, self.program));
+                }
 
-            if SHOW_REACHING_DEFINITIONS {
-                *self.reaching_def_cache.borrow_mut() = Some(analyze_reaching_definitions(
-                    self.program,
-                    function_id,
-                    AnalysisLevel::Function,
-                ));
-            }
+                if SHOW_REACHING_DEFINITIONS {
+                    *self.reaching_def_cache.borrow_mut() = Some(analyze_reaching_definitions(function, self.program));
+                }
 
-            if SHOW_AVAILABLE_EXPRESSIONS {
-                *self.available_expr_cache.borrow_mut() = Some(analyze_available_expressions(
-                    self.program,
-                    function_id,
-                    AnalysisLevel::Function,
-                ));
-            }
+                if SHOW_AVAILABLE_EXPRESSIONS {
+                    *self.available_expr_cache.borrow_mut() = Some(analyze_available_expressions(function, self.program));
+                }
 
-            if SHOW_TABLE_MOD_REF {
-                if let Some(function) = self.program.functions.get(function_id) {
-                    *self.table_mod_ref_cache.borrow_mut() = Some(analyze_table_mod_ref(
-                        function,
-                        self.program,
-                        AnalysisLevel::Function,
-                    ));
+                if SHOW_TABLE_MOD_REF {
+                    *self.table_mod_ref_cache.borrow_mut() = Some(analyze_table_mod_ref(function, self.program));
+                }
+
+                if SHOW_CONSTANT_ANALYSIS {
+                    *self.constant_cache.borrow_mut() = Some(analyze_constants(function, self.program));
+                }
+
+                if SHOW_COPY_ANALYSIS {
+                    *self.copy_cache.borrow_mut() = Some(analyze_copies(function, self.program));
                 }
             }
         }
@@ -114,7 +111,7 @@ impl<'a> CfgPrintVisitor<'a> {
                 if let Some(live_vars) = results.stmt_entry.get(&stmt_loc) {
                     parts.push(format!(
                         "live {}",
-                        self.format_variable_set_lattice(live_vars)
+                        self.format_liveness_lattice(live_vars)
                     ));
                 }
             }
@@ -125,7 +122,7 @@ impl<'a> CfgPrintVisitor<'a> {
                 if let Some(reaching_defs) = results.stmt_entry.get(&stmt_loc) {
                     parts.push(format!(
                         "reaching {}",
-                        self.format_variable_set_lattice(reaching_defs)
+                        self.format_definitions_lattice(reaching_defs)
                     ));
                 }
             }
@@ -136,7 +133,7 @@ impl<'a> CfgPrintVisitor<'a> {
                 if let Some(avail_exprs) = results.stmt_entry.get(&stmt_loc) {
                     parts.push(format!(
                         "available {}",
-                        self.format_available_expressions_lattice(avail_exprs)
+                        self.format_avail_expr_lattice(avail_exprs)
                     ));
                 }
             }
@@ -153,11 +150,174 @@ impl<'a> CfgPrintVisitor<'a> {
             }
         }
 
+        if SHOW_CONSTANT_ANALYSIS {
+            if let Some(ref results) = *self.constant_cache.borrow() {
+                if let Some(constants) = results.stmt_entry.get(&stmt_loc) {
+                    parts.push(format!(
+                        "constants {}",
+                        self.format_constants_lattice(constants)
+                    ));
+                }
+            }
+        }
+
+        if SHOW_COPY_ANALYSIS {
+            if let Some(ref results) = *self.copy_cache.borrow() {
+                if let Some(copies) = results.stmt_entry.get(&stmt_loc) {
+                    parts.push(format!(
+                        "copies {}",
+                        self.format_copies_lattice(copies)
+                    ));
+                }
+            }
+        }
+
         if parts.is_empty() {
             String::new()
         } else {
             parts.join(", ")
         }
+    }
+
+    /// Format liveness lattice using visitor pattern
+    fn format_liveness_lattice(&self, lattice: &SetLattice<LiveVar>) -> String {
+        if let Some(live_set) = lattice.as_set() {
+            self.format_liveness_set(live_set)
+        } else {
+            "⊤".to_string() // Top
+        }
+    }
+
+    /// Format a set of live variables using visitor pattern
+    fn format_liveness_set(&self, live_set: &std::collections::HashSet<LiveVar>) -> String {
+        if live_set.is_empty() {
+            "∅".to_string()
+        } else {
+            let mut vars: Vec<String> = live_set
+                .iter()
+                .map(|live_var| self.format_variable(live_var.0))
+                .collect();
+            vars.sort();
+            format!("{{{}}}", vars.join(", "))
+        }
+    }
+
+    /// Format definitions lattice using visitor pattern
+    fn format_definitions_lattice(&self, lattice: &SetLattice<Definition>) -> String {
+        if let Some(def_set) = lattice.as_set() {
+            self.format_definitions_set(def_set)
+        } else {
+            "⊤".to_string() // Top
+        }
+    }
+
+    /// Format a set of definitions using visitor pattern
+    fn format_definitions_set(&self, def_set: &std::collections::HashSet<Definition>) -> String {
+        if def_set.is_empty() {
+            "∅".to_string()
+        } else {
+            let mut defs: Vec<String> = def_set
+                .iter()
+                .map(|def| self.format_definition(def))
+                .collect();
+            defs.sort();
+            format!("{{{}}}", defs.join(", "))
+        }
+    }
+
+    /// Format a single definition using visitor pattern
+    fn format_definition(&self, def: &Definition) -> String {
+        let var_name = self.format_variable(def.var);
+        format!("{}@{}", var_name, def.loc.block.index())
+    }
+
+    /// Format available expressions lattice using visitor pattern  
+    fn format_avail_expr_lattice(&self, lattice: &SetLattice<AvailExpr>) -> String {
+        if let Some(expr_set) = lattice.as_set() {
+            self.format_avail_expr_set(expr_set)
+        } else {
+            "⊤".to_string()
+        }
+    }
+
+    /// Format available expressions set using visitor pattern
+    fn format_avail_expr_set(&self, expr_set: &std::collections::HashSet<AvailExpr>) -> String {
+        if expr_set.is_empty() {
+            "∅".to_string()
+        } else {
+            let mut exprs: Vec<String> = expr_set
+                .iter()
+                .map(|expr| self.format_avail_expr(expr))
+                .collect();
+            exprs.sort();
+            format!("{{{}}}", exprs.join(", "))
+        }
+    }
+
+    /// Format a single available expression using visitor pattern
+    fn format_avail_expr(&self, expr: &AvailExpr) -> String {
+        // Since fields are private, use debug representation as fallback
+        format!("{:?}", expr)
+    }
+
+    /// Format constants lattice using visitor pattern
+    fn format_constants_lattice(&self, lattice: &SetLattice<ConstRelation>) -> String {
+        if let Some(const_set) = lattice.as_set() {
+            self.format_constants_set(const_set)
+        } else {
+            "⊤".to_string()
+        }
+    }
+
+    /// Format constants set using visitor pattern
+    fn format_constants_set(&self, const_set: &std::collections::HashSet<ConstRelation>) -> String {
+        if const_set.is_empty() {
+            "∅".to_string()
+        } else {
+            let mut consts: Vec<String> = const_set
+                .iter()
+                .map(|const_rel| self.format_const_relation(const_rel))
+                .collect();
+            consts.sort();
+            format!("{{{}}}", consts.join(", "))
+        }
+    }
+
+    /// Format a single constant relation using visitor pattern
+    fn format_const_relation(&self, const_rel: &ConstRelation) -> String {
+        let var_name = self.format_variable(const_rel.var);
+        let const_str = self.format_constant(&const_rel.value);
+        format!("{}={}", var_name, const_str)
+    }
+
+    /// Format copies lattice using visitor pattern
+    fn format_copies_lattice(&self, lattice: &SetLattice<CopyRelation>) -> String {
+        if let Some(copy_set) = lattice.as_set() {
+            self.format_copies_set(copy_set)
+        } else {
+            "⊤".to_string()
+        }
+    }
+
+    /// Format copies set using visitor pattern
+    fn format_copies_set(&self, copy_set: &std::collections::HashSet<CopyRelation>) -> String {
+        if copy_set.is_empty() {
+            "∅".to_string()
+        } else {
+            let mut copies: Vec<String> = copy_set
+                .iter()
+                .map(|copy_rel| self.format_copy_relation(copy_rel))
+                .collect();
+            copies.sort();
+            format!("{{{}}}", copies.join(", "))
+        }
+    }
+
+    /// Format a single copy relation using visitor pattern
+    fn format_copy_relation(&self, copy_rel: &CopyRelation) -> String {
+        let var_name = self.format_variable(copy_rel.lhs);
+        let src_name = self.format_variable(copy_rel.rhs);
+        format!("{}←{}", var_name, src_name)
     }
 
     /// Format a set of variables using visitor pattern
@@ -220,6 +380,8 @@ impl<'a> CfgPrintVisitor<'a> {
                         reaching_def_cache: RefCell::new(None),
                         available_expr_cache: RefCell::new(None),
                         table_mod_ref_cache: RefCell::new(None),
+                        constant_cache: RefCell::new(None),
+                        copy_cache: RefCell::new(None),
                     };
                     temp_visitor.visit_rvalue(rvalue)
                 })
