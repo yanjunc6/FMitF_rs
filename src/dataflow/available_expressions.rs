@@ -7,8 +7,8 @@ use crate::cfg::{ControlFlowEdge, FunctionCfg, LValue, RValue, Statement, VarId}
 /// Available expression for tracking computations
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AvailExpr {
-    lvalue: LValue, // variable being assigned, currently no array element/table field recorded here
-    rvalue: RValue, // all possible rvalue is recorded here
+    pub lvalue: LValue, // variable being assigned, currently no array element/table field recorded here
+    pub rvalue: RValue, // all possible rvalue is recorded here
 }
 
 /// Transfer function for available expressions analysis

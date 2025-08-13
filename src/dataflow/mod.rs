@@ -21,7 +21,7 @@ mod constant_analysis;
 pub use constant_analysis::analyze_constants;
 
 mod copy_analysis;
-pub use copy_analysis::{analyze_copies, CopyRelation};
+pub use copy_analysis::analyze_copies;
 
 mod table_mod_ref;
 pub use table_mod_ref::{analyze_table_mod_ref, AccessType, TableAccess};

@@ -13,10 +13,10 @@ mod constant_folding;
 mod copy_propagation;
 mod dead_code_elimination;
 
-pub use common_subexpression_elimination::CommonSubexpressionEliminationPass;
+pub use common_subexpression_elimination::CommonSubexpressionElimination;
 pub use constant_folding::ConstantFoldingPass;
-pub use copy_propagation::CopyPropagation;
-pub use dead_code_elimination::DeadCodeEliminationPass;
+pub use copy_propagation::CopyPropagationPass;
+pub use dead_code_elimination::DeadCodeElimination;
 
 /// Trait for optimization passes
 pub trait OptimizationPass {
@@ -51,9 +51,9 @@ impl CfgOptimizer {
     pub fn default_passes() -> Self {
         Self::new()
             .add_pass(Box::new(ConstantFoldingPass::new()))
-            .add_pass(Box::new(CopyPropagation::new()))
-            .add_pass(Box::new(CommonSubexpressionEliminationPass::new()))
-            .add_pass(Box::new(DeadCodeEliminationPass::new()))
+            .add_pass(Box::new(CopyPropagationPass::new()))
+            .add_pass(Box::new(CommonSubexpressionElimination::new()))
+            .add_pass(Box::new(DeadCodeElimination::new()))
     }
 
     /// Optimize an entire CFG program

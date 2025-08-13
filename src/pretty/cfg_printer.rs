@@ -6,8 +6,8 @@ use crate::{
     },
     dataflow::{
         analyze_available_expressions, analyze_constants, analyze_copies, analyze_live_variables,
-        analyze_reaching_definitions, analyze_table_mod_ref, AvailExpr, CopyRelation,
-        DataflowResults, Definition, Flat, LiveVar, MapLattice, SetLattice, StmtLoc, TableAccess,
+        analyze_reaching_definitions, analyze_table_mod_ref, AvailExpr, DataflowResults,
+        Definition, Flat, LiveVar, MapLattice, SetLattice, StmtLoc, TableAccess,
     },
 };
 use std::cell::RefCell;
@@ -46,7 +46,7 @@ pub struct CfgPrintVisitor<'a> {
     available_expr_cache: RefCell<Option<DataflowResults<SetLattice<AvailExpr>>>>,
     table_mod_ref_cache: RefCell<Option<DataflowResults<SetLattice<TableAccess>>>>,
     constant_cache: RefCell<Option<DataflowResults<MapLattice<VarId, Constant>>>>,
-    copy_cache: RefCell<Option<DataflowResults<SetLattice<CopyRelation>>>>,
+    copy_cache: RefCell<Option<DataflowResults<MapLattice<VarId, VarId>>>>,
 }
 
 impl<'a> CfgPrintVisitor<'a> {
@@ -294,33 +294,36 @@ impl<'a> CfgPrintVisitor<'a> {
     }
 
     /// Format copies lattice using visitor pattern
-    fn format_copies_lattice(&self, lattice: &SetLattice<CopyRelation>) -> String {
-        if let Some(copy_set) = lattice.as_set() {
-            self.format_copies_set(copy_set)
-        } else {
+    fn format_copies_lattice(&self, lattice: &MapLattice<VarId, VarId>) -> String {
+        if lattice.is_top() {
             "⊤".to_string()
+        } else {
+            self.format_copies_map(lattice)
         }
     }
 
-    /// Format copies set using visitor pattern
-    fn format_copies_set(&self, copy_set: &std::collections::HashSet<CopyRelation>) -> String {
-        if copy_set.is_empty() {
+    /// Format copies map using visitor pattern
+    fn format_copies_map(&self, copy_map: &MapLattice<VarId, VarId>) -> String {
+        let mut entries = Vec::new();
+
+        // Iterate through all variables to check their copy relations
+        for (var_id, _var) in self.program.variables.iter() {
+            match copy_map.get(&var_id) {
+                Flat::Value(source_var_id) => {
+                    let var_name = self.format_variable(var_id);
+                    let src_name = self.format_variable(source_var_id);
+                    entries.push(format!("{}←{}", var_name, src_name));
+                }
+                _ => {} // Skip Bottom and Top values
+            }
+        }
+
+        if entries.is_empty() {
             "∅".to_string()
         } else {
-            let mut copies: Vec<String> = copy_set
-                .iter()
-                .map(|copy_rel| self.format_copy_relation(copy_rel))
-                .collect();
-            copies.sort();
-            format!("{{{}}}", copies.join(", "))
+            entries.sort();
+            format!("{{{}}}", entries.join(", "))
         }
-    }
-
-    /// Format a single copy relation using visitor pattern
-    fn format_copy_relation(&self, copy_rel: &CopyRelation) -> String {
-        let var_name = self.format_variable(copy_rel.lhs);
-        let src_name = self.format_variable(copy_rel.rhs);
-        format!("{}←{}", var_name, src_name)
     }
 
     /// Format a set of variables using visitor pattern
