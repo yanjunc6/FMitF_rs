@@ -2,7 +2,9 @@ use super::{
     AnalysisKind, AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
     TransferFunction,
 };
-use crate::cfg::{BasicBlockId, ControlFlowEdge, FunctionCfg, RValue, Statement, TableId};
+use crate::cfg::BasicBlock;
+use crate::cfg::{ControlFlowEdge, FunctionCfg, LValue, RValue, Statement, TableId};
+use crate::dataflow::StmtLoc;
 
 /// Table access tracking
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -25,6 +27,7 @@ impl TransferFunction<SetLattice<TableAccess>> for TableModRefTransfer {
     fn transfer_statement(
         &self,
         stmt: &Statement,
+        _stmt_loc: StmtLoc,
         state: &SetLattice<TableAccess>,
     ) -> SetLattice<TableAccess> {
         if state.is_top() {
@@ -36,22 +39,25 @@ impl TransferFunction<SetLattice<TableAccess>> for TableModRefTransfer {
         match stmt {
             Statement::Assign { lvalue, rvalue, .. } => {
                 // Track reads from rvalue
-                self.add_reads_from_rvalue(&mut result_set, rvalue);
+                match rvalue {
+                    RValue::TableAccess { table, .. } => {
+                        result_set.insert(TableAccess {
+                            table: *table,
+                            access_type: AccessType::Read,
+                        });
+                    }
+                    _ => {}
+                }
 
                 // Track writes from lvalue
                 match lvalue {
-                    crate::cfg::LValue::Variable { .. } => {
-                        // Variable assignments don't affect tables
-                    }
-                    crate::cfg::LValue::ArrayElement { .. } => {
-                        // Array assignments don't affect tables directly
-                    }
-                    crate::cfg::LValue::TableField { table, .. } => {
+                    LValue::TableField { table, .. } => {
                         result_set.insert(TableAccess {
                             table: *table,
                             access_type: AccessType::Write,
                         });
                     }
+                    _ => {}
                 }
             }
         }
@@ -71,60 +77,8 @@ impl TransferFunction<SetLattice<TableAccess>> for TableModRefTransfer {
         SetLattice::bottom().unwrap()
     }
 
-    fn boundary_value(
-        &self,
-        _func: &FunctionCfg,
-        _blockid: BasicBlockId,
-    ) -> SetLattice<TableAccess> {
-        // At hop entry, no table accesses yet
+    fn boundary_value(&self, _func: &FunctionCfg, _block: &BasicBlock) -> SetLattice<TableAccess> {
         SetLattice::bottom().unwrap()
-    }
-}
-
-impl TableModRefTransfer {
-    fn add_reads_from_rvalue(
-        &self,
-        accesses: &mut std::collections::HashSet<TableAccess>,
-        rvalue: &RValue,
-    ) {
-        match rvalue {
-            RValue::Use(_) => {
-                // Variable use doesn't read from tables
-            }
-            RValue::TableAccess { table, .. } => {
-                accesses.insert(TableAccess {
-                    table: *table,
-                    access_type: AccessType::Read,
-                });
-            }
-            RValue::ArrayAccess { array, index } => {
-                // Check if array or index operands contain table accesses
-                self.add_reads_from_operand(accesses, array);
-                self.add_reads_from_operand(accesses, index);
-            }
-            RValue::UnaryOp { operand, .. } => {
-                self.add_reads_from_operand(accesses, operand);
-            }
-            RValue::BinaryOp { left, right, .. } => {
-                self.add_reads_from_operand(accesses, left);
-                self.add_reads_from_operand(accesses, right);
-            }
-        }
-    }
-
-    fn add_reads_from_operand(
-        &self,
-        _accesses: &mut std::collections::HashSet<TableAccess>,
-        operand: &crate::cfg::Operand,
-    ) {
-        match operand {
-            crate::cfg::Operand::Var(_) => {
-                // Variable use doesn't read from tables directly
-            }
-            crate::cfg::Operand::Const(_) => {
-                // Constants don't read from tables
-            }
-        }
     }
 }
 
