@@ -17,10 +17,10 @@ mod available_expressions;
 pub use available_expressions::{analyze_available_expressions, AvailExpr};
 
 mod constant_analysis;
-pub use constant_analysis::{analyze_constants, ConstantMapLattice, ConstantState};
+pub use constant_analysis::{analyze_constants, ConstRelation};
 
 mod copy_analysis;
-pub use copy_analysis::{analyze_copies, CopyMapLattice, CopyRelation};
+pub use copy_analysis::{analyze_copies, CopyRelation};
 
 mod table_mod_ref;
 pub use table_mod_ref::{analyze_table_mod_ref, AccessType, TableAccess};

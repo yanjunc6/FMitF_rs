@@ -1,230 +1,161 @@
 use super::{
-    AnalysisKind, AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, StmtLoc,
-    TransferFunction,
+    AnalysisKind, AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
+    StmtLoc, TransferFunction,
 };
 use crate::cfg::{
     BasicBlock, Constant, ControlFlowEdge, FunctionCfg, LValue, Operand, RValue, Statement, VarId,
 };
 
-/// Constant state - tracks which variables have constant values
+/// Single definite-constant fact  (x = c).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ConstantState {
-    // Bottom, // No information, it should be treat as no key defined in the map
-    Const(Constant),
-    Top, // Not constant (multiple values)
-}
-
-/// Map from variables to their constant state
-pub type ConstantMapLattice = std::collections::HashMap<VarId, ConstantState>;
-
-impl Lattice for ConstantMapLattice {
-    fn bottom() -> Option<Self> {
-        Some(std::collections::HashMap::new())
-    }
-
-    fn top() -> Option<Self> {
-        None
-    }
-
-    fn meet(&self, other: &Self) -> Self {
-        let mut result = self.clone();
-        for (var, state) in other {
-            match state {
-                ConstantState::Top => {
-                    result.insert(*var, ConstantState::Top);
-                }
-                ConstantState::Const(value) => {
-                    if let Some(existing) = result.get(var) {
-                        match existing {
-                            ConstantState::Top => continue,
-                            ConstantState::Const(existing_value) if existing_value == value => {
-                                continue
-                            }
-                            _ => result.insert(*var, ConstantState::Top),
-                        };
-                    } else {
-                        result.insert(*var, ConstantState::Const(value.clone()));
-                    }
-                }
-            }
-        }
-        result
-    }
-
-    /// Should never been used
-    fn join(&self, _other: &Self) -> Self {
-        panic!("Join operation is not defined for ConstantMapLattice");
-    }
-
-    /// Should never been used
-    fn less_equal(&self, other: &Self) -> bool {
-        // Check if self is a subset of other
-        self.iter().all(|(var, state)| {
-            other
-                .get(var)
-                .map_or(false, |other_state| match (state, other_state) {
-                    (ConstantState::Top, _) => true,
-                    (ConstantState::Const(value), ConstantState::Const(other_value)) => {
-                        value == other_value
-                    }
-                    _ => false,
-                })
-        })
-    }
+pub struct ConstRelation {
+    pub var: VarId,
+    pub value: Constant,
 }
 
 /// Transfer function for constant propagation analysis
 pub struct ConstantTransfer;
 
-impl TransferFunction<ConstantMapLattice> for ConstantTransfer {
-    /// For each statement, update constant information
+impl TransferFunction<SetLattice<ConstRelation>> for ConstantTransfer {
     fn transfer_statement(
         &self,
         stmt: &Statement,
         _stmt_loc: StmtLoc,
-        state: &ConstantMapLattice,
-    ) -> ConstantMapLattice {
-        let mut result_set = state.clone();
-
-        match stmt {
-            Statement::Assign { lvalue, rvalue, .. } => match lvalue {
-                LValue::Variable { var } => {
-                    result_set.remove(var);
-
-                    if let Some(constant_val) = self.eval_rvalue(rvalue, &result_set) {
-                        result_set.insert(*var, ConstantState::Const(constant_val));
-                    } else {
-                        result_set.insert(*var, ConstantState::Top);
-                    }
-                }
-                LValue::ArrayElement { .. } => {}
-                LValue::TableField { .. } => {}
-            },
+        state: &SetLattice<ConstRelation>,
+    ) -> SetLattice<ConstRelation> {
+        // If the whole lattice element is ⊤ just propagate it unchanged
+        if state.is_top() {
+            return SetLattice::top_element();
         }
 
-        result_set
+        // Work on an owned copy of the inner HashSet
+        let mut out = state.as_set().unwrap().clone();
+
+        match stmt {
+            Statement::Assign { lvalue, rvalue, .. } => {
+                if let LValue::Variable { var } = lvalue {
+                    /* KILL: remove any fact mentioning the target variable */
+                    out.retain(|rel| rel.var != *var);
+
+                    /* GEN: try to fold the R-value to a constant */
+                    if let Some(c) = self.eval_rvalue(rvalue, &out) {
+                        out.insert(ConstRelation {
+                            var: *var,
+                            value: c,
+                        });
+                    }
+                }
+            }
+        }
+
+        SetLattice::new(out)
     }
 
     fn transfer_edge(
         &self,
         _edge: &ControlFlowEdge,
-        state: &ConstantMapLattice,
-    ) -> ConstantMapLattice {
+        state: &SetLattice<ConstRelation>,
+    ) -> SetLattice<ConstRelation> {
         state.clone()
     }
 
-    fn initial_value(&self) -> ConstantMapLattice {
-        ConstantMapLattice::bottom().unwrap()
+    fn initial_value(&self) -> SetLattice<ConstRelation> {
+        SetLattice::bottom().unwrap() // ⊥ = ∅
     }
 
-    fn boundary_value(&self, _func: &FunctionCfg, _block: &BasicBlock) -> ConstantMapLattice {
-        ConstantMapLattice::bottom().unwrap()
+    fn boundary_value(
+        &self,
+        _func: &FunctionCfg,
+        _block: &BasicBlock,
+    ) -> SetLattice<ConstRelation> {
+        SetLattice::bottom().unwrap()
     }
 }
 
 impl ConstantTransfer {
-    fn eval_rvalue(&self, rvalue: &RValue, constants: &ConstantMapLattice) -> Option<Constant> {
-        match rvalue {
-            RValue::Use(operand) => self.eval_operand(operand, constants),
-            RValue::BinaryOp { op, left, right } => {
-                let left_val = self.eval_operand(left, constants)?;
-                let right_val = self.eval_operand(right, constants)?;
-                self.eval_binary_op(op.clone(), &left_val, &right_val)
-            }
-            RValue::UnaryOp { op, operand } => {
-                let val = self.eval_operand(operand, constants)?;
-                self.eval_unary_op(op.clone(), &val)
-            }
-            _ => None, // Table/array access not constant-foldable
-        }
-    }
-
-    fn eval_operand(&self, operand: &Operand, constants: &ConstantMapLattice) -> Option<Constant> {
-        match operand {
-            Operand::Const(c) => {
-                match c {
-                    Constant::Array(..) => None, // Arrays are not constant-foldable
-                    _ => Some(c.clone()),
-                }
-            }
-            Operand::Var(var_id) => constants.get(var_id).and_then(|state| match state {
-                ConstantState::Const(value) => Some(value.clone()),
-                _ => None,
-            }),
-        }
-    }
-
-    fn eval_binary_op(
+    fn eval_rvalue(
         &self,
-        op: crate::cfg::BinaryOp,
-        left: &Constant,
-        right: &Constant,
+        rv: &RValue,
+        facts: &std::collections::HashSet<ConstRelation>,
     ) -> Option<Constant> {
-        match (left, right) {
-            (Constant::Int(l), Constant::Int(r)) => {
-                use crate::cfg::BinaryOp;
-                match op {
-                    BinaryOp::Add => Some(Constant::Int(l + r)),
-                    BinaryOp::Sub => Some(Constant::Int(l - r)),
-                    BinaryOp::Mul => Some(Constant::Int(l * r)),
-                    BinaryOp::Div => {
-                        if *r != 0 {
-                            Some(Constant::Int(l / r))
-                        } else {
-                            None
-                        }
-                    }
-                    BinaryOp::Eq => Some(Constant::Bool(l == r)),
-                    BinaryOp::Neq => Some(Constant::Bool(l != r)),
-                    BinaryOp::Lt => Some(Constant::Bool(l < r)),
-                    BinaryOp::Lte => Some(Constant::Bool(l <= r)),
-                    BinaryOp::Gt => Some(Constant::Bool(l > r)),
-                    BinaryOp::Gte => Some(Constant::Bool(l >= r)),
-                    _ => None,
-                }
+        match rv {
+            RValue::Use(op) => self.eval_operand(op, facts),
+            RValue::UnaryOp { op, operand } => {
+                let v = self.eval_operand(operand, facts)?;
+                Self::eval_unary_op(op.clone(), &v)
             }
-            (Constant::Bool(l), Constant::Bool(r)) => {
-                use crate::cfg::BinaryOp;
-                match op {
-                    BinaryOp::And => Some(Constant::Bool(*l && *r)),
-                    BinaryOp::Or => Some(Constant::Bool(*l || *r)),
-                    BinaryOp::Eq => Some(Constant::Bool(l == r)),
-                    BinaryOp::Neq => Some(Constant::Bool(l != r)),
-                    _ => None,
-                }
+            RValue::BinaryOp { op, left, right } => {
+                let l = self.eval_operand(left, facts)?;
+                let r = self.eval_operand(right, facts)?;
+                Self::eval_binary_op(op.clone(), &l, &r)
             }
-            (Constant::Float(l), Constant::Float(r)) => {
-                use crate::cfg::BinaryOp;
-                match op {
-                    BinaryOp::Add => Some(Constant::Float(l + r)),
-                    BinaryOp::Sub => Some(Constant::Float(l - r)),
-                    BinaryOp::Mul => Some(Constant::Float(l * r)),
-                    BinaryOp::Div => Some(Constant::Float(l / r)),
-                    BinaryOp::Eq => Some(Constant::Bool(l == r)),
-                    BinaryOp::Neq => Some(Constant::Bool(l != r)),
-                    BinaryOp::Lt => Some(Constant::Bool(l < r)),
-                    BinaryOp::Lte => Some(Constant::Bool(l <= r)),
-                    BinaryOp::Gt => Some(Constant::Bool(l > r)),
-                    BinaryOp::Gte => Some(Constant::Bool(l >= r)),
-                    _ => None,
-                }
-            }
-            _ => None, // Unsupported combinations
+            _ => None,
         }
     }
 
-    fn eval_unary_op(&self, op: crate::cfg::UnaryOp, operand: &Constant) -> Option<Constant> {
-        match operand {
-            Constant::Int(val) => match op {
-                crate::cfg::UnaryOp::Neg => Some(Constant::Int(-val)),
+    fn eval_operand(
+        &self,
+        op: &Operand,
+        facts: &std::collections::HashSet<ConstRelation>,
+    ) -> Option<Constant> {
+        match op {
+            Operand::Const(c) => match c {
+                Constant::Array(..) => None,
+                _ => Some(c.clone()),
+            },
+            Operand::Var(v) => facts
+                .iter()
+                .find(|rel| rel.var == *v)
+                .map(|rel| rel.value.clone()),
+        }
+    }
+
+    /* ---------------- simple constant folding helpers ---------------- */
+
+    fn eval_unary_op(op: crate::cfg::UnaryOp, v: &Constant) -> Option<Constant> {
+        use crate::cfg::UnaryOp::*;
+        match (op, v) {
+            (Neg, Constant::Int(i)) => Some(Constant::Int(-i)),
+            (Neg, Constant::Float(f)) => Some(Constant::Float(-f)),
+            (Not, Constant::Bool(b)) => Some(Constant::Bool(!b)),
+            _ => None,
+        }
+    }
+
+    fn eval_binary_op(op: crate::cfg::BinaryOp, l: &Constant, r: &Constant) -> Option<Constant> {
+        use crate::cfg::BinaryOp::*;
+        match (l, r) {
+            (Constant::Int(a), Constant::Int(b)) => match op {
+                Add => Some(Constant::Int(a + b)),
+                Sub => Some(Constant::Int(a - b)),
+                Mul => Some(Constant::Int(a * b)),
+                Div if *b != 0 => Some(Constant::Int(a / b)),
+                Eq => Some(Constant::Bool(a == b)),
+                Neq => Some(Constant::Bool(a != b)),
+                Lt => Some(Constant::Bool(a < b)),
+                Lte => Some(Constant::Bool(a <= b)),
+                Gt => Some(Constant::Bool(a > b)),
+                Gte => Some(Constant::Bool(a >= b)),
                 _ => None,
             },
-            Constant::Bool(val) => match op {
-                crate::cfg::UnaryOp::Not => Some(Constant::Bool(!val)),
+            (Constant::Float(a), Constant::Float(b)) => match op {
+                Add => Some(Constant::Float(a + b)),
+                Sub => Some(Constant::Float(a - b)),
+                Mul => Some(Constant::Float(a * b)),
+                Div => Some(Constant::Float(a / b)),
+                Eq => Some(Constant::Bool(a == b)),
+                Neq => Some(Constant::Bool(a != b)),
+                Lt => Some(Constant::Bool(a < b)),
+                Lte => Some(Constant::Bool(a <= b)),
+                Gt => Some(Constant::Bool(a > b)),
+                Gte => Some(Constant::Bool(a >= b)),
                 _ => None,
             },
-            Constant::Float(val) => match op {
-                crate::cfg::UnaryOp::Neg => Some(Constant::Float(-val)),
+            (Constant::Bool(a), Constant::Bool(b)) => match op {
+                And => Some(Constant::Bool(*a && *b)),
+                Or => Some(Constant::Bool(*a || *b)),
+                Eq => Some(Constant::Bool(a == b)),
+                Neq => Some(Constant::Bool(a != b)),
                 _ => None,
             },
             _ => None,
@@ -236,11 +167,11 @@ impl ConstantTransfer {
 pub fn analyze_constants(
     func: &FunctionCfg,
     cfg_program: &crate::cfg::CfgProgram,
-) -> DataflowResults<ConstantMapLattice> {
+) -> DataflowResults<SetLattice<ConstRelation>> {
     let analysis = DataflowAnalysis::new(
         AnalysisLevel::Function,
         Direction::Forward,
-        AnalysisKind::May,
+        AnalysisKind::Must, // here, we might lose some information as compromise
         ConstantTransfer,
     );
     analysis.analyze(func, cfg_program)
