@@ -1,23 +1,13 @@
-//! Dead Code Elimination Optimization Pass
-//!
-//! This pass removes assignments to variables that are never used after assignment.
-
 use super::OptimizationPass;
-use crate::cfg::{CfgProgram, FunctionId, Statement, VarId};
-use crate::dataflow::LiveVar;
+use crate::cfg::{CfgProgram, FunctionId, LValue, Statement, VarId};
 use crate::dataflow::{analyze_live_variables, StmtLoc};
 use std::collections::HashSet;
 
-pub struct DeadCodeEliminationPass;
+pub struct DeadCodeElimination;
 
-impl DeadCodeEliminationPass {
-    /// Extract live variables from lattice result
-    fn extract_live_vars(lattice_result: &crate::dataflow::SetLattice<LiveVar>) -> HashSet<VarId> {
-        if let Some(live_vars) = lattice_result.as_set() {
-            live_vars.iter().map(|live_var| live_var.0).collect()
-        } else {
-            HashSet::new()
-        }
+impl DeadCodeElimination {
+    pub fn new() -> Self {
+        Self
     }
 
     /// Check if an assignment is dead (assigned variable is not live after assignment)
@@ -25,7 +15,7 @@ impl DeadCodeEliminationPass {
         match stmt {
             Statement::Assign { lvalue, rvalue, .. } => {
                 // Check if this is a variable assignment
-                if let crate::cfg::LValue::Variable { var } = lvalue {
+                if let LValue::Variable { var } = lvalue {
                     // If the assigned variable is not live after this statement, it's dead
                     let is_dead = !live_after.contains(var);
 
@@ -45,13 +35,9 @@ impl DeadCodeEliminationPass {
     }
 }
 
-impl OptimizationPass for DeadCodeEliminationPass {
-    fn new() -> Self {
-        Self
-    }
-
+impl OptimizationPass for DeadCodeElimination {
     fn name(&self) -> &'static str {
-        "Dead Code Elimination"
+        "dead-code-elimination"
     }
 
     fn optimize_function(&self, program: &mut CfgProgram, func_id: FunctionId) -> bool {
@@ -72,9 +58,11 @@ impl OptimizationPass for DeadCodeEliminationPass {
         // Process each block in the function
         for &block_id in &function.blocks {
             let block = &mut program.blocks[block_id];
-            let mut new_statements = Vec::new();
+            let original_len = block.statements.len();
 
-            // Process each statement
+            // First pass: mark statements for deletion
+            let mut statements_to_keep = Vec::new();
+
             for (stmt_idx, stmt) in block.statements.iter().enumerate() {
                 let stmt_loc = StmtLoc {
                     block: block_id,
@@ -84,7 +72,13 @@ impl OptimizationPass for DeadCodeEliminationPass {
                 // Get live variables after this statement
                 let should_keep =
                     if let Some(lattice_result) = liveness_results.stmt_exit.get(&stmt_loc) {
-                        let live_after = Self::extract_live_vars(lattice_result);
+                        let live_after = if let Some(live_vars) = lattice_result.as_set() {
+                            live_vars.iter().map(|live_var| live_var.0).collect()
+                        } else {
+                            HashSet::new()
+                        };
+
+                        // Keep the statement if it's not dead
                         !self.is_dead_assignment(stmt, &live_after)
                     } else {
                         // If we don't have liveness info, keep the statement
@@ -92,13 +86,17 @@ impl OptimizationPass for DeadCodeEliminationPass {
                     };
 
                 if should_keep {
-                    new_statements.push(stmt.clone());
-                } else {
-                    changed = true;
+                    statements_to_keep.push(stmt.clone());
                 }
             }
 
-            block.statements = new_statements;
+            // Replace the statements
+            block.statements = statements_to_keep;
+
+            // Check if we actually removed statements
+            if block.statements.len() < original_len {
+                changed = true;
+            }
         }
 
         changed

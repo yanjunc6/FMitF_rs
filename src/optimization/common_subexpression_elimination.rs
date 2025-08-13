@@ -1,98 +1,48 @@
-//! Common Subexpression Elimination Optimization Pass
-//!
-//! This pass identifies and eliminates redundant computations by reusing
-//! previously computed values when the same expression is encountered again.
-
 use super::OptimizationPass;
-use crate::cfg::{CfgProgram, FunctionId, Operand, RValue, Statement, VarId};
-use crate::dataflow::available_expressions::AvailExpr;
-use crate::dataflow::{analyze_available_expressions, StmtLoc};
-use std::collections::{HashMap, HashSet};
+use crate::cfg::{CfgProgram, FunctionId, LValue, Operand, RValue, Statement, VarId};
+use crate::dataflow::{analyze_available_expressions, AvailExpr, StmtLoc};
+use std::collections::HashSet;
 
-pub struct CommonSubexpressionEliminationPass;
+pub struct CommonSubexpressionElimination;
 
-impl CommonSubexpressionEliminationPass {
-    /// Extract available expressions from lattice result
-    fn extract_available_exprs(
-        lattice_result: &crate::dataflow::SetLattice<AvailExpr>,
-    ) -> HashSet<AvailExpr> {
-        if let Some(exprs) = lattice_result.as_set() {
-            exprs.clone()
-        } else {
-            HashSet::new()
-        }
-    }
-
-    /// Convert an RValue to an AvailExpr if possible
-    fn rvalue_to_avail_expr(&self, rvalue: &RValue) -> Option<AvailExpr> {
-        match rvalue {
-            RValue::BinaryOp { op, left, right } => Some(AvailExpr::BinaryOp {
-                op: op.clone(),
-                left: left.clone(),
-                right: right.clone(),
-            }),
-            RValue::UnaryOp { op, operand } => Some(AvailExpr::UnaryOp {
-                op: op.clone(),
-                operand: operand.clone(),
-            }),
-            RValue::ArrayAccess { array, index } => Some(AvailExpr::ArrayAccess {
-                array: array.clone(),
-                index: index.clone(),
-            }),
-            _ => None, // Use operations and table access don't need CSE
-        }
-    }
-
-    /// Check if an expression matches an available expression and return the variable that holds it
-    fn find_existing_computation(
-        &self,
-        expr: &AvailExpr,
-        available: &HashSet<AvailExpr>,
-        expr_to_var: &HashMap<AvailExpr, VarId>,
-    ) -> Option<VarId> {
-        if available.contains(expr) {
-            expr_to_var.get(expr).copied()
-        } else {
-            None
-        }
-    }
-
-    /// Create a mapping from expressions to the variables that hold their results
-    fn build_expr_to_var_map(
-        &self,
-        program: &CfgProgram,
-        func_id: FunctionId,
-    ) -> HashMap<AvailExpr, VarId> {
-        let mut expr_to_var = HashMap::new();
-        let function = &program.functions[func_id];
-
-        // Scan all statements to build the mapping
-        for &block_id in &function.blocks {
-            let block = &program.blocks[block_id];
-            for stmt in &block.statements {
-                match stmt {
-                    Statement::Assign { lvalue, rvalue, .. } => {
-                        if let crate::cfg::LValue::Variable { var } = lvalue {
-                            if let Some(expr) = self.rvalue_to_avail_expr(rvalue) {
-                                expr_to_var.insert(expr, *var);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        expr_to_var
-    }
-}
-
-impl OptimizationPass for CommonSubexpressionEliminationPass {
-    fn new() -> Self {
+impl CommonSubexpressionElimination {
+    pub fn new() -> Self {
         Self
     }
 
+    /// Find a variable that holds the result of the same computation
+    fn find_existing_var(
+        &self,
+        target_rvalue: &RValue,
+        available: &HashSet<AvailExpr>,
+    ) -> Option<VarId> {
+        for avail_expr in available {
+            // Use the new accessor method
+            if avail_expr.rvalue == target_rvalue.clone() {
+                // Check if the lvalue is a simple variable
+                if let LValue::Variable { var } = avail_expr.lvalue {
+                    return Some(var);
+                }
+            }
+        }
+        None
+    }
+
+    /// Check if an RValue is worth optimizing (has computation cost)
+    fn is_worth_optimizing(&self, rvalue: &RValue) -> bool {
+        match rvalue {
+            RValue::BinaryOp { .. } => true,
+            RValue::UnaryOp { .. } => true,
+            RValue::ArrayAccess { .. } => true,
+            RValue::TableAccess { .. } => true,
+            RValue::Use(_) => false, // Simple variable use doesn't need CSE
+        }
+    }
+}
+
+impl OptimizationPass for CommonSubexpressionElimination {
     fn name(&self) -> &'static str {
-        "Common Subexpression Elimination"
+        "common-subexpression-elimination"
     }
 
     fn optimize_function(&self, program: &mut CfgProgram, func_id: FunctionId) -> bool {
@@ -108,10 +58,6 @@ impl OptimizationPass for CommonSubexpressionEliminationPass {
 
         // Run available expressions analysis
         let results = analyze_available_expressions(function, program);
-
-        // Build expression to variable mapping
-        let expr_to_var = self.build_expr_to_var_map(program, func_id);
-
         let mut changed = false;
 
         // Process each block in the function
@@ -127,15 +73,21 @@ impl OptimizationPass for CommonSubexpressionEliminationPass {
 
                 // Get available expressions before this statement
                 if let Some(lattice_result) = results.stmt_entry.get(&stmt_loc) {
-                    let available = Self::extract_available_exprs(lattice_result);
+                    // Extract available expressions from lattice
+                    let available = if let Some(exprs) = lattice_result.as_set() {
+                        exprs.clone()
+                    } else {
+                        continue; // Top element - can't analyze
+                    };
 
                     // Apply CSE to the statement
                     match stmt {
                         Statement::Assign { rvalue, .. } => {
-                            if let Some(expr) = self.rvalue_to_avail_expr(rvalue) {
-                                // Check if this expression is available
+                            // Only try to optimize computations that are worth it
+                            if self.is_worth_optimizing(rvalue) {
+                                // Check if this computation is available
                                 if let Some(existing_var) =
-                                    self.find_existing_computation(&expr, &available, &expr_to_var)
+                                    self.find_existing_var(rvalue, &available)
                                 {
                                     // Replace the computation with a use of the existing variable
                                     *rvalue = RValue::Use(Operand::Var(existing_var));

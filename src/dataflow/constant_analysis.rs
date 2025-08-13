@@ -152,7 +152,7 @@ pub fn analyze_constants(
     let analysis = DataflowAnalysis::new(
         AnalysisLevel::Function,
         Direction::Forward,
-        AnalysisKind::Must, // here, we might lose some information as compromise
+        AnalysisKind::May,
         ConstantTransfer,
     );
     analysis.analyze(func, cfg_program)
