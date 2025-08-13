@@ -1,7 +1,7 @@
 use super::{EdgeType, SCGraph, SCGraphNodeId};
 use crate::cfg::{CfgProgram, FunctionType, HopId};
 use crate::dataflow::{
-    analyze_table_mod_ref, AccessType, AnalysisLevel, DataflowResults, SetLattice, TableAccess,
+    analyze_table_mod_ref, AccessType, DataflowResults, SetLattice, TableAccess,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -119,8 +119,7 @@ impl SCGraphBuilder {
             // Only analyze transaction functions
             if function.function_type == FunctionType::Transaction {
                 // Run hop-level table mod-ref analysis
-                let analysis_results =
-                    analyze_table_mod_ref(function, cfg_program, AnalysisLevel::Hop);
+                let analysis_results = analyze_table_mod_ref(function, cfg_program);
 
                 // Extract table accesses for each hop
                 for &hop_id in &function.hops {
@@ -152,7 +151,7 @@ impl SCGraphBuilder {
         let hop = &prog.hops[hop_id];
         for &block_id in &hop.blocks {
             // For hop-level analysis, we want the exit values of each block within the hop
-            if let Some(block_exit_lattice) = analysis_results.exit.get(&block_id) {
+            if let Some(block_exit_lattice) = analysis_results.block_exit.get(&block_id) {
                 if let Some(access_set) = block_exit_lattice.as_set() {
                     for access in access_set {
                         hop_accesses.insert(access.clone());
@@ -255,7 +254,7 @@ impl SCGraphBuilder {
         for access1 in accesses1 {
             for access2 in accesses2 {
                 // Same table accessed
-                if access1.table_id == access2.table_id {
+                if access1.table == access2.table {
                     match (access1.access_type, access2.access_type) {
                         // Read-Write conflict
                         (AccessType::Read, AccessType::Write) |
