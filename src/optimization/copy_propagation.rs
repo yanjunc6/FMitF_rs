@@ -5,16 +5,12 @@
 
 use super::OptimizationPass;
 use crate::cfg::{CfgProgram, FunctionId, Operand, RValue, Statement};
-use crate::dataflow::{analyze_copies, CopyMapLattice, CopyRelation, StmtLoc};
+use crate::dataflow::{analyze_copies, CopyRelation, StmtLoc};
 use std::collections::HashSet;
 
 pub struct CopyPropagation;
 
 impl CopyPropagation {
-    pub fn new() -> Self {
-        Self
-    }
-
     /// Extract copy relations from lattice result
     fn extract_copies(lattice_result: &CopyMapLattice) -> HashSet<CopyRelation> {
         if let Some(copies) = lattice_result.as_set() {
@@ -125,6 +121,10 @@ impl CopyPropagation {
 }
 
 impl OptimizationPass for CopyPropagation {
+    fn new() -> Self {
+        Self
+    }
+
     fn name(&self) -> &'static str {
         "Copy Propagation"
     }

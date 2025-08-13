@@ -12,10 +12,6 @@ use std::collections::{HashMap, HashSet};
 pub struct CommonSubexpressionEliminationPass;
 
 impl CommonSubexpressionEliminationPass {
-    pub fn new() -> Self {
-        Self
-    }
-
     /// Extract available expressions from lattice result
     fn extract_available_exprs(
         lattice_result: &crate::dataflow::SetLattice<AvailExpr>,
@@ -91,6 +87,10 @@ impl CommonSubexpressionEliminationPass {
 }
 
 impl OptimizationPass for CommonSubexpressionEliminationPass {
+    fn new() -> Self {
+        Self
+    }
+
     fn name(&self) -> &'static str {
         "Common Subexpression Elimination"
     }

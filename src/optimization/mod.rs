@@ -10,13 +10,11 @@ use crate::cfg::{CfgProgram, FunctionId};
 
 mod common_subexpression_elimination;
 mod constant_folding;
-mod constant_propagation;
 mod copy_propagation;
 mod dead_code_elimination;
 
 pub use common_subexpression_elimination::CommonSubexpressionEliminationPass;
 pub use constant_folding::ConstantFoldingPass;
-pub use constant_propagation::ConstantPropagationPass;
 pub use copy_propagation::CopyPropagation;
 pub use dead_code_elimination::DeadCodeEliminationPass;
 
@@ -52,7 +50,6 @@ impl CfgOptimizer {
     /// Create a default optimizer with standard passes in recommended order
     pub fn default_passes() -> Self {
         Self::new()
-            .add_pass(Box::new(ConstantPropagationPass::new()))
             .add_pass(Box::new(ConstantFoldingPass::new()))
             .add_pass(Box::new(CopyPropagation::new()))
             .add_pass(Box::new(CommonSubexpressionEliminationPass::new()))

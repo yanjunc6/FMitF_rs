@@ -1,83 +1,68 @@
 use super::{
-    AnalysisKind, AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
-    StmtLoc, TransferFunction,
+    AnalysisKind, AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Flat, Lattice,
+    MapLattice, StmtLoc, TransferFunction,
 };
 use crate::cfg::{
     BasicBlock, Constant, ControlFlowEdge, FunctionCfg, LValue, Operand, RValue, Statement, VarId,
 };
 
-/// Single definite-constant fact  (x = c).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ConstRelation {
-    pub var: VarId,
-    pub value: Constant,
-}
-
 /// Transfer function for constant propagation analysis
 pub struct ConstantTransfer;
 
-impl TransferFunction<SetLattice<ConstRelation>> for ConstantTransfer {
+impl TransferFunction<MapLattice<VarId, Constant>> for ConstantTransfer {
     fn transfer_statement(
         &self,
         stmt: &Statement,
         _stmt_loc: StmtLoc,
-        state: &SetLattice<ConstRelation>,
-    ) -> SetLattice<ConstRelation> {
+        state: &MapLattice<VarId, Constant>,
+    ) -> MapLattice<VarId, Constant> {
         // If the whole lattice element is ⊤ just propagate it unchanged
         if state.is_top() {
-            return SetLattice::top_element();
+            return Lattice::top().unwrap();
         }
 
-        // Work on an owned copy of the inner HashSet
-        let mut out = state.as_set().unwrap().clone();
+        let mut out = state.clone();
 
         match stmt {
             Statement::Assign { lvalue, rvalue, .. } => {
                 if let LValue::Variable { var } = lvalue {
                     /* KILL: remove any fact mentioning the target variable */
-                    out.retain(|rel| rel.var != *var);
+                    out.insert(*var, Flat::Bottom);
 
                     /* GEN: try to fold the R-value to a constant */
-                    if let Some(c) = self.eval_rvalue(rvalue, &out) {
-                        out.insert(ConstRelation {
-                            var: *var,
-                            value: c,
-                        });
+                    if let Some(c) = self.eval_rvalue(rvalue, state) {
+                        out.insert(*var, Flat::Value(c));
                     }
                 }
             }
         }
 
-        SetLattice::new(out)
+        out
     }
 
     fn transfer_edge(
         &self,
         _edge: &ControlFlowEdge,
-        state: &SetLattice<ConstRelation>,
-    ) -> SetLattice<ConstRelation> {
+        state: &MapLattice<VarId, Constant>,
+    ) -> MapLattice<VarId, Constant> {
         state.clone()
     }
 
-    fn initial_value(&self) -> SetLattice<ConstRelation> {
-        SetLattice::bottom().unwrap() // ⊥ = ∅
+    fn initial_value(&self) -> MapLattice<VarId, Constant> {
+        Lattice::bottom().unwrap() // ⊥ = empty map
     }
 
     fn boundary_value(
         &self,
         _func: &FunctionCfg,
         _block: &BasicBlock,
-    ) -> SetLattice<ConstRelation> {
-        SetLattice::bottom().unwrap()
+    ) -> MapLattice<VarId, Constant> {
+        Lattice::bottom().unwrap()
     }
 }
 
 impl ConstantTransfer {
-    fn eval_rvalue(
-        &self,
-        rv: &RValue,
-        facts: &std::collections::HashSet<ConstRelation>,
-    ) -> Option<Constant> {
+    fn eval_rvalue(&self, rv: &RValue, facts: &MapLattice<VarId, Constant>) -> Option<Constant> {
         match rv {
             RValue::Use(op) => self.eval_operand(op, facts),
             RValue::UnaryOp { op, operand } => {
@@ -93,20 +78,16 @@ impl ConstantTransfer {
         }
     }
 
-    fn eval_operand(
-        &self,
-        op: &Operand,
-        facts: &std::collections::HashSet<ConstRelation>,
-    ) -> Option<Constant> {
+    fn eval_operand(&self, op: &Operand, facts: &MapLattice<VarId, Constant>) -> Option<Constant> {
         match op {
             Operand::Const(c) => match c {
                 Constant::Array(..) => None,
                 _ => Some(c.clone()),
             },
-            Operand::Var(v) => facts
-                .iter()
-                .find(|rel| rel.var == *v)
-                .map(|rel| rel.value.clone()),
+            Operand::Var(v) => match facts.get(v) {
+                Flat::Value(c) => Some(c),
+                _ => None,
+            },
         }
     }
 
@@ -167,7 +148,7 @@ impl ConstantTransfer {
 pub fn analyze_constants(
     func: &FunctionCfg,
     cfg_program: &crate::cfg::CfgProgram,
-) -> DataflowResults<SetLattice<ConstRelation>> {
+) -> DataflowResults<MapLattice<VarId, Constant>> {
     let analysis = DataflowAnalysis::new(
         AnalysisLevel::Function,
         Direction::Forward,
