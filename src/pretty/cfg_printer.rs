@@ -66,6 +66,95 @@ impl<'a> CfgPrintVisitor<'a> {
         }
     }
 
+    /// Format an RValue as string without mutable reference
+    fn format_rvalue_immutable(&self, rv: &RValue) -> String {
+        match rv {
+            RValue::Use(operand) => self.format_operand(operand),
+            RValue::TableAccess {
+                table,
+                pk_values,
+                field,
+                ..
+            } => {
+                let pk_strs: Vec<String> =
+                    pk_values.iter().map(|op| self.format_operand(op)).collect();
+                let table_name = self
+                    .program
+                    .tables
+                    .get(*table)
+                    .map(|t| t.name.as_str())
+                    .unwrap_or("<unknown_table>");
+                let field_name = self
+                    .program
+                    .fields
+                    .get(*field)
+                    .map(|f| f.name.as_str())
+                    .unwrap_or("<unknown_field>");
+                format!("{}[{}].{}", table_name, pk_strs.join(", "), field_name)
+            }
+            RValue::ArrayAccess { array, index } => {
+                let array_str = self.format_operand(array);
+                let index_str = self.format_operand(index);
+                format!("{}[{}]", array_str, index_str)
+            }
+            RValue::UnaryOp { op, operand } => {
+                let operand_str = self.format_operand(operand);
+                let op_str = self.format_unary_op(op);
+                format!("{}{}", op_str, operand_str)
+            }
+            RValue::BinaryOp { op, left, right } => {
+                let left_str = self.format_operand(left);
+                let right_str = self.format_operand(right);
+                let op_str = self.format_binary_op(op);
+                format!("({} {} {})", left_str, op_str, right_str)
+            }
+        }
+    }
+
+    /// Format an LValue as string without mutable reference
+    fn format_lvalue_immutable(&self, lv: &LValue) -> String {
+        match lv {
+            LValue::Variable { var } => {
+                if let Some(var_info) = self.program.variables.get(*var) {
+                    self.format_variable_name(var_info)
+                } else {
+                    format!("var_{}", var.index())
+                }
+            }
+            LValue::ArrayElement { array, index } => {
+                let array_name = if let Some(var_info) = self.program.variables.get(*array) {
+                    self.format_variable_name(var_info)
+                } else {
+                    format!("var_{}", array.index())
+                };
+                let index_str = self.format_operand(index);
+                format!("{}[{}]", array_name, index_str)
+            }
+            LValue::TableField {
+                table,
+                pk_values,
+                field,
+                ..
+            } => {
+                let pk_strs: Vec<String> =
+                    pk_values.iter().map(|op| self.format_operand(op)).collect();
+                let table_name = self
+                    .program
+                    .tables
+                    .get(*table)
+                    .map(|t| t.name.as_str())
+                    .unwrap_or("<unknown_table>");
+                let field_name = self
+                    .program
+                    .fields
+                    .get(*field)
+                    .map(|f| f.name.as_str())
+                    .unwrap_or("<unknown_field>");
+                format!("{}[{}].{}", table_name, pk_strs.join(", "), field_name)
+            }
+        }
+    }
+
     /// Ensure dataflow results are computed and cached for the current function
     fn ensure_dataflow_cache(&self, function_id: FunctionId) {
         let mut current_id = self.current_function_id.borrow_mut();
@@ -255,8 +344,10 @@ impl<'a> CfgPrintVisitor<'a> {
 
     /// Format a single available expression using visitor pattern
     fn format_avail_expr(&self, expr: &AvailExpr) -> String {
-        // Since fields are private, use debug representation as fallback
-        format!("{:?}", expr)
+        // Format as: lvalue = rvalue using immutable helpers
+        let lvalue_str = self.format_lvalue_immutable(&expr.lvalue);
+        let rvalue_str = self.format_rvalue_immutable(&expr.rvalue);
+        format!("{} = {}", lvalue_str, rvalue_str)
     }
 
     /// Format constants lattice using visitor pattern
@@ -326,74 +417,12 @@ impl<'a> CfgPrintVisitor<'a> {
         }
     }
 
-    /// Format a set of variables using visitor pattern
-    fn format_variable_set_lattice(&self, lattice: &SetLattice<VarId>) -> String {
-        if let Some(var_set) = lattice.as_set() {
-            self.format_variable_set(var_set)
-        } else {
-            "⊤".to_string() // Top
-        }
-    }
-
-    /// Format a variable set using visitor pattern  
-    fn format_variable_set(&self, var_set: &std::collections::HashSet<VarId>) -> String {
-        if var_set.is_empty() {
-            "∅".to_string()
-        } else {
-            let mut vars: Vec<String> = var_set
-                .iter()
-                .map(|var_id| self.format_variable(*var_id))
-                .collect();
-            vars.sort();
-            format!("{{{}}}", vars.join(", "))
-        }
-    }
-
     /// Format a single variable using visitor pattern
     fn format_variable(&self, var_id: VarId) -> String {
         if let Some(var) = self.program.variables.get(var_id) {
             var.name.clone()
         } else {
             format!("v{}", var_id.index())
-        }
-    }
-
-    /// Format available expressions using visitor pattern
-    fn format_available_expressions_lattice(&self, lattice: &SetLattice<RValue>) -> String {
-        if let Some(expr_set) = lattice.as_set() {
-            self.format_available_expressions(expr_set)
-        } else {
-            "⊤".to_string()
-        }
-    }
-
-    /// Format available expressions set using visitor pattern
-    fn format_available_expressions(&self, expr_set: &std::collections::HashSet<RValue>) -> String {
-        if expr_set.is_empty() {
-            "∅".to_string()
-        } else {
-            let mut exprs: Vec<String> = expr_set
-                .iter()
-                .map(|rvalue| {
-                    // Create a temporary mutable visitor to format rvalue
-                    let mut temp_visitor = CfgPrintVisitor {
-                        writer: &mut std::io::sink(), // Dummy writer since we only need string output
-                        program: self.program,
-                        indent_level: RefCell::new(0),
-                        indent_size: 2,
-                        current_function_id: RefCell::new(None),
-                        liveness_cache: RefCell::new(None),
-                        reaching_def_cache: RefCell::new(None),
-                        available_expr_cache: RefCell::new(None),
-                        table_mod_ref_cache: RefCell::new(None),
-                        constant_cache: RefCell::new(None),
-                        copy_cache: RefCell::new(None),
-                    };
-                    temp_visitor.visit_rvalue(rvalue)
-                })
-                .collect();
-            exprs.sort();
-            format!("{{{}}}", exprs.join(", "))
         }
     }
 
