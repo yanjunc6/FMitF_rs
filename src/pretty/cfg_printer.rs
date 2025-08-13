@@ -202,6 +202,12 @@ impl<'a> CfgPrintVisitor<'a> {
 
         if SHOW_LIVENESS {
             if let Some(ref results) = *self.liveness_cache.borrow() {
+                if let Some(live_vars) = results.stmt_entry.get(&stmt_loc) {
+                    parts.push(format!(
+                        "live-in {}",
+                        self.format_liveness_lattice(live_vars)
+                    ));
+                }
                 if let Some(live_vars) = results.stmt_exit.get(&stmt_loc) {
                     parts.push(format!(
                         "live-out {}",
