@@ -53,6 +53,9 @@ impl AstBuilder {
                 function_map: HashMap::new(),
                 resolutions: HashMap::new(),
                 var_types: HashMap::new(),
+                parameter_resolutions: HashMap::new(),
+                table_resolutions: HashMap::new(),
+                function_resolutions: HashMap::new(),
             },
         }
     }

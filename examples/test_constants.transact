@@ -1,0 +1,19 @@
+const int MAX_ITEMS = 100;
+const int THRESHOLD = 50;
+
+partition simple_partition(int id) = id + 1;
+
+table Items {
+    primary int ID;
+    int QUANTITY;
+    int PRICE;
+    node simple_partition(ID);
+}
+
+void test_constants() {
+    hop {
+        Items[ID: 1].QUANTITY = MAX_ITEMS;
+        Items[ID: 2].PRICE = THRESHOLD;
+        int temp = MAX_ITEMS + THRESHOLD;
+    }
+}

@@ -16,12 +16,17 @@ pub struct CfgBuilder<'a> {
     ast: &'a AstProgram,
     cfg: CfgProgram,
 
-    // Mapping from AST IDs to CFG IDs
+    // NEW APPROACH: Direct mapping from logical identifiers to CFG elements
+    // Key insight: Use (cfg_function_id, name) as the unique identifier for simplicity
+
+    // Scope-aware variable mapping: (CFG FunctionId, variable_name) -> CFG VarId
+    scoped_var_map: HashMap<(Option<FunctionId>, String), VarId>,
+
+    // Other mappings remain the same but will be cleaned up
     table_map: HashMap<ast::TableId, TableId>,
     field_map: HashMap<ast::FieldId, FieldId>,
     function_map: HashMap<ast::FunctionId, FunctionId>,
     partition_map: HashMap<ast::PartitionId, FunctionId>,
-    var_map: HashMap<ast::VarId, VarId>,
 
     // Current context during building
     current_function: Option<FunctionId>,
@@ -46,11 +51,11 @@ impl<'a> CfgBuilder<'a> {
         Self {
             ast,
             cfg: CfgProgram::default(),
+            scoped_var_map: HashMap::new(),
             table_map: HashMap::new(),
             field_map: HashMap::new(),
             function_map: HashMap::new(),
             partition_map: HashMap::new(),
-            var_map: HashMap::new(),
             current_function: None,
             current_hop: None,
             current_block: None,
@@ -60,8 +65,10 @@ impl<'a> CfgBuilder<'a> {
     }
 
     pub fn build(mut self) -> CfgProgram {
-        // First pass: populate var_map by scanning all resolved variables in the AST
-        self.populate_var_map();
+        // DISABLED: First pass: populate var_map by scanning all resolved variables in the AST
+        // self.populate_var_map();
+
+        // TODO: Implement new approach - use only AST resolutions map for variable references
 
         // Process global constants first
         self.process_global_constants();
@@ -78,9 +85,45 @@ impl<'a> CfgBuilder<'a> {
         self.cfg
     }
 
-    /// Populate var_map by creating CFG variables for all AST variables that have been resolved
-    fn populate_var_map(&mut self) {
+    /// NEW APPROACH: Get or create a CFG variable using logical scope + name
+    /// This ensures that the same (function_scope, variable_name) always maps to the same CFG VarId
+    fn get_or_create_variable(
+        &mut self,
+        var_name: &str,
+        var_type: &TypeName,
+        var_kind: VariableKind,
+        span: &Span,
+    ) -> VarId {
+        // Use the current CFG FunctionId as scope (simpler and more reliable)
+        let scope_key = (self.current_function, var_name.to_string());
+
+        if let Some(&cfg_var_id) = self.scoped_var_map.get(&scope_key) {
+            // Variable already exists for this scope + name
+            cfg_var_id
+        } else {
+            // Create new CFG variable
+            let cfg_var = Variable {
+                name: var_name.to_string(),
+                ty: var_type.clone(),
+                kind: var_kind,
+                value: None,
+                span: span.clone(),
+            };
+
+            let cfg_var_id = self.cfg.variables.alloc(cfg_var);
+            self.scoped_var_map.insert(scope_key, cfg_var_id);
+            cfg_var_id
+        }
+    }
+
+    /// OLD APPROACH - DISABLED  
+    /// This method created inconsistent variable mappings and has been replaced
+    /// with the new scope-aware approach in get_or_create_variable()
+    #[allow(dead_code)]
+    fn populate_var_map_DISABLED(&mut self) {
+        // DISABLED: This entire approach was flawed
         // Create CFG variables for all AST variables and populate var_map
+        /*
         for (ast_var_id, var_type) in &self.ast.var_types {
             let ast_var = &self.ast.variables[*ast_var_id];
 
@@ -111,6 +154,7 @@ impl<'a> CfgBuilder<'a> {
                 }
             }
         }
+        */
     }
 
     /// Static method to build CFG from AST program - used by compiler
@@ -173,7 +217,8 @@ impl<'a> CfgBuilder<'a> {
         };
 
         let cfg_var_id = self.cfg.variables.alloc(var);
-        self.var_map.insert(const_id, cfg_var_id);
+        // DISABLED: Old mapping approach - constants should use global scope mapping
+        // self.var_map.insert(const_id, cfg_var_id);
         cfg_var_id
     }
 
@@ -247,22 +292,20 @@ impl<'a> CfgBuilder<'a> {
     fn visit_partition(&mut self, partition_id: ast::PartitionId) -> FunctionId {
         let partition = &self.ast.partitions[partition_id];
 
-        // Process parameters
-        let cfg_params = self.visit_parameters(&partition.parameters);
-
         let implementation = if partition.implementation.is_some() {
             FunctionImplementation::Concrete
         } else {
             FunctionImplementation::Abstract
         };
 
+        // Create function with empty parameters initially
         let func_cfg = FunctionCfg {
             name: partition.name.clone(),
             function_type: FunctionType::Partition,
             implementation,
             return_type: ReturnType::Type(TypeName::Int),
             span: partition.span.clone(),
-            parameters: cfg_params,
+            parameters: Vec::new(), // Will be filled inside function context
             local_variables: Vec::new(),
             hops: Vec::new(),
             blocks: Vec::new(),
@@ -273,9 +316,14 @@ impl<'a> CfgBuilder<'a> {
         let cfg_func_id = self.cfg.functions.alloc(func_cfg);
         self.partition_map.insert(partition_id, cfg_func_id);
 
-        // Process implementation if exists
-        if let Some(expr_id) = partition.implementation {
-            self.with_function_context(cfg_func_id, |builder| {
+        // Process parameters and implementation inside function context
+        self.with_function_context(cfg_func_id, |builder| {
+            // Process parameters inside function context for consistent variable scoping
+            let cfg_params = builder.visit_parameters(&partition.parameters);
+            builder.cfg.functions[cfg_func_id].parameters = cfg_params;
+
+            // Process implementation if exists
+            if let Some(expr_id) = partition.implementation {
                 let hop_id = builder.create_hop(cfg_func_id);
                 let block_id = builder.create_basic_block(hop_id);
 
@@ -286,8 +334,8 @@ impl<'a> CfgBuilder<'a> {
                 });
 
                 builder.finalize_function_with_single_hop(cfg_func_id, hop_id, block_id);
-            });
-        }
+            }
+        });
 
         cfg_func_id
     }
@@ -295,16 +343,13 @@ impl<'a> CfgBuilder<'a> {
     fn visit_function(&mut self, func_id: ast::FunctionId) -> FunctionId {
         let function = &self.ast.functions[func_id];
 
-        // Process parameters
-        let cfg_params = self.visit_parameters(&function.parameters);
-
         let func_cfg = FunctionCfg {
             name: function.name.clone(),
             function_type: FunctionType::Transaction,
             implementation: FunctionImplementation::Concrete,
             return_type: function.return_type.clone(),
             span: function.span.clone(),
-            parameters: cfg_params,
+            parameters: Vec::new(), // Will be populated inside function context
             local_variables: Vec::new(),
             hops: Vec::new(),
             blocks: Vec::new(),
@@ -315,9 +360,14 @@ impl<'a> CfgBuilder<'a> {
         let cfg_func_id = self.cfg.functions.alloc(func_cfg);
         self.function_map.insert(func_id, cfg_func_id);
 
-        // Process hops
-        if !function.hops.is_empty() {
-            self.with_function_context(cfg_func_id, |builder| {
+        // Process parameters and hops inside function context for consistent scope
+        self.with_function_context(cfg_func_id, |builder| {
+            // Process parameters INSIDE function context so scope is consistent
+            let cfg_params = builder.visit_parameters(&function.parameters);
+            builder.cfg.functions[cfg_func_id].parameters = cfg_params;
+
+            // Process hops
+            if !function.hops.is_empty() {
                 let mut cfg_hops = Vec::new();
                 for &hop_id in &function.hops {
                     let cfg_hop_id = builder.visit_hop(hop_id, cfg_func_id);
@@ -329,8 +379,8 @@ impl<'a> CfgBuilder<'a> {
                     builder.cfg.functions[cfg_func_id].entry_hop = Some(cfg_hops[0]);
                     // hop_order is maintained by individual hop processing
                 }
-            });
-        }
+            }
+        });
 
         cfg_func_id
     }
@@ -338,41 +388,18 @@ impl<'a> CfgBuilder<'a> {
     fn visit_parameters(&mut self, param_ids: &[ast::ParameterId]) -> Vec<VarId> {
         let mut cfg_params = Vec::new();
 
-        // For each parameter, find the corresponding AST VarId and get the CFG VarId from var_map
+        // NEW APPROACH: Use parameter names directly with current function scope
         for &param_id in param_ids {
             let param = &self.ast.parameters[param_id];
 
-            // Find the AST VarId that corresponds to this parameter
-            let mut found_var_id = None;
-            for (ast_var_id, _) in &self.ast.var_types {
-                let ast_var = &self.ast.variables[*ast_var_id];
-                if ast_var.name == param.param_name && ast_var.kind == ast::VarKind::Parameter {
-                    found_var_id = Some(*ast_var_id);
-                    break;
-                }
-            }
-
-            if let Some(ast_var_id) = found_var_id {
-                if let Some(&cfg_var_id) = self.var_map.get(&ast_var_id) {
-                    cfg_params.push(cfg_var_id);
-                } else {
-                    panic!("Parameter not found in var_map: {}", param.param_name);
-                }
-            } else {
-                // If parameter is not resolved in AST (e.g., for partitions), create it directly
-                let cfg_var = Variable {
-                    name: param.param_name.clone(),
-                    ty: param.param_type.clone(),
-                    kind: VariableKind::Parameter,
-                    value: None,
-                    span: param.span.clone(),
-                };
-
-                let cfg_var_id = self.cfg.variables.alloc(cfg_var);
-                cfg_params.push(cfg_var_id);
-
-                // Note: We don't add to var_map here since there's no AST VarId to map from
-            }
+            // Create or get parameter using scope-aware mapping
+            let cfg_var_id = self.get_or_create_variable(
+                &param.param_name,
+                &param.param_type,
+                VariableKind::Parameter,
+                &param.span,
+            );
+            cfg_params.push(cfg_var_id);
         }
 
         cfg_params
@@ -569,25 +596,13 @@ impl<'a> CfgBuilder<'a> {
         var_decl: &ast::VarDeclStatement,
         span: Span,
     ) -> Vec<BasicBlockId> {
-        // Find the AST VarId that corresponds to this variable declaration
-        let mut found_var_id = None;
-        for (ast_var_id, _) in &self.ast.var_types {
-            let ast_var = &self.ast.variables[*ast_var_id];
-            if ast_var.name == var_decl.var_name && ast_var.kind == ast::VarKind::Local {
-                found_var_id = Some(*ast_var_id);
-                break;
-            }
-        }
-
-        let cfg_var_id = if let Some(ast_var_id) = found_var_id {
-            if let Some(&cfg_var_id) = self.var_map.get(&ast_var_id) {
-                cfg_var_id
-            } else {
-                panic!("Variable not found in var_map: {}", var_decl.var_name);
-            }
-        } else {
-            panic!("Variable not resolved in AST: {}", var_decl.var_name);
-        };
+        // NEW APPROACH: Create or get variable using scope + name
+        let cfg_var_id = self.get_or_create_variable(
+            &var_decl.var_name,
+            &var_decl.var_type,
+            VariableKind::Local,
+            &span,
+        );
 
         // Add to current function's local variables
         if let Some(func_id) = self.current_function {
@@ -657,39 +672,27 @@ impl<'a> CfgBuilder<'a> {
     fn visit_for_statement(
         &mut self,
         for_stmt: &ast::ForStatement,
-        _span: Span,
+        span: Span,
     ) -> Vec<BasicBlockId> {
-        // Find the AST VarId that corresponds to this for loop variable
-        let mut found_var_id = None;
-        for (ast_var_id, _) in &self.ast.var_types {
-            let ast_var = &self.ast.variables[*ast_var_id];
-            if ast_var.name == for_stmt.loop_var && ast_var.kind == ast::VarKind::Local {
-                found_var_id = Some(*ast_var_id);
-                break;
-            }
-        }
+        // First, try to find the for loop variable via AST resolution
+        // For statements create their own scoped variables in name resolution
+        let loop_var_id = self.get_or_create_variable(
+            &for_stmt.loop_var,
+            &for_stmt.loop_var_type,
+            VariableKind::Local,
+            &span,
+        );
 
-        let loop_var_id = if let Some(ast_var_id) = found_var_id {
-            if let Some(&cfg_var_id) = self.var_map.get(&ast_var_id) {
-                cfg_var_id
-            } else {
-                panic!(
-                    "For loop variable not found in var_map: {}",
-                    for_stmt.loop_var
-                );
-            }
-        } else {
-            panic!(
-                "For loop variable not resolved in AST: {}",
-                for_stmt.loop_var
-            );
-        };
-
-        // Add to current function's local variables
+        // Add to current function's local variables if not already present
         if let Some(func_id) = self.current_function {
-            self.cfg.functions[func_id]
+            if !self.cfg.functions[func_id]
                 .local_variables
-                .push(loop_var_id);
+                .contains(&loop_var_id)
+            {
+                self.cfg.functions[func_id]
+                    .local_variables
+                    .push(loop_var_id);
+            }
         }
 
         // Initialize loop variable with init expression
@@ -874,25 +877,45 @@ impl<'a> CfgBuilder<'a> {
                 self.visit_literal(Constant::Bool(*val), TypeName::Bool, expr.span.clone())
             }
             ast::ExpressionKind::Ident(name) => {
-                // Use resolved variable from AST resolutions map
-                if let Some(&var_id) = self.ast.resolutions.get(&expr_id) {
-                    if let Some(&cfg_var_id) = self.var_map.get(&var_id) {
-                        let temp =
-                            self.create_temp_variable(self.cfg.variables[cfg_var_id].ty.clone());
-                        let stmt = Statement::Assign {
-                            lvalue: LValue::Variable { var: temp },
-                            rvalue: RValue::Use(Operand::Var(cfg_var_id)),
-                            span: expr.span.clone(),
-                        };
-                        (temp, vec![stmt])
-                    } else {
-                        panic!("Variable mapping not found for resolved variable: {} (AST VarId: {:?})", name, var_id)
-                    }
+                // NEW APPROACH: Use variable name + current scope to get consistent CFG variable
+                let scope_key = (self.current_function, name.clone());
+
+                if let Some(&cfg_var_id) = self.scoped_var_map.get(&scope_key) {
+                    let temp = self.create_temp_variable(self.cfg.variables[cfg_var_id].ty.clone());
+                    let stmt = Statement::Assign {
+                        lvalue: LValue::Variable { var: temp },
+                        rvalue: RValue::Use(Operand::Var(cfg_var_id)),
+                        span: expr.span.clone(),
+                    };
+                    (temp, vec![stmt])
                 } else {
-                    panic!(
-                        "Unresolved identifier in AST: {} (ExprId: {:?})",
-                        name, expr_id
-                    )
+                    // Fallback: Try to get type information from AST resolution to create the variable
+                    if let Some(&ast_var_id) = self.ast.resolutions.get(&expr_id) {
+                        if let Some(var_type) = self.ast.var_types.get(&ast_var_id) {
+                            // Create the variable using scope-aware mapping
+                            let cfg_var_id = self.get_or_create_variable(
+                                name,
+                                var_type,
+                                VariableKind::Local, // Default to local - this could be refined
+                                &expr.span,
+                            );
+
+                            let temp = self.create_temp_variable(var_type.clone());
+                            let stmt = Statement::Assign {
+                                lvalue: LValue::Variable { var: temp },
+                                rvalue: RValue::Use(Operand::Var(cfg_var_id)),
+                                span: expr.span.clone(),
+                            };
+                            (temp, vec![stmt])
+                        } else {
+                            panic!(
+                                "Variable type not found for: {} (AST VarId: {:?})",
+                                name, ast_var_id
+                            )
+                        }
+                    } else {
+                        panic!("Variable not found in scope and AST resolution failed: {} (scope: {:?})", name, scope_key)
+                    }
                 }
             }
             ast::ExpressionKind::BinaryOp {
@@ -914,22 +937,18 @@ impl<'a> CfgBuilder<'a> {
                 ..
             } => self.visit_table_access(table_name, pk_exprs, pk_fields, expr.span.clone()),
             ast::ExpressionKind::ArrayAccess {
-                array_name,
-                index,
-                resolved_var,
-                ..
+                array_name, index, ..
             } => {
-                if let Some(var_id) = resolved_var {
-                    if let Some(&cfg_var_id) = self.var_map.get(var_id) {
-                        self.visit_array_access_resolved(cfg_var_id, *index, expr.span.clone())
-                    } else {
-                        panic!(
-                            "Variable mapping not found for resolved array: {}",
-                            array_name
-                        )
-                    }
+                // NEW APPROACH: Use array name + current scope for consistent lookup
+                let scope_key = (self.current_function, array_name.clone());
+
+                if let Some(&cfg_var_id) = self.scoped_var_map.get(&scope_key) {
+                    self.visit_array_access_resolved(cfg_var_id, *index, expr.span.clone())
                 } else {
-                    panic!("Unresolved array access in AST: {}", array_name)
+                    panic!(
+                        "Array not found in scope: {} (scope: {:?})",
+                        array_name, scope_key
+                    )
                 }
             }
             ast::ExpressionKind::ArrayLiteral { elements, .. } => {
@@ -941,20 +960,18 @@ impl<'a> CfgBuilder<'a> {
             ast::ExpressionKind::FieldAccess {
                 object_name,
                 field_name,
-                resolved_var,
                 ..
             } => {
-                if let Some(var_id) = resolved_var {
-                    if let Some(&cfg_var_id) = self.var_map.get(var_id) {
-                        self.visit_field_access_resolved(cfg_var_id, field_name, expr.span.clone())
-                    } else {
-                        panic!(
-                            "Variable mapping not found for resolved object: {}",
-                            object_name
-                        )
-                    }
+                // NEW APPROACH: Use object name + current scope for consistent lookup
+                let scope_key = (self.current_function, object_name.clone());
+
+                if let Some(&cfg_var_id) = self.scoped_var_map.get(&scope_key) {
+                    self.visit_field_access_resolved(cfg_var_id, field_name, expr.span.clone())
                 } else {
-                    panic!("Unresolved field access in AST: {}", object_name)
+                    panic!(
+                        "Object not found in scope: {} (scope: {:?})",
+                        object_name, scope_key
+                    )
                 }
             }
         }
@@ -1332,15 +1349,17 @@ impl<'a> CfgBuilder<'a> {
 
     fn visit_lvalue(&mut self, lvalue: &ast::LValue) -> LValue {
         match lvalue {
-            ast::LValue::Var { name, resolved_var } => {
-                if let Some(var_id) = resolved_var {
-                    if let Some(&cfg_var_id) = self.var_map.get(var_id) {
-                        LValue::Variable { var: cfg_var_id }
-                    } else {
-                        panic!("Variable mapping not found: {}", name)
-                    }
+            ast::LValue::Var { name, .. } => {
+                // NEW APPROACH: Use variable name + current scope for consistent lookup
+                let scope_key = (self.current_function, name.clone());
+
+                if let Some(&cfg_var_id) = self.scoped_var_map.get(&scope_key) {
+                    LValue::Variable { var: cfg_var_id }
                 } else {
-                    panic!("Unresolved variable: {}", name)
+                    panic!(
+                        "Variable not found in scope: {} (scope: {:?})",
+                        name, scope_key
+                    )
                 }
             }
             ast::LValue::TableField {
@@ -1391,28 +1410,24 @@ impl<'a> CfgBuilder<'a> {
                 }
             }
             ast::LValue::ArrayElement {
-                array_name,
-                index,
-                resolved_var,
-                ..
+                array_name, index, ..
             } => {
-                if let Some(var_id) = resolved_var {
-                    if let Some(&cfg_var_id) = self.var_map.get(var_id) {
-                        let (index_var, index_stmts) = self.visit_expression(*index);
-                        self.add_statements_to_current_block(index_stmts);
+                // NEW APPROACH: Use array name + current scope for consistent lookup
+                let scope_key = (self.current_function, array_name.clone());
 
-                        LValue::ArrayElement {
-                            array: cfg_var_id,
-                            index: Operand::Var(index_var),
-                        }
-                    } else {
-                        panic!(
-                            "Variable mapping not found for resolved array: {}",
-                            array_name
-                        )
+                if let Some(&cfg_var_id) = self.scoped_var_map.get(&scope_key) {
+                    let (index_var, index_stmts) = self.visit_expression(*index);
+                    self.add_statements_to_current_block(index_stmts);
+
+                    LValue::ArrayElement {
+                        array: cfg_var_id,
+                        index: Operand::Var(index_var),
                     }
                 } else {
-                    panic!("Unresolved array element: {}", array_name)
+                    panic!(
+                        "Array not found in scope: {} (scope: {:?})",
+                        array_name, scope_key
+                    )
                 }
             }
             ast::LValue::TableRecord {
@@ -1465,20 +1480,18 @@ impl<'a> CfgBuilder<'a> {
             ast::LValue::FieldAccess {
                 object_name,
                 field_name,
-                resolved_var,
                 ..
             } => {
-                let object_var = if let Some(var_id) = resolved_var {
-                    if let Some(&cfg_var_id) = self.var_map.get(var_id) {
-                        cfg_var_id
-                    } else {
-                        panic!(
-                            "Variable mapping not found for resolved object: {}",
-                            object_name
-                        )
-                    }
+                // NEW APPROACH: Use object name + current scope for consistent lookup
+                let scope_key = (self.current_function, object_name.clone());
+
+                let object_var = if let Some(&cfg_var_id) = self.scoped_var_map.get(&scope_key) {
+                    cfg_var_id
                 } else {
-                    panic!("Unresolved field access object: {}", object_name)
+                    panic!(
+                        "Object not found in scope: {} (scope: {:?})",
+                        object_name, scope_key
+                    )
                 };
 
                 // For field access LValue, we need to create a synthetic table field access
@@ -1823,15 +1836,10 @@ impl<'a> CfgBuilder<'a> {
                     .local_variables
                     .push(loop_var_id);
 
-                // Find the corresponding VarId in AST by looking up the loop variable name
-                // Hop loop variables should be resolved to VarIds by the name resolver
-                for (ast_var_id, _) in &builder.ast.var_types {
-                    let ast_var = &builder.ast.variables[*ast_var_id];
-                    if ast_var.name == loop_var && ast_var.kind == ast::VarKind::Local {
-                        builder.var_map.insert(*ast_var_id, loop_var_id);
-                        break;
-                    }
-                }
+                // NEW APPROACH: Use scope + name for loop variable
+                // The loop variable should be consistently mapped using the new system
+                let scope_key = (builder.current_function, loop_var.to_string());
+                builder.scoped_var_map.insert(scope_key, loop_var_id);
 
                 // Create assignment statement to initialize the loop variable
                 let init_stmt = Statement::Assign {

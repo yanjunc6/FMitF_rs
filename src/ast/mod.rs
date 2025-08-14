@@ -133,6 +133,11 @@ pub struct Program {
     // Resolution results - public for type checking access
     pub resolutions: HashMap<ExpressionId, VarId>,
     pub var_types: HashMap<VarId, TypeName>,
+    pub parameter_resolutions: HashMap<ParameterId, VarId>, // Maps parameters to their variable declarations
+
+    // Unique ID mappings for CFG builder - all identifier references resolved to their declarations
+    pub table_resolutions: HashMap<ExpressionId, TableId>, // Expression references to tables
+    pub function_resolutions: HashMap<ExpressionId, FunctionId>, // Function call references
 }
 
 impl Default for Program {
@@ -159,6 +164,9 @@ impl Default for Program {
             function_map: HashMap::new(),
             resolutions: HashMap::new(),
             var_types: HashMap::new(),
+            parameter_resolutions: HashMap::new(),
+            table_resolutions: HashMap::new(),
+            function_resolutions: HashMap::new(),
         }
     }
 }
