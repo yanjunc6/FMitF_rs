@@ -1,8 +1,8 @@
 use super::PrettyPrinter;
 use crate::{
     cfg::{
-        BasicBlockId, CfgProgram, CfgVisitor, Constant, FunctionCfg, FunctionId, HopId, LValue,
-        Operand, RValue, Statement, StmtVisitor, VarId, Variable,
+        BasicBlockId, CfgProgram, CfgVisitor, Constant, FieldId, FunctionCfg, FunctionId, HopId,
+        LValue, Operand, RValue, Statement, StmtVisitor, TableId, VarId, Variable,
     },
     dataflow::{
         analyze_available_expressions, analyze_constants, analyze_copies, analyze_live_variables,
@@ -14,13 +14,20 @@ use std::cell::RefCell;
 use std::io::Write;
 
 // ============== DATAFLOW OUTPUT CONTROL CONSTANTS ==============
-const SHOW_LIVENESS: bool = true;
+const SHOW_LIVENESS: bool = false;
 const SHOW_REACHING_DEFINITIONS: bool = false;
 const SHOW_AVAILABLE_EXPRESSIONS: bool = false;
 const SHOW_TABLE_MOD_REF: bool = false;
-const SHOW_CONSTANT_ANALYSIS: bool = false; // Usually too verbose
-const SHOW_COPY_ANALYSIS: bool = false; // Usually too verbose
-                                        // ===============================================================
+// Usually too verbose
+const SHOW_CONSTANT_ANALYSIS: bool = false;
+// Usually too verbose
+const SHOW_COPY_ANALYSIS: bool = false;
+// ===============================================================
+
+// ============== ID DISPLAY CONTROL CONSTANTS ===================
+// Controls whether IDs are shown after names
+const SHOW_IDS: bool = true;
+// ===============================================================
 
 /// Pretty printer for CFG structures using visitor pattern.
 /// Provides human-readable output of the control flow graph.
@@ -82,14 +89,26 @@ impl<'a> CfgPrintVisitor<'a> {
                     .program
                     .tables
                     .get(*table)
-                    .map(|t| t.name.as_str())
-                    .unwrap_or("<unknown_table>");
+                    .map(|t| self.format_table_name_with_id(&t.name, *table))
+                    .unwrap_or_else(|| {
+                        if SHOW_IDS {
+                            format!("<unknown_table> ({})", table.index())
+                        } else {
+                            "<unknown_table>".to_string()
+                        }
+                    });
                 let field_name = self
                     .program
                     .fields
                     .get(*field)
-                    .map(|f| f.name.as_str())
-                    .unwrap_or("<unknown_field>");
+                    .map(|f| self.format_field_name_with_id(&f.name, *field))
+                    .unwrap_or_else(|| {
+                        if SHOW_IDS {
+                            format!("<unknown_field> ({})", field.index())
+                        } else {
+                            "<unknown_field>".to_string()
+                        }
+                    });
                 format!("{}[{}].{}", table_name, pk_strs.join(", "), field_name)
             }
             RValue::ArrayAccess { array, index } => {
@@ -116,16 +135,24 @@ impl<'a> CfgPrintVisitor<'a> {
         match lv {
             LValue::Variable { var } => {
                 if let Some(var_info) = self.program.variables.get(*var) {
-                    self.format_variable_name(var_info)
+                    self.format_variable_name_with_id(var_info, *var)
                 } else {
-                    format!("var_{}", var.index())
+                    if SHOW_IDS {
+                        format!("var_{} ({})", var.index(), var.index())
+                    } else {
+                        format!("var_{}", var.index())
+                    }
                 }
             }
             LValue::ArrayElement { array, index } => {
                 let array_name = if let Some(var_info) = self.program.variables.get(*array) {
-                    self.format_variable_name(var_info)
+                    self.format_variable_name_with_id(var_info, *array)
                 } else {
-                    format!("var_{}", array.index())
+                    if SHOW_IDS {
+                        format!("var_{} ({})", array.index(), array.index())
+                    } else {
+                        format!("var_{}", array.index())
+                    }
                 };
                 let index_str = self.format_operand(index);
                 format!("{}[{}]", array_name, index_str)
@@ -142,14 +169,26 @@ impl<'a> CfgPrintVisitor<'a> {
                     .program
                     .tables
                     .get(*table)
-                    .map(|t| t.name.as_str())
-                    .unwrap_or("<unknown_table>");
+                    .map(|t| self.format_table_name_with_id(&t.name, *table))
+                    .unwrap_or_else(|| {
+                        if SHOW_IDS {
+                            format!("<unknown_table> ({})", table.index())
+                        } else {
+                            "<unknown_table>".to_string()
+                        }
+                    });
                 let field_name = self
                     .program
                     .fields
                     .get(*field)
-                    .map(|f| f.name.as_str())
-                    .unwrap_or("<unknown_field>");
+                    .map(|f| self.format_field_name_with_id(&f.name, *field))
+                    .unwrap_or_else(|| {
+                        if SHOW_IDS {
+                            format!("<unknown_field> ({})", field.index())
+                        } else {
+                            "<unknown_field>".to_string()
+                        }
+                    });
                 format!("{}[{}].{}", table_name, pk_strs.join(", "), field_name)
             }
         }
@@ -429,9 +468,13 @@ impl<'a> CfgPrintVisitor<'a> {
     /// Format a single variable using visitor pattern
     fn format_variable(&self, var_id: VarId) -> String {
         if let Some(var) = self.program.variables.get(var_id) {
-            var.name.clone()
+            self.format_variable_name_with_id(var, var_id)
         } else {
-            format!("v{}", var_id.index())
+            if SHOW_IDS {
+                format!("v{} ({})", var_id.index(), var_id.index())
+            } else {
+                format!("v{}", var_id.index())
+            }
         }
     }
 
@@ -461,9 +504,13 @@ impl<'a> CfgPrintVisitor<'a> {
     /// Format a single table access using visitor pattern
     fn format_table_access(&self, access: &TableAccess) -> String {
         let table_name = if let Some(table) = self.program.tables.get(access.table) {
-            table.name.clone()
+            self.format_table_name_with_id(&table.name, access.table)
         } else {
-            format!("table_{}", access.table.index())
+            if SHOW_IDS {
+                format!("table_{} ({})", access.table.index(), access.table.index())
+            } else {
+                format!("table_{}", access.table.index())
+            }
         };
         let access_type = match access.access_type {
             crate::dataflow::AccessType::Read => "R",
@@ -525,7 +572,7 @@ impl<'a> CfgPrintVisitor<'a> {
             },
             EdgeType::Abort => "abort".to_string(),
             EdgeType::HopExit { next_hop } => match next_hop {
-                Some(hop_id) => format!("hop_exit -> hop_{}", hop_id.index()),
+                Some(hop_id) => format!("hop_exit -> {}", self.format_hop_name_with_id(*hop_id)),
                 None => "hop_exit".to_string(),
             },
         }
@@ -536,19 +583,23 @@ impl<'a> CfgPrintVisitor<'a> {
         match op {
             Operand::Var(var_id) => {
                 if let Some(var) = self.program.variables.get(*var_id) {
-                    self.format_variable_name(var)
+                    self.format_variable_name_with_id(var, *var_id)
                 } else {
-                    format!("var_{}", var_id.index())
+                    if SHOW_IDS {
+                        format!("var_{} ({})", var_id.index(), var_id.index())
+                    } else {
+                        format!("var_{}", var_id.index())
+                    }
                 }
             }
             Operand::Const(constant) => self.format_constant(constant),
         }
     }
 
-    /// Format variable name based on its kind and name
+    /// Format variable name based on its kind and name, with optional ID
     fn format_variable_name(&self, var: &Variable) -> String {
         use crate::cfg::VariableKind;
-        match var.kind {
+        let base_name = match var.kind {
             VariableKind::Temporary => {
                 if var.name.starts_with("_t") {
                     format!("tmp_{}", var.name.strip_prefix("_t").unwrap_or("?"))
@@ -559,6 +610,62 @@ impl<'a> CfgPrintVisitor<'a> {
             VariableKind::Global => format!("global_{}", var.name),
             VariableKind::Parameter => format!("param_{}", var.name),
             VariableKind::Local => var.name.clone(),
+        };
+        base_name
+    }
+
+    /// Format variable name with ID using visitor pattern
+    fn format_variable_name_with_id(&self, var: &Variable, var_id: VarId) -> String {
+        let base_name = self.format_variable_name(var);
+        if SHOW_IDS {
+            format!("{} ({})", base_name, var_id.index())
+        } else {
+            base_name
+        }
+    }
+
+    /// Format function name with ID using visitor pattern
+    fn format_function_name_with_id(&self, function_name: &str, func_id: FunctionId) -> String {
+        if SHOW_IDS {
+            format!("{} ({})", function_name, func_id.index())
+        } else {
+            function_name.to_string()
+        }
+    }
+
+    /// Format table name with ID using visitor pattern
+    fn format_table_name_with_id(&self, table_name: &str, table_id: TableId) -> String {
+        if SHOW_IDS {
+            format!("{} ({})", table_name, table_id.index())
+        } else {
+            table_name.to_string()
+        }
+    }
+
+    /// Format field name with ID using visitor pattern
+    fn format_field_name_with_id(&self, field_name: &str, field_id: FieldId) -> String {
+        if SHOW_IDS {
+            format!("{} ({})", field_name, field_id.index())
+        } else {
+            field_name.to_string()
+        }
+    }
+
+    /// Format hop name with ID using visitor pattern
+    fn format_hop_name_with_id(&self, hop_id: HopId) -> String {
+        if SHOW_IDS {
+            format!("hop_{} ({})", hop_id.index(), hop_id.index())
+        } else {
+            format!("hop_{}", hop_id.index())
+        }
+    }
+
+    /// Format basic block name with ID using visitor pattern
+    fn format_block_name_with_id(&self, block_id: BasicBlockId) -> String {
+        if SHOW_IDS {
+            format!("block_{} ({})", block_id.index(), block_id.index())
+        } else {
+            format!("block_{}", block_id.index())
         }
     }
 
@@ -644,7 +751,7 @@ impl<'a> CfgVisitor<std::io::Result<()>> for CfgPrintVisitor<'a> {
             writeln!(
                 self.writer,
                 "const {}: {}",
-                var_info.name,
+                self.format_variable_name_with_id(var_info, *var_id),
                 self.format_type(&var_info.ty)
             )?;
         }
@@ -661,8 +768,8 @@ impl<'a> CfgVisitor<std::io::Result<()>> for CfgPrintVisitor<'a> {
                     self.write_indent()?;
                     writeln!(
                         self.writer,
-                        "table {} (id: {:?}) {{",
-                        table_info.name, table_id
+                        "table {} {{",
+                        self.format_table_name_with_id(&table_info.name, table_id)
                     )?;
                     self.write_indent()?;
                     writeln!(self.writer, "}}")?;
@@ -696,9 +803,8 @@ impl<'a> CfgVisitor<std::io::Result<()>> for CfgPrintVisitor<'a> {
         self.write_indent()?;
         writeln!(
             self.writer,
-            "function {} (id: {}) -> {} [type: {:?}, hops: {}, blocks: {}] {{",
-            function.name,
-            id.index(),
+            "function {} -> {} [type: {:?}, hops: {}, blocks: {}] {{",
+            self.format_function_name_with_id(&function.name, id),
             self.format_return_type(&function.return_type),
             function.function_type,
             function.hops.len(),
@@ -718,7 +824,7 @@ impl<'a> CfgVisitor<std::io::Result<()>> for CfgPrintVisitor<'a> {
                     writeln!(
                         self.writer,
                         "{}: {}",
-                        param.name,
+                        self.format_variable_name_with_id(param, param_id),
                         self.format_type(&param.ty)
                     )?;
                 }
@@ -738,7 +844,7 @@ impl<'a> CfgVisitor<std::io::Result<()>> for CfgPrintVisitor<'a> {
                     writeln!(
                         self.writer,
                         "{}: {} ({})",
-                        self.format_variable_name(var),
+                        self.format_variable_name_with_id(var, var_id),
                         self.format_type(&var.ty),
                         self.format_variable_kind(&var.kind)
                     )?;
@@ -765,8 +871,8 @@ impl<'a> CfgVisitor<std::io::Result<()>> for CfgPrintVisitor<'a> {
         self.write_indent()?;
         writeln!(
             self.writer,
-            "hop_{} (func: {}) [blocks: {}] {{",
-            id.index(),
+            "{} (func: {}) [blocks: {}] {{",
+            self.format_hop_name_with_id(id),
             hop.function_id.index(),
             hop.blocks.len()
         )?;
@@ -790,9 +896,9 @@ impl<'a> CfgVisitor<std::io::Result<()>> for CfgPrintVisitor<'a> {
         self.write_indent()?;
         writeln!(
             self.writer,
-            "block_{} (hop: hop_{}) [stmts: {}] {{",
-            id.index(),
-            block.hop_id.index(),
+            "{} (hop: {}) [stmts: {}] {{",
+            self.format_block_name_with_id(id),
+            self.format_hop_name_with_id(block.hop_id),
             block.statements.len()
         )?;
 
@@ -881,7 +987,12 @@ impl<'a> CfgVisitor<std::io::Result<()>> for CfgPrintVisitor<'a> {
             for edge in &block.successors {
                 self.write_indent()?;
                 let edge_desc = self.format_edge_type(&edge.edge_type);
-                writeln!(self.writer, "-> block_{} ({})", edge.to.index(), edge_desc)?;
+                writeln!(
+                    self.writer,
+                    "-> {} ({})",
+                    self.format_block_name_with_id(edge.to),
+                    edge_desc
+                )?;
             }
             self.decrease_indent();
         }
@@ -916,16 +1027,24 @@ impl<'a> StmtVisitor<String> for CfgPrintVisitor<'a> {
         match lv {
             LValue::Variable { var } => {
                 if let Some(var_info) = self.program.variables.get(*var) {
-                    self.format_variable_name(var_info)
+                    self.format_variable_name_with_id(var_info, *var)
                 } else {
-                    format!("var_{}", var.index())
+                    if SHOW_IDS {
+                        format!("var_{} ({})", var.index(), var.index())
+                    } else {
+                        format!("var_{}", var.index())
+                    }
                 }
             }
             LValue::ArrayElement { array, index } => {
                 let array_name = if let Some(var_info) = self.program.variables.get(*array) {
-                    self.format_variable_name(var_info)
+                    self.format_variable_name_with_id(var_info, *array)
                 } else {
-                    format!("var_{}", array.index())
+                    if SHOW_IDS {
+                        format!("var_{} ({})", array.index(), array.index())
+                    } else {
+                        format!("var_{}", array.index())
+                    }
                 };
                 let index_str = self.visit_operand(index);
                 format!("{}[{}]", array_name, index_str)
@@ -942,14 +1061,26 @@ impl<'a> StmtVisitor<String> for CfgPrintVisitor<'a> {
                     .program
                     .tables
                     .get(*table)
-                    .map(|t| t.name.as_str())
-                    .unwrap_or("<unknown_table>");
+                    .map(|t| self.format_table_name_with_id(&t.name, *table))
+                    .unwrap_or_else(|| {
+                        if SHOW_IDS {
+                            format!("<unknown_table> ({})", table.index())
+                        } else {
+                            "<unknown_table>".to_string()
+                        }
+                    });
                 let field_name = self
                     .program
                     .fields
                     .get(*field)
-                    .map(|f| f.name.as_str())
-                    .unwrap_or("<unknown_field>");
+                    .map(|f| self.format_field_name_with_id(&f.name, *field))
+                    .unwrap_or_else(|| {
+                        if SHOW_IDS {
+                            format!("<unknown_field> ({})", field.index())
+                        } else {
+                            "<unknown_field>".to_string()
+                        }
+                    });
                 format!("{}[{}].{}", table_name, pk_strs.join(", "), field_name)
             }
         }
@@ -970,14 +1101,26 @@ impl<'a> StmtVisitor<String> for CfgPrintVisitor<'a> {
                     .program
                     .tables
                     .get(*table)
-                    .map(|t| t.name.as_str())
-                    .unwrap_or("<unknown_table>");
+                    .map(|t| self.format_table_name_with_id(&t.name, *table))
+                    .unwrap_or_else(|| {
+                        if SHOW_IDS {
+                            format!("<unknown_table> ({})", table.index())
+                        } else {
+                            "<unknown_table>".to_string()
+                        }
+                    });
                 let field_name = self
                     .program
                     .fields
                     .get(*field)
-                    .map(|f| f.name.as_str())
-                    .unwrap_or("<unknown_field>");
+                    .map(|f| self.format_field_name_with_id(&f.name, *field))
+                    .unwrap_or_else(|| {
+                        if SHOW_IDS {
+                            format!("<unknown_field> ({})", field.index())
+                        } else {
+                            "<unknown_field>".to_string()
+                        }
+                    });
                 format!("{}[{}].{}", table_name, pk_strs.join(", "), field_name)
             }
             RValue::ArrayAccess { array, index } => {
@@ -1003,9 +1146,13 @@ impl<'a> StmtVisitor<String> for CfgPrintVisitor<'a> {
         match op {
             Operand::Var(var_id) => {
                 if let Some(var_info) = self.program.variables.get(*var_id) {
-                    self.format_variable_name(var_info)
+                    self.format_variable_name_with_id(var_info, *var_id)
                 } else {
-                    format!("var_{}", var_id.index())
+                    if SHOW_IDS {
+                        format!("var_{} ({})", var_id.index(), var_id.index())
+                    } else {
+                        format!("var_{}", var_id.index())
+                    }
                 }
             }
             Operand::Const(constant) => self.visit_constant(constant),
@@ -1026,6 +1173,8 @@ impl<'a> StmtVisitor<String> for CfgPrintVisitor<'a> {
     }
 
     fn visit_variable(&mut self, _program: &CfgProgram, v: &Variable) -> String {
+        // Note: This method doesn't have access to VarId, so we can't include ID here
+        // This is used primarily by dataflow analysis helper methods
         self.format_variable_name(v)
     }
 }

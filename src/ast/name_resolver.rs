@@ -53,6 +53,9 @@ impl<'p> NameResolver<'p> {
     /// This function iterates over all root functions and resolves their names,
     /// including parameters, hops, and statements.
     pub fn resolve(mut self) -> Results<()> {
+        // Resolve constants first (populate var_types for global constants)
+        self.resolve_constants();
+
         // Resolve table partitions first
         self.resolve_table_partitions();
 
@@ -72,6 +75,16 @@ impl<'p> NameResolver<'p> {
             Ok(())
         } else {
             Err(self.errors)
+        }
+    }
+
+    /// Resolves constants by populating var_types for global constants.
+    fn resolve_constants(&mut self) {
+        for &const_var_id in &self.program.root_constants {
+            let var_decl = &self.program.variables[const_var_id];
+            self.program
+                .var_types
+                .insert(const_var_id, var_decl.ty.clone());
         }
     }
 
@@ -136,8 +149,13 @@ impl<'p> NameResolver<'p> {
             })
             .collect();
 
-        for (name, ty, span) in params_to_declare {
-            self.declare_variable(&name, ty, VarKind::Parameter, span, partition_scope);
+        for (i, (name, ty, span)) in params_to_declare.into_iter().enumerate() {
+            let var_id =
+                self.declare_variable(&name, ty, VarKind::Parameter, span, partition_scope);
+            // Store the parameter -> variable mapping
+            self.program
+                .parameter_resolutions
+                .insert(param_ids[i], var_id);
         }
 
         // Resolve implementation expression
@@ -181,8 +199,12 @@ impl<'p> NameResolver<'p> {
             })
             .collect();
 
-        for (name, ty, span) in params_to_declare {
-            self.declare_variable(&name, ty, VarKind::Parameter, span, func_scope);
+        for (i, (name, ty, span)) in params_to_declare.into_iter().enumerate() {
+            let var_id = self.declare_variable(&name, ty, VarKind::Parameter, span, func_scope);
+            // Store the parameter -> variable mapping
+            self.program
+                .parameter_resolutions
+                .insert(param_ids[i], var_id);
         }
 
         // Resolve each hop
@@ -227,7 +249,7 @@ impl<'p> NameResolver<'p> {
             self.push_scope(hop_scope);
 
             // Create the loop variable in the hop's scope
-            self.declare_variable(
+            let _ = self.declare_variable(
                 &loop_var,
                 loop_var_type,
                 VarKind::Local,
@@ -279,7 +301,7 @@ impl<'p> NameResolver<'p> {
 
                 // Declare the variable in the current scope
                 let current_scope_id = self.current_scope.unwrap();
-                self.declare_variable(
+                let _ = self.declare_variable(
                     &var_decl.var_name,
                     var_decl.var_type.clone(),
                     VarKind::Local,
@@ -311,7 +333,7 @@ impl<'p> NameResolver<'p> {
                 self.push_scope(for_scope);
 
                 // Declare the loop variable
-                self.declare_variable(
+                let _ = self.declare_variable(
                     &for_stmt.loop_var,
                     for_stmt.loop_var_type.clone(),
                     VarKind::Local,
@@ -667,6 +689,9 @@ impl<'p> NameResolver<'p> {
 
                 // Resolve table name
                 if let Some(&table_id) = self.program.table_map.get(&table_name) {
+                    // Store table resolution for CFG builder
+                    self.program.table_resolutions.insert(expr_id, table_id);
+
                     let (resolved_pk_field_ids, missing_pk_fields, field_id) = {
                         let table = &self.program.tables[table_id];
 
@@ -752,6 +777,9 @@ impl<'p> NameResolver<'p> {
 
                 // Resolve table name
                 if let Some(&table_id) = self.program.table_map.get(&table_name) {
+                    // Store table resolution for CFG builder
+                    self.program.table_resolutions.insert(expr_id, table_id);
+
                     let (resolved_pk_field_ids, missing_pk_fields) = {
                         let table = &self.program.tables[table_id];
 
@@ -953,7 +981,7 @@ impl<'p> NameResolver<'p> {
         }
     }
 
-    /// Declares a variable in the current scope.
+    /// Declares a variable in the current scope and returns the VarId.
     fn declare_variable(
         &mut self,
         name: &str,
@@ -961,7 +989,7 @@ impl<'p> NameResolver<'p> {
         kind: VarKind,
         span: Span,
         target_scope_id: ScopeId,
-    ) {
+    ) -> VarId {
         let var_id = self.program.variables.alloc(VarDecl {
             name: name.to_string(),
             ty: ty.clone(),
@@ -977,6 +1005,8 @@ impl<'p> NameResolver<'p> {
 
         // Store type information
         self.program.var_types.insert(var_id, ty);
+
+        var_id
     }
 
     /// Looks up a variable in the current scope stack.
