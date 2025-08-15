@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 mod Boogie_printer;
+pub mod gen_Boogie;
 
 #[derive(Debug, Clone)]
 pub struct BoogieProgram {
@@ -21,7 +22,7 @@ pub enum BoogieType {
     Int,
     Real,
     Bool,
-    Map(Vec<Box<BoogieType>>, Box<BoogieType>), //:[type1]type2, or :[type1][type2]type3, all the BoogieType here must be flattened.
+    Map(Vec<Box<BoogieType>>, Box<BoogieType>), //:[type1]type2, or :[type1][type2]type3, all the BoogieType here must be flattened simple types.
     UserDefined(String),
 }
 
@@ -36,6 +37,7 @@ pub struct BoogieProcedure {
 
 #[derive(Debug, Clone)]
 pub enum BoogieLine {
+    Comment(String),                  // // string
     Label(String),                    // label:
     Goto(String),                     // goto label;
     Assign(String, BoogieExpr),       // var := expr ;

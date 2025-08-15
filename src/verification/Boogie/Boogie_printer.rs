@@ -47,6 +47,9 @@ impl Display for BoogieType {
             BoogieType::Map(domains, range) => {
                 // Print each domain as “[dom]”
                 for dom in domains {
+                    if let BoogieType::Map(_, _) = **dom {
+                        assert!(false, "Type must be simple for domain");
+                    };
                     write!(f, "[{}]", dom)?; // `[int]`, `[real]`, …
                 }
                 // Finally print the range
@@ -103,6 +106,7 @@ impl Display for BoogieProcedure {
 impl Display for BoogieLine {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            BoogieLine::Comment(text) => writeln!(f, "  // {}", text),
             BoogieLine::Label(name) => writeln!(f, "  {}:", name),
             BoogieLine::Goto(tgt) => writeln!(f, "    goto {};", tgt),
             BoogieLine::Assign(lhs, rhs) => writeln!(f, "    {} := {};", lhs, rhs),
