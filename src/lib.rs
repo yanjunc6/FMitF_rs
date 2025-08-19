@@ -30,4 +30,4 @@ pub use sc_graph::{EdgeType as SCGraphEdgeType, SCGraph};
 
 // Re-export verification
 pub use optimization::CfgOptimizer;
-pub use verification::{PartitionVerificationResult, VerificationManager};
+pub use verification::VerificationManager;

@@ -7,7 +7,7 @@ use crate::{
     ast::parse_and_analyze,
     cfg::CfgBuilder,
     sc_graph::SCGraphBuilder,
-    verification::{partition_verification::PartitionVerificationResult, VerificationManager},
+    verification::VerificationManager,
     AstProgram, CfgProgram,
 };
 use std::time::Instant;
@@ -18,7 +18,6 @@ pub struct CompilationResult {
     pub cfg_program: CfgProgram,
     pub optimized_cfg_program: Option<CfgProgram>,
     pub sc_graph: crate::sc_graph::SCGraph,
-    pub verification_result: Option<PartitionVerificationResult>,
     pub success: bool,
     pub compilation_time_ms: u64,
 }
@@ -92,7 +91,7 @@ impl Compiler {
         let ast = match self.stage_ast(source_code) {
             Ok(ast) => ast,
             Err(_) => {
-                return Ok(self.fail_result(start, None, None, None, None, None, false));
+                return Ok(self.fail_result(start, None, None, None, None, false));
             }
         };
         self.write_ast_output(&ast, cli)?;
@@ -101,7 +100,7 @@ impl Compiler {
         let mut cfg = match self.stage_cfg(&ast) {
             Ok(cfg) => cfg,
             Err(_) => {
-                return Ok(self.fail_result(start, Some(ast), None, None, None, None, false));
+                return Ok(self.fail_result(start, Some(ast), None, None, None, false));
             }
         };
 
@@ -122,7 +121,6 @@ impl Compiler {
                         Some(cfg),
                         None,
                         None,
-                        None,
                         false,
                     ));
                 }
@@ -139,33 +137,21 @@ impl Compiler {
         let scg = match self.stage_scgraph(&cfg, cli) {
             Ok(scg) => scg,
             Err(_) => {
-                return Ok(self.fail_result(start, Some(ast), Some(cfg), None, None, None, false));
+                return Ok(self.fail_result(start, Some(ast), Some(cfg), None, None, false));
             }
         };
         self.write_scgraph_output(&scg, &cfg, cli)?;
 
-        // Stage 5: Verification
-        let verification_result = match self.run_verification(&cfg, &scg, cli) {
-            Ok(result) => Some(result),
-            Err(_) => {
-                return Ok(self.fail_result(
-                    start,
-                    Some(ast),
-                    Some(cfg),
-                    None,
-                    Some(scg),
-                    None,
-                    false,
-                ));
-            }
-        };
+        // Stage 5: Generate Boogie files
+        if let Err(e) = self.generate_boogie_files(&cfg, cli) {
+            eprintln!("Warning: Failed to generate Boogie files: {}", e);
+        }
 
         Ok(CompilationResult {
             ast_program: ast,
             cfg_program: cfg,            // Store the final CFG (which is optimized)
             optimized_cfg_program: None, // No separate optimized version
             sc_graph: scg,
-            verification_result,
             success: true,
             compilation_time_ms: start.elapsed().as_millis() as u64,
         })
@@ -178,7 +164,6 @@ impl Compiler {
         cfg: Option<CfgProgram>,
         optimized_cfg: Option<CfgProgram>,
         scg: Option<crate::sc_graph::SCGraph>,
-        verification_result: Option<PartitionVerificationResult>,
         success: bool,
     ) -> CompilationResult {
         CompilationResult {
@@ -186,26 +171,16 @@ impl Compiler {
             cfg_program: cfg.unwrap_or_default(),
             optimized_cfg_program: optimized_cfg,
             sc_graph: scg.unwrap_or_default(),
-            verification_result,
             success,
             compilation_time_ms: start.elapsed().as_millis() as u64,
         }
     }
 
-    fn run_verification(
-        &mut self,
-        cfg_program: &CfgProgram,
-        sc_graph: &crate::sc_graph::SCGraph,
-        cli: &Cli,
-    ) -> Result<PartitionVerificationResult, String> {
-        let mut verification_manager = VerificationManager::new();
+    pub fn generate_boogie_files(&mut self, cfg: &CfgProgram, cli: &Cli) -> Result<(), String> {
         let output_dir = cli.get_output_dir();
-
-        Ok(verification_manager.run_partition_verification(
-            cfg_program,
-            sc_graph,
-            Some(output_dir.to_str().unwrap_or("tmp")),
-        ))
+        let verification_manager = VerificationManager::new();
+        verification_manager.generate_boogie_files(cfg, &output_dir).map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     fn stage_ast(&mut self, src: &str) -> Result<AstProgram, String> {
