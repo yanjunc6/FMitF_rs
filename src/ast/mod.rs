@@ -483,6 +483,7 @@ pub enum BinaryOp {
     Sub,
     Mul,
     Div,
+    Concat, // New concat operator for string concatenation
     Lt,
     Lte,
     Gt,

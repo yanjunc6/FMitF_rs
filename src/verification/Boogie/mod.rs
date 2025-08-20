@@ -74,6 +74,12 @@ pub enum BoogieExprKind {
     RealConst(f64),
     BoolConst(bool),
 
+    // Function calls
+    FunctionCall {
+        name: String,
+        args: Vec<BoogieExpr>,
+    },
+
     // Arithmetic / Boolean
     BinOp(Box<BoogieExpr>, BoogieBinOp, Box<BoogieExpr>),
     UnOp(BoogieUnOp, Box<BoogieExpr>),

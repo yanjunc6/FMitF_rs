@@ -2039,15 +2039,29 @@ impl<'a> CfgBuilder<'a> {
     ) -> TypeName {
         match op {
             // Arithmetic operations
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
+            BinaryOp::Add => {
+                // Check if this is string concatenation (any type + string or string + any type)
+                if matches!(left_ty, TypeName::String) || matches!(right_ty, TypeName::String) {
+                    TypeName::String // Any type + string = string concatenation
+                } else {
+                    // Regular arithmetic addition
+                    match (left_ty, right_ty) {
+                        (TypeName::Int, TypeName::Int) => TypeName::Int,
+                        (TypeName::Float, _) | (_, TypeName::Float) => TypeName::Float,
+                        _ => left_ty.clone(), // Default to left type
+                    }
+                }
+            }
+            BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
                 match (left_ty, right_ty) {
                     (TypeName::Int, TypeName::Int) => TypeName::Int,
                     (TypeName::Float, _) | (_, TypeName::Float) => TypeName::Float,
-                    (TypeName::String, TypeName::String) if matches!(op, BinaryOp::Add) => {
-                        TypeName::String
-                    } // String concatenation
                     _ => left_ty.clone(), // Default to left type
                 }
+            }
+            BinaryOp::Concat => {
+                // Concat operator always returns string, accepts any types
+                TypeName::String
             }
             // Comparison operations - always return bool
             BinaryOp::Lt
@@ -2101,6 +2115,7 @@ impl<'a> CfgBuilder<'a> {
             ast::BinaryOp::Sub => BinaryOp::Sub,
             ast::BinaryOp::Mul => BinaryOp::Mul,
             ast::BinaryOp::Div => BinaryOp::Div,
+            ast::BinaryOp::Concat => BinaryOp::Concat,
             ast::BinaryOp::Lt => BinaryOp::Lt,
             ast::BinaryOp::Lte => BinaryOp::Lte,
             ast::BinaryOp::Gt => BinaryOp::Gt,
