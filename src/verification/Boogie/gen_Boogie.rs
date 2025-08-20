@@ -78,13 +78,14 @@ axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);"
 
     /// Helper function to generate a global constant name for a string literal
     /// For string literal "abc", generates "L_abc"
+    /// Uses $ prefix for unicode escapes to ensure uniqueness
     fn gen_string_literal_name(literal: &str) -> String {
         // Sanitize the string for use as identifier
         let sanitized: String = literal
             .chars()
             .map(|c| match c {
-                'a'..='z' | 'A'..='Z' | '0'..='9' | '_' => c,
-                _ => '_', // Replace any other character with underscore
+                'a'..='z' | 'A'..='Z' | '0'..='9' | '_' => c.to_string(),
+                _ => format!("$u{:04X}", c as u32), // Use $uXXXX for unicode escapes
             })
             .collect();
 
@@ -254,7 +255,7 @@ axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);"
     ) -> Results<BoogieExpr> {
         match operand {
             Operand::Var(var_id) => {
-                let var_name = self.gen_var_name(cfg_program, *var_id, prefix);
+                let var_name = Self::gen_var_name(cfg_program, *var_id, prefix);
                 Ok(BoogieExpr {
                     kind: BoogieExprKind::Var(var_name),
                 })
@@ -324,12 +325,13 @@ axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);"
 
     /// Convert CFG RValue to Boogie expression with optional prefix
     pub fn convert_rvalue(
+        &mut self,
         cfg_program: &CfgProgram,
         rvalue: &RValue,
         prefix: Option<&str>,
     ) -> Results<BoogieExpr> {
         match rvalue {
-            RValue::Use(operand) => Self::convert_operand(cfg_program, operand, prefix),
+            RValue::Use(operand) => self.convert_operand(cfg_program, operand, prefix),
             RValue::TableAccess {
                 table,
                 pk_values,
@@ -348,7 +350,7 @@ axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);"
                 let mut errors = Vec::new();
 
                 for operand in pk_values {
-                    match Self::convert_operand(cfg_program, operand, prefix) {
+                    match self.convert_operand(cfg_program, operand, prefix) {
                         Ok(expr) => indices.push(expr),
                         Err(mut errs) => errors.append(&mut errs),
                     }
@@ -366,8 +368,8 @@ axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);"
                 })
             }
             RValue::ArrayAccess { array, index } => {
-                let array_expr = Self::convert_operand(cfg_program, array, prefix)?;
-                let index_expr = Self::convert_operand(cfg_program, index, prefix)?;
+                let array_expr = self.convert_operand(cfg_program, array, prefix)?;
+                let index_expr = self.convert_operand(cfg_program, index, prefix)?;
 
                 Ok(BoogieExpr {
                     kind: BoogieExprKind::MapSelect {
@@ -378,7 +380,7 @@ axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);"
             }
             RValue::UnaryOp { op, operand } => {
                 let boogie_op = Self::convert_unary_op(op)?;
-                let operand_expr = Self::convert_operand(cfg_program, operand, prefix)?;
+                let operand_expr = self.convert_operand(cfg_program, operand, prefix)?;
 
                 Ok(BoogieExpr {
                     kind: BoogieExprKind::UnOp(boogie_op, Box::new(operand_expr)),
@@ -386,8 +388,8 @@ axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);"
             }
             RValue::BinaryOp { op, left, right } => {
                 let boogie_op = Self::convert_binary_op(op);
-                let left_expr = Self::convert_operand(cfg_program, left, prefix)?;
-                let right_expr = Self::convert_operand(cfg_program, right, prefix)?;
+                let left_expr = self.convert_operand(cfg_program, left, prefix)?;
+                let right_expr = self.convert_operand(cfg_program, right, prefix)?;
 
                 Ok(BoogieExpr {
                     kind: BoogieExprKind::BinOp(
@@ -402,12 +404,13 @@ axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);"
 
     /// Convert CFG assignment statement to Boogie assignment with optional prefix
     pub fn convert_assignment(
+        &mut self,
         cfg_program: &CfgProgram,
         lvalue: &LValue,
         rvalue: &RValue,
         prefix: Option<&str>,
     ) -> Results<BoogieLine> {
-        let rvalue_expr = Self::convert_rvalue(cfg_program, rvalue, prefix)?;
+        let rvalue_expr = self.convert_rvalue(cfg_program, rvalue, prefix)?;
 
         match lvalue {
             LValue::Variable { var } => {
@@ -419,7 +422,7 @@ axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);"
                 let base_expr = Box::new(BoogieExpr {
                     kind: BoogieExprKind::Var(array_name.clone()),
                 });
-                let index_expr = Self::convert_operand(cfg_program, index, prefix)?;
+                let index_expr = self.convert_operand(cfg_program, index, prefix)?;
 
                 let store_expr = BoogieExpr {
                     kind: BoogieExprKind::MapStore {
@@ -449,7 +452,7 @@ axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);"
                 let mut errors = Vec::new();
 
                 for operand in pk_values {
-                    match Self::convert_operand(cfg_program, operand, prefix) {
+                    match self.convert_operand(cfg_program, operand, prefix) {
                         Ok(expr) => indices.push(expr),
                         Err(mut errs) => errors.append(&mut errs),
                     }
@@ -474,6 +477,7 @@ axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);"
 
     /// Convert CFG statement to Boogie lines with optional prefix
     pub fn convert_statement(
+        &mut self,
         cfg_program: &CfgProgram,
         stmt: &Statement,
         prefix: Option<&str>,
@@ -484,7 +488,7 @@ axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);"
                 rvalue,
                 span,
             } => {
-                let assignment = Self::convert_assignment(cfg_program, lvalue, rvalue, prefix);
+                let assignment = self.convert_assignment(cfg_program, lvalue, rvalue, prefix);
                 match assignment {
                     Ok(line) => Ok(vec![line]),
                     Err(errors) => Err(errors
@@ -554,7 +558,7 @@ axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);"
         for &function_id in &cfg_program.root_functions {
             let function = &cfg_program.functions[function_id];
             if function.function_type == FunctionType::Transaction {
-                match Self::gen_function_to_boogie_template(cfg_program, function_id, None) {
+                match self.gen_function_to_boogie_template(cfg_program, function_id, None) {
                     Ok(procedure) => self.program.procedures.push(procedure),
                     Err(mut errors) => all_errors.append(&mut errors),
                 }
@@ -587,6 +591,7 @@ axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);"
 
     /// Template: Generate Boogie lines from a single hop with prefix support
     pub fn gen_hop_to_boogie_template(
+        &mut self,
         cfg_program: &CfgProgram,
         hop_id: crate::cfg::HopId,
         prefix: Option<&str>,
@@ -605,7 +610,7 @@ axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);"
 
             // Convert statements
             for stmt in &block.statements {
-                match Self::convert_statement(cfg_program, stmt, prefix) {
+                match self.convert_statement(cfg_program, stmt, prefix) {
                     Ok(boogie_stmts) => lines.extend(boogie_stmts),
                     Err(mut errors) => all_errors.append(&mut errors),
                 }
@@ -621,6 +626,7 @@ axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);"
 
     /// Template: Generate complete Boogie procedure from a CFG function with prefix
     pub fn gen_function_to_boogie_template(
+        &mut self,
         cfg_program: &CfgProgram,
         function_id: FunctionId,
         prefix: Option<&str>,
@@ -647,7 +653,7 @@ axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);"
                 lines.push(BoogieLine::Label(label));
 
                 for stmt in &block.statements {
-                    match Self::convert_statement(cfg_program, stmt, prefix) {
+                    match self.convert_statement(cfg_program, stmt, prefix) {
                         Ok(boogie_stmts) => lines.extend(boogie_stmts),
                         Err(mut errors) => all_errors.append(&mut errors),
                     }

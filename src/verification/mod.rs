@@ -30,16 +30,17 @@ impl VerificationManager {
         for &function_id in &cfg_program.root_functions {
             let function = &cfg_program.functions[function_id];
             if function.function_type == crate::cfg::FunctionType::Transaction {
-                let mut program = base_program.clone();
+                let program = base_program.clone();
+
+                // Create a generator instance to call the method
+                let mut generator =
+                    Boogie::gen_Boogie::BoogieProgramGenerator::with_program(program);
                 let procedure =
-                    Boogie::gen_Boogie::BoogieProgramGenerator::gen_function_to_boogie_template(
-                        cfg_program,
-                        function_id,
-                        None,
-                    )?;
-                program.procedures.push(procedure);
-                program.name = function.name.clone(); // Set the program name to the function name
-                programs.push(program);
+                    generator.gen_function_to_boogie_template(cfg_program, function_id, None)?;
+
+                generator.program.procedures.push(procedure);
+                generator.program.name = function.name.clone(); // Set the program name to the function name
+                programs.push(generator.program);
             }
         }
 
