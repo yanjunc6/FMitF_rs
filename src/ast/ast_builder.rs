@@ -1478,6 +1478,7 @@ impl AstBuilder {
                     operators.push(match inner_pair.as_str() {
                         "+" => BinaryOp::Add,
                         "-" => BinaryOp::Sub,
+                        "~" => BinaryOp::Concat,
                         _ => unreachable!(),
                     });
                 }

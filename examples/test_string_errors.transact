@@ -1,0 +1,24 @@
+// Test case for error conditions - using + with strings should fail
+// This file should produce compilation errors
+
+partition simple_partition(int x);
+
+table ErrorTests {
+    primary int id;
+    node simple_partition(id);
+    string result;
+    string description;
+}
+
+void test_string_plus_errors() {
+    hop {
+        // ERROR: Using + with strings should fail
+        ErrorTests[id: 1].result = "hello" + " world";  // Should be an error
+        
+        // ERROR: Mixed + with string should fail
+        ErrorTests[id: 2].result = 42 + " text";        // Should be an error
+        
+        // ERROR: String + number should fail
+        ErrorTests[id: 3].result = "value: " + 100;     // Should be an error
+    }
+}
