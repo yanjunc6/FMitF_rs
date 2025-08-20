@@ -9,14 +9,13 @@ pub mod pretty;
 // pub mod runtime;
 pub mod sc_graph;
 pub mod verification;
+
 // Re-export AST functionality
 pub use ast::{parse_and_analyze, Program as AstProgram, Span as AstSpan};
 pub use ast::{AstError, Results as AstResults, SpannedError as AstSpannedError};
 
 // Re-export pretty printing
 pub use pretty::{print_program, PrintMode, PrintOptions};
-// pub use pretty::cfg_printer::{print_cfg, CfgFormat, CfgPrintOptions};
-// pub use pretty::sc_graph_printer::{print_sc_graph, SCGraphFormat, SCGraphPrintOptions};
 
 // Re-export CFG functionality
 pub use cfg::CfgProgram; // This is the main CFG structure
@@ -25,9 +24,11 @@ pub use cfg::{
     FunctionId as CfgFunctionId, HopId as CfgHopId, TableId as CfgTableId, VarId as CfgVarId,
 };
 
+// Re-export optimization functionality
+pub use optimization::CfgOptimizer;
+
 // Re-export SC-Graph functionality
 pub use sc_graph::{EdgeType as SCGraphEdgeType, SCGraph};
 
-// Re-export verification
-pub use optimization::CfgOptimizer;
-pub use verification::VerificationManager;
+// Re-export verification functionality
+pub use verification::{SpannedError as VerificationSpannedError, VerificationManager};

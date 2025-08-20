@@ -4,16 +4,11 @@ use std::path::PathBuf;
 
 mod compiler;
 mod logger;
-mod output;
 // mod verification; // Temporarily disabled due to compilation errors
 
 pub use compiler::*;
 pub use logger::Logger;
-pub use output::*;
-// pub use verification::*;
-
-// Re-export error printing function
-pub use output::print_spanned_error;
+// pub use output::*; // Not needed anymore - output is handled directly in compiler
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "fmitf")]
@@ -70,5 +65,60 @@ impl Cli {
                 PathBuf::from(input_stem)
             }
         }
+    }
+}
+
+/// Print ast error
+pub fn print_ast_spanned_error(spanned_error: &crate::AstSpannedError, source_code: &str) {
+    use colored::*;
+
+    if let Some(span_value) = &spanned_error.span {
+        eprintln!(
+            "{}: {} at line {}, column {}",
+            spanned_error.error.error_type().red().bold(),
+            spanned_error.error.message(),
+            span_value.line.to_string().red(),
+            span_value.column.to_string().red()
+        );
+        if let Some(line_content) = source_code.lines().nth(span_value.line.saturating_sub(1)) {
+            eprintln!("   |");
+            eprintln!("{} | {}", span_value.line.to_string().red(), line_content);
+            eprintln!("   | {}{}", " ".repeat(span_value.column), "^".red().bold());
+        }
+    } else {
+        eprintln!(
+            "{}: {}",
+            spanned_error.error.error_type().red().bold(),
+            spanned_error.error.message()
+        );
+    }
+}
+
+/// Print verification error
+pub fn print_verification_spanned_error(
+    spanned_error: &crate::VerificationSpannedError,
+    source_code: &str,
+) {
+    use colored::*;
+
+    if let Some(span_value) = &spanned_error.span {
+        eprintln!(
+            "{}: {} at line {}, column {}",
+            spanned_error.error.error_type().red().bold(),
+            spanned_error.error.message(),
+            span_value.line.to_string().red(),
+            span_value.column.to_string().red()
+        );
+        if let Some(line_content) = source_code.lines().nth(span_value.line.saturating_sub(1)) {
+            eprintln!("   |");
+            eprintln!("{} | {}", span_value.line.to_string().red(), line_content);
+            eprintln!("   | {}{}", " ".repeat(span_value.column), "^".red().bold());
+        }
+    } else {
+        eprintln!(
+            "{}: {}",
+            spanned_error.error.error_type().red().bold(),
+            spanned_error.error.message()
+        );
     }
 }

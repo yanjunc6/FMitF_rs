@@ -3,7 +3,7 @@ use super::{
     TransferFunction,
 };
 use crate::cfg::BasicBlock;
-use crate::cfg::{ControlFlowEdge, FunctionCfg, LValue, RValue, Statement, TableId, FieldId};
+use crate::cfg::{ControlFlowEdge, FieldId, FunctionCfg, LValue, RValue, Statement, TableId};
 use crate::dataflow::StmtLoc;
 
 /// Table access tracking
@@ -41,7 +41,13 @@ impl TransferFunction<SetLattice<TableAccess>> for TableModRefTransfer {
             Statement::Assign { lvalue, rvalue, .. } => {
                 // Track reads from rvalue
                 match rvalue {
-                    RValue::TableAccess { table, field, pk_values: _, pk_fields: _, .. } => {
+                    RValue::TableAccess {
+                        table,
+                        field,
+                        pk_values: _,
+                        pk_fields: _,
+                        ..
+                    } => {
                         // Read from the target field
                         result_set.insert(TableAccess {
                             table: *table,
@@ -54,7 +60,13 @@ impl TransferFunction<SetLattice<TableAccess>> for TableModRefTransfer {
 
                 // Track writes from lvalue
                 match lvalue {
-                    LValue::TableField { table, field, pk_values: _, pk_fields: _, .. } => {
+                    LValue::TableField {
+                        table,
+                        field,
+                        pk_values: _,
+                        pk_fields: _,
+                        ..
+                    } => {
                         // Write to the target field
                         result_set.insert(TableAccess {
                             table: *table,

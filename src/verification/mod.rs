@@ -1,71 +1,48 @@
 pub mod Boogie;
+pub mod errors;
 
 use crate::cfg::CfgProgram;
-use std::path::Path;
+use errors::Results;
+
+pub use errors::{SpannedError, VerificationError};
 
 /// Simple verification manager for Boogie generation
-pub struct VerificationManager {
-}
+pub struct VerificationManager {}
 
 impl VerificationManager {
     pub fn new() -> Self {
         VerificationManager {}
     }
 
-    /// Generate Boogie files for all functions in the CFG program
-    pub fn generate_boogie_files(&self, cfg_program: &CfgProgram, output_dir: &Path) -> std::io::Result<()> {
-        use std::fs;
-        use std::io::Write;
+    /// Generate Boogie programs for all functions in the CFG program
+    /// Returns a vector of BoogiePrograms, one for each transaction function
+    pub fn generate_boogie_programs(
+        &self,
+        cfg_program: &CfgProgram,
+    ) -> Results<Vec<Boogie::BoogieProgram>> {
+        // Generate common elements (constants, globals, axioms, table variables)
+        let base_program =
+            Boogie::gen_Boogie::BoogieProgramGenerator::gen_base_program(cfg_program)?;
 
-        // Create Boogie output directory
-        let boogie_dir = output_dir.join("Boogie");
-        fs::create_dir_all(&boogie_dir)?;
+        let mut programs = Vec::new();
 
-        let mut generator = Boogie::gen_Boogie::BoogieProgramGenerator::new();
-        generator.gen_complete_program(cfg_program);
-
-        // Write the complete Boogie program to a file
-        let boogie_file_path = boogie_dir.join("program.bpl");
-        let mut file = fs::File::create(&boogie_file_path)?;
-
-        // Write global variables
-        for (name, var_decl) in &generator.program.global_vars {
-            if var_decl.is_const {
-                writeln!(file, "const {} : {};", name, 
-                    Boogie::gen_Boogie::BoogieProgramGenerator::boogie_type_to_string(&var_decl.var_type))?;
-            } else {
-                writeln!(file, "var {} : {};", name, 
-                    Boogie::gen_Boogie::BoogieProgramGenerator::boogie_type_to_string(&var_decl.var_type))?;
+        // Generate a separate program for each transaction function
+        for &function_id in &cfg_program.root_functions {
+            let function = &cfg_program.functions[function_id];
+            if function.function_type == crate::cfg::FunctionType::Transaction {
+                let mut program = base_program.clone();
+                let procedure =
+                    Boogie::gen_Boogie::BoogieProgramGenerator::gen_function_to_boogie_template(
+                        cfg_program,
+                        function_id,
+                        None,
+                    )?;
+                program.procedures.push(procedure);
+                program.name = function.name.clone(); // Set the program name to the function name
+                programs.push(program);
             }
         }
 
-        // Write other declarations
-        for decl in &generator.program.other_declarations {
-            writeln!(file, "{}", decl)?;
-        }
-
-        // Write procedures
-        for procedure in &generator.program.procedures {
-            writeln!(file, "\nprocedure {}(", procedure.name)?;
-            for (i, param) in procedure.params.iter().enumerate() {
-                if i > 0 { write!(file, ", ")?; }
-                write!(file, "{}: {}", param.var_name, 
-                    Boogie::gen_Boogie::BoogieProgramGenerator::boogie_type_to_string(&param.var_type))?;
-            }
-            writeln!(file, ")")?;
-
-            if !procedure.modifies.is_empty() {
-                writeln!(file, "  modifies {};", procedure.modifies.join(", "))?;
-            }
-
-            writeln!(file, "{{")?;
-            for line in &procedure.lines {
-                writeln!(file, "{}", line)?;
-            }
-            writeln!(file, "}}")?;
-        }
-
-        println!("Generated Boogie program: {}", boogie_file_path.display());
-        Ok(())
+        Ok(programs)
     }
 }
