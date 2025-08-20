@@ -17,6 +17,11 @@ impl Display for BoogieProgram {
             writeln!(f, "{}", var_decl)?;
         }
 
+        // Write global string literal constants
+        for var_decl in self.global_string_literals.values() {
+            writeln!(f, "{}", var_decl)?;
+        }
+
         // Write procedures
         for procedure in &self.procedures {
             writeln!(f, "{}", procedure)?;

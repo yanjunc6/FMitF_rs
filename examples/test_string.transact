@@ -1,0 +1,35 @@
+// Test case for string operations and literals
+
+partition simple_partition(int x) = 0;
+
+table Users {
+    primary int id;
+    node simple_partition(id);
+    string username;
+    string email;
+    int age;
+}
+
+void test_string_operations() {
+    hop {
+        // Test basic string literal assignment
+        Users[id: 1].username = "alice";
+        Users[id: 1].email = "alice@example.com";
+        Users[id: 1].age = 25;
+        
+        // Test string concatenation (if supported)
+        Users[id: 2].username = "bob" + " ";
+        Users[id: 2].email = "bob@test.org";
+        
+        // Test empty string
+        Users[id: 3].username = "";
+        Users[id: 3].email = "empty@user.com";
+    }
+    
+    hop {
+        // Test reading and using string values
+        string temp_user = Users[id: 1].username;
+        Users[id: 4].username = temp_user;
+        Users[id: 4].email = "copy@example.com";
+    }
+}
