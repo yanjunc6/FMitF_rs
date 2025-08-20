@@ -670,15 +670,49 @@ impl<'a> CfgBuilder<'a> {
 
         // Process initialization if present
         if let Some(init_expr) = var_decl.init_value {
-            let (init_var, init_stmts) = self.visit_expression(init_expr);
-            self.add_statements_to_current_block(init_stmts);
+            // Check for array variable with array literal initialization
+            if let (
+                ast::TypeName::Array { .. },
+                ast::ExpressionKind::ArrayLiteral { elements, .. },
+            ) = (&var_decl.var_type, &self.ast.expressions[init_expr].node)
+            {
+                // Array initialization with array literal - expand into individual element assignments
+                for (index, &element_expr) in elements.iter().enumerate() {
+                    // Process the element expression
+                    let (element_var, element_stmts) = self.visit_expression(element_expr);
+                    self.add_statements_to_current_block(element_stmts);
 
-            let stmt = Statement::Assign {
-                lvalue: LValue::Variable { var: cfg_var_id },
-                rvalue: RValue::Use(Operand::Var(init_var)),
-                span,
-            };
-            self.add_statement_to_current_block(stmt);
+                    // Create individual element assignment: array[index] = element
+                    let index_const = self.create_temp_variable(TypeName::Int);
+                    let index_stmt = Statement::Assign {
+                        lvalue: LValue::Variable { var: index_const },
+                        rvalue: RValue::Use(Operand::Const(Constant::Int(index as i64))),
+                        span: span.clone(),
+                    };
+                    self.add_statement_to_current_block(index_stmt);
+
+                    let element_assign = Statement::Assign {
+                        lvalue: LValue::ArrayElement {
+                            array: cfg_var_id,
+                            index: Operand::Var(index_const),
+                        },
+                        rvalue: RValue::Use(Operand::Var(element_var)),
+                        span: span.clone(),
+                    };
+                    self.add_statement_to_current_block(element_assign);
+                }
+            } else {
+                // Normal initialization (not array literal)
+                let (init_var, init_stmts) = self.visit_expression(init_expr);
+                self.add_statements_to_current_block(init_stmts);
+
+                let stmt = Statement::Assign {
+                    lvalue: LValue::Variable { var: cfg_var_id },
+                    rvalue: RValue::Use(Operand::Var(init_var)),
+                    span,
+                };
+                self.add_statement_to_current_block(stmt);
+            }
         }
 
         Vec::new()

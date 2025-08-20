@@ -1,0 +1,19 @@
+partition p1(int x, int y);
+
+table Money {
+    primary int ACCOUNT;
+    primary int PASSWORD;
+    int BALANCE;
+    node p1(ACCOUNT, PASSWORD);
+}
+
+float deposit_money(int amount) {
+    hop {
+        float[10] itemPrices = {1.1, 2.2};
+        Money[ACCOUNT: 1, PASSWORD: 1234].BALANCE += amount;
+    }
+    hop {
+        itemPrices[1] += 3.3;
+        return itemPrices[1];
+    }
+}
