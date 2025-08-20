@@ -1,0 +1,71 @@
+// Test case for string concatenation using ~ operator
+// Tests that ~ works for string concatenation and + only for numeric addition
+
+partition simple_partition(int x);
+
+table StringTests {
+    primary int id;
+    node simple_partition(id);
+    string result;
+    string description;
+}
+
+table NumberTests {
+    primary int id;
+    node simple_partition(id);
+    int int_result;
+    float float_result;
+    string description;
+}
+
+void test_string_concat() {
+    hop {
+        // Test 1: String concatenation with ~
+        StringTests[id: 1].result = "hello" ~ " world";
+        StringTests[id: 1].description = "basic_string_concat";
+        
+        // Test 2: Mixed type concatenation with ~
+        StringTests[id: 2].result = 42 ~ " is the answer";
+        StringTests[id: 2].description = "int_string_concat";
+        
+        // Test 3: Float and string concatenation
+        StringTests[id: 3].result = "Pi is " ~ 3.14;
+        StringTests[id: 3].description = "string_float_concat";
+        
+        // Test 4: Boolean and string concatenation
+        StringTests[id: 4].result = "Enabled: " ~ true;
+        StringTests[id: 4].description = "string_bool_concat";
+        
+        // Test 5: Chain concatenations
+        StringTests[id: 5].result = "Value " ~ 10 ~ " is " ~ "valid";
+        StringTests[id: 5].description = "chain_concat";
+        
+        // Test 6: Variables
+        int num = 100;
+        string prefix = "Number: ";
+        StringTests[id: 6].result = prefix ~ num;
+        StringTests[id: 6].description = "variable_concat";
+    }
+}
+
+void test_numeric_addition() {
+    hop {
+        // Test 1: Integer addition (should work)
+        NumberTests[id: 1].int_result = 10 + 20;
+        NumberTests[id: 1].description = "integer_addition";
+        
+        // Test 2: Float addition (should work)  
+        NumberTests[id: 2].float_result = 3.14 + 2.86;
+        NumberTests[id: 2].description = "float_addition";
+        
+        // Test 3: Mixed numeric addition
+        NumberTests[id: 3].float_result = 5 + 2.5;
+        NumberTests[id: 3].description = "mixed_numeric_addition";
+        
+        // Test 4: Variables in numeric addition
+        int a = 15;
+        int b = 25;
+        NumberTests[id: 4].int_result = a + b;
+        NumberTests[id: 4].description = "variable_addition";
+    }
+}

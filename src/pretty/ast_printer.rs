@@ -744,7 +744,7 @@ impl AstPrinter {
             BinaryOp::Sub => "-",
             BinaryOp::Mul => "*",
             BinaryOp::Div => "/",
-            BinaryOp::Concat => "++", // Use ++ to represent concat in pretty printing
+            BinaryOp::Concat => "~", // Use ~ to represent concat in pretty printing
             BinaryOp::Lt => "<",
             BinaryOp::Lte => "<=",
             BinaryOp::Gt => ">",

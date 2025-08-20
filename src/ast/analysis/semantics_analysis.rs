@@ -745,11 +745,6 @@ impl<'p> SemanticAnalyzer<'p> {
         matches!(ty, TypeName::Float)
     }
 
-    /// Helper function to check if a type is string
-    fn is_string_type(&self, ty: &TypeName) -> bool {
-        matches!(ty, TypeName::String)
-    }
-
     fn check_return_statement(&mut self, ret_stmt: &ReturnStatement, span: &Span) {
         self.has_return = true;
 
@@ -1090,11 +1085,8 @@ impl<'p> SemanticAnalyzer<'p> {
     ) -> Option<TypeName> {
         match op {
             BinaryOp::Add => {
-                // Check if this is string concatenation (any type + string or string + any type)
-                if self.is_string_type(left) || self.is_string_type(right) {
-                    Some(TypeName::String) // Any type + string = string concatenation
-                } else if self.is_numeric_type(left) && self.is_numeric_type(right) {
-                    // Regular arithmetic addition
+                // Only handle numeric addition - no string concatenation
+                if self.is_numeric_type(left) && self.is_numeric_type(right) {
                     if self.is_float_type(left) || self.is_float_type(right) {
                         Some(TypeName::Float)
                     } else {

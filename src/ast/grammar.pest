@@ -194,7 +194,7 @@ addition = {
     multiplication ~ (addition_op ~ multiplication)*
 }
 
-addition_op = { "+" | "-" }
+addition_op = { "+" | "-" | "~" }
 
 multiplication = {
     unary ~ (multiplication_op ~ unary)*

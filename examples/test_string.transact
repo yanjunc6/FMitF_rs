@@ -14,115 +14,115 @@ void test_string_operations() {
     hop {
         // Test 1: Integer + String
         int i = 1;
-        StringTests[id: 1].result = 1 + "a";
+        StringTests[id: 1].result = 1 ~ "a";
         StringTests[id: 1].description = "literal_int_plus_string";
         
         // Test 2: String + String
-        StringTests[id: 2].result = "a" + "b";
+        StringTests[id: 2].result = "a" ~ "b";
         StringTests[id: 2].description = "string_plus_string";
         
         // Test 3: String + Integer
-        StringTests[id: 3].result = "a" + 1;
+        StringTests[id: 3].result = "a" ~ 1;
         StringTests[id: 3].description = "string_plus_literal_int";
         
         // Test 4: Float + String
-        StringTests[id: 4].result = 1.1 + "a";
+        StringTests[id: 4].result = 1.1 ~ "a";
         StringTests[id: 4].description = "literal_float_plus_string";
         
         // Test 5: String + Float
-        StringTests[id: 5].result = "a" + 1.5;
+        StringTests[id: 5].result = "a" ~ 1.5;
         StringTests[id: 5].description = "string_plus_literal_float";
         
         // Test 6: Variable int + String
-        StringTests[id: 6].result = i + "a";
+        StringTests[id: 6].result = i ~ "a";
         StringTests[id: 6].description = "var_int_plus_string";
         
         // Test 7: String + Variable int
-        StringTests[id: 7].result = "a" + i;
+        StringTests[id: 7].result = "a" ~ i;
         StringTests[id: 7].description = "string_plus_var_int";
     }
     
     hop {
         // Test 8: Float variable operations
         float f = 2.5;
-        StringTests[id: 8].result = f + "hello";
+        StringTests[id: 8].result = f ~ "hello";
         StringTests[id: 8].description = "var_float_plus_string";
         
         // Test 9: String + Float variable
-        StringTests[id: 9].result = "world" + f;
+        StringTests[id: 9].result = "world" ~ f;
         StringTests[id: 9].description = "string_plus_var_float";
         
         // Test 10: Boolean + String (if supported)
         bool b = true;
-        StringTests[id: 10].result = b + "test";
+        StringTests[id: 10].result = b ~ "test";
         StringTests[id: 10].description = "var_bool_plus_string";
         
         // Test 11: String + Boolean
-        StringTests[id: 11].result = "flag" + b;
+        StringTests[id: 11].result = "flag" ~ b;
         StringTests[id: 11].description = "string_plus_var_bool";
         
         // Test 12: Literal boolean operations
-        StringTests[id: 12].result = true + "literal";
+        StringTests[id: 12].result = true ~ "literal";
         StringTests[id: 12].description = "literal_bool_plus_string";
         
         // Test 13: String + Literal boolean
-        StringTests[id: 13].result = "value" + false;
+        StringTests[id: 13].result = "value" ~ false;
         StringTests[id: 13].description = "string_plus_literal_bool";
     }
     
     hop {
         // Test 14: Multiple concatenations (left associative)
-        StringTests[id: 14].result = "a" + "b" + "c";
+        StringTests[id: 14].result = "a" ~ "b" ~ "c";
         StringTests[id: 14].description = "triple_string_concat";
         
         // Test 15: Mixed type concatenations
-        StringTests[id: 15].result = 1 + "test" + 2;
+        StringTests[id: 15].result = 1 ~ "test" ~ 2;
         StringTests[id: 15].description = "int_string_int_concat";
         
         // Test 16: Complex expression
         int x = 10;
         float y = 3.14;
-        StringTests[id: 16].result = "Result: " + x + " and " + y;
+        StringTests[id: 16].result = "Result: " ~ x ~ " and " ~ y;
         StringTests[id: 16].description = "complex_mixed_concat";
         
         // Test 17: Empty string operations
-        StringTests[id: 17].result = "" + "non_empty";
+        StringTests[id: 17].result = "" ~ "non_empty";
         StringTests[id: 17].description = "empty_plus_string";
         
         // Test 18: String + Empty string
-        StringTests[id: 18].result = "non_empty" + "";
+        StringTests[id: 18].result = "non_empty" ~ "";
         StringTests[id: 18].description = "string_plus_empty";
         
         // Test 19: Special characters in strings
-        StringTests[id: 19].result = "Hello\nWorld" + "!";
+        StringTests[id: 19].result = "Hello\nWorld" ~ "!";
         StringTests[id: 19].description = "special_chars_newline";
         
         // Test 20: Unicode and special symbols
-        StringTests[id: 20].result = "café" + "★" + "测试";
+        StringTests[id: 20].result = "café" ~ "★" ~ "测试";
         StringTests[id: 20].description = "unicode_symbols";
     }
     
     hop {
         // Test 21: Parentheses in expressions
-        StringTests[id: 21].result = ("a" + "b") + ("c" + "d");
+        StringTests[id: 21].result = ("a" ~ "b") ~ ("c" ~ "d");
         StringTests[id: 21].description = "parentheses_grouping";
         
         // Test 22: Variable assignment and use
         string temp = "intermediate";
-        StringTests[id: 22].result = temp + "_result";
+        StringTests[id: 22].result = temp ~ "_result";
         StringTests[id: 22].description = "var_assignment_use";
         
         // Test 23: Concatenate with computed values
         int computed = 5 + 3;
-        StringTests[id: 23].result = "computed: " + computed;
+        StringTests[id: 23].result = "computed: " ~ computed;
         StringTests[id: 23].description = "computed_value_concat";
         
         // Test 24: Nested string expressions
-        StringTests[id: 24].result = "prefix_" + ("inner" + "_suffix");
+        StringTests[id: 24].result = "prefix_" ~ ("inner" ~ "_suffix");
         StringTests[id: 24].description = "nested_expressions";
         
         // Test 25: String comparison context (assign result of concat)
-        string concat_result = 42 + " is the answer";
+        string concat_result = 42 ~ " is the answer";
         StringTests[id: 25].result = concat_result;
         StringTests[id: 25].description = "assign_concat_result";
     }
@@ -132,11 +132,11 @@ void test_string_with_table_access() {
     hop {
         // Test reading strings from table and concatenating
         string existing = StringTests[id: 1].result;
-        StringTests[id: 26].result = "Read: " + existing;
+        StringTests[id: 26].result = "Read: " ~ existing;
         StringTests[id: 26].description = "table_read_concat";
         
         // Test concatenating with table field access directly
-        StringTests[id: 27].result = StringTests[id: 2].description + "_modified";
+        StringTests[id: 27].result = StringTests[id: 2].description ~ "_modified";
         StringTests[id: 27].description = "direct_table_concat";
     }
 }

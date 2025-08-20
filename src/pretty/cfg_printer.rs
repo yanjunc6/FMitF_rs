@@ -697,7 +697,7 @@ impl<'a> CfgPrintVisitor<'a> {
             BinaryOp::Sub => "-".to_string(),
             BinaryOp::Mul => "*".to_string(),
             BinaryOp::Div => "/".to_string(),
-            BinaryOp::Concat => "++".to_string(), // Use ++ to represent concat in pretty printing
+            BinaryOp::Concat => "~".to_string(), // Use ~ to represent concat in pretty printing
             BinaryOp::Lt => "<".to_string(),
             BinaryOp::Lte => "<=".to_string(),
             BinaryOp::Gt => ">".to_string(),
