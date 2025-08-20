@@ -36,14 +36,41 @@ impl BoogieProgramGenerator {
 
     /// Generate string axioms and add to other_declarations
     pub fn gen_string_axioms(&mut self) {
-        let string_axioms = vec![
-            "// String model".to_string(),
-            "type String;".to_string(),
-            "function Concat(s1:String, s2:String) : String;".to_string(),
-            "function IntToString(i:int) : String;".to_string(),
-            "function RealToString(r:real) : String;".to_string(),
-            "const Empty : String;".to_string(),
-        ];
+        let string_axioms = vec!["// --------------------------
+            // Type and Operators
+            // --------------------------
+
+            type String;
+
+            const empty: String;
+
+            function Concat(x: String, y: String): String;
+            function IntToString(i: int): String;
+            function RealToString(r: real): String;
+
+
+            // --------------------------
+            // Axioms (with correct triggers)
+            // --------------------------
+
+            // Identity of empty for concat
+            axiom (forall s: String :: {Concat(empty, s)} Concat(empty, s) == s);
+            axiom (forall s: String :: {Concat(s, empty)} Concat(s, empty) == s);
+
+            // Injectivity of IntToString
+            axiom (forall i: int, j: int ::
+            { IntToString(i), IntToString(j) }
+            IntToString(i) == IntToString(j) ==> i == j);
+
+            // Injectivity of RealToString
+            axiom (forall x: real, y: real ::
+            { RealToString(x), RealToString(y) }
+            RealToString(x) == RealToString(y) ==> x == y);
+
+            // Conversions never yield empty
+            axiom (forall i: int :: {IntToString(i)} IntToString(i) != empty);
+            axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);"
+            .to_string()];
 
         self.program.other_declarations.extend(string_axioms);
     }
