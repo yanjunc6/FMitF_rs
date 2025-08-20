@@ -545,6 +545,65 @@ impl<'a> CfgBuilder<'a> {
         assign: &ast::AssignmentStatement,
         span: Span,
     ) -> Vec<BasicBlockId> {
+        // Check for table record assignment with record literal
+        if let (
+            ast::LValue::TableRecord {
+                table_name,
+                pk_fields,
+                pk_exprs,
+                resolved_table,
+                ..
+            },
+            rhs_expr,
+        ) = (&assign.lvalue, &self.ast.expressions[assign.rhs].node)
+        {
+            if let ast::ExpressionKind::RecordLiteral { fields, .. } = rhs_expr {
+                // This is a table record assignment with record literal
+
+                if fields.is_empty() {
+                    // Empty record assignment - add TODO comment and don't generate anything
+                    // TODO: Handle empty record assignments - should not generate any CFG statements
+                    return Vec::new();
+                }
+
+                // Expand non-empty record into multiple individual field assignments
+
+                // Process each field assignment individually
+                for field_assign in fields {
+                    // Create a new LValue for each field
+                    let field_lvalue = ast::LValue::TableField {
+                        table_name: table_name.clone(),
+                        pk_fields: pk_fields.clone(),
+                        pk_exprs: pk_exprs.clone(),
+                        field_name: field_assign.field_name.clone(),
+                        resolved_table: resolved_table.clone(),
+                        resolved_pk_fields: vec![None; pk_fields.len()], // Will be resolved later
+                        resolved_field: field_assign.resolved_field,
+                    };
+
+                    // Create individual assignment
+                    let field_assignment = ast::AssignmentStatement {
+                        lvalue: field_lvalue,
+                        operator: ast::AssignmentOperator::Assign,
+                        rhs: field_assign.value,
+                    };
+
+                    // Recursively process the individual field assignment
+                    self.visit_assignment(&field_assignment, span.clone());
+                }
+
+                return Vec::new();
+            } else if let ast::ExpressionKind::ArrayLiteral { elements, .. } = rhs_expr {
+                // Handle empty array literal (which might represent empty record {})
+                if elements.is_empty() {
+                    // Empty record assignment - add TODO comment and don't generate anything
+                    // TODO: Handle empty record assignments - should not generate any CFG statements
+                    return Vec::new();
+                }
+            }
+        }
+
+        // Normal assignment processing
         // Process RHS expression
         let (rhs_var, rhs_stmts) = self.visit_expression(assign.rhs);
         self.add_statements_to_current_block(rhs_stmts);
