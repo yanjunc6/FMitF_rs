@@ -228,7 +228,7 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
             VariableKind::Global => var.name.clone(),
             VariableKind::Parameter => format!("param_{}", var.name),
             VariableKind::Local => format!("local_{}", var.name),
-            VariableKind::Temporary => format!("temp_{}", var.name),
+            VariableKind::Temporary => format!("{}", var.name),
         };
 
         if let Some(prefix) = prefix {
