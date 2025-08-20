@@ -1,0 +1,47 @@
+// Test case for record assignment issues
+
+partition simple_partition(int x) = 0;
+
+table TestTable {
+    primary int id;
+    node simple_partition(id);
+    int field1;
+    string field2;
+    float field3;
+}
+
+table EmptyTable {
+    primary int id;
+    node simple_partition(id);
+}
+
+void test_record_assignment() {
+    hop {
+        // This should become multiple assignments:
+        // TestTable[1].field1 = 42;
+        // TestTable[1].field2 = "hello";
+        // TestTable[1].field3 = 3.14;
+        TestTable[id: 1] = {
+            field1: 42,
+            field2: "hello", 
+            field3: 3.14
+        };
+        
+        // This should add a TODO comment and not generate anything
+        EmptyTable[id: 1] = {};
+    }
+}
+
+void test_compound_assignment() {
+    hop {
+        // This should become:
+        // tmp = TestTable[2].field1;
+        // tmp2 = tmp + 5;
+        // TestTable[2].field1 = tmp2;
+        TestTable[id: 2].field1 += 5;
+        
+        // Test other compound operators too
+        TestTable[id: 3].field1 -= 10;
+        TestTable[id: 4].field3 *= 2.0;
+    }
+}
