@@ -351,6 +351,7 @@ src/
 
 # TODO-list
 
+- `+=` is wrong
 - dataflow & optimization has many TODO
 - for loop grammar is terrible
 - in compilation log, record boogie output; in cli interface, at commutativity stage, output how many edges elimated.

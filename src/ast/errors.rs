@@ -359,18 +359,3 @@ impl AstError {
         }
     }
 }
-
-/// Formats a list of errors for display.
-pub fn format_errors(errors: &[SpannedError]) -> String {
-    errors
-        .iter()
-        .map(|e| {
-            if let Some(span) = &e.span {
-                format!("Error at {}:{}: {}", span.line, span.column, e.error)
-            } else {
-                format!("Error: {}", e.error)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
