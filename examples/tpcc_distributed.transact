@@ -245,8 +245,8 @@ void Payment(int w_id, int d_id, int c_w_id, int c_d_id, int c_id, float amount)
         c.C_PAYMENT_CNT += 1;
 
         if (c.C_CREDIT == "BC") {
-            c.C_DATA = c.C_ID + " " + c.C_D_ID + " " + c.C_W_ID + " " + d_id + " " + w_id 
-                + " " + amount + " | " + c.C_DATA;
+            c.C_DATA = c.C_ID ~ " " ~ c.C_D_ID ~ " " ~ c.C_W_ID ~ " " ~ d_id ~ " " ~ w_id 
+                ~ " " ~ amount ~ " | " ~ c.C_DATA;
         }
         Customer[C_W_ID: c_w_id, C_D_ID: c_d_id, C_ID: c_id] = c;
     }
