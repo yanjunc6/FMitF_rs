@@ -1,0 +1,22 @@
+partition p1(int x);
+
+table Account {
+    primary int id;
+    int balance;
+    string name;
+    node p1(id);
+}
+
+void set_balance(int new_balance) {
+    hop {
+        Account a = Account[id: 1]; // copy every field from table
+        int old_balance = a.balance + 70;
+        a.balance = new_balance;
+        a.balance += old_balance;
+        a.name = "update" ~ " " ~ "" ~ "name";
+    }
+
+    hop {
+        Account[id: 1] = a; // assign every field to table
+    }
+}
