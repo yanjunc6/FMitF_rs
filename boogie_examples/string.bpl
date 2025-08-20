@@ -39,6 +39,20 @@ axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);
 
 
 // --------------------------
+// String literals as constants
+// --------------------------
+// For each literal lexeme in your source, declare one constant and reuse it.
+// Do NOT mark them 'unique' unless you want to force all literals to be distinct.
+// Reusing the same const name across the program ensures multiple occurrences
+// of the same literal refer to the same String value.
+
+const L_abc: String; // models the literal "abc"
+const L_def: String; // models the literal "def"
+// Add more as needed, e.g., const L_hello: String;
+
+// The empty literal "" is represented by 'empty' (no extra constant needed).
+
+// --------------------------
 // Tests / Verification Harness
 // --------------------------
 
@@ -139,6 +153,20 @@ procedure TestEqualityCongruence()
   assert Concat(empty, s1) == Concat(empty, s2);
 }
 
+procedure Test_SameLiteralIsSameSymbol()
+{
+  var a, b: String;
+  a := L_abc;
+  b := L_abc;
+  assert a == b; // same constant reused for the same literal
+}
+
+procedure Negative_Test_DoNotProveUnknownFacts()
+{
+  // Neither of these should be provable under the minimal model:
+  assert L_abc == L_def;     // should fail
+  assert L_abc != L_def;     // should also fail
+}
 
 // --------------------------
 // Main: Run all tests
@@ -158,4 +186,6 @@ procedure Main()
   call TestEqualityReflexivity();
   call TestEqualitySymmetry();
   call TestEqualityCongruence();
+  call Test_SameLiteralIsSameSymbol();
+  call Negative_Test_DoNotProveUnknownFacts();
 }

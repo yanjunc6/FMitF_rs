@@ -8,7 +8,8 @@ pub struct BoogieProgram {
     pub name: String, // program name, usually the input file name without extension
     pub global_vars: HashMap<String, BoogieVarDecl>, // global variables, var_name -> var_decl
     pub other_declarations: Vec<String>, // axiom, function, types; for global var, const: use global_vars
-    pub procedures: Vec<BoogieProcedure>, // procedures
+    pub global_string_literals: HashMap<String, BoogieVarDecl>, // string literal -> global string literals
+    pub procedures: Vec<BoogieProcedure>,                       // procedures
 }
 
 #[derive(Debug, Clone)]

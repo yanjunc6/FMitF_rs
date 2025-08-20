@@ -24,6 +24,7 @@ impl BoogieProgramGenerator {
                 name,
                 global_vars: HashMap::new(),
                 other_declarations: Vec::new(),
+                global_string_literals: HashMap::new(),
                 procedures: Vec::new(),
             },
         }
@@ -37,42 +38,83 @@ impl BoogieProgramGenerator {
     /// Generate string axioms and add to other_declarations
     pub fn gen_string_axioms(&mut self) {
         let string_axioms = vec!["// --------------------------
-            // Type and Operators
-            // --------------------------
+// Type and Operators
+// --------------------------
 
-            type String;
+type String;
 
-            const empty: String;
+const empty: String;
 
-            function Concat(x: String, y: String): String;
-            function IntToString(i: int): String;
-            function RealToString(r: real): String;
+function Concat(x: String, y: String): String;
+function IntToString(i: int): String;
+function RealToString(r: real): String;
 
 
-            // --------------------------
-            // Axioms (with correct triggers)
-            // --------------------------
+// --------------------------
+// Axioms (with correct triggers)
+// --------------------------
 
-            // Identity of empty for concat
-            axiom (forall s: String :: {Concat(empty, s)} Concat(empty, s) == s);
-            axiom (forall s: String :: {Concat(s, empty)} Concat(s, empty) == s);
+// Identity of empty for concat
+axiom (forall s: String :: {Concat(empty, s)} Concat(empty, s) == s);
+axiom (forall s: String :: {Concat(s, empty)} Concat(s, empty) == s);
 
-            // Injectivity of IntToString
-            axiom (forall i: int, j: int ::
-            { IntToString(i), IntToString(j) }
-            IntToString(i) == IntToString(j) ==> i == j);
+// Injectivity of IntToString
+axiom (forall i: int, j: int ::
+{ IntToString(i), IntToString(j) }
+IntToString(i) == IntToString(j) ==> i == j);
 
-            // Injectivity of RealToString
-            axiom (forall x: real, y: real ::
-            { RealToString(x), RealToString(y) }
-            RealToString(x) == RealToString(y) ==> x == y);
+// Injectivity of RealToString
+axiom (forall x: real, y: real ::
+{ RealToString(x), RealToString(y) }
+RealToString(x) == RealToString(y) ==> x == y);
 
-            // Conversions never yield empty
-            axiom (forall i: int :: {IntToString(i)} IntToString(i) != empty);
-            axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);"
+// Conversions never yield empty
+axiom (forall i: int :: {IntToString(i)} IntToString(i) != empty);
+axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);"
             .to_string()];
 
         self.program.other_declarations.extend(string_axioms);
+    }
+
+    /// Helper function to generate a global constant name for a string literal
+    /// For string literal "abc", generates "L_abc"
+    fn gen_string_literal_name(literal: &str) -> String {
+        // Sanitize the string for use as identifier
+        let sanitized: String = literal
+            .chars()
+            .map(|c| match c {
+                'a'..='z' | 'A'..='Z' | '0'..='9' | '_' => c,
+                _ => '_', // Replace any other character with underscore
+            })
+            .collect();
+
+        format!("L_{}", sanitized)
+    }
+
+    /// Add a string literal to the global string literals map
+    pub fn add_string_literal(&mut self, literal: &str) -> String {
+        if literal.is_empty() {
+            return "empty".to_string();
+        }
+
+        let const_name = Self::gen_string_literal_name(literal);
+
+        if !self
+            .program
+            .global_string_literals
+            .contains_key(&const_name)
+        {
+            let var_decl = BoogieVarDecl {
+                var_name: const_name.clone(),
+                var_type: BoogieType::UserDefined("String".to_string()),
+                is_const: true,
+            };
+            self.program
+                .global_string_literals
+                .insert(const_name.clone(), var_decl);
+        }
+
+        const_name
     }
 
     /// Generate global constants from CFG program
@@ -205,23 +247,24 @@ impl BoogieProgramGenerator {
 
     /// Convert CFG operand to Boogie expression with optional prefix
     pub fn convert_operand(
+        &mut self,
         cfg_program: &CfgProgram,
         operand: &Operand,
         prefix: Option<&str>,
     ) -> Results<BoogieExpr> {
         match operand {
             Operand::Var(var_id) => {
-                let var_name = Self::gen_var_name(cfg_program, *var_id, prefix);
+                let var_name = self.gen_var_name(cfg_program, *var_id, prefix);
                 Ok(BoogieExpr {
                     kind: BoogieExprKind::Var(var_name),
                 })
             }
-            Operand::Const(constant) => Self::convert_constant(constant),
+            Operand::Const(constant) => self.convert_constant(constant),
         }
     }
 
     /// Convert CFG constant to Boogie expression
-    pub fn convert_constant(constant: &Constant) -> Results<BoogieExpr> {
+    pub fn convert_constant(&mut self, constant: &Constant) -> Results<BoogieExpr> {
         match constant {
             Constant::Int(i) => Ok(BoogieExpr {
                 kind: BoogieExprKind::IntConst(*i),
@@ -232,10 +275,13 @@ impl BoogieProgramGenerator {
             Constant::Bool(b) => Ok(BoogieExpr {
                 kind: BoogieExprKind::BoolConst(*b),
             }),
-            Constant::String(_) => Err(vec![SpannedError {
-                error: VerificationError::StringConstantNotSupported,
-                span: None,
-            }]),
+            Constant::String(s) => {
+                // Generate the expected string literal constant name
+                let const_name = self.add_string_literal(s);
+                Ok(BoogieExpr {
+                    kind: BoogieExprKind::Var(const_name),
+                })
+            }
             Constant::Array(_) => Err(vec![SpannedError {
                 error: VerificationError::ArrayConstantNotSupported,
                 span: None,
