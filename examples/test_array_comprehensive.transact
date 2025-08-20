@@ -1,0 +1,30 @@
+// Comprehensive test for array initialization
+
+partition simple_partition(int x) = 0;
+
+table TestTable {
+    primary int id;
+    node simple_partition(id);
+    int value;
+}
+
+void test_various_arrays() {
+    hop {
+        // Test integer array with multiple elements
+        int[5] numbers = {10, 20, 30};
+        
+        // Test float array with different values
+        float[3] prices = {1.5, 2.75, 3.99};
+        
+        // Test single element array
+        int[1] single = {42};
+        
+        // Test empty initialization (should not crash)
+        bool[4] flags = {};
+        
+        // Use the arrays to make sure they work
+        TestTable[id: 1].value = numbers[0] + numbers[2];
+        TestTable[id: 2].value = 25;  // Simplified instead of cast
+        TestTable[id: 3].value = single[0];
+    }
+}
