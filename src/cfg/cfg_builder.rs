@@ -374,6 +374,9 @@ impl<'a> CfgBuilder<'a> {
                     cfg_hops.push(cfg_hop_id);
                 }
 
+                // Connect sequential hops with HopExit edges
+                builder.connect_sequential_hops(&cfg_hops);
+
                 // Set function's hop information (visit_hop already registers hops properly)
                 if !cfg_hops.is_empty() {
                     builder.cfg.functions[cfg_func_id].entry_hop = Some(cfg_hops[0]);
@@ -383,6 +386,51 @@ impl<'a> CfgBuilder<'a> {
         });
 
         cfg_func_id
+    }
+
+    /// Connect sequential hops with HopExit edges and add return to the last hop
+    fn connect_sequential_hops(&mut self, cfg_hops: &[HopId]) {
+        for i in 0..cfg_hops.len() {
+            let current_hop = cfg_hops[i];
+            let hop_cfg = &self.cfg.hops[current_hop];
+
+            // Find the exit block of this hop (the last block that doesn't have successors)
+            let mut exit_blocks = Vec::new();
+            for &block_id in &hop_cfg.blocks {
+                let block = &self.cfg.blocks[block_id];
+                if block.successors.is_empty() {
+                    exit_blocks.push(block_id);
+                }
+            }
+
+            // Connect each exit block to the next hop or add return
+            for exit_block_id in exit_blocks {
+                if i + 1 < cfg_hops.len() {
+                    // Not the last hop - add HopExit edge to next hop
+                    let next_hop = cfg_hops[i + 1];
+                    let next_hop_entry_block = self.cfg.hops[next_hop]
+                        .entry_block
+                        .expect("Next hop should have entry block");
+
+                    let edge = ControlFlowEdge {
+                        from: exit_block_id,
+                        to: next_hop_entry_block,
+                        edge_type: EdgeType::HopExit {
+                            next_hop: Some(next_hop),
+                        },
+                    };
+                    self.cfg.blocks[exit_block_id].successors.push(edge);
+                } else {
+                    // Last hop - add return edge
+                    let edge = ControlFlowEdge {
+                        from: exit_block_id,
+                        to: exit_block_id, // Self-reference for return
+                        edge_type: EdgeType::Return { value: None },
+                    };
+                    self.cfg.blocks[exit_block_id].successors.push(edge);
+                }
+            }
+        }
     }
 
     fn visit_parameters(&mut self, param_ids: &[ast::ParameterId]) -> Vec<VarId> {
@@ -418,19 +466,8 @@ impl<'a> CfgBuilder<'a> {
                     let _blocks = builder.visit_statement_list(&hop.statements);
                     // Blocks are automatically registered via create_basic_block and visit_statement_list
 
-                    // Add implicit void return if the hop doesn't end with an explicit return
-                    // This is necessary for proper liveness analysis and control flow
-                    if let Some(current_block_id) = builder.current_block {
-                        let current_block = &builder.cfg.blocks[current_block_id];
-                        let has_return_edge = current_block.successors.iter().any(|edge| {
-                            matches!(edge.edge_type, EdgeType::Return { .. } | EdgeType::Abort)
-                        });
-
-                        if !has_return_edge {
-                            // Add implicit void return for transaction functions
-                            builder.add_return_to_current_block(None);
-                        }
-                    }
+                    // Note: Do NOT add implicit return here - hop transitions will be handled
+                    // by connect_sequential_hops() after all hops are processed
                 });
 
                 self.finalize_hop_with_entry_block(cfg_hop_id, func_id, block_id);
@@ -603,6 +640,41 @@ impl<'a> CfgBuilder<'a> {
             }
         }
 
+        // Check for table assignment: TableAccess = table_variable
+        // This should expand to multiple field assignments: Table[key].field1 = var#field1, etc.
+        if let ast::LValue::TableRecord {
+            table_name,
+            pk_exprs,
+            resolved_table,
+            ..
+        } = &assign.lvalue
+        {
+            // Check if RHS is a variable reference
+            if let ast::ExpressionKind::Ident(name) = &self.ast.expressions[assign.rhs].node {
+                // Check if this variable is a table type
+                let scope_key = (self.current_function, name.clone());
+                if let Some(&table_var_id) = self.scoped_var_map.get(&scope_key) {
+                    if let TypeName::Table(rhs_table_name) = &self.cfg.variables[table_var_id].ty {
+                        // This is a table assignment: expand to multiple field assignments
+                        if rhs_table_name == table_name {
+                            return self.expand_table_assignment(
+                                table_name,
+                                pk_exprs,
+                                resolved_table,
+                                name,
+                                span,
+                            );
+                        } else {
+                            panic!(
+                                "Cannot assign table {} to table {}",
+                                rhs_table_name, table_name
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         // Normal assignment processing
         // Process RHS expression
         let (rhs_var, rhs_stmts) = self.visit_expression(assign.rhs);
@@ -655,7 +727,161 @@ impl<'a> CfgBuilder<'a> {
         var_decl: &ast::VarDeclStatement,
         span: Span,
     ) -> Vec<BasicBlockId> {
-        // NEW APPROACH: Create or get variable using scope + name
+        // Handle table type variables specially - decompose into field variables
+        if let ast::TypeName::Table(table_name) = &var_decl.var_type {
+            self.visit_table_var_decl(var_decl, table_name, span)
+        } else {
+            // Handle normal (non-table) variable declarations
+            self.visit_normal_var_decl(var_decl, span)
+        }
+    }
+
+    fn visit_table_var_decl(
+        &mut self,
+        var_decl: &ast::VarDeclStatement,
+        table_name: &str,
+        span: Span,
+    ) -> Vec<BasicBlockId> {
+        // Register the table variable in scope (as a dummy variable for field access resolution)
+        // but DON'T add it to local_variables since it's just syntax sugar
+        let scope_key = (self.current_function, var_decl.var_name.clone());
+        let table_var_id = self.get_or_create_variable(
+            &var_decl.var_name,
+            &TypeName::Table(table_name.to_string()),
+            VariableKind::Local,
+            &span,
+        );
+        self.scoped_var_map.insert(scope_key, table_var_id);
+        // NOTE: Deliberately NOT adding table_var_id to function's local_variables
+
+        // Find the table definition to get field information
+        let ast_table_id = self
+            .ast
+            .table_map
+            .get(table_name)
+            .copied()
+            .unwrap_or_else(|| panic!("Table {} not found in AST", table_name));
+
+        let ast_table = &self.ast.tables[ast_table_id];
+
+        // Create individual field variables with names like "var_name#field_name"
+        let mut field_vars = Vec::new();
+        for &field_id in &ast_table.fields {
+            let field = &self.ast.fields[field_id];
+            let field_var_name = format!("{}#{}", var_decl.var_name, field.field_name);
+
+            let field_var_id = self.get_or_create_variable(
+                &field_var_name,
+                &field.field_type,
+                VariableKind::Local,
+                &span,
+            );
+
+            field_vars.push((field_var_id, field.field_name.clone()));
+
+            // Add field variables to current function's local variables
+            if let Some(func_id) = self.current_function {
+                self.cfg.functions[func_id]
+                    .local_variables
+                    .push(field_var_id);
+            }
+        }
+
+        // Process initialization if present
+        if let Some(init_expr) = var_decl.init_value {
+            // Check if this is a table access like "Account[id: 1]"
+            if let ast::ExpressionKind::TableAccess {
+                table_name: init_table_name,
+                pk_exprs,
+                resolved_table,
+                ..
+            } = &self.ast.expressions[init_expr].node
+            {
+                // Ensure it's accessing the same table type
+                if init_table_name == table_name {
+                    // Get primary key field information first
+                    let cfg_table_id = *self.table_map.get(&ast_table_id).unwrap();
+                    let primary_key_field_ids = self.cfg.tables[cfg_table_id].primary_keys.clone();
+
+                    // Collect field information to avoid borrowing conflicts
+                    let field_info: Vec<_> = field_vars
+                        .iter()
+                        .map(|(field_var_id, field_name)| {
+                            let cfg_field_id = self.cfg.tables[cfg_table_id]
+                                .fields
+                                .iter()
+                                .find(|&&fid| self.cfg.fields[fid].name == *field_name)
+                                .copied()
+                                .unwrap_or_else(|| {
+                                    panic!("Field {} not found in table {}", field_name, table_name)
+                                });
+                            (
+                                *field_var_id,
+                                field_name.clone(),
+                                cfg_field_id,
+                                primary_key_field_ids.contains(&cfg_field_id),
+                            )
+                        })
+                        .collect();
+
+                    // Generate field copy assignments: var#field = value
+                    for (field_var_id, field_name, _cfg_field_id, is_primary_key) in field_info {
+                        if is_primary_key {
+                            // This is a primary key field - assign directly from pk expression
+                            if let Some(&pk_expr) = pk_exprs.first() {
+                                let (pk_var, pk_stmts) = self.visit_expression(pk_expr);
+                                self.add_statements_to_current_block(pk_stmts);
+
+                                // Direct assignment: var#field = pk_value
+                                let assign_stmt = Statement::Assign {
+                                    lvalue: LValue::Variable { var: field_var_id },
+                                    rvalue: RValue::Use(Operand::Var(pk_var)),
+                                    span: span.clone(),
+                                };
+                                self.add_statement_to_current_block(assign_stmt);
+                            } else {
+                                panic!("No primary key expression found for table access");
+                            }
+                        } else {
+                            // Non-primary key field - access from table
+                            let (src_var, src_stmts) = self.create_table_field_access(
+                                init_table_name,
+                                pk_exprs,
+                                resolved_table,
+                                &field_name,
+                                span.clone(),
+                            );
+                            self.add_statements_to_current_block(src_stmts);
+
+                            // Create assignment: var#field = src
+                            let assign_stmt = Statement::Assign {
+                                lvalue: LValue::Variable { var: field_var_id },
+                                rvalue: RValue::Use(Operand::Var(src_var)),
+                                span: span.clone(),
+                            };
+                            self.add_statement_to_current_block(assign_stmt);
+                        }
+                    }
+                } else {
+                    panic!(
+                        "Cannot initialize {} with table access to {}",
+                        table_name, init_table_name
+                    );
+                }
+            } else {
+                panic!("Table variables can only be initialized with table access expressions");
+            }
+        }
+
+        Vec::new()
+    }
+
+    fn visit_normal_var_decl(
+        &mut self,
+        var_decl: &ast::VarDeclStatement,
+        span: Span,
+    ) -> Vec<BasicBlockId> {
+        // Original implementation for non-table variables
         let cfg_var_id = self.get_or_create_variable(
             &var_decl.var_name,
             &var_decl.var_type,
@@ -1396,46 +1622,38 @@ impl<'a> CfgBuilder<'a> {
         field_name: &str,
         span: Span,
     ) -> (VarId, Vec<Statement>) {
+        // Check if this is a table variable that has been decomposed
+        let object_var_name = &self.cfg.variables[object_var].name;
+
+        if let TypeName::Table(table_name) = &self.cfg.variables[object_var].ty {
+            // This is a table variable - look for the decomposed field variable
+            let field_var_name = format!("{}#{}", object_var_name, field_name);
+
+            // Try to find the decomposed field variable
+            let field_scope_key = (self.current_function, field_var_name.clone());
+            if let Some(&field_var_id) = self.scoped_var_map.get(&field_scope_key) {
+                // Return the field variable directly - no statements needed
+                return (field_var_id, Vec::new());
+            } else {
+                panic!(
+                    "Field variable {}#{} not found for table type {}",
+                    object_var_name, field_name, table_name
+                );
+            }
+        }
+
+        // For non-table types (shouldn't happen with current grammar, but keep for safety)
         let mut stmts = Vec::new();
-
-        // Get object type - for now assume it's a table type
-        let result_type = match &self.cfg.variables[object_var].ty {
-            TypeName::Table(table_name) => {
-                // Find the field in the table and return its type
-                let table_id = self
-                    .ast
-                    .table_map
-                    .get(table_name)
-                    .and_then(|&ast_table_id| self.table_map.get(&ast_table_id))
-                    .copied()
-                    .unwrap_or_else(|| panic!("Table {} not found", table_name));
-
-                let table_info = &self.cfg.tables[table_id];
-                let field_id = table_info
-                    .fields
-                    .iter()
-                    .find(|&&fid| self.cfg.fields[fid].name == *field_name)
-                    .copied()
-                    .unwrap_or_else(|| {
-                        panic!("Field {} not found in table {}", field_name, table_name)
-                    });
-
-                self.cfg.fields[field_id].ty.clone()
-            }
-            _ => {
-                // For non-table types, default to string - this needs proper type system extension
-                TypeName::String
-            }
-        };
-
+        let result_type = TypeName::String; // Default fallback
         let result = self.create_temp_variable(result_type);
 
-        // Create a placeholder assignment - this would need proper field access implementation
-        stmts.push(Statement::Assign {
+        // Create a placeholder assignment
+        let assign = Statement::Assign {
             lvalue: LValue::Variable { var: result },
-            rvalue: RValue::Use(Operand::Var(object_var)), // Placeholder - needs proper field access
+            rvalue: RValue::Use(Operand::Const(Constant::String(String::new()))),
             span,
-        });
+        };
+        stmts.push(assign);
 
         (result, stmts)
     }
@@ -1594,37 +1812,20 @@ impl<'a> CfgBuilder<'a> {
                 // Try to find if this is a table variable and resolve the field
                 let object_type = &self.cfg.variables[object_var].ty;
                 match object_type {
-                    TypeName::Table(table_name) => {
-                        // Find the table and field
-                        let table_id = self
-                            .ast
-                            .table_map
-                            .get(table_name)
-                            .and_then(|&ast_table_id| self.table_map.get(&ast_table_id))
-                            .copied()
-                            .unwrap_or_else(|| {
-                                panic!("Table {} not found for field access", table_name)
-                            });
+                    TypeName::Table(_table_name) => {
+                        // This is a table variable field access on LHS - redirect to field variable
+                        let object_var_name = &self.cfg.variables[object_var].name;
+                        let field_var_name = format!("{}#{}", object_var_name, field_name);
+                        let field_scope_key = (self.current_function, field_var_name.clone());
 
-                        let table_info = &self.cfg.tables[table_id];
-                        let field_id = table_info
-                            .fields
-                            .iter()
-                            .find(|&&fid| self.cfg.fields[fid].name == *field_name)
-                            .copied()
-                            .unwrap_or_else(|| {
-                                panic!("Field {} not found in table {}", field_name, table_name)
-                            });
-
-                        // Create primary key values from the object variable
-                        // This is a simplified approach - we'd need the actual PK values
-                        let pk_values = vec![Operand::Var(object_var)];
-
-                        LValue::TableField {
-                            table: table_id,
-                            pk_fields: table_info.primary_keys.clone(),
-                            pk_values,
-                            field: field_id,
+                        if let Some(&field_var_id) = self.scoped_var_map.get(&field_scope_key) {
+                            // Return the field variable directly for assignment
+                            LValue::Variable { var: field_var_id }
+                        } else {
+                            panic!(
+                                "Field variable {}#{} not found for table field assignment",
+                                object_var_name, field_name
+                            );
                         }
                     }
                     _ => {
@@ -2214,5 +2415,152 @@ impl<'a> CfgBuilder<'a> {
                 }
             }
         }
+    }
+
+    /// Helper method to create a table field access expression
+    /// Used for decomposing table variables - creates Table[key].field access
+    fn create_table_field_access(
+        &mut self,
+        table_name: &str,
+        pk_exprs: &[ast::ExpressionId],
+        resolved_table: &Option<ast::TableId>,
+        field_name: &str,
+        span: Span,
+    ) -> (VarId, Vec<Statement>) {
+        let mut stmts = Vec::new();
+
+        // Process the primary key expressions
+        let mut key_vars = Vec::new();
+        for &pk_expr in pk_exprs {
+            let (key_var, key_stmts) = self.visit_expression(pk_expr);
+            stmts.extend(key_stmts);
+            key_vars.push(Operand::Var(key_var));
+        }
+
+        // Find the table and field information
+        let cfg_table_id = if let Some(ast_table_id) = resolved_table {
+            self.table_map
+                .get(ast_table_id)
+                .copied()
+                .unwrap_or_else(|| panic!("Table {} not found in CFG mapping", table_name))
+        } else {
+            panic!("Unresolved table {} in table access", table_name);
+        };
+
+        // Find the field in the table
+        let cfg_table = &self.cfg.tables[cfg_table_id];
+
+        // Get primary key fields
+        let pk_fields = cfg_table.primary_keys.clone();
+
+        // Find the specific field being accessed
+        let field_id = cfg_table
+            .fields
+            .iter()
+            .find(|&&fid| self.cfg.fields[fid].name == field_name)
+            .copied()
+            .unwrap_or_else(|| panic!("Field {} not found in table {}", field_name, table_name));
+
+        let field_type = self.cfg.fields[field_id].ty.clone();
+        let result_var = self.create_temp_variable(field_type);
+
+        // Create table field access statement
+        let access_stmt = Statement::Assign {
+            lvalue: LValue::Variable { var: result_var },
+            rvalue: RValue::TableAccess {
+                table: cfg_table_id,
+                pk_fields,
+                pk_values: key_vars,
+                field: field_id,
+            },
+            span,
+        };
+        stmts.push(access_stmt);
+
+        (result_var, stmts)
+    }
+
+    /// Expand table assignment like `Account[id: 1] = a` into multiple field assignments
+    fn expand_table_assignment(
+        &mut self,
+        table_name: &str,
+        pk_exprs: &[ast::ExpressionId],
+        resolved_table: &Option<ast::TableId>,
+        table_var_name: &str,
+        span: Span,
+    ) -> Vec<BasicBlockId> {
+        // Get the table definition to find all fields
+        let ast_table_id = resolved_table
+            .as_ref()
+            .copied()
+            .or_else(|| self.ast.table_map.get(table_name).copied())
+            .unwrap_or_else(|| panic!("Table {} not found", table_name));
+
+        // Process primary key expressions first
+        let mut pk_values = Vec::new();
+        for &pk_expr in pk_exprs {
+            let (pk_var, pk_stmts) = self.visit_expression(pk_expr);
+            self.add_statements_to_current_block(pk_stmts);
+            pk_values.push(Operand::Var(pk_var));
+        }
+
+        // Get table information
+        let cfg_table_id = *self.table_map.get(&ast_table_id).unwrap();
+        let pk_fields = self.cfg.tables[cfg_table_id].primary_keys.clone();
+        let field_ids_with_names: Vec<_> = self.ast.tables[ast_table_id]
+            .fields
+            .iter()
+            .map(|&field_id| {
+                let field = &self.ast.fields[field_id];
+                let field_name = field.field_name.clone();
+                let cfg_field_id = self.cfg.tables[cfg_table_id]
+                    .fields
+                    .iter()
+                    .find(|&&fid| self.cfg.fields[fid].name == field_name)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        panic!("Field {} not found in table {}", field_name, table_name)
+                    });
+                (field_name, cfg_field_id)
+            })
+            .collect();
+
+        // For each field in the table, create an assignment: Table[key].field = var#field
+        // BUT skip primary key fields - they should never be assigned back
+        for (field_name, cfg_field_id) in field_ids_with_names {
+            // Skip primary key fields
+            if pk_fields.contains(&cfg_field_id) {
+                continue;
+            }
+
+            // Create the field variable name (source)
+            let field_var_name = format!("{}#{}", table_var_name, field_name);
+            let field_scope_key = (self.current_function, field_var_name.clone());
+
+            if let Some(&field_var_id) = self.scoped_var_map.get(&field_scope_key) {
+                let lvalue = LValue::TableField {
+                    table: cfg_table_id,
+                    pk_fields: pk_fields.clone(),
+                    pk_values: pk_values.clone(),
+                    field: cfg_field_id,
+                };
+
+                // Create the assignment statement: Table[key].field = var#field
+                let assign_stmt = Statement::Assign {
+                    lvalue,
+                    rvalue: RValue::Use(Operand::Var(field_var_id)),
+                    span: span.clone(),
+                };
+
+                self.add_statement_to_current_block(assign_stmt);
+            } else {
+                panic!(
+                    "Field variable {} not found for table assignment",
+                    field_var_name
+                );
+            }
+        }
+
+        Vec::new()
     }
 }
