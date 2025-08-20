@@ -48,6 +48,7 @@ const empty: String;
 function Concat(x: String, y: String): String;
 function IntToString(i: int): String;
 function RealToString(r: real): String;
+function BoolToString(b: bool): String;
 
 
 // --------------------------
@@ -68,9 +69,15 @@ axiom (forall x: real, y: real ::
 { RealToString(x), RealToString(y) }
 RealToString(x) == RealToString(y) ==> x == y);
 
+// Injectivity of BoolToString
+axiom (forall x: bool, y: bool ::
+{ BoolToString(x), BoolToString(y) }
+BoolToString(x) == BoolToString(y) ==> x == y);
+
 // Conversions never yield empty
 axiom (forall i: int :: {IntToString(i)} IntToString(i) != empty);
-axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);"
+axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);
+axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
             .to_string()];
 
         self.program.other_declarations.extend(string_axioms);
@@ -305,10 +312,115 @@ axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);"
             BinaryOp::Neq => BoogieBinOp::Ne,
             BinaryOp::And => BoogieBinOp::And,
             BinaryOp::Or => BoogieBinOp::Or,
+            BinaryOp::Concat => panic!("Concat should be handled as function call, not binary op"),
         }
     }
 
-    /// Convert CFG unary operation to Boogie unary operation
+    /// Convert CFG operand to Boogie expression, automatically converting to string if needed
+    pub fn convert_operand_to_string(
+        &mut self,
+        cfg_program: &CfgProgram,
+        operand: &Operand,
+        prefix: Option<&str>,
+    ) -> Results<BoogieExpr> {
+        match operand {
+            Operand::Var(var_id) => {
+                let var = &cfg_program.variables[*var_id];
+                let var_name = Self::gen_var_name(cfg_program, *var_id, prefix);
+
+                match var.ty {
+                    TypeName::String => Ok(BoogieExpr {
+                        kind: BoogieExprKind::Var(var_name),
+                    }),
+                    TypeName::Int => Ok(BoogieExpr {
+                        kind: BoogieExprKind::FunctionCall {
+                            name: "IntToString".to_string(),
+                            args: vec![BoogieExpr {
+                                kind: BoogieExprKind::Var(var_name),
+                            }],
+                        },
+                    }),
+                    TypeName::Float => Ok(BoogieExpr {
+                        kind: BoogieExprKind::FunctionCall {
+                            name: "RealToString".to_string(),
+                            args: vec![BoogieExpr {
+                                kind: BoogieExprKind::Var(var_name),
+                            }],
+                        },
+                    }),
+                    TypeName::Bool => Ok(BoogieExpr {
+                        kind: BoogieExprKind::FunctionCall {
+                            name: "BoolToString".to_string(), // TODO: Add this function to axioms
+                            args: vec![BoogieExpr {
+                                kind: BoogieExprKind::Var(var_name),
+                            }],
+                        },
+                    }),
+                    _ => {
+                        todo!("Implement conversion for other types")
+                    }
+                }
+            }
+            Operand::Const(constant) => {
+                match constant {
+                    Constant::String(s) => {
+                        let const_name = self.add_string_literal(s);
+                        Ok(BoogieExpr {
+                            kind: BoogieExprKind::Var(const_name),
+                        })
+                    }
+                    Constant::Int(i) => Ok(BoogieExpr {
+                        kind: BoogieExprKind::FunctionCall {
+                            name: "IntToString".to_string(),
+                            args: vec![BoogieExpr {
+                                kind: BoogieExprKind::IntConst(*i),
+                            }],
+                        },
+                    }),
+                    Constant::Float(f) => Ok(BoogieExpr {
+                        kind: BoogieExprKind::FunctionCall {
+                            name: "RealToString".to_string(),
+                            args: vec![BoogieExpr {
+                                kind: BoogieExprKind::RealConst(f.into_inner()),
+                            }],
+                        },
+                    }),
+                    Constant::Bool(b) => Ok(BoogieExpr {
+                        kind: BoogieExprKind::FunctionCall {
+                            name: "BoolToString".to_string(), // TODO: Add this function to axioms
+                            args: vec![BoogieExpr {
+                                kind: BoogieExprKind::BoolConst(*b),
+                            }],
+                        },
+                    }),
+                    Constant::Array(_) => Err(vec![SpannedError {
+                        error: VerificationError::ArrayConstantNotSupported,
+                        span: None,
+                    }]),
+                }
+            }
+        }
+    }
+
+    /// Infer the type of an operand for concatenation logic
+    pub fn infer_operand_type(
+        &self,
+        cfg_program: &CfgProgram,
+        operand: &Operand,
+    ) -> Option<TypeName> {
+        match operand {
+            Operand::Var(var_id) => Some(cfg_program.variables[*var_id].ty.clone()),
+            Operand::Const(constant) => {
+                match constant {
+                    Constant::Int(_) => Some(TypeName::Int),
+                    Constant::Float(_) => Some(TypeName::Float),
+                    Constant::Bool(_) => Some(TypeName::Bool),
+                    Constant::String(_) => Some(TypeName::String),
+                    Constant::Array(_) => None, // Arrays not fully supported yet
+                }
+            }
+        }
+    }
     pub fn convert_unary_op(op: &UnaryOp) -> Results<BoogieUnOp> {
         match op {
             UnaryOp::Not => Ok(BoogieUnOp::Not),
@@ -387,17 +499,35 @@ axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);"
                 })
             }
             RValue::BinaryOp { op, left, right } => {
-                let boogie_op = Self::convert_binary_op(op);
                 let left_expr = self.convert_operand(cfg_program, left, prefix)?;
                 let right_expr = self.convert_operand(cfg_program, right, prefix)?;
 
-                Ok(BoogieExpr {
-                    kind: BoogieExprKind::BinOp(
-                        Box::new(left_expr),
-                        boogie_op,
-                        Box::new(right_expr),
-                    ),
-                })
+                match op {
+                    BinaryOp::Concat => {
+                        // Handle string concatenation with type conversion
+                        let left_converted =
+                            self.convert_operand_to_string(cfg_program, left, prefix)?;
+                        let right_converted =
+                            self.convert_operand_to_string(cfg_program, right, prefix)?;
+
+                        Ok(BoogieExpr {
+                            kind: BoogieExprKind::FunctionCall {
+                                name: "Concat".to_string(),
+                                args: vec![left_converted, right_converted],
+                            },
+                        })
+                    }
+                    _ => {
+                        let boogie_op = Self::convert_binary_op(op);
+                        Ok(BoogieExpr {
+                            kind: BoogieExprKind::BinOp(
+                                Box::new(left_expr),
+                                boogie_op,
+                                Box::new(right_expr),
+                            ),
+                        })
+                    }
+                }
             }
         }
     }

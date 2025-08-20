@@ -155,6 +155,18 @@ impl Display for BoogieExprKind {
             BoogieExprKind::RealConst(r) => write!(f, "{}", r),
             BoogieExprKind::BoolConst(b) => write!(f, "{}", b),
 
+            // ───── function call ─────
+            BoogieExprKind::FunctionCall { name, args } => {
+                write!(f, "{}(", name)?;
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", arg)?;
+                }
+                write!(f, ")")
+            }
+
             // ───── unary ─────
             BoogieExprKind::UnOp(op, e) => write!(f, "{}{}", op, wrap(e)),
 
