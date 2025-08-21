@@ -13,6 +13,7 @@ pub enum VerificationError {
     StringConstantNotSupported,
     ArrayConstantNotSupported,
     IncrementDecrementNotSupported,
+    HopNotFoundInFunction,
 }
 
 impl std::fmt::Display for VerificationError {
@@ -30,6 +31,7 @@ impl VerificationError {
             VerificationError::StringConstantNotSupported => "StringConstantNotSupported",
             VerificationError::ArrayConstantNotSupported => "ArrayConstantNotSupported",
             VerificationError::IncrementDecrementNotSupported => "IncrementDecrementNotSupported",
+            VerificationError::HopNotFoundInFunction => "HopNotFoundInFunction",
         }
     }
 
@@ -45,6 +47,7 @@ impl VerificationError {
             VerificationError::IncrementDecrementNotSupported => {
                 "Increment/decrement operators are not supported".to_string()
             }
+            VerificationError::HopNotFoundInFunction => "Hop not found in any function".to_string(),
         }
     }
 }

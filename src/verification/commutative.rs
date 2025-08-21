@@ -35,10 +35,8 @@ struct SpecialInterleavings {
     b_then_a: Interleaving,
 }
 
-/// Liveness analysis results for slice commutativity verification
-/// TODO: change its name to analysis info would be better. After generate the live-in var, live-out var, please also record table written and read by slice A and B.
-/// also, record the table written by last hop of slice A and B individually
-struct SliceLivenessInfo {
+/// Analysis results for slice commutativity verification
+struct SliceAnalysisInfo {
     /// All variables that are live-in or live-out for either slice
     live_vars: Vec<VarId>,
     /// Variables live-in to slice A
@@ -49,6 +47,18 @@ struct SliceLivenessInfo {
     live_in_b: HashSet<VarId>,
     /// Variables live-out from slice B
     live_out_b: HashSet<VarId>,
+    /// Tables read by slice A
+    tables_read_a: HashSet<String>,
+    /// Tables written by slice A
+    tables_written_a: HashSet<String>,
+    /// Tables read by slice B
+    tables_read_b: HashSet<String>,
+    /// Tables written by slice B
+    tables_written_b: HashSet<String>,
+    /// Tables written by last hop of slice A
+    tables_written_last_hop_a: HashSet<String>,
+    /// Tables written by last hop of slice B
+    tables_written_last_hop_b: HashSet<String>,
 }
 
 /// Variable snapshot names for tracking state
@@ -152,7 +162,7 @@ impl CommutativeVerificationManager {
         let special = self.extract_special_interleavings(&unit.hops_A, &unit.hops_B);
 
         // Analyze liveness for both slices
-        let liveness_info = self.analyze_slice_liveness(cfg_program, &unit.hops_A, &unit.hops_B)?;
+        let analysis_info = Self::analyze_slice_info(cfg_program, unit)?;
 
         let mut lines = Vec::new();
 
@@ -167,17 +177,17 @@ impl CommutativeVerificationManager {
         );
 
         // Step 1: Havoc all tables and live-in variables to create initial state
-        self.havoc_initial_state(generator, cfg_program, &liveness_info, &mut lines)?;
+        self.havoc_initial_state(generator, cfg_program, &analysis_info, &mut lines)?;
 
         // Step 2: Save initial state for restoration
-        self.save_initial_state(generator, cfg_program, &liveness_info, &mut lines)?;
+        self.save_initial_state(generator, cfg_program, &analysis_info, &mut lines)?;
 
         // Step 3: Execute the two special interleavings and save their final states
         let (a_then_b_vars, b_then_a_vars) = self.execute_special_interleavings(
             generator,
             cfg_program,
             &special,
-            &liveness_info,
+            &analysis_info,
             &mut lines,
         )?;
 
@@ -188,7 +198,7 @@ impl CommutativeVerificationManager {
                 cfg_program,
                 interleaving,
                 i,
-                &liveness_info,
+                &analysis_info,
                 &a_then_b_vars,
                 &b_then_a_vars,
                 &mut lines,
@@ -198,31 +208,12 @@ impl CommutativeVerificationManager {
         // Generate procedure parameters (empty for this verification)
         let params = Vec::new();
 
-        // Collect all modified globals
-        // TODO: use better way to collect modifed globals
+        // Collect all modified globals using analysis info
         let mut modifies = HashSet::new();
 
-        // Add table variables that might be modified
-        for &table_id in &cfg_program.root_tables {
-            let table = &cfg_program.tables[table_id];
-            for &field_id in &table.fields {
-                let field = &cfg_program.fields[field_id];
-                modifies.insert(BoogieProgramGenerator::gen_table_field_var_name(
-                    &table.name,
-                    &field.name,
-                ));
-            }
-        }
-
-        // Add live variables that might be modified
-        // TODO: live variable should not be collected
-        for var_id in liveness_info.live_vars.iter() {
-            modifies.insert(BoogieProgramGenerator::gen_var_name(
-                cfg_program,
-                *var_id,
-                None,
-            ));
-        }
+        // Add table variables that are written by either slice
+        modifies.extend(analysis_info.tables_written_a.iter().cloned());
+        modifies.extend(analysis_info.tables_written_b.iter().cloned());
 
         let procedure = BoogieProcedure {
             name: procedure_name,
@@ -417,15 +408,17 @@ impl CommutativeVerificationManager {
         SpecialInterleavings { a_then_b, b_then_a }
     }
 
-    /// Analyze liveness for both slices to determine live-in/live-out variables, and also table written and read by each slice
-    /// tODO: change its name
-    fn analyze_slice_liveness(
-        &self,
+    /// Analyze liveness and table access for both slices
+    fn analyze_slice_info(
         cfg_program: &CfgProgram,
-        slice_a: &[HopId],
-        slice_b: &[HopId],
-    ) -> Results<SliceLivenessInfo> {
-        use crate::dataflow::{analyze_live_variables, LiveVar};
+        unit: &CommutativeUnit,
+    ) -> Results<SliceAnalysisInfo> {
+        use crate::dataflow::{analyze_live_variables, analyze_table_mod_ref, AccessType, LiveVar};
+
+        let slice_a = &unit.hops_A;
+        let slice_b = &unit.hops_B;
+        let func_a = &cfg_program.functions[unit.func_id_A];
+        let func_b = &cfg_program.functions[unit.func_id_B];
 
         let mut all_live_vars = HashSet::new();
         let mut live_in_a = HashSet::new();
@@ -433,50 +426,157 @@ impl CommutativeVerificationManager {
         let mut live_in_b = HashSet::new();
         let mut live_out_b = HashSet::new();
 
-        // Analyze liveness for each hop in both slices
-        for &hop_id in slice_a.iter().chain(slice_b.iter()) {
-            let hop = &cfg_program.hops[hop_id];
+        let mut tables_read_a = HashSet::new();
+        let mut tables_written_a = HashSet::new();
+        let mut tables_read_b = HashSet::new();
+        let mut tables_written_b = HashSet::new();
+        let mut tables_written_last_hop_a = HashSet::new();
+        let mut tables_written_last_hop_b = HashSet::new();
 
-            //TODO: take commutative unit as function input so no need to find the function id then, it is stored in the edge
-            let function = cfg_program
-                .functions
-                .iter()
-                .find(|(_, func)| func.hops.contains(&hop_id))
-                .map(|(_, func)| func)
-                .ok_or_else(|| {
-                    vec![SpannedError {
-                        error: VerificationError::StringConstantNotSupported, // TODO: create another error in errors.rs
-                        span: None,
-                    }]
-                })?;
+        // Analyze liveness for function A
+        let liveness_results_a = analyze_live_variables(func_a, cfg_program);
 
-            let liveness_results = analyze_live_variables(function, cfg_program);
-
-            // Collect live variables from all basic blocks in this hop
-            // TODO: for each slice, take the entry point of the beginning of slices and the exit point of the end of slices.
-            // TODO: entry point should be HopCfg.entry_block. exit point should be all the BB's successors where the edge of
-            //          type hopexit/return/abort, store them directly, the live var in between should not be stored
-            for &block_id in &hop.blocks {
-                if let Some(live_vars) = liveness_results.block_entry.get(&block_id) {
+        // Get entry and exit blocks for slice A
+        if let Some(&first_hop_a) = slice_a.first() {
+            let first_hop_cfg_a = &cfg_program.hops[first_hop_a];
+            if let Some(entry_block_a) = first_hop_cfg_a.entry_block.clone() {
+                if let Some(live_vars) = liveness_results_a.block_entry.get(&entry_block_a) {
                     if let Some(var_set) = live_vars.as_set() {
                         for LiveVar(var_id) in var_set {
+                            live_in_a.insert(*var_id);
                             all_live_vars.insert(*var_id);
+                        }
+                    }
+                }
+            }
+        }
 
-                            if slice_a.contains(&hop_id) {
-                                if hop_id == slice_a[0] {
-                                    live_in_a.insert(*var_id);
-                                }
-                                if hop_id == slice_a[slice_a.len() - 1] {
-                                    live_out_a.insert(*var_id);
+        if let Some(&last_hop_a) = slice_a.last() {
+            let last_hop_cfg_a = &cfg_program.hops[last_hop_a];
+            // Find exit blocks (blocks with HopExit/Return/Abort edges)
+            for &block_id in &last_hop_cfg_a.blocks {
+                let block = &cfg_program.blocks[block_id];
+                for edge in &block.successors {
+                    match &edge.edge_type {
+                        crate::cfg::EdgeType::HopExit { .. }
+                        | crate::cfg::EdgeType::Return { .. }
+                        | crate::cfg::EdgeType::Abort => {
+                            if let Some(live_vars) = liveness_results_a.block_exit.get(&block_id) {
+                                if let Some(var_set) = live_vars.as_set() {
+                                    for LiveVar(var_id) in var_set {
+                                        live_out_a.insert(*var_id);
+                                        all_live_vars.insert(*var_id);
+                                    }
                                 }
                             }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
 
-                            if slice_b.contains(&hop_id) {
-                                if hop_id == slice_b[0] {
-                                    live_in_b.insert(*var_id);
+        // Analyze liveness for function B (if different from A)
+        if unit.func_id_A != unit.func_id_B {
+            let liveness_results_b = analyze_live_variables(func_b, cfg_program);
+
+            if let Some(&first_hop_b) = slice_b.first() {
+                let first_hop_cfg_b = &cfg_program.hops[first_hop_b];
+                if let Some(entry_block_b) = first_hop_cfg_b.entry_block.clone() {
+                    if let Some(live_vars) = liveness_results_b.block_entry.get(&entry_block_b) {
+                        if let Some(var_set) = live_vars.as_set() {
+                            for LiveVar(var_id) in var_set {
+                                live_in_b.insert(*var_id);
+                                all_live_vars.insert(*var_id);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(&last_hop_b) = slice_b.last() {
+                let last_hop_cfg_b = &cfg_program.hops[last_hop_b];
+                for &block_id in &last_hop_cfg_b.blocks {
+                    let block = &cfg_program.blocks[block_id];
+                    for edge in &block.successors {
+                        match &edge.edge_type {
+                            crate::cfg::EdgeType::HopExit { .. }
+                            | crate::cfg::EdgeType::Return { .. }
+                            | crate::cfg::EdgeType::Abort => {
+                                if let Some(live_vars) =
+                                    liveness_results_b.block_exit.get(&block_id)
+                                {
+                                    if let Some(var_set) = live_vars.as_set() {
+                                        for LiveVar(var_id) in var_set {
+                                            live_out_b.insert(*var_id);
+                                            all_live_vars.insert(*var_id);
+                                        }
+                                    }
                                 }
-                                if hop_id == slice_b[slice_b.len() - 1] {
-                                    live_out_b.insert(*var_id);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        } else {
+            // Same function, use the same liveness results
+            if let Some(&first_hop_b) = slice_b.first() {
+                let first_hop_cfg_b = &cfg_program.hops[first_hop_b];
+                if let Some(&entry_block_b) = first_hop_cfg_b.blocks.first() {
+                    if let Some(live_vars) = liveness_results_a.block_entry.get(&entry_block_b) {
+                        if let Some(var_set) = live_vars.as_set() {
+                            for LiveVar(var_id) in var_set {
+                                live_in_b.insert(*var_id);
+                                all_live_vars.insert(*var_id);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(&last_hop_b) = slice_b.last() {
+                let last_hop_cfg_b = &cfg_program.hops[last_hop_b];
+                for &block_id in &last_hop_cfg_b.blocks {
+                    let block = &cfg_program.blocks[block_id];
+                    for edge in &block.successors {
+                        match &edge.edge_type {
+                            crate::cfg::EdgeType::HopExit { .. }
+                            | crate::cfg::EdgeType::Return { .. }
+                            | crate::cfg::EdgeType::Abort => {
+                                if let Some(live_vars) =
+                                    liveness_results_a.block_exit.get(&block_id)
+                                {
+                                    if let Some(var_set) = live_vars.as_set() {
+                                        for LiveVar(var_id) in var_set {
+                                            live_out_b.insert(*var_id);
+                                            all_live_vars.insert(*var_id);
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        // Analyze table access for slice A
+        let table_analysis_a = analyze_table_mod_ref(func_a, cfg_program);
+        for &hop_id in slice_a {
+            let hop_cfg = &cfg_program.hops[hop_id];
+            for &block_id in &hop_cfg.blocks {
+                if let Some(block_exit) = table_analysis_a.block_exit.get(&block_id) {
+                    if let Some(access_set) = block_exit.as_set() {
+                        for table_access in access_set {
+                            let table_name = format!("table_{}", table_access.table.index());
+                            match table_access.access_type {
+                                AccessType::Read => {
+                                    tables_read_a.insert(table_name);
+                                }
+                                AccessType::Write => {
+                                    tables_written_a.insert(table_name);
                                 }
                             }
                         }
@@ -485,16 +585,80 @@ impl CommutativeVerificationManager {
             }
         }
 
-        // TODO: table written and read by each slice
-        // Please use the table_mod_ref.rs, it is a hop level analysis, you just go to the end of each hop, hence all the BB's successors where the edge of
-            //          type hopexit/return/abort and union the read part and write parts.
-        //            Make sure the sliceA and sliceB are stored separately
-        Ok(SliceLivenessInfo {
+        // Analyze table access for last hop of slice A
+        if let Some(&last_hop_a) = slice_a.last() {
+            let hop_cfg_a = &cfg_program.hops[last_hop_a];
+            for &block_id in &hop_cfg_a.blocks {
+                if let Some(block_exit) = table_analysis_a.block_exit.get(&block_id) {
+                    if let Some(access_set) = block_exit.as_set() {
+                        for table_access in access_set {
+                            if let AccessType::Write = table_access.access_type {
+                                let table_name = format!("table_{}", table_access.table.index());
+                                tables_written_last_hop_a.insert(table_name);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Analyze table access for slice B
+        let table_analysis_b = if unit.func_id_A != unit.func_id_B {
+            analyze_table_mod_ref(func_b, cfg_program)
+        } else {
+            table_analysis_a
+        };
+
+        for &hop_id in slice_b {
+            let hop_cfg = &cfg_program.hops[hop_id];
+            for &block_id in &hop_cfg.blocks {
+                if let Some(block_exit) = table_analysis_b.block_exit.get(&block_id) {
+                    if let Some(access_set) = block_exit.as_set() {
+                        for table_access in access_set {
+                            let table_name = format!("table_{}", table_access.table.index());
+                            match table_access.access_type {
+                                AccessType::Read => {
+                                    tables_read_b.insert(table_name);
+                                }
+                                AccessType::Write => {
+                                    tables_written_b.insert(table_name);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Analyze table access for last hop of slice B
+        if let Some(&last_hop_b) = slice_b.last() {
+            let hop_cfg_b = &cfg_program.hops[last_hop_b];
+            for &block_id in &hop_cfg_b.blocks {
+                if let Some(block_exit) = table_analysis_b.block_exit.get(&block_id) {
+                    if let Some(access_set) = block_exit.as_set() {
+                        for table_access in access_set {
+                            if let AccessType::Write = table_access.access_type {
+                                let table_name = format!("table_{}", table_access.table.index());
+                                tables_written_last_hop_b.insert(table_name);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(SliceAnalysisInfo {
             live_vars: all_live_vars.into_iter().collect(),
             live_in_a,
             live_out_a,
             live_in_b,
             live_out_b,
+            tables_read_a,
+            tables_written_a,
+            tables_read_b,
+            tables_written_b,
+            tables_written_last_hop_a,
+            tables_written_last_hop_b,
         })
     }
 
@@ -503,7 +667,7 @@ impl CommutativeVerificationManager {
         &self,
         _generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
-        liveness_info: &SliceLivenessInfo,
+        analysis_info: &SliceAnalysisInfo,
         lines: &mut Vec<BoogieLine>,
     ) -> Results<()> {
         BoogieProgramGenerator::add_comment(
@@ -526,7 +690,7 @@ impl CommutativeVerificationManager {
 
         // Havoc all live variables, please add BoogieLine::Havoc and use this not comments
         // only live-IN variable should be havoc
-        for &var_id in &liveness_info.live_vars {
+        for &var_id in &analysis_info.live_vars {
             let var_name = BoogieProgramGenerator::gen_var_name(cfg_program, var_id, None);
             lines.push(BoogieLine::Comment(format!("havoc {};", var_name)));
         }
@@ -539,7 +703,7 @@ impl CommutativeVerificationManager {
         &self,
         _generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
-        liveness_info: &SliceLivenessInfo,
+        analysis_info: &SliceAnalysisInfo,
         lines: &mut Vec<BoogieLine>,
     ) -> Results<()> {
         BoogieProgramGenerator::add_comment(
@@ -563,7 +727,7 @@ impl CommutativeVerificationManager {
         }
 
         // Save live variables, only live-IN variable should be saved
-        for &var_id in &liveness_info.live_vars {
+        for &var_id in &analysis_info.live_vars {
             let var_name = BoogieProgramGenerator::gen_var_name(cfg_program, var_id, None);
             let snapshot_name = format!("{}_init", var_name);
             lines.push(BoogieLine::Comment(format!(
@@ -581,7 +745,7 @@ impl CommutativeVerificationManager {
         generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
         special: &SpecialInterleavings,
-        liveness_info: &SliceLivenessInfo,
+        analysis_info: &SliceAnalysisInfo,
         lines: &mut Vec<BoogieLine>,
     ) -> Results<(VariableSnapshots, VariableSnapshots)> {
         BoogieProgramGenerator::add_comment(
@@ -596,13 +760,13 @@ impl CommutativeVerificationManager {
             cfg_program,
             &special.a_then_b,
             "a_then_b",
-            liveness_info,
+            analysis_info,
             lines,
             true,
         )?;
 
         // Reset state
-        self.restore_initial_state(generator, cfg_program, liveness_info, lines)?;
+        self.restore_initial_state(generator, cfg_program, analysis_info, lines)?;
 
         // Execute B then A
         BoogieProgramGenerator::add_comment(lines, "Executing B then A:".to_string());
@@ -611,7 +775,7 @@ impl CommutativeVerificationManager {
             cfg_program,
             &special.b_then_a,
             "b_then_a",
-            liveness_info,
+            analysis_info,
             lines,
             true,
         )?;
@@ -626,7 +790,7 @@ impl CommutativeVerificationManager {
         cfg_program: &CfgProgram,
         interleaving: &Interleaving,
         suffix: &str,
-        liveness_info: &SliceLivenessInfo,
+        analysis_info: &SliceAnalysisInfo,
         lines: &mut Vec<BoogieLine>,
         is_special: bool,
     ) -> Results<VariableSnapshots> {
@@ -637,7 +801,7 @@ impl CommutativeVerificationManager {
 
         // Snapshot final state if this is a special interleaving
         if is_special {
-            self.snapshot_final_state(generator, cfg_program, liveness_info, suffix, lines)
+            self.snapshot_final_state(generator, cfg_program, analysis_info, suffix, lines)
         } else {
             // For regular interleavings, just return empty snapshots
             Ok(VariableSnapshots {
@@ -764,7 +928,7 @@ impl CommutativeVerificationManager {
         &self,
         _generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
-        liveness_info: &SliceLivenessInfo,
+        analysis_info: &SliceAnalysisInfo,
         suffix: &str,
         lines: &mut Vec<BoogieLine>,
     ) -> Results<VariableSnapshots> {
@@ -793,7 +957,7 @@ impl CommutativeVerificationManager {
         }
 
         // Snapshot live variables, only need to snapshot live-OUT variables
-        for &var_id in &liveness_info.live_vars {
+        for &var_id in &analysis_info.live_vars {
             let var_name = BoogieProgramGenerator::gen_var_name(cfg_program, var_id, None);
             let snapshot_name = format!("{}_{}", var_name, suffix);
             var_snapshots.insert(var_id, snapshot_name.clone());
@@ -814,7 +978,7 @@ impl CommutativeVerificationManager {
         &self,
         _generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
-        liveness_info: &SliceLivenessInfo,
+        analysis_info: &SliceAnalysisInfo,
         lines: &mut Vec<BoogieLine>,
     ) -> Results<()> {
         BoogieProgramGenerator::add_comment(lines, "Restoring initial state:".to_string());
@@ -835,7 +999,7 @@ impl CommutativeVerificationManager {
         }
 
         // Restore live variables, only need to restore live-IN variables
-        for &var_id in &liveness_info.live_vars {
+        for &var_id in &analysis_info.live_vars {
             let var_name = BoogieProgramGenerator::gen_var_name(cfg_program, var_id, None);
             let snapshot_name = format!("{}_init", var_name);
             lines.push(BoogieLine::Comment(format!(
@@ -854,7 +1018,7 @@ impl CommutativeVerificationManager {
         cfg_program: &CfgProgram,
         interleaving: &Interleaving,
         interleaving_index: usize,
-        liveness_info: &SliceLivenessInfo,
+        analysis_info: &SliceAnalysisInfo,
         a_then_b_vars: &VariableSnapshots,
         b_then_a_vars: &VariableSnapshots,
         lines: &mut Vec<BoogieLine>,
@@ -865,7 +1029,7 @@ impl CommutativeVerificationManager {
         );
 
         // Reset to initial state
-        self.restore_initial_state(generator, cfg_program, liveness_info, lines)?;
+        self.restore_initial_state(generator, cfg_program, analysis_info, lines)?;
 
         // Execute this interleaving
         let suffix = format!("interleaving_{}", interleaving_index);
@@ -874,7 +1038,7 @@ impl CommutativeVerificationManager {
             cfg_program,
             interleaving,
             &suffix,
-            liveness_info,
+            analysis_info,
             lines,
             false,
         )?;
@@ -883,7 +1047,7 @@ impl CommutativeVerificationManager {
         self.assert_equivalence_to_special_interleavings(
             generator,
             cfg_program,
-            liveness_info,
+            analysis_info,
             a_then_b_vars,
             b_then_a_vars,
             lines,
@@ -897,7 +1061,7 @@ impl CommutativeVerificationManager {
         &self,
         _generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
-        liveness_info: &SliceLivenessInfo,
+        analysis_info: &SliceAnalysisInfo,
         a_then_b_vars: &VariableSnapshots,
         b_then_a_vars: &VariableSnapshots,
         lines: &mut Vec<BoogieLine>,
@@ -950,7 +1114,7 @@ impl CommutativeVerificationManager {
         }
 
         // Compare live variables
-        for &var_id in &liveness_info.live_vars {
+        for &var_id in &analysis_info.live_vars {
             let var_name = BoogieProgramGenerator::gen_var_name(cfg_program, var_id, None);
 
             // Current var == a_then_b snapshot
