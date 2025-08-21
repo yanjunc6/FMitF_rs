@@ -671,37 +671,6 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
         }
     }
 
-    /// Generate a complete Boogie program from a CFG program
-    pub fn gen_complete_program(&mut self, cfg_program: &CfgProgram) -> Results<()> {
-        // Generate string axioms if needed
-        self.gen_string_axioms();
-
-        // Generate global constants
-        self.gen_global_constants(cfg_program);
-
-        // Generate table variables
-        self.gen_table_variables(cfg_program);
-
-        // Generate procedures for transaction functions only
-        let mut all_errors = Vec::new();
-
-        for &function_id in &cfg_program.root_functions {
-            let function = &cfg_program.functions[function_id];
-            if function.function_type == FunctionType::Transaction {
-                match self.gen_function_to_boogie_template(cfg_program, function_id, None) {
-                    Ok(procedure) => self.program.procedures.push(procedure),
-                    Err(mut errors) => all_errors.append(&mut errors),
-                }
-            }
-        }
-
-        if all_errors.is_empty() {
-            Ok(())
-        } else {
-            Err(all_errors)
-        }
-    }
-
     /// Generate base Boogie program with common elements (constants, globals, axioms, tables)
     /// Returns a BoogieProgram that can be used as a template for individual functions
     pub fn gen_base_program(cfg_program: &CfgProgram) -> Results<BoogieProgram> {
@@ -717,96 +686,6 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
         generator.gen_table_variables(cfg_program);
 
         Ok(generator.program)
-    }
-
-    /// Template: Generate Boogie lines from a single hop with prefix support
-    pub fn gen_hop_to_boogie_template(
-        &mut self,
-        cfg_program: &CfgProgram,
-        hop_id: crate::cfg::HopId,
-        prefix: Option<&str>,
-    ) -> Results<Vec<BoogieLine>> {
-        let mut lines = Vec::new();
-        let mut all_errors = Vec::new();
-        let hop = &cfg_program.hops[hop_id];
-
-        lines.push(BoogieLine::Comment(format!("Hop template")));
-
-        // Generate labels and statements for each block in the hop
-        for (block_index, &block_id) in hop.blocks.iter().enumerate() {
-            let block = &cfg_program.blocks[block_id];
-            let label = Self::gen_block_label("template", 0, block_index, prefix);
-            lines.push(BoogieLine::Label(label));
-
-            // Convert statements
-            for stmt in &block.statements {
-                match self.convert_statement(cfg_program, stmt, prefix) {
-                    Ok(boogie_stmts) => lines.extend(boogie_stmts),
-                    Err(mut errors) => all_errors.append(&mut errors),
-                }
-            }
-        }
-
-        if all_errors.is_empty() {
-            Ok(lines)
-        } else {
-            Err(all_errors)
-        }
-    }
-
-    /// Template: Generate complete Boogie procedure from a CFG function with prefix
-    pub fn gen_function_to_boogie_template(
-        &mut self,
-        cfg_program: &CfgProgram,
-        function_id: FunctionId,
-        prefix: Option<&str>,
-    ) -> Results<BoogieProcedure> {
-        let function = &cfg_program.functions[function_id];
-        let params = Self::gen_procedure_params(cfg_program, function, prefix);
-
-        let mut lines = Vec::new();
-        let mut all_errors = Vec::new();
-
-        lines.push(BoogieLine::Comment(format!(
-            "Template function: {}",
-            function.name
-        )));
-
-        // Generate hops
-        for (hop_index, &hop_id) in function.hops.iter().enumerate() {
-            let hop = &cfg_program.hops[hop_id];
-            lines.push(BoogieLine::Comment(format!("Hop {}", hop_index)));
-
-            for (block_index, &block_id) in hop.blocks.iter().enumerate() {
-                let block = &cfg_program.blocks[block_id];
-                let label = Self::gen_block_label(&function.name, hop_index, block_index, prefix);
-                lines.push(BoogieLine::Label(label));
-
-                for stmt in &block.statements {
-                    match self.convert_statement(cfg_program, stmt, prefix) {
-                        Ok(boogie_stmts) => lines.extend(boogie_stmts),
-                        Err(mut errors) => all_errors.append(&mut errors),
-                    }
-                }
-            }
-        }
-
-        if !all_errors.is_empty() {
-            return Err(all_errors);
-        }
-
-        let procedure_name = if let Some(prefix) = prefix {
-            format!("{}_{}", prefix, function.name)
-        } else {
-            function.name.clone()
-        };
-
-        Ok(BoogieProcedure {
-            name: procedure_name,
-            params,
-            modifies: vec![],
-            lines,
-        })
     }
 }
 
