@@ -59,10 +59,12 @@ impl Cli {
         // Validate verification type
         match self.verify.as_str() {
             "partition" | "commutative" | "all" | "none" => {}
-            _ => return Err(format!(
+            _ => {
+                return Err(format!(
                 "Invalid verification type '{}'. Valid options: partition, commutative, all, none",
                 self.verify
-            )),
+            ))
+            }
         }
 
         Ok(())

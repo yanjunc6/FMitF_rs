@@ -1,5 +1,5 @@
 use super::errors::Results;
-use super::Boogie;
+use super::Boogie::{self, BoogieExpr, BoogieExprKind};
 use crate::cfg::{CfgProgram, HopId};
 
 pub use super::errors::{SpannedError, VerificationError};
@@ -190,7 +190,9 @@ impl CommutativeVerificationManager {
             "4. Assert identical results (commutativity)".to_string(),
         );
 
-        let db_assertion = Boogie::gen_Boogie::BoogieProgramGenerator::gen_true_expr(); // Placeholder
+        let db_assertion = BoogieExpr {
+            kind: BoogieExprKind::BoolConst(true), // Placeholder - TODO: implement DB comparison
+        };
 
         let db_error = Boogie::ErrorMessage {
             msg: format!(
@@ -205,7 +207,9 @@ impl CommutativeVerificationManager {
             db_error,
         );
 
-        let output_assertion = Boogie::gen_Boogie::BoogieProgramGenerator::gen_true_expr(); // Placeholder
+        let output_assertion = BoogieExpr {
+            kind: BoogieExprKind::BoolConst(true), // Placeholder - TODO: implement output comparison
+        };
 
         let output_error = Boogie::ErrorMessage {
             msg: format!(
@@ -300,8 +304,9 @@ impl CommutativeVerificationManager {
             }
 
             // Assert this interleaving produces same result
-            let interleaving_assertion =
-                Boogie::gen_Boogie::BoogieProgramGenerator::gen_true_expr(); // Placeholder
+            let interleaving_assertion = BoogieExpr {
+                kind: BoogieExprKind::BoolConst(true), // Placeholder - TODO: implement interleaving comparison
+            };
 
             let interleaving_error = Boogie::ErrorMessage {
                 msg: format!(
