@@ -1,6 +1,6 @@
 use super::{
-    BoogieBinOp, BoogieExpr, BoogieExprKind, BoogieLine, BoogieProcedure, BoogieProgram,
-    BoogieType, BoogieUnOp, BoogieVarDecl, ErrorMessage,
+    BoogieBinOp, BoogieExpr, BoogieExprKind, BoogieLine, BoogieProgram, BoogieType, BoogieUnOp,
+    BoogieVarDecl, ErrorMessage,
 };
 use crate::cfg::{
     BasicBlockId, BinaryOp, CfgProgram, Constant, EdgeType, FunctionCfg, FunctionId, LValue,
@@ -251,6 +251,46 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
         } else {
             base_label
         }
+    }
+
+    /// Generate function start label
+    pub fn gen_function_start_label(function_name: &str) -> String {
+        format!("{}_start", function_name)
+    }
+
+    /// Generate function end label  
+    pub fn gen_function_end_label(function_name: &str) -> String {
+        format!("{}_end", function_name)
+    }
+
+    /// Generate label for a basic block by its BasicBlockId
+    pub fn gen_basic_block_label(
+        &self,
+        cfg_program: &CfgProgram,
+        block_id: BasicBlockId,
+        function_name: &str,
+    ) -> Option<String> {
+        let block = &cfg_program.blocks[block_id];
+        let hop_id = block.hop_id;
+
+        // Find which hop index this hop_id corresponds to
+        let function = cfg_program
+            .functions
+            .iter()
+            .find(|(_, func)| func.hops.contains(&hop_id))?;
+
+        let hop_index = function.1.hops.iter().position(|&h| h == hop_id)?;
+
+        // Find block index within the hop
+        let hop = &cfg_program.hops[hop_id];
+        let block_index = hop.blocks.iter().position(|&b| b == block_id)?;
+
+        Some(Self::gen_block_label(
+            function_name,
+            hop_index,
+            block_index,
+            None,
+        ))
     }
 
     /// Convert CFG operand to Boogie expression with optional prefix
@@ -688,137 +728,78 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
         Ok(generator.program)
     }
 
-    /// Generate program name for partition verification
-    pub fn gen_partition_program_name(function_name: &str) -> String {
-        format!("partition_verification_{}", function_name)
-    }
-
-    /// Generate program name for commutative verification  
-    pub fn gen_commutative_program_name(func_a: &str, func_b: &str) -> String {
-        format!("commutative_verification_{}_vs_{}", func_a, func_b)
-    }
-
-    /// Generate partition verification procedure for a complete function (all hops connected)
-    pub fn gen_partition_verification_procedure(
-        &mut self,
-        cfg_program: &CfgProgram,
-        function_id: FunctionId,
-    ) -> Results<BoogieProcedure> {
-        let function = &cfg_program.functions[function_id];
-        let procedure_name = format!("check_partition_{}", function.name);
-        let params = Self::gen_procedure_params(cfg_program, function, None);
-
-        let mut lines = Vec::new();
-
-        // Add procedure header comment
-        lines.push(BoogieLine::Comment(format!(
-            "Partition verification for function {}",
-            function.name
-        )));
-
-        // Generate connected hops with proper basic block edges
-        for (hop_index, &hop_id) in function.hops.iter().enumerate() {
-            let hop = &cfg_program.hops[hop_id];
-            lines.push(BoogieLine::Comment(format!("Hop {}", hop_index)));
-
-            // Generate each block in the hop with proper labels and edges
-            for (block_index, &block_id) in hop.blocks.iter().enumerate() {
-                let block = &cfg_program.blocks[block_id];
-                let label = Self::gen_block_label(&function.name, hop_index, block_index, None);
-                lines.push(BoogieLine::Label(label));
-
-                // Convert statements to Boogie
-                for stmt in &block.statements {
-                    match self.convert_statement(cfg_program, stmt, None) {
-                        Ok(boogie_stmts) => lines.extend(boogie_stmts),
-                        Err(errors) => return Err(errors),
-                    }
-                }
-
-                // Generate partition consistency checks for table accesses
-                for stmt in &block.statements {
-                    if let Some(assertion) =
-                        self.gen_partition_consistency_check(cfg_program, stmt)?
-                    {
-                        lines.push(assertion);
-                    }
-                }
-
-                // Add goto edges for basic block control flow
-                self.gen_basic_block_edges(
-                    &mut lines,
-                    cfg_program,
-                    block_id,
-                    &function.name,
-                    hop_index,
-                );
-            }
-        }
-
-        lines.push(BoogieLine::Comment(
-            "End partition verification".to_string(),
-        ));
-
-        Ok(BoogieProcedure {
-            name: procedure_name,
-            params,
-            modifies: vec![],
-            lines,
-        })
-    }
-
-    /// Generate partition consistency check for a statement if it contains table access
-    fn gen_partition_consistency_check(
-        &mut self,
-        cfg_program: &CfgProgram,
-        stmt: &Statement,
-    ) -> Results<Option<BoogieLine>> {
-        if let Statement::Assign { rvalue, .. } = stmt {
-            if let RValue::TableAccess {
-                table, pk_values, ..
-            } = rvalue
-            {
-                let table_info = &cfg_program.tables[*table];
-                let partition_fn = &cfg_program.functions[table_info.partition_function];
-
-                // Generate assertion for partition consistency
-                // TODO: Implement proper partition argument comparison
-                let assertion_expr = BoogieExpr {
-                    kind: BoogieExprKind::BoolConst(true), // Placeholder
-                };
-
-                let error_msg = ErrorMessage {
-                    msg: format!(
-                        "Partition consistency for table {} with function {}",
-                        table_info.name, partition_fn.name
-                    ),
-                };
-
-                return Ok(Some(BoogieLine::Assert(assertion_expr, error_msg)));
-            }
-        }
-        Ok(None)
-    }
-
     /// Generate goto edges for basic block control flow
-    fn gen_basic_block_edges(
+    pub fn gen_basic_block_edges(
         &mut self,
         lines: &mut Vec<BoogieLine>,
         cfg_program: &CfgProgram,
         block_id: BasicBlockId,
         function_name: &str,
-        hop_index: usize,
+        _hop_index: usize,
     ) {
         let block = &cfg_program.blocks[block_id];
+
+        // If no successors, this is a terminal block - no gotos needed
+        if block.successors.is_empty() {
+            return;
+        }
 
         for edge in &block.successors {
             match &edge.edge_type {
                 EdgeType::Unconditional => {
-                    // Find target block label
+                    // Generate goto to target block
                     if let Some(target_label) =
-                        self.find_block_label(cfg_program, edge.to, function_name)
+                        self.gen_basic_block_label(cfg_program, edge.to, function_name)
                     {
                         lines.push(BoogieLine::Goto(target_label));
+                    }
+                }
+                EdgeType::ConditionalTrue { condition } => {
+                    // Generate conditional goto: if (condition) goto target
+                    if let Some(target_label) =
+                        self.gen_basic_block_label(cfg_program, edge.to, function_name)
+                    {
+                        // Convert condition operand to Boogie expression
+                        match self.convert_operand(cfg_program, condition, None) {
+                            Ok(condition_expr) => {
+                                lines.push(BoogieLine::If {
+                                    cond: condition_expr,
+                                    then_body: vec![Box::new(BoogieLine::Goto(target_label))],
+                                    else_body: vec![], // Empty else body
+                                });
+                            }
+                            Err(_) => {
+                                // If condition conversion fails, generate unconditional goto as fallback
+                                lines.push(BoogieLine::Goto(target_label));
+                            }
+                        }
+                    }
+                }
+                EdgeType::ConditionalFalse { condition } => {
+                    // Generate conditional goto: if (!condition) goto target
+                    if let Some(target_label) =
+                        self.gen_basic_block_label(cfg_program, edge.to, function_name)
+                    {
+                        // Convert condition operand to Boogie expression and negate it
+                        match self.convert_operand(cfg_program, condition, None) {
+                            Ok(condition_expr) => {
+                                let negated_condition = BoogieExpr {
+                                    kind: BoogieExprKind::UnOp(
+                                        BoogieUnOp::Not,
+                                        Box::new(condition_expr),
+                                    ),
+                                };
+                                lines.push(BoogieLine::If {
+                                    cond: negated_condition,
+                                    then_body: vec![Box::new(BoogieLine::Goto(target_label))],
+                                    else_body: vec![], // Empty else body
+                                });
+                            }
+                            Err(_) => {
+                                // If condition conversion fails, generate unconditional goto as fallback
+                                lines.push(BoogieLine::Goto(target_label));
+                            }
+                        }
                     }
                 }
                 EdgeType::HopExit { next_hop } => {
@@ -827,52 +808,29 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
                         let next_hop = &cfg_program.hops[*next_hop_id];
                         if let Some(entry_block) = next_hop.entry_block {
                             if let Some(target_label) =
-                                self.find_block_label(cfg_program, entry_block, function_name)
+                                self.gen_basic_block_label(cfg_program, entry_block, function_name)
                             {
                                 lines.push(BoogieLine::Goto(target_label));
                             }
                         }
+                    } else {
+                        // HopExit with no next hop - goto function end
+                        let end_label = Self::gen_function_end_label(function_name);
+                        lines.push(BoogieLine::Goto(end_label));
                     }
                 }
-                EdgeType::Return { .. } => {
-                    lines.push(BoogieLine::Comment("return".to_string()));
+                EdgeType::Return { value: _ } => {
+                    // Return statement - goto function end (ignore return value for now)
+                    let end_label = Self::gen_function_end_label(function_name);
+                    lines.push(BoogieLine::Goto(end_label));
                 }
-                _ => {
-                    // Handle other edge types as needed
-                    lines.push(BoogieLine::Comment(format!("edge: {:?}", edge.edge_type)));
+                EdgeType::Abort => {
+                    // Abort statement - same as return, goto function end
+                    let end_label = Self::gen_function_end_label(function_name);
+                    lines.push(BoogieLine::Goto(end_label));
                 }
             }
         }
-    }
-
-    /// Find the Boogie label for a basic block
-    fn find_block_label(
-        &self,
-        cfg_program: &CfgProgram,
-        block_id: BasicBlockId,
-        function_name: &str,
-    ) -> Option<String> {
-        let block = &cfg_program.blocks[block_id];
-        let hop_id = block.hop_id;
-
-        // Find which hop index this hop_id corresponds to
-        let function = cfg_program
-            .functions
-            .iter()
-            .find(|(_, func)| func.hops.contains(&hop_id))?;
-
-        let hop_index = function.1.hops.iter().position(|&h| h == hop_id)?;
-
-        // Find block index within the hop
-        let hop = &cfg_program.hops[hop_id];
-        let block_index = hop.blocks.iter().position(|&b| b == block_id)?;
-
-        Some(Self::gen_block_label(
-            function_name,
-            hop_index,
-            block_index,
-            None,
-        ))
     }
 
     /// Add a Boogie assertion to the current procedure
@@ -887,6 +845,90 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
     /// Add a Boogie comment to the current procedure  
     pub fn add_comment(lines: &mut Vec<BoogieLine>, comment: String) {
         lines.push(BoogieLine::Comment(comment));
+    }
+
+    /// Generate boolean conjunction (AND) of multiple expressions
+    /// Returns true if expressions is empty, otherwise combines all with AND
+    pub fn gen_conjunction(expressions: Vec<BoogieExpr>) -> BoogieExpr {
+        if expressions.is_empty() {
+            return BoogieExpr {
+                kind: BoogieExprKind::BoolConst(true),
+            };
+        }
+
+        if expressions.len() == 1 {
+            return expressions.into_iter().next().unwrap();
+        }
+
+        let mut result = expressions[0].clone();
+        for expr in expressions.iter().skip(1) {
+            result = BoogieExpr {
+                kind: BoogieExprKind::BinOp(
+                    Box::new(result),
+                    BoogieBinOp::And,
+                    Box::new(expr.clone()),
+                ),
+            };
+        }
+
+        result
+    }
+
+    /// Generate boolean disjunction (OR) of multiple expressions
+    /// Returns false if expressions is empty, otherwise combines all with OR
+    pub fn gen_disjunction(expressions: Vec<BoogieExpr>) -> BoogieExpr {
+        if expressions.is_empty() {
+            return BoogieExpr {
+                kind: BoogieExprKind::BoolConst(false),
+            };
+        }
+
+        if expressions.len() == 1 {
+            return expressions.into_iter().next().unwrap();
+        }
+
+        let mut result = expressions[0].clone();
+        for expr in expressions.iter().skip(1) {
+            result = BoogieExpr {
+                kind: BoogieExprKind::BinOp(
+                    Box::new(result),
+                    BoogieBinOp::Or,
+                    Box::new(expr.clone()),
+                ),
+            };
+        }
+
+        result
+    }
+
+    /// Collect modified globals using hop-level table_mod_ref analysis
+    /// Returns list of global variable names that are modified by the function
+    pub fn collect_modified_globals_from_dataflow(
+        cfg_program: &CfgProgram,
+        function_id: FunctionId,
+    ) -> Vec<String> {
+        use crate::dataflow::{analyze_table_mod_ref, AccessType};
+
+        let function = &cfg_program.functions[function_id];
+        let analysis_results = analyze_table_mod_ref(function, cfg_program);
+
+        let mut modified_globals = std::collections::HashSet::new();
+
+        // Collect all table accesses from all basic blocks
+        for block_exit in analysis_results.block_exit.values() {
+            if let Some(accesses) = block_exit.as_set() {
+                for access in accesses {
+                    if access.access_type == AccessType::Write {
+                        let table = &cfg_program.tables[access.table];
+                        let field = &cfg_program.fields[access.field];
+                        let var_name = Self::gen_table_field_var_name(&table.name, &field.name);
+                        modified_globals.insert(var_name);
+                    }
+                }
+            }
+        }
+
+        modified_globals.into_iter().collect()
     }
 }
 
