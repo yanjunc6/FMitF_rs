@@ -238,6 +238,28 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
         }
     }
 
+    /// Generate a unique label name for a basic block with optional prefix and suffix  
+    pub fn gen_block_label_with_suffix(
+        function_name: &str,
+        hop_index: usize,
+        block_index: usize,
+        prefix: Option<&str>,
+        suffix: Option<&str>,
+    ) -> String {
+        let base_label = format!("{}_hop{}_block{}", function_name, hop_index, block_index);
+        let mut label = if let Some(prefix) = prefix {
+            format!("{}_{}", prefix, base_label)
+        } else {
+            base_label
+        };
+
+        if let Some(suffix) = suffix {
+            label = format!("{}_{}", label, suffix);
+        }
+
+        label
+    }
+
     /// Generate a unique label name for a basic block with optional prefix
     pub fn gen_block_label(
         function_name: &str,
@@ -245,12 +267,7 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
         block_index: usize,
         prefix: Option<&str>,
     ) -> String {
-        let base_label = format!("{}_hop{}_block{}", function_name, hop_index, block_index);
-        if let Some(prefix) = prefix {
-            format!("{}_{}", prefix, base_label)
-        } else {
-            base_label
-        }
+        Self::gen_block_label_with_suffix(function_name, hop_index, block_index, prefix, None)
     }
 
     /// Generate function start label
