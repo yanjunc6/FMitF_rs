@@ -33,8 +33,8 @@ impl VerificationManager {
         cfg_program: &CfgProgram,
         verification_type: VerificationType,
     ) -> Results<Vec<Boogie::BoogieProgram>> {
-        let partition_manager = partition::PartitionVerificationManager {};
-        let commutative_manager = commutative::CommutativeVerificationManager {};
+        let partition_manager = partition::PartitionVerificationManager::new();
+        let commutative_manager = commutative::CommutativeVerificationManager::new();
         match verification_type {
             VerificationType::Partition => {
                 partition_manager.generate_partition_verification(cfg_program)

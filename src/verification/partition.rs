@@ -1,5 +1,3 @@
-//TODO: the current partition verification ensures same hop with same partition function has same args
-
 use super::errors::Results;
 use super::Boogie::{
     gen_Boogie::BoogieProgramGenerator, BoogieBinOp, BoogieExpr, BoogieExprKind, BoogieLine,
