@@ -11,10 +11,10 @@ pub use errors::{SpannedError, VerificationError};
 /// Types of verification to generate
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerificationType {
-    /// P-1: Correct PartitionNode Placement verification
-    NodePlacement,
-    /// P-2: Slice Commutativity verification  
-    SliceCommutativity,
+    /// Partition function consistency verification
+    Partition,
+    /// Slice commutativity verification  
+    Commutative,
     /// Generate both verification types
     All,
 }
@@ -36,16 +36,18 @@ impl VerificationManager {
         let partition_manager = partition::PartitionVerificationManager {};
         let commutative_manager = commutative::CommutativeVerificationManager {};
         match verification_type {
-            VerificationType::NodePlacement => {
-                partition_manager.generate_p1_verification(cfg_program)
+            VerificationType::Partition => {
+                partition_manager.generate_partition_verification(cfg_program)
             }
-            VerificationType::SliceCommutativity => {
-                commutative_manager.generate_p2_verification(cfg_program)
+            VerificationType::Commutative => {
+                commutative_manager.generate_commutative_verification(cfg_program)
             }
             VerificationType::All => {
                 let mut all_programs = Vec::new();
-                all_programs.extend(partition_manager.generate_p1_verification(cfg_program)?);
-                all_programs.extend(commutative_manager.generate_p2_verification(cfg_program)?);
+                all_programs
+                    .extend(partition_manager.generate_partition_verification(cfg_program)?);
+                all_programs
+                    .extend(commutative_manager.generate_commutative_verification(cfg_program)?);
                 Ok(all_programs)
             }
         }

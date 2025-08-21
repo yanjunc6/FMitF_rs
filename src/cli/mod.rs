@@ -33,7 +33,7 @@ pub struct Cli {
     #[arg(long = "instances", default_value = "2")]
     pub instances: u32,
 
-    /// Verification type to generate (p1, p2, all, or none). Default: all
+    /// Verification type to generate (partition, commutative, all, or none). Default: all
     #[arg(long = "verify", default_value = "all")]
     pub verify: String,
 }
@@ -58,13 +58,11 @@ impl Cli {
 
         // Validate verification type
         match self.verify.as_str() {
-            "p1" | "p2" | "all" | "none" => {}
-            _ => {
-                return Err(format!(
-                    "Invalid verification type '{}'. Valid options: p1, p2, all, none",
-                    self.verify
-                ))
-            }
+            "partition" | "commutative" | "all" | "none" => {}
+            _ => return Err(format!(
+                "Invalid verification type '{}'. Valid options: partition, commutative, all, none",
+                self.verify
+            )),
         }
 
         Ok(())
@@ -74,8 +72,8 @@ impl Cli {
     pub fn get_verification_type(&self) -> Option<crate::verification::VerificationType> {
         use crate::verification::VerificationType;
         match self.verify.as_str() {
-            "p1" => Some(VerificationType::NodePlacement),
-            "p2" => Some(VerificationType::SliceCommutativity),
+            "partition" => Some(VerificationType::Partition),
+            "commutative" => Some(VerificationType::Commutative),
             "all" => Some(VerificationType::All),
             "none" => None,
             _ => Some(VerificationType::All), // Default fallback
