@@ -45,6 +45,7 @@ pub enum BoogieLine {
     Assign(String, BoogieExpr),       // var := expr ;
     Assert(BoogieExpr, ErrorMessage), // assert {:msg "ErrorMessage"} expr;
     Assume(BoogieExpr),               // assume expr;
+    Havoc(String),                    // havoc var;
     If {
         // only used for conditional jump in cfg
         cond: BoogieExpr,

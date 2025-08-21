@@ -119,6 +119,7 @@ impl Display for BoogieLine {
             BoogieLine::Assign(lhs, rhs) => writeln!(f, "    {} := {};", lhs, rhs),
             BoogieLine::Assert(e, msg) => writeln!(f, "    assert {{:msg \"{}\"}} {};", msg.msg, e),
             BoogieLine::Assume(e) => writeln!(f, "    assume {};", e),
+            BoogieLine::Havoc(var) => writeln!(f, "    havoc {};", var),
             BoogieLine::If {
                 cond,
                 then_body,
