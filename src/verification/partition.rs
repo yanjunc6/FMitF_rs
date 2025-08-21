@@ -1,3 +1,5 @@
+//TODO: the current partition verification ensures same hop with same partition function has same args
+
 use super::errors::Results;
 use super::Boogie::{
     gen_Boogie::BoogieProgramGenerator, BoogieBinOp, BoogieExpr, BoogieExprKind, BoogieLine,
@@ -85,8 +87,9 @@ impl PartitionVerificationManager {
         lines.push(BoogieLine::Label(start_label));
 
         // Track partition calls per hop for consistency checking
+        // Key: (hop_id, partition_function_id) - same partition function across different tables
         let mut partition_call_tracker: HashMap<
-            (crate::cfg::HopId, crate::cfg::TableId),
+            (crate::cfg::HopId, crate::cfg::FunctionId),
             Vec<Operand>,
         > = HashMap::new();
 
@@ -168,7 +171,7 @@ impl PartitionVerificationManager {
         statement: &Statement,
         hop_id: crate::cfg::HopId,
         partition_call_tracker: &mut HashMap<
-            (crate::cfg::HopId, crate::cfg::TableId),
+            (crate::cfg::HopId, crate::cfg::FunctionId),
             Vec<Operand>,
         >,
         lines: &mut Vec<BoogieLine>,
@@ -219,12 +222,31 @@ impl PartitionVerificationManager {
         table_id: crate::cfg::TableId,
         pk_values: &[Operand],
         partition_call_tracker: &mut HashMap<
-            (crate::cfg::HopId, crate::cfg::TableId),
+            (crate::cfg::HopId, crate::cfg::FunctionId),
             Vec<Operand>,
         >,
         lines: &mut Vec<BoogieLine>,
     ) -> Results<()> {
-        let key = (hop_id, table_id);
+        // Get the partition function for this table
+        let table = &cfg_program.tables[table_id];
+        let partition_function_id = table.partition_function;
+        let key = (hop_id, partition_function_id);
+
+        // Map table primary key values to partition function arguments
+        // The table.partition_fields tells us which table fields correspond to which partition parameters
+        let mut partition_args = Vec::new();
+        for &partition_field_id in &table.partition_fields {
+            // Find the index of this field in the table's primary keys
+            if let Some(pk_index) = table
+                .primary_keys
+                .iter()
+                .position(|&pk_id| pk_id == partition_field_id)
+            {
+                if pk_index < pk_values.len() {
+                    partition_args.push(pk_values[pk_index].clone());
+                }
+            }
+        }
 
         // Check if we've seen this partition function called in this hop before
         if let Some(previous_args) = partition_call_tracker.get(&key) {
@@ -232,14 +254,14 @@ impl PartitionVerificationManager {
             self.insert_partition_consistency_assertion(
                 generator,
                 cfg_program,
-                table_id,
+                partition_function_id,
                 previous_args,
-                pk_values,
+                &partition_args,
                 lines,
             )?;
         } else {
             // First call to this partition function in this hop - just record it
-            partition_call_tracker.insert(key, pk_values.to_vec());
+            partition_call_tracker.insert(key, partition_args);
         }
 
         Ok(())
@@ -250,19 +272,18 @@ impl PartitionVerificationManager {
         &self,
         generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
-        table_id: crate::cfg::TableId,
+        partition_function_id: crate::cfg::FunctionId,
         previous_args: &[Operand],
         current_args: &[Operand],
         lines: &mut Vec<BoogieLine>,
     ) -> Results<()> {
-        let table = &cfg_program.tables[table_id];
-        let partition_function = &cfg_program.functions[table.partition_function];
+        let partition_function = &cfg_program.functions[partition_function_id];
 
         BoogieProgramGenerator::add_comment(
             lines,
             format!(
-                "Partition consistency check for function '{}' on table '{}'",
-                partition_function.name, table.name
+                "Partition consistency check for function '{}': all calls in same hop must have same args",
+                partition_function.name
             ),
         );
 
@@ -287,19 +308,15 @@ impl PartitionVerificationManager {
         // Use the general conjunction function from gen_Boogie.rs
         let args_equal = BoogieProgramGenerator::gen_conjunction(equality_conditions);
 
-        // Assert !(args are equal) - if same args, this should fail
-        let not_args_equal = BoogieExpr {
-            kind: BoogieExprKind::UnOp(super::Boogie::BoogieUnOp::Not, Box::new(args_equal)),
-        };
-
+        // Assert (args are equal) - all accesses to same partition function in same hop must have same args
         let error_msg = ErrorMessage {
             msg: format!(
-                "Partition function '{}' called with same arguments in the same hop, violating single-node constraint",
+                "Partition function '{}' called with different arguments in the same hop, violating single-node constraint",
                 partition_function.name
             ),
         };
 
-        BoogieProgramGenerator::add_assertion(lines, not_args_equal, error_msg);
+        BoogieProgramGenerator::add_assertion(lines, args_equal, error_msg);
 
         Ok(())
     }
