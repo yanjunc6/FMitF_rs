@@ -7,9 +7,9 @@ pub use super::errors::{SpannedError, VerificationError};
 pub struct CommutativeVerificationManager {}
 
 impl CommutativeVerificationManager {
-    /// Generate P-2 (Slice Commutativity) verification Boogie programs
+    /// Generate Commutative (Slice Commutativity) verification Boogie programs
     /// Each pair of conflicting transaction slices gets its own verification
-    pub fn generate_p2_verification(
+    pub fn generate_commutative_verification(
         &self,
         cfg_program: &CfgProgram,
     ) -> Results<Vec<Boogie::BoogieProgram>> {
@@ -17,10 +17,10 @@ impl CommutativeVerificationManager {
         let base_program =
             Boogie::gen_Boogie::BoogieProgramGenerator::gen_base_program(cfg_program)?;
 
-        // For P-2 verification, we need to analyze conflicts between transaction slices
+        // For commutative verification, we need to analyze conflicts between transaction slices
         // This requires SC-graph information which is not available here yet
 
-        // Placeholder: Generate P-2 verification for pairs of transaction functions
+        // Placeholder: Generate commutative verification for pairs of transaction functions
         let transaction_functions: Vec<_> = cfg_program
             .root_functions
             .iter()
@@ -44,19 +44,22 @@ impl CommutativeVerificationManager {
 
                 if !slice_a.is_empty() && !slice_b.is_empty() {
                     let mut program = base_program.clone();
-                    program.name = format!("{}_vs_{}_p2", func_a.name, func_b.name);
+                    program.name = format!("{}_vs_{}_commutative", func_a.name, func_b.name);
 
                     let mut generator =
                         Boogie::gen_Boogie::BoogieProgramGenerator::with_program(program);
 
-                    // Generate P-2 verification procedure for these slices
-                    let procedure = self.gen_p2_slice_procedure(
+                    // Generate commutative verification procedure
+                    let procedure = self.create_commutative_verification_procedure(
                         &mut generator,
                         cfg_program,
                         &slice_a,
                         &slice_b,
                         &c_edges,
+                        &func_a.name,
+                        &func_b.name,
                     )?;
+
                     generator.program.procedures.push(procedure);
                     programs.push(generator.program);
                 }
@@ -66,7 +69,258 @@ impl CommutativeVerificationManager {
         Ok(programs)
     }
 
-    /// Generate all legal interleavings of two hop slices for P-2 verification
+    /// Create a procedure to verify slice commutativity
+    fn create_commutative_verification_procedure(
+        &self,
+        _generator: &mut Boogie::gen_Boogie::BoogieProgramGenerator,
+        _cfg_program: &CfgProgram,
+        slice_a: &[HopId],
+        slice_b: &[HopId],
+        c_edges: &[(HopId, HopId)],
+        func_a_name: &str,
+        func_b_name: &str,
+    ) -> Results<Boogie::BoogieProcedure> {
+        let procedure_name = format!("Check_SliceCommut_{}_vs_{}", func_a_name, func_b_name);
+
+        let mut lines = Vec::new();
+
+        // Add procedure header comment
+        Boogie::gen_Boogie::BoogieProgramGenerator::add_comment(
+            &mut lines,
+            format!(
+                "Slice Commutativity Verification: {} vs {}",
+                func_a_name, func_b_name
+            ),
+        );
+
+        // Analyze conflict edges
+        Boogie::gen_Boogie::BoogieProgramGenerator::add_comment(
+            &mut lines,
+            format!(
+                "Verifying commutativity between {} conflicting slices",
+                if c_edges.is_empty() { "non-" } else { "" }
+            ),
+        );
+
+        // Step 1: Snapshot initial state
+        Boogie::gen_Boogie::BoogieProgramGenerator::add_comment(
+            &mut lines,
+            "1. Snapshot initial world state".to_string(),
+        );
+        Boogie::gen_Boogie::BoogieProgramGenerator::add_comment(
+            &mut lines,
+            "// var DB_initial := DB; var LiveIns_initial := LiveIns;".to_string(),
+        );
+
+        // Step 2: Execute first ordering (slice A then slice B)
+        Boogie::gen_Boogie::BoogieProgramGenerator::add_comment(
+            &mut lines,
+            format!(
+                "2. Execute first ordering: {} then {}",
+                func_a_name, func_b_name
+            ),
+        );
+
+        for hop_id in slice_a {
+            Boogie::gen_Boogie::BoogieProgramGenerator::add_comment(
+                &mut lines,
+                format!(
+                    "call execute_hop_{}(); // from {}",
+                    hop_id.index(),
+                    func_a_name
+                ),
+            );
+        }
+
+        for hop_id in slice_b {
+            Boogie::gen_Boogie::BoogieProgramGenerator::add_comment(
+                &mut lines,
+                format!(
+                    "call execute_hop_{}(); // from {}",
+                    hop_id.index(),
+                    func_b_name
+                ),
+            );
+        }
+
+        // Step 3: Save first result
+        Boogie::gen_Boogie::BoogieProgramGenerator::add_comment(
+            &mut lines,
+            "// var DB_first := DB; var LiveOuts_first := LiveOuts;".to_string(),
+        );
+
+        // Step 4: Reset and execute reverse ordering (slice B then slice A)
+        Boogie::gen_Boogie::BoogieProgramGenerator::add_comment(
+            &mut lines,
+            format!(
+                "3. Reset and execute reverse ordering: {} then {}",
+                func_b_name, func_a_name
+            ),
+        );
+        Boogie::gen_Boogie::BoogieProgramGenerator::add_comment(
+            &mut lines,
+            "// DB := DB_initial; LiveIns := LiveIns_initial;".to_string(),
+        );
+
+        for hop_id in slice_b {
+            Boogie::gen_Boogie::BoogieProgramGenerator::add_comment(
+                &mut lines,
+                format!(
+                    "call execute_hop_{}(); // from {}",
+                    hop_id.index(),
+                    func_b_name
+                ),
+            );
+        }
+
+        for hop_id in slice_a {
+            Boogie::gen_Boogie::BoogieProgramGenerator::add_comment(
+                &mut lines,
+                format!(
+                    "call execute_hop_{}(); // from {}",
+                    hop_id.index(),
+                    func_a_name
+                ),
+            );
+        }
+
+        // Step 5: Generate assertions for commutativity
+        Boogie::gen_Boogie::BoogieProgramGenerator::add_comment(
+            &mut lines,
+            "4. Assert identical results (commutativity)".to_string(),
+        );
+
+        let db_assertion = Boogie::gen_Boogie::BoogieProgramGenerator::gen_true_expr(); // Placeholder
+
+        let db_error = Boogie::ErrorMessage {
+            msg: format!(
+                "Database states must be identical for commutative slices {} and {}",
+                func_a_name, func_b_name
+            ),
+        };
+
+        Boogie::gen_Boogie::BoogieProgramGenerator::add_assertion(
+            &mut lines,
+            db_assertion,
+            db_error,
+        );
+
+        let output_assertion = Boogie::gen_Boogie::BoogieProgramGenerator::gen_true_expr(); // Placeholder
+
+        let output_error = Boogie::ErrorMessage {
+            msg: format!(
+                "Live-out variables must be identical for commutative slices {} and {}",
+                func_a_name, func_b_name
+            ),
+        };
+
+        Boogie::gen_Boogie::BoogieProgramGenerator::add_assertion(
+            &mut lines,
+            output_assertion,
+            output_error,
+        );
+
+        // Step 6: Legal interleaving analysis (if there are conflicts)
+        if !c_edges.is_empty() {
+            self.add_legal_interleaving_analysis(
+                &mut lines,
+                slice_a,
+                slice_b,
+                c_edges,
+                func_a_name,
+                func_b_name,
+            )?;
+        }
+
+        Boogie::gen_Boogie::BoogieProgramGenerator::add_comment(
+            &mut lines,
+            "End of slice commutativity verification".to_string(),
+        );
+
+        Ok(Boogie::BoogieProcedure {
+            name: procedure_name,
+            params: vec![], // Commutative procedures use havoc for initial conditions
+            modifies: vec![], // Placeholder
+            lines,
+        })
+    }
+
+    /// Add analysis for legal interleavings when there are conflicts
+    fn add_legal_interleaving_analysis(
+        &self,
+        lines: &mut Vec<Boogie::BoogieLine>,
+        slice_a: &[HopId],
+        slice_b: &[HopId],
+        c_edges: &[(HopId, HopId)],
+        func_a_name: &str,
+        func_b_name: &str,
+    ) -> Results<()> {
+        Boogie::gen_Boogie::BoogieProgramGenerator::add_comment(
+            lines,
+            format!(
+                "5. Legal interleaving analysis for {} conflicting edges",
+                c_edges.len()
+            ),
+        );
+
+        // Generate all legal interleavings
+        let interleavings = self.generate_legal_interleavings(slice_a, slice_b, c_edges);
+
+        Boogie::gen_Boogie::BoogieProgramGenerator::add_comment(
+            lines,
+            format!(
+                "Found {} legal interleavings to verify",
+                interleavings.len()
+            ),
+        );
+
+        // For each legal interleaving, verify it produces same results
+        for (interleaving_index, interleaving) in interleavings.iter().enumerate() {
+            Boogie::gen_Boogie::BoogieProgramGenerator::add_comment(
+                lines,
+                format!(
+                    "Verifying interleaving {} with {} hops",
+                    interleaving_index + 1,
+                    interleaving.len()
+                ),
+            );
+
+            // Execute this specific interleaving
+            for (hop_id, is_from_a) in interleaving {
+                let source_func = if *is_from_a { func_a_name } else { func_b_name };
+                Boogie::gen_Boogie::BoogieProgramGenerator::add_comment(
+                    lines,
+                    format!(
+                        "call execute_hop_{}(); // from {} in interleaving {}",
+                        hop_id.index(),
+                        source_func,
+                        interleaving_index + 1
+                    ),
+                );
+            }
+
+            // Assert this interleaving produces same result
+            let interleaving_assertion =
+                Boogie::gen_Boogie::BoogieProgramGenerator::gen_true_expr(); // Placeholder
+
+            let interleaving_error = Boogie::ErrorMessage {
+                msg: format!(
+                    "Interleaving {} of {} vs {} must produce identical results to sequential execution",
+                    interleaving_index + 1, func_a_name, func_b_name
+                ),
+            };
+
+            Boogie::gen_Boogie::BoogieProgramGenerator::add_assertion(
+                lines,
+                interleaving_assertion,
+                interleaving_error,
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Generate all legal interleavings of two hop slices
     fn generate_legal_interleavings(
         &self,
         slice_a: &[HopId],
@@ -202,128 +456,5 @@ impl CommutativeVerificationManager {
             &mut result,
         );
         result
-    }
-
-    /// Generate P-2 verification procedure for two conflicting slices  
-    fn gen_p2_slice_procedure(
-        &self,
-        generator: &mut Boogie::gen_Boogie::BoogieProgramGenerator,
-        cfg_program: &CfgProgram,
-        slice_a: &[HopId],
-        slice_b: &[HopId],
-        c_edges: &[(HopId, HopId)],
-    ) -> Results<Boogie::BoogieProcedure> {
-        let procedure_name = format!(
-            "Check_SliceCommut_{}_{}",
-            slice_a
-                .iter()
-                .map(|h| h.index().to_string())
-                .collect::<Vec<_>>()
-                .join("_"),
-            slice_b
-                .iter()
-                .map(|h| h.index().to_string())
-                .collect::<Vec<_>>()
-                .join("_")
-        );
-
-        let mut lines = Vec::new();
-        lines.push(Boogie::BoogieLine::Comment(format!(
-            "P-2 Slice Commutativity Verification"
-        )));
-
-        // Generate legal interleavings
-        let interleavings = self.generate_legal_interleavings(slice_a, slice_b, c_edges);
-
-        // For now, just generate the first interleaving as a placeholder
-        if let Some(first_interleaving) = interleavings.first() {
-            lines.push(Boogie::BoogieLine::Comment(format!(
-                "Testing interleaving with {} hops",
-                first_interleaving.len()
-            )));
-
-            // 1. Snapshot initial state
-            lines.push(Boogie::BoogieLine::Comment(
-                "1. Snapshot initial world state".to_string(),
-            ));
-            lines.push(Boogie::BoogieLine::Comment(
-                "// havoc DB0; havoc LiveIns0; (placeholder)".to_string(),
-            ));
-
-            // 2. Execute first ordering
-            lines.push(Boogie::BoogieLine::Comment(
-                "2. Execute first ordering".to_string(),
-            ));
-            for (hop_id, is_from_a) in first_interleaving {
-                let slice_name = if *is_from_a { "A" } else { "B" };
-                lines.push(Boogie::BoogieLine::Comment(format!(
-                    "call Hop_{}_{}_procedure(); // placeholder",
-                    slice_name,
-                    hop_id.index()
-                )));
-            }
-
-            // 3. Save first result
-            lines.push(Boogie::BoogieLine::Comment(
-                "// var DB1 := DB; var OUT1 := LiveOuts; (placeholder)".to_string(),
-            ));
-
-            // 4. Reset and execute reverse ordering
-            lines.push(Boogie::BoogieLine::Comment(
-                "3. Reset and execute reverse ordering".to_string(),
-            ));
-            lines.push(Boogie::BoogieLine::Comment(
-                "// DB := DB0; LiveIns := LiveIns0; (placeholder)".to_string(),
-            ));
-
-            // Execute in reverse slice order (A<->B but preserve internal order)
-            for (hop_id, is_from_a) in first_interleaving {
-                let slice_name = if !*is_from_a { "A" } else { "B" }; // Flip slice
-                lines.push(Boogie::BoogieLine::Comment(format!(
-                    "call Hop_{}_{}_procedure(); // placeholder",
-                    slice_name,
-                    hop_id.index()
-                )));
-            }
-
-            // 5. Generate assertions
-            lines.push(Boogie::BoogieLine::Comment(
-                "4. Assert identical results".to_string(),
-            ));
-
-            // Placeholder assertions (need proper implementation)
-            let db_assertion = Boogie::BoogieExpr {
-                kind: Boogie::BoogieExprKind::BoolConst(true), // Placeholder
-            };
-
-            lines.push(Boogie::BoogieLine::Assert(
-                db_assertion,
-                Boogie::ErrorMessage {
-                    msg: "Database states must be identical after both orderings".to_string(),
-                },
-            ));
-
-            let output_assertion = Boogie::BoogieExpr {
-                kind: Boogie::BoogieExprKind::BoolConst(true), // Placeholder
-            };
-
-            lines.push(Boogie::BoogieLine::Assert(
-                output_assertion,
-                Boogie::ErrorMessage {
-                    msg: "Live-out variables must be identical after both orderings".to_string(),
-                },
-            ));
-        }
-
-        lines.push(Boogie::BoogieLine::Comment(
-            "End of P-2 verification".to_string(),
-        ));
-
-        Ok(Boogie::BoogieProcedure {
-            name: procedure_name,
-            params: vec![],   // P-2 procedures use havoc for initial conditions
-            modifies: vec![], // Placeholder
-            lines,
-        })
     }
 }
