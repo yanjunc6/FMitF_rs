@@ -134,7 +134,7 @@ impl Compiler {
         self.write_scgraph_output(&scg, &cfg, cli)?;
 
         // Stage 5: Verification (Boogie)
-        let boogie_programs = match self.stage_verification(&cfg, source_code, cli) {
+        let boogie_programs = match self.stage_verification(&cfg, &scg, source_code, cli) {
             Ok(programs) => programs,
             Err(_) => {
                 return Ok(self.fail_result(start, Some(ast), Some(cfg), None, Some(scg), false));
@@ -179,6 +179,7 @@ impl Compiler {
     fn stage_verification(
         &mut self,
         cfg: &CfgProgram,
+        sc_graph: &crate::sc_graph::SCGraph,
         src: &str,
         cli: &Cli,
     ) -> Result<Vec<crate::verification::Boogie::BoogieProgram>, String> {
@@ -187,7 +188,11 @@ impl Compiler {
 
         // Check if verification is disabled
         if let Some(verification_type) = cli.get_verification_type() {
-            match verification_manager.generate_verification_programs(cfg, verification_type) {
+            match verification_manager.generate_verification_programs(
+                cfg,
+                sc_graph,
+                verification_type,
+            ) {
                 Ok(programs) => {
                     self.logger.stage_success();
                     Ok(programs)

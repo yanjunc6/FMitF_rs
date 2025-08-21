@@ -4,6 +4,7 @@ pub mod errors;
 pub mod partition;
 
 use crate::cfg::CfgProgram;
+use crate::sc_graph::SCGraph;
 use errors::Results;
 
 pub use errors::{SpannedError, VerificationError};
@@ -31,23 +32,25 @@ impl VerificationManager {
     pub fn generate_verification_programs(
         &self,
         cfg_program: &CfgProgram,
+        sc_graph: &SCGraph,
         verification_type: VerificationType,
     ) -> Results<Vec<Boogie::BoogieProgram>> {
         let partition_manager = partition::PartitionVerificationManager::new();
-        let commutative_manager = commutative::CommutativeVerificationManager::new();
+        let mut commutative_manager = commutative::CommutativeVerificationManager::new();
         match verification_type {
             VerificationType::Partition => {
                 partition_manager.generate_partition_verification(cfg_program)
             }
             VerificationType::Commutative => {
-                commutative_manager.generate_commutative_verification(cfg_program)
+                commutative_manager.generate_commutative_verification(cfg_program, sc_graph)
             }
             VerificationType::All => {
                 let mut all_programs = Vec::new();
                 all_programs
                     .extend(partition_manager.generate_partition_verification(cfg_program)?);
-                all_programs
-                    .extend(commutative_manager.generate_commutative_verification(cfg_program)?);
+                all_programs.extend(
+                    commutative_manager.generate_commutative_verification(cfg_program, sc_graph)?,
+                );
                 Ok(all_programs)
             }
         }
