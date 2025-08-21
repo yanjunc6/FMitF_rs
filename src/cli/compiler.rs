@@ -134,7 +134,7 @@ impl Compiler {
         self.write_scgraph_output(&scg, &cfg, cli)?;
 
         // Stage 5: Verification (Boogie)
-        let boogie_programs = match self.stage_verification(&cfg, source_code) {
+        let boogie_programs = match self.stage_verification(&cfg, source_code, cli) {
             Ok(programs) => programs,
             Err(_) => {
                 return Ok(self.fail_result(start, Some(ast), Some(cfg), None, Some(scg), false));
@@ -180,21 +180,30 @@ impl Compiler {
         &mut self,
         cfg: &CfgProgram,
         src: &str,
+        cli: &Cli,
     ) -> Result<Vec<crate::verification::Boogie::BoogieProgram>, String> {
         self.logger.stage_start(5, 5, "Verification Analysis");
         let verification_manager = VerificationManager::new();
-        match verification_manager.generate_boogie_programs(cfg) {
-            Ok(programs) => {
-                self.logger.stage_success();
-                Ok(programs)
-            }
-            Err(errors) => {
-                self.logger.stage_error(errors.len());
-                for error in &errors {
-                    super::print_verification_spanned_error(error, src);
+
+        // Check if verification is disabled
+        if let Some(verification_type) = cli.get_verification_type() {
+            match verification_manager.generate_verification_programs(cfg, verification_type) {
+                Ok(programs) => {
+                    self.logger.stage_success();
+                    Ok(programs)
                 }
-                Err("Verification stage failed".to_string())
+                Err(errors) => {
+                    self.logger.stage_error(errors.len());
+                    for error in &errors {
+                        super::print_verification_spanned_error(error, src);
+                    }
+                    Err("Verification stage failed".to_string())
+                }
             }
+        } else {
+            // Verification disabled - return empty programs
+            self.logger.stage_success();
+            Ok(Vec::new())
         }
     }
 
