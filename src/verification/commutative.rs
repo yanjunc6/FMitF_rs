@@ -36,6 +36,8 @@ struct SpecialInterleavings {
 }
 
 /// Liveness analysis results for slice commutativity verification
+/// TODO: change its name to analysis info would be better. After generate the live-in var, live-out var, please also record table written and read by slice A and B.
+/// also, record the table written by last hop of slice A and B individually
 struct SliceLivenessInfo {
     /// All variables that are live-in or live-out for either slice
     live_vars: Vec<VarId>,
@@ -108,7 +110,7 @@ impl CommutativeVerificationManager {
             if !slice_a.is_empty() && !slice_b.is_empty() {
                 let mut program = base_program.clone();
                 program.name = format!(
-                    "commutative_Hop{}_vs_Hop{}",
+                    "commutative_Simple_Hop{}_vs_Hop{}",
                     unit.c_edge.source.hop_id.index(),
                     unit.c_edge.target.hop_id.index()
                 );
@@ -415,7 +417,8 @@ impl CommutativeVerificationManager {
         SpecialInterleavings { a_then_b, b_then_a }
     }
 
-    /// Analyze liveness for both slices to determine live-in/live-out variables
+    /// Analyze liveness for both slices to determine live-in/live-out variables, and also table written and read by each slice
+    /// tODO: change its name
     fn analyze_slice_liveness(
         &self,
         cfg_program: &CfgProgram,
@@ -433,6 +436,8 @@ impl CommutativeVerificationManager {
         // Analyze liveness for each hop in both slices
         for &hop_id in slice_a.iter().chain(slice_b.iter()) {
             let hop = &cfg_program.hops[hop_id];
+
+            //TODO: take commutative unit as function input so no need to find the function id then, it is stored in the edge
             let function = cfg_program
                 .functions
                 .iter()
@@ -440,7 +445,7 @@ impl CommutativeVerificationManager {
                 .map(|(_, func)| func)
                 .ok_or_else(|| {
                     vec![SpannedError {
-                        error: VerificationError::StringConstantNotSupported, // Using existing error variant
+                        error: VerificationError::StringConstantNotSupported, // TODO: create another error in errors.rs
                         span: None,
                     }]
                 })?;
@@ -448,7 +453,9 @@ impl CommutativeVerificationManager {
             let liveness_results = analyze_live_variables(function, cfg_program);
 
             // Collect live variables from all basic blocks in this hop
-            // TODO: only take the exit and entry point.
+            // TODO: for each slice, take the entry point of the beginning of slices and the exit point of the end of slices.
+            // TODO: entry point should be HopCfg.entry_block. exit point should be all the BB's successors where the edge of
+            //          type hopexit/return/abort, store them directly, the live var in between should not be stored
             for &block_id in &hop.blocks {
                 if let Some(live_vars) = liveness_results.block_entry.get(&block_id) {
                     if let Some(var_set) = live_vars.as_set() {
@@ -478,6 +485,10 @@ impl CommutativeVerificationManager {
             }
         }
 
+        // TODO: table written and read by each slice
+        // Please use the table_mod_ref.rs, it is a hop level analysis, you just go to the end of each hop, hence all the BB's successors where the edge of
+            //          type hopexit/return/abort and union the read part and write parts.
+        //            Make sure the sliceA and sliceB are stored separately
         Ok(SliceLivenessInfo {
             live_vars: all_live_vars.into_iter().collect(),
             live_in_a,
@@ -501,7 +512,8 @@ impl CommutativeVerificationManager {
         );
 
         // Havoc all table variables
-        // TODO: just havoc table r/w by hops
+        // TODO: just havoc table r/w by hops, use the analysis info, use gen_table_field_var_name() from gen_Boogie. Also, for the field that is primary, no variable should be generated.
+        // please add BoogieLine::Havoc and use this not comments
         for &table_id in &cfg_program.root_tables {
             let table = &cfg_program.tables[table_id];
             for &field_id in &table.fields {
@@ -512,7 +524,8 @@ impl CommutativeVerificationManager {
             }
         }
 
-        // Havoc all live variables
+        // Havoc all live variables, please add BoogieLine::Havoc and use this not comments
+        // only live-IN variable should be havoc
         for &var_id in &liveness_info.live_vars {
             let var_name = BoogieProgramGenerator::gen_var_name(cfg_program, var_id, None);
             lines.push(BoogieLine::Comment(format!("havoc {};", var_name)));
@@ -549,7 +562,7 @@ impl CommutativeVerificationManager {
             }
         }
 
-        // Save live variables
+        // Save live variables, only live-IN variable should be saved
         for &var_id in &liveness_info.live_vars {
             let var_name = BoogieProgramGenerator::gen_var_name(cfg_program, var_id, None);
             let snapshot_name = format!("{}_init", var_name);
@@ -690,7 +703,7 @@ impl CommutativeVerificationManager {
     }
 
     /// Add control flow edges for a hop execution with unique labels
-    /// TODO: use gen_Boogie.rs ones
+    /// TODO: use gen_Boogie.rs ones, you might need to modify it, but don't create your own one
     fn add_hop_control_flow_edges(
         &self,
         _generator: &mut BoogieProgramGenerator,
@@ -763,7 +776,7 @@ impl CommutativeVerificationManager {
             format!("Snapshotting final state for {}", suffix),
         );
 
-        // Snapshot table variables
+        // Snapshot table variables, you should just use analysis info
         for &table_id in &cfg_program.root_tables {
             let table = &cfg_program.tables[table_id];
             for &field_id in &table.fields {
@@ -779,7 +792,7 @@ impl CommutativeVerificationManager {
             }
         }
 
-        // Snapshot live variables
+        // Snapshot live variables, only need to snapshot live-OUT variables
         for &var_id in &liveness_info.live_vars {
             let var_name = BoogieProgramGenerator::gen_var_name(cfg_program, var_id, None);
             let snapshot_name = format!("{}_{}", var_name, suffix);
@@ -806,7 +819,7 @@ impl CommutativeVerificationManager {
     ) -> Results<()> {
         BoogieProgramGenerator::add_comment(lines, "Restoring initial state:".to_string());
 
-        // Restore table variables
+        // Restore table variables, use analysis info
         for &table_id in &cfg_program.root_tables {
             let table = &cfg_program.tables[table_id];
             for &field_id in &table.fields {
@@ -821,7 +834,7 @@ impl CommutativeVerificationManager {
             }
         }
 
-        // Restore live variables
+        // Restore live variables, only need to restore live-IN variables
         for &var_id in &liveness_info.live_vars {
             let var_name = BoogieProgramGenerator::gen_var_name(cfg_program, var_id, None);
             let snapshot_name = format!("{}_init", var_name);
@@ -879,7 +892,7 @@ impl CommutativeVerificationManager {
         Ok(())
     }
 
-    /// Assert that current state equals one of the special interleaving states
+    /// Assert that current state equals one of the special interleaving states, similarly, use analysis info, compare table written by "last hop" only, and compare live-OUT variable only
     fn assert_equivalence_to_special_interleavings(
         &self,
         _generator: &mut BoogieProgramGenerator,
