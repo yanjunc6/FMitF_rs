@@ -1,0 +1,34 @@
+partition f(int x);
+partition g(int x) = x * 10;
+
+table WI {
+    primary int ID;
+    node f(ID);
+    int VWI;
+}
+
+table RS {
+    primary int ID;
+    int VRS;
+    node g(ID);
+}
+
+table WS {
+    primary int ID;
+    int VWS;
+    node g(ID);
+}
+
+void test_function() {
+    hop {
+        WI[ID: 1].VWI = 42;
+        RS[ID: 2].VRS = 84;
+        WS[ID: 3].VWS = 126;
+    }
+
+    hop {
+        RS[ID: 2].VRS = 84;
+        WS[ID: 3].VWS = 126;
+    }
+}
+

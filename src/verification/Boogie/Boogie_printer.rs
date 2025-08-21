@@ -81,6 +81,8 @@ impl Display for BoogieProcedure {
                 write!(f, "{}: {}", param.var_name, param.var_type)?;
             }
             write!(f, ")")?;
+        } else {
+            write!(f, "()")?;
         }
         writeln!(f)?;
 
