@@ -413,7 +413,118 @@ impl CommutativeVerificationManager {
         cfg_program: &CfgProgram,
         unit: &CommutativeUnit,
     ) -> Results<SliceAnalysisInfo> {
-        use crate::dataflow::{analyze_live_variables, analyze_table_mod_ref, AccessType, LiveVar};
+        use crate::dataflow::{
+            analyze_live_variables, analyze_table_mod_ref, AccessType, LiveVar, TableAccess,
+        };
+
+        // Helper function to collect live variables from entry block
+        fn collect_live_vars_entry(
+            liveness_results: &crate::dataflow::DataflowResults<
+                crate::dataflow::SetLattice<LiveVar>,
+            >,
+            entry_block: crate::cfg::BasicBlockId,
+        ) -> HashSet<VarId> {
+            let mut vars = HashSet::new();
+            if let Some(live_vars) = liveness_results.block_entry.get(&entry_block) {
+                if let Some(var_set) = live_vars.as_set() {
+                    for LiveVar(var_id) in var_set {
+                        vars.insert(*var_id);
+                    }
+                }
+            }
+            vars
+        }
+
+        // Helper function to collect live variables from exit blocks
+        fn collect_live_vars_exit(
+            liveness_results: &crate::dataflow::DataflowResults<
+                crate::dataflow::SetLattice<LiveVar>,
+            >,
+            cfg_program: &CfgProgram,
+            hop_id: HopId,
+        ) -> HashSet<VarId> {
+            let mut vars = HashSet::new();
+            let hop = &cfg_program.hops[hop_id];
+
+            for &block_id in &hop.blocks {
+                let block = &cfg_program.blocks[block_id];
+                for edge in &block.successors {
+                    match &edge.edge_type {
+                        crate::cfg::EdgeType::HopExit { .. }
+                        | crate::cfg::EdgeType::Return { .. }
+                        | crate::cfg::EdgeType::Abort => {
+                            if let Some(live_vars) = liveness_results.block_exit.get(&block_id) {
+                                if let Some(var_set) = live_vars.as_set() {
+                                    for LiveVar(var_id) in var_set {
+                                        vars.insert(*var_id);
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            vars
+        }
+
+        // Helper function to collect table accesses from slice
+        fn collect_table_accesses(
+            table_analysis: &crate::dataflow::DataflowResults<
+                crate::dataflow::SetLattice<TableAccess>,
+            >,
+            cfg_program: &CfgProgram,
+            slice: &[HopId],
+        ) -> (HashSet<TableAccess>, HashSet<TableAccess>) {
+            let mut reads = HashSet::new();
+            let mut writes = HashSet::new();
+
+            for &hop_id in slice {
+                let hop = &cfg_program.hops[hop_id];
+                for &block_id in &hop.blocks {
+                    if let Some(block_exit) = table_analysis.block_exit.get(&block_id) {
+                        if let Some(access_set) = block_exit.as_set() {
+                            for table_access in access_set {
+                                match table_access.access_type {
+                                    AccessType::Read => {
+                                        reads.insert(table_access.clone());
+                                    }
+                                    AccessType::Write => {
+                                        writes.insert(table_access.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            (reads, writes)
+        }
+
+        // Helper function to collect table accesses from last hop only
+        fn collect_last_hop_writes(
+            table_analysis: &crate::dataflow::DataflowResults<
+                crate::dataflow::SetLattice<TableAccess>,
+            >,
+            cfg_program: &CfgProgram,
+            hop_id: HopId,
+        ) -> HashSet<TableAccess> {
+            let mut writes = HashSet::new();
+            let hop = &cfg_program.hops[hop_id];
+
+            for &block_id in &hop.blocks {
+                if let Some(block_exit) = table_analysis.block_exit.get(&block_id) {
+                    if let Some(access_set) = block_exit.as_set() {
+                        for table_access in access_set {
+                            if let AccessType::Write = table_access.access_type {
+                                writes.insert(table_access.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            writes
+        }
 
         let slice_a = &unit.hops_A;
         let slice_b = &unit.hops_B;
@@ -426,54 +537,21 @@ impl CommutativeVerificationManager {
         let mut live_in_b = HashSet::new();
         let mut live_out_b = HashSet::new();
 
-        let mut tables_read_a = HashSet::new();
-        let mut tables_written_a = HashSet::new();
-        let mut tables_read_b = HashSet::new();
-        let mut tables_written_b = HashSet::new();
-        let mut tables_written_last_hop_a = HashSet::new();
-        let mut tables_written_last_hop_b = HashSet::new();
-
         // Analyze liveness for function A
         let liveness_results_a = analyze_live_variables(func_a, cfg_program);
 
-        // Get entry and exit blocks for slice A
+        // Get entry and exit blocks for slice A - use entry_block, not first block
         if let Some(&first_hop_a) = slice_a.first() {
             let first_hop_cfg_a = &cfg_program.hops[first_hop_a];
-            if let Some(entry_block_a) = first_hop_cfg_a.entry_block.clone() {
-                if let Some(live_vars) = liveness_results_a.block_entry.get(&entry_block_a) {
-                    if let Some(var_set) = live_vars.as_set() {
-                        for LiveVar(var_id) in var_set {
-                            live_in_a.insert(*var_id);
-                            all_live_vars.insert(*var_id);
-                        }
-                    }
-                }
+            if let Some(entry_block_a) = first_hop_cfg_a.entry_block {
+                live_in_a = collect_live_vars_entry(&liveness_results_a, entry_block_a);
+                all_live_vars.extend(&live_in_a);
             }
         }
 
         if let Some(&last_hop_a) = slice_a.last() {
-            let last_hop_cfg_a = &cfg_program.hops[last_hop_a];
-            // Find exit blocks (blocks with HopExit/Return/Abort edges)
-            for &block_id in &last_hop_cfg_a.blocks {
-                let block = &cfg_program.blocks[block_id];
-                for edge in &block.successors {
-                    match &edge.edge_type {
-                        crate::cfg::EdgeType::HopExit { .. }
-                        | crate::cfg::EdgeType::Return { .. }
-                        | crate::cfg::EdgeType::Abort => {
-                            if let Some(live_vars) = liveness_results_a.block_exit.get(&block_id) {
-                                if let Some(var_set) = live_vars.as_set() {
-                                    for LiveVar(var_id) in var_set {
-                                        live_out_a.insert(*var_id);
-                                        all_live_vars.insert(*var_id);
-                                    }
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
+            live_out_a = collect_live_vars_exit(&liveness_results_a, cfg_program, last_hop_a);
+            all_live_vars.extend(&live_out_a);
         }
 
         // Analyze liveness for function B (if different from A)
@@ -482,125 +560,42 @@ impl CommutativeVerificationManager {
 
             if let Some(&first_hop_b) = slice_b.first() {
                 let first_hop_cfg_b = &cfg_program.hops[first_hop_b];
-                if let Some(entry_block_b) = first_hop_cfg_b.entry_block.clone() {
-                    if let Some(live_vars) = liveness_results_b.block_entry.get(&entry_block_b) {
-                        if let Some(var_set) = live_vars.as_set() {
-                            for LiveVar(var_id) in var_set {
-                                live_in_b.insert(*var_id);
-                                all_live_vars.insert(*var_id);
-                            }
-                        }
-                    }
+                if let Some(entry_block_b) = first_hop_cfg_b.entry_block {
+                    live_in_b = collect_live_vars_entry(&liveness_results_b, entry_block_b);
+                    all_live_vars.extend(&live_in_b);
                 }
             }
 
             if let Some(&last_hop_b) = slice_b.last() {
-                let last_hop_cfg_b = &cfg_program.hops[last_hop_b];
-                for &block_id in &last_hop_cfg_b.blocks {
-                    let block = &cfg_program.blocks[block_id];
-                    for edge in &block.successors {
-                        match &edge.edge_type {
-                            crate::cfg::EdgeType::HopExit { .. }
-                            | crate::cfg::EdgeType::Return { .. }
-                            | crate::cfg::EdgeType::Abort => {
-                                if let Some(live_vars) =
-                                    liveness_results_b.block_exit.get(&block_id)
-                                {
-                                    if let Some(var_set) = live_vars.as_set() {
-                                        for LiveVar(var_id) in var_set {
-                                            live_out_b.insert(*var_id);
-                                            all_live_vars.insert(*var_id);
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
+                live_out_b = collect_live_vars_exit(&liveness_results_b, cfg_program, last_hop_b);
+                all_live_vars.extend(&live_out_b);
             }
         } else {
             // Same function, use the same liveness results
             if let Some(&first_hop_b) = slice_b.first() {
                 let first_hop_cfg_b = &cfg_program.hops[first_hop_b];
-                if let Some(&entry_block_b) = first_hop_cfg_b.blocks.first() {
-                    if let Some(live_vars) = liveness_results_a.block_entry.get(&entry_block_b) {
-                        if let Some(var_set) = live_vars.as_set() {
-                            for LiveVar(var_id) in var_set {
-                                live_in_b.insert(*var_id);
-                                all_live_vars.insert(*var_id);
-                            }
-                        }
-                    }
+                if let Some(entry_block_b) = first_hop_cfg_b.entry_block {
+                    live_in_b = collect_live_vars_entry(&liveness_results_a, entry_block_b);
+                    all_live_vars.extend(&live_in_b);
                 }
             }
 
             if let Some(&last_hop_b) = slice_b.last() {
-                let last_hop_cfg_b = &cfg_program.hops[last_hop_b];
-                for &block_id in &last_hop_cfg_b.blocks {
-                    let block = &cfg_program.blocks[block_id];
-                    for edge in &block.successors {
-                        match &edge.edge_type {
-                            crate::cfg::EdgeType::HopExit { .. }
-                            | crate::cfg::EdgeType::Return { .. }
-                            | crate::cfg::EdgeType::Abort => {
-                                if let Some(live_vars) =
-                                    liveness_results_a.block_exit.get(&block_id)
-                                {
-                                    if let Some(var_set) = live_vars.as_set() {
-                                        for LiveVar(var_id) in var_set {
-                                            live_out_b.insert(*var_id);
-                                            all_live_vars.insert(*var_id);
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
+                live_out_b = collect_live_vars_exit(&liveness_results_a, cfg_program, last_hop_b);
+                all_live_vars.extend(&live_out_b);
             }
         }
 
-        // Analyze table access for slice A
+        // Analyze table access for both slices
         let table_analysis_a = analyze_table_mod_ref(func_a, cfg_program);
-        for &hop_id in slice_a {
-            let hop_cfg = &cfg_program.hops[hop_id];
-            for &block_id in &hop_cfg.blocks {
-                if let Some(block_exit) = table_analysis_a.block_exit.get(&block_id) {
-                    if let Some(access_set) = block_exit.as_set() {
-                        for table_access in access_set {
-                            let table_name = format!("table_{}", table_access.table.index());
-                            match table_access.access_type {
-                                AccessType::Read => {
-                                    tables_read_a.insert(table_name);
-                                }
-                                AccessType::Write => {
-                                    tables_written_a.insert(table_name);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        let (table_reads_a, table_writes_a) =
+            collect_table_accesses(&table_analysis_a, cfg_program, slice_a);
 
-        // Analyze table access for last hop of slice A
-        if let Some(&last_hop_a) = slice_a.last() {
-            let hop_cfg_a = &cfg_program.hops[last_hop_a];
-            for &block_id in &hop_cfg_a.blocks {
-                if let Some(block_exit) = table_analysis_a.block_exit.get(&block_id) {
-                    if let Some(access_set) = block_exit.as_set() {
-                        for table_access in access_set {
-                            if let AccessType::Write = table_access.access_type {
-                                let table_name = format!("table_{}", table_access.table.index());
-                                tables_written_last_hop_a.insert(table_name);
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        let table_writes_last_hop_a = if let Some(&last_hop_a) = slice_a.last() {
+            collect_last_hop_writes(&table_analysis_a, cfg_program, last_hop_a)
+        } else {
+            HashSet::new()
+        };
 
         // Analyze table access for slice B
         let table_analysis_b = if unit.func_id_A != unit.func_id_B {
@@ -609,42 +604,70 @@ impl CommutativeVerificationManager {
             table_analysis_a
         };
 
-        for &hop_id in slice_b {
-            let hop_cfg = &cfg_program.hops[hop_id];
-            for &block_id in &hop_cfg.blocks {
-                if let Some(block_exit) = table_analysis_b.block_exit.get(&block_id) {
-                    if let Some(access_set) = block_exit.as_set() {
-                        for table_access in access_set {
-                            let table_name = format!("table_{}", table_access.table.index());
-                            match table_access.access_type {
-                                AccessType::Read => {
-                                    tables_read_b.insert(table_name);
-                                }
-                                AccessType::Write => {
-                                    tables_written_b.insert(table_name);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        let (table_reads_b, table_writes_b) =
+            collect_table_accesses(&table_analysis_b, cfg_program, slice_b);
+
+        let table_writes_last_hop_b = if let Some(&last_hop_b) = slice_b.last() {
+            collect_last_hop_writes(&table_analysis_b, cfg_program, last_hop_b)
+        } else {
+            HashSet::new()
+        };
+
+        // Convert TableAccess to strings using gen_table_field_var_name
+        let mut tables_read_a = HashSet::new();
+        let mut tables_written_a = HashSet::new();
+        let mut tables_written_last_hop_a_strings = HashSet::new();
+
+        for access in table_reads_a {
+            let table = &cfg_program.tables[access.table];
+            let field = &cfg_program.fields[access.field];
+            let var_name =
+                BoogieProgramGenerator::gen_table_field_var_name(&table.name, &field.name);
+            tables_read_a.insert(var_name);
         }
 
-        // Analyze table access for last hop of slice B
-        if let Some(&last_hop_b) = slice_b.last() {
-            let hop_cfg_b = &cfg_program.hops[last_hop_b];
-            for &block_id in &hop_cfg_b.blocks {
-                if let Some(block_exit) = table_analysis_b.block_exit.get(&block_id) {
-                    if let Some(access_set) = block_exit.as_set() {
-                        for table_access in access_set {
-                            if let AccessType::Write = table_access.access_type {
-                                let table_name = format!("table_{}", table_access.table.index());
-                                tables_written_last_hop_b.insert(table_name);
-                            }
-                        }
-                    }
-                }
-            }
+        for access in table_writes_a {
+            let table = &cfg_program.tables[access.table];
+            let field = &cfg_program.fields[access.field];
+            let var_name =
+                BoogieProgramGenerator::gen_table_field_var_name(&table.name, &field.name);
+            tables_written_a.insert(var_name);
+        }
+
+        for access in table_writes_last_hop_a {
+            let table = &cfg_program.tables[access.table];
+            let field = &cfg_program.fields[access.field];
+            let var_name =
+                BoogieProgramGenerator::gen_table_field_var_name(&table.name, &field.name);
+            tables_written_last_hop_a_strings.insert(var_name);
+        }
+
+        let mut tables_read_b = HashSet::new();
+        let mut tables_written_b = HashSet::new();
+        let mut tables_written_last_hop_b_strings = HashSet::new();
+
+        for access in table_reads_b {
+            let table = &cfg_program.tables[access.table];
+            let field = &cfg_program.fields[access.field];
+            let var_name =
+                BoogieProgramGenerator::gen_table_field_var_name(&table.name, &field.name);
+            tables_read_b.insert(var_name);
+        }
+
+        for access in table_writes_b {
+            let table = &cfg_program.tables[access.table];
+            let field = &cfg_program.fields[access.field];
+            let var_name =
+                BoogieProgramGenerator::gen_table_field_var_name(&table.name, &field.name);
+            tables_written_b.insert(var_name);
+        }
+
+        for access in table_writes_last_hop_b {
+            let table = &cfg_program.tables[access.table];
+            let field = &cfg_program.fields[access.field];
+            let var_name =
+                BoogieProgramGenerator::gen_table_field_var_name(&table.name, &field.name);
+            tables_written_last_hop_b_strings.insert(var_name);
         }
 
         Ok(SliceAnalysisInfo {
@@ -657,8 +680,8 @@ impl CommutativeVerificationManager {
             tables_written_a,
             tables_read_b,
             tables_written_b,
-            tables_written_last_hop_a,
-            tables_written_last_hop_b,
+            tables_written_last_hop_a: tables_written_last_hop_a_strings,
+            tables_written_last_hop_b: tables_written_last_hop_b_strings,
         })
     }
 
@@ -675,24 +698,25 @@ impl CommutativeVerificationManager {
             "--- Step 1: Havoc initial state ---".to_string(),
         );
 
-        // Havoc all table variables
-        // TODO: just havoc table r/w by hops, use the analysis info, use gen_table_field_var_name() from gen_Boogie. Also, for the field that is primary, no variable should be generated.
-        // please add BoogieLine::Havoc and use this not comments
-        for &table_id in &cfg_program.root_tables {
-            let table = &cfg_program.tables[table_id];
-            for &field_id in &table.fields {
-                let field = &cfg_program.fields[field_id];
-                let var_name =
-                    BoogieProgramGenerator::gen_table_field_var_name(&table.name, &field.name);
-                lines.push(BoogieLine::Comment(format!("havoc {};", var_name)));
-            }
+        // Havoc tables read/written by both slices (exclude primary keys)
+        let mut tables_to_havoc = HashSet::new();
+        tables_to_havoc.extend(&analysis_info.tables_read_a);
+        tables_to_havoc.extend(&analysis_info.tables_written_a);
+        tables_to_havoc.extend(&analysis_info.tables_read_b);
+        tables_to_havoc.extend(&analysis_info.tables_written_b);
+
+        for table_var_name in tables_to_havoc {
+            lines.push(BoogieLine::Havoc(table_var_name.clone()));
         }
 
-        // Havoc all live variables, please add BoogieLine::Havoc and use this not comments
-        // only live-IN variable should be havoc
-        for &var_id in &analysis_info.live_vars {
+        // Havoc live-IN variables only
+        let mut live_in_vars = HashSet::new();
+        live_in_vars.extend(&analysis_info.live_in_a);
+        live_in_vars.extend(&analysis_info.live_in_b);
+
+        for &var_id in &live_in_vars {
             let var_name = BoogieProgramGenerator::gen_var_name(cfg_program, var_id, None);
-            lines.push(BoogieLine::Comment(format!("havoc {};", var_name)));
+            lines.push(BoogieLine::Havoc(var_name));
         }
 
         Ok(())
@@ -706,34 +730,39 @@ impl CommutativeVerificationManager {
         analysis_info: &SliceAnalysisInfo,
         lines: &mut Vec<BoogieLine>,
     ) -> Results<()> {
+        //TODO: when create new variable, maybe need to call gen_Boogie.rs to make sure it is declared
         BoogieProgramGenerator::add_comment(
             lines,
             "--- Step 2: Save initial state ---".to_string(),
         );
 
-        // Save table variables
-        for &table_id in &cfg_program.root_tables {
-            let table = &cfg_program.tables[table_id];
-            for &field_id in &table.fields {
-                let field = &cfg_program.fields[field_id];
-                let var_name =
-                    BoogieProgramGenerator::gen_table_field_var_name(&table.name, &field.name);
-                let snapshot_name = format!("{}_init", var_name);
-                lines.push(BoogieLine::Comment(format!(
-                    "{} := {};",
-                    snapshot_name, var_name
-                )));
-            }
+        // Save tables read/written by both slices
+        let mut tables_to_save = HashSet::new();
+        tables_to_save.extend(&analysis_info.tables_read_a);
+        tables_to_save.extend(&analysis_info.tables_written_a);
+        tables_to_save.extend(&analysis_info.tables_read_b);
+        tables_to_save.extend(&analysis_info.tables_written_b);
+
+        for table_var_name in tables_to_save {
+            let snapshot_name = format!("{}_init", table_var_name);
+            let assign_expr = BoogieExpr {
+                kind: BoogieExprKind::Var(table_var_name.clone()),
+            };
+            lines.push(BoogieLine::Assign(snapshot_name, assign_expr));
         }
 
-        // Save live variables, only live-IN variable should be saved
-        for &var_id in &analysis_info.live_vars {
+        // Save live-IN variables only
+        let mut live_in_vars = HashSet::new();
+        live_in_vars.extend(&analysis_info.live_in_a);
+        live_in_vars.extend(&analysis_info.live_in_b);
+
+        for &var_id in &live_in_vars {
             let var_name = BoogieProgramGenerator::gen_var_name(cfg_program, var_id, None);
             let snapshot_name = format!("{}_init", var_name);
-            lines.push(BoogieLine::Comment(format!(
-                "{} := {};",
-                snapshot_name, var_name
-            )));
+            let assign_expr = BoogieExpr {
+                kind: BoogieExprKind::Var(var_name),
+            };
+            lines.push(BoogieLine::Assign(snapshot_name, assign_expr));
         }
 
         Ok(())
@@ -866,60 +895,26 @@ impl CommutativeVerificationManager {
         Ok(())
     }
 
-    /// Add control flow edges for a hop execution with unique labels
-    /// TODO: use gen_Boogie.rs ones, you might need to modify it, but don't create your own one
+    /// Add control flow edges for a hop execution using gen_Boogie.rs functions
     fn add_hop_control_flow_edges(
         &self,
-        _generator: &mut BoogieProgramGenerator,
+        generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
         block_id: crate::cfg::BasicBlockId,
         execution_index: usize,
         suffix: &str,
         lines: &mut Vec<BoogieLine>,
     ) -> Results<()> {
-        let block = &cfg_program.blocks[block_id];
-
-        for edge in &block.successors {
-            match &edge.edge_type {
-                crate::cfg::EdgeType::Unconditional => {
-                    let target_hop = &cfg_program.blocks[edge.to].hop_id;
-                    let target_label = format!(
-                        "hop_{}_{}_exec_{}_{}",
-                        target_hop.index(),
-                        0,
-                        execution_index,
-                        suffix
-                    );
-                    lines.push(BoogieLine::Goto(target_label));
-                }
-                crate::cfg::EdgeType::ConditionalTrue { condition } => {
-                    let cond_expr = _generator.convert_operand(cfg_program, condition, None)?;
-                    let target_hop = &cfg_program.blocks[edge.to].hop_id;
-                    let true_label = format!(
-                        "hop_{}_{}_exec_{}_{}",
-                        target_hop.index(),
-                        0,
-                        execution_index,
-                        suffix
-                    );
-                    let false_label = format!(
-                        "hop_{}_{}_exec_{}_{}_false",
-                        target_hop.index(),
-                        0,
-                        execution_index,
-                        suffix
-                    );
-
-                    lines.push(BoogieLine::If {
-                        cond: cond_expr,
-                        then_body: vec![Box::new(BoogieLine::Goto(true_label))],
-                        else_body: vec![Box::new(BoogieLine::Goto(false_label))],
-                    });
-                }
-                _ => {} // Other edge types handled implicitly
-            }
-        }
-
+        // Use gen_Boogie.rs function to generate control flow
+        // TODO: maybe the suffix needs to be included
+        let function_name = format!("exec_{}_{}", execution_index, suffix);
+        generator.gen_basic_block_edges(
+            lines,
+            cfg_program,
+            block_id,
+            &function_name,
+            execution_index,
+        );
         Ok(())
     }
 
@@ -940,31 +935,33 @@ impl CommutativeVerificationManager {
             format!("Snapshotting final state for {}", suffix),
         );
 
-        // Snapshot table variables, you should just use analysis info
-        for &table_id in &cfg_program.root_tables {
-            let table = &cfg_program.tables[table_id];
-            for &field_id in &table.fields {
-                let field = &cfg_program.fields[field_id];
-                let var_name =
-                    BoogieProgramGenerator::gen_table_field_var_name(&table.name, &field.name);
-                let snapshot_name = format!("{}_{}", var_name, suffix);
-                table_snapshots.insert(var_name.clone(), snapshot_name.clone());
-                lines.push(BoogieLine::Comment(format!(
-                    "{} := {};",
-                    snapshot_name, var_name
-                )));
-            }
+        // Snapshot tables written by last hop only
+        let mut tables_written_last_hop = HashSet::new();
+        tables_written_last_hop.extend(&analysis_info.tables_written_last_hop_a);
+        tables_written_last_hop.extend(&analysis_info.tables_written_last_hop_b);
+
+        for table_var_name in tables_written_last_hop {
+            let snapshot_name = format!("{}_{}", table_var_name, suffix);
+            table_snapshots.insert(table_var_name.clone(), snapshot_name.clone());
+            let assign_expr = BoogieExpr {
+                kind: BoogieExprKind::Var(table_var_name.clone()),
+            };
+            lines.push(BoogieLine::Assign(snapshot_name, assign_expr));
         }
 
-        // Snapshot live variables, only need to snapshot live-OUT variables
-        for &var_id in &analysis_info.live_vars {
+        // Snapshot live-OUT variables only
+        let mut live_out_vars = HashSet::new();
+        live_out_vars.extend(&analysis_info.live_out_a);
+        live_out_vars.extend(&analysis_info.live_out_b);
+
+        for &var_id in &live_out_vars {
             let var_name = BoogieProgramGenerator::gen_var_name(cfg_program, var_id, None);
             let snapshot_name = format!("{}_{}", var_name, suffix);
             var_snapshots.insert(var_id, snapshot_name.clone());
-            lines.push(BoogieLine::Comment(format!(
-                "{} := {};",
-                snapshot_name, var_name
-            )));
+            let assign_expr = BoogieExpr {
+                kind: BoogieExprKind::Var(var_name),
+            };
+            lines.push(BoogieLine::Assign(snapshot_name, assign_expr));
         }
 
         Ok(VariableSnapshots {
@@ -983,29 +980,33 @@ impl CommutativeVerificationManager {
     ) -> Results<()> {
         BoogieProgramGenerator::add_comment(lines, "Restoring initial state:".to_string());
 
-        // Restore table variables, use analysis info
-        for &table_id in &cfg_program.root_tables {
-            let table = &cfg_program.tables[table_id];
-            for &field_id in &table.fields {
-                let field = &cfg_program.fields[field_id];
-                let var_name =
-                    BoogieProgramGenerator::gen_table_field_var_name(&table.name, &field.name);
-                let snapshot_name = format!("{}_init", var_name);
-                lines.push(BoogieLine::Comment(format!(
-                    "{} := {};",
-                    var_name, snapshot_name
-                )));
-            }
+        // Restore tables read/written by both slices
+        let mut tables_to_restore = HashSet::new();
+        tables_to_restore.extend(&analysis_info.tables_read_a);
+        tables_to_restore.extend(&analysis_info.tables_written_a);
+        tables_to_restore.extend(&analysis_info.tables_read_b);
+        tables_to_restore.extend(&analysis_info.tables_written_b);
+
+        for table_var_name in tables_to_restore {
+            let snapshot_name = format!("{}_init", table_var_name);
+            let assign_expr = BoogieExpr {
+                kind: BoogieExprKind::Var(snapshot_name),
+            };
+            lines.push(BoogieLine::Assign(table_var_name.clone(), assign_expr));
         }
 
-        // Restore live variables, only need to restore live-IN variables
-        for &var_id in &analysis_info.live_vars {
+        // Restore live-IN variables only
+        let mut live_in_vars = HashSet::new();
+        live_in_vars.extend(&analysis_info.live_in_a);
+        live_in_vars.extend(&analysis_info.live_in_b);
+
+        for &var_id in &live_in_vars {
             let var_name = BoogieProgramGenerator::gen_var_name(cfg_program, var_id, None);
             let snapshot_name = format!("{}_init", var_name);
-            lines.push(BoogieLine::Comment(format!(
-                "{} := {};",
-                var_name, snapshot_name
-            )));
+            let assign_expr = BoogieExpr {
+                kind: BoogieExprKind::Var(snapshot_name),
+            };
+            lines.push(BoogieLine::Assign(var_name, assign_expr));
         }
 
         Ok(())
@@ -1056,7 +1057,8 @@ impl CommutativeVerificationManager {
         Ok(())
     }
 
-    /// Assert that current state equals one of the special interleaving states, similarly, use analysis info, compare table written by "last hop" only, and compare live-OUT variable only
+    /// Assert that current state equals one of the special interleaving states
+    /// Compare tables written by "last hop" only, and compare live-OUT variables only
     fn assert_equivalence_to_special_interleavings(
         &self,
         _generator: &mut BoogieProgramGenerator,
@@ -1069,52 +1071,53 @@ impl CommutativeVerificationManager {
         let mut equality_conditions_a_then_b = Vec::new();
         let mut equality_conditions_b_then_a = Vec::new();
 
-        // Compare table variables
-        for &table_id in &cfg_program.root_tables {
-            let table = &cfg_program.tables[table_id];
-            for &field_id in &table.fields {
-                let field = &cfg_program.fields[field_id];
-                let var_name =
-                    BoogieProgramGenerator::gen_table_field_var_name(&table.name, &field.name);
+        // Compare tables written by last hop only
+        let mut tables_written_last_hop = HashSet::new();
+        tables_written_last_hop.extend(&analysis_info.tables_written_last_hop_a);
+        tables_written_last_hop.extend(&analysis_info.tables_written_last_hop_b);
 
-                // Current var == a_then_b snapshot
-                if let Some(a_then_b_snapshot) = a_then_b_vars.table_snapshots.get(&var_name) {
-                    let current_expr = BoogieExpr {
-                        kind: BoogieExprKind::Var(var_name.clone()),
-                    };
-                    let a_then_b_expr = BoogieExpr {
-                        kind: BoogieExprKind::Var(a_then_b_snapshot.clone()),
-                    };
-                    equality_conditions_a_then_b.push(BoogieExpr {
-                        kind: BoogieExprKind::BinOp(
-                            Box::new(current_expr.clone()),
-                            BoogieBinOp::Eq,
-                            Box::new(a_then_b_expr),
-                        ),
-                    });
-                }
+        for table_var_name in tables_written_last_hop {
+            // Current var == a_then_b snapshot
+            if let Some(a_then_b_snapshot) = a_then_b_vars.table_snapshots.get(table_var_name) {
+                let current_expr = BoogieExpr {
+                    kind: BoogieExprKind::Var(table_var_name.clone()),
+                };
+                let a_then_b_expr = BoogieExpr {
+                    kind: BoogieExprKind::Var(a_then_b_snapshot.clone()),
+                };
+                equality_conditions_a_then_b.push(BoogieExpr {
+                    kind: BoogieExprKind::BinOp(
+                        Box::new(current_expr.clone()),
+                        BoogieBinOp::Eq,
+                        Box::new(a_then_b_expr),
+                    ),
+                });
+            }
 
-                // Current var == b_then_a snapshot
-                if let Some(b_then_a_snapshot) = b_then_a_vars.table_snapshots.get(&var_name) {
-                    let current_expr = BoogieExpr {
-                        kind: BoogieExprKind::Var(var_name),
-                    };
-                    let b_then_a_expr = BoogieExpr {
-                        kind: BoogieExprKind::Var(b_then_a_snapshot.clone()),
-                    };
-                    equality_conditions_b_then_a.push(BoogieExpr {
-                        kind: BoogieExprKind::BinOp(
-                            Box::new(current_expr),
-                            BoogieBinOp::Eq,
-                            Box::new(b_then_a_expr),
-                        ),
-                    });
-                }
+            // Current var == b_then_a snapshot
+            if let Some(b_then_a_snapshot) = b_then_a_vars.table_snapshots.get(table_var_name) {
+                let current_expr = BoogieExpr {
+                    kind: BoogieExprKind::Var(table_var_name.clone()),
+                };
+                let b_then_a_expr = BoogieExpr {
+                    kind: BoogieExprKind::Var(b_then_a_snapshot.clone()),
+                };
+                equality_conditions_b_then_a.push(BoogieExpr {
+                    kind: BoogieExprKind::BinOp(
+                        Box::new(current_expr),
+                        BoogieBinOp::Eq,
+                        Box::new(b_then_a_expr),
+                    ),
+                });
             }
         }
 
-        // Compare live variables
-        for &var_id in &analysis_info.live_vars {
+        // Compare live-OUT variables only
+        let mut live_out_vars = HashSet::new();
+        live_out_vars.extend(&analysis_info.live_out_a);
+        live_out_vars.extend(&analysis_info.live_out_b);
+
+        for &var_id in &live_out_vars {
             let var_name = BoogieProgramGenerator::gen_var_name(cfg_program, var_id, None);
 
             // Current var == a_then_b snapshot
