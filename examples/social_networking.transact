@@ -1,0 +1,168 @@
+// Mostly written with transact syntax
+// There are some syntax not in transact, to express tables being partitioned into different nodes
+
+partition f(int x);
+
+
+table Graph{
+    primary int UID1;
+    primary int UID2;
+    node f(UID1);
+
+    int Counter;
+}
+
+table Status{
+    primary UUID SID;
+    primary int UID;
+    node f(UID);
+
+    string Status;
+}
+
+table Wall{
+    primary UUID WID;
+    primary int UID;
+    node f(UID);
+
+    string Message;
+}
+
+table Activity{
+    primary UUID AID;
+    primary int UID;
+    node f(UID);
+
+    int Type;
+    string Log;
+    int Time;
+}
+
+table User{
+    primary int UID;
+    node f(UID);
+}
+
+// AID is a system generated UUID that is globally unique
+void beFriend(int uid1, int uid2, int time){
+    UUID aid1 = genUUID();
+    UUID aid2 = genUUID();
+    // How to express data constraints
+
+    hop {
+        Graph[UID1: uid1, UID2: uid2].Counter = 1;
+    }
+
+    hop {
+        Graph[UID1: uid2, UID2: uid1].Counter = 1;
+    }
+
+    hop {
+        Activity[AID: aid1, UID: uid1] = {
+            Type: 1,
+            Log: uid1 + " befriend with " + uid2,
+            Time: time
+        };
+    }
+
+    hop {
+        Activity[AID: aid2, UID: uid2] = {
+            Type: 1,
+            Log: uid2 + " befriend with " + uid1,
+            Time: time
+        };
+    }
+}
+
+void unFriend(int uid1, int uid2, int aid1, int aid2, int time){
+    UUID aid1 = genUUID();
+    UUID aid2 = genUUID();
+    hop {
+        Graph[UID1: uid1, UID2: uid2].Counter = 0;
+    }
+
+    hop {
+        Graph[UID1: uid2, UID2: uid1].Counter = 0;
+    }
+
+    hop {
+        Activity[AID: aid1, UID: uid1] = {
+            Type: 2,
+            Log: uid1 + " unfriend with " + uid2,
+            Time: time
+        };
+    }
+
+    hop {
+        Activity[AID: aid2, UID: uid2] = {
+            Type: 2,
+            Log: uid2 + " unfriend with " + uid1,
+            Time: time
+        };
+    }
+}
+
+// Reading a list 
+// return list
+// insert list
+// table scan
+int[] readFriends(int uid) {
+    hop {
+        // select uid2 from Graph where uid1 = {uid} AND counter > 0;
+        int[] uids;
+        for Graph g in Graph.scan() {
+            if g.UID1 == uid && g.Counter > 0 {
+                uids.insert(g.UID2);
+            }
+        }
+        return uids;
+    }
+}
+
+string[] readActivities(int uid) {
+    hop {
+        string[] logs;
+        for Activity a in Activity.scan() {
+            if a.UID == uid {
+                logs.insert(a.Log);
+            }
+        }
+        return logs;
+    }
+}
+
+void postStatus(int uid, string status, int time){
+    UUID sid = genUUID();
+    UUID aid = genUUID();
+    hop {
+        Status[SID: sid, UID: uid] = {
+            Status: status
+        };
+    }
+
+    hop {
+        Activity[AID: aid, UID: uid] = {
+            Type: 3,
+            Log: uid + " posted status: " + status,
+            Time: time
+        };
+    }
+}
+
+void postWall(int uid, string message, int time){
+    UUID wid = genUUID();
+    UUID aid = genUUID();
+    hop {
+        Wall[WID: wid, UID: uid] = {
+            Message: message
+        };
+    }
+
+    hop {
+        Activity[AID: aid, UID: uid] = {
+            Type: 4,
+            Log: str(uid) + " posted wall message: " + message,
+            Time: time
+        };
+    }
+}
