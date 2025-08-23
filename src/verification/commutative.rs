@@ -2,7 +2,7 @@ use super::errors::Results;
 pub use super::errors::{SpannedError, VerificationError};
 use super::Boogie::{
     self, gen_Boogie::BoogieProgramGenerator, BoogieBinOp, BoogieExpr, BoogieExprKind, BoogieLine,
-    BoogieProcedure, ErrorMessage,
+    BoogieProcedure, BoogieUnOp, ErrorMessage,
 };
 use crate::cfg::{CfgProgram, FunctionId, HopId, VarId};
 use crate::sc_graph::{EdgeType, SCGraph, SCGraphEdge};
@@ -120,7 +120,7 @@ impl CommutativeVerificationManager {
             if !slice_a.is_empty() && !slice_b.is_empty() {
                 let mut program = base_program.clone();
                 program.name = format!(
-                    "commutative_Simple_Hop{}_vs_Hop{}",
+                    "commutative_simple_hop{}_vs_hop{}",
                     unit.c_edge.source.hop_id.index(),
                     unit.c_edge.target.hop_id.index()
                 );
@@ -865,14 +865,16 @@ impl CommutativeVerificationManager {
         for (block_idx, &block_id) in hop.blocks.iter().enumerate() {
             let block = &cfg_program.blocks[block_id];
 
-            // Generate unique label
-            let label = format!(
+            // Generate unique label using gen_Boogie.rs functions
+            let prefix_str = format!(
                 "hop_{}_{}_exec_{}_{}",
                 hop_id.index(),
                 block_idx,
                 execution_index,
                 suffix
             );
+            let label =
+                BoogieProgramGenerator::gen_basic_block_label(block_idx, Some(&prefix_str), None);
             lines.push(BoogieLine::Label(label));
 
             // Convert statements
@@ -881,11 +883,12 @@ impl CommutativeVerificationManager {
                 lines.extend(boogie_lines);
             }
 
-            // Add control flow edges with unique labels
-            self.add_hop_control_flow_edges(
+            // Add control flow edges - for commutative verification, handle specially
+            self.add_commutative_control_flow_edges(
                 generator,
                 cfg_program,
                 block_id,
+                &prefix_str,
                 execution_index,
                 suffix,
                 lines,
@@ -895,27 +898,150 @@ impl CommutativeVerificationManager {
         Ok(())
     }
 
-    /// Add control flow edges for a hop execution using gen_Boogie.rs functions
-    fn add_hop_control_flow_edges(
+    /// Add control flow edges specifically for commutative verification
+    /// Handles hop isolation properly - only generates gotos within the same hop
+    fn add_commutative_control_flow_edges(
         &self,
         generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
         block_id: crate::cfg::BasicBlockId,
+        _current_prefix: &str,
         execution_index: usize,
         suffix: &str,
         lines: &mut Vec<BoogieLine>,
     ) -> Results<()> {
-        // Use gen_Boogie.rs function to generate control flow
-        // TODO: maybe the suffix needs to be included
-        let function_name = format!("exec_{}_{}", execution_index, suffix);
-        generator.gen_basic_block_edges(
-            lines,
-            cfg_program,
-            block_id,
-            &function_name,
-            execution_index,
-        );
+        let block = &cfg_program.blocks[block_id];
+        let current_hop_id = block.hop_id;
+
+        // If no successors, this is a terminal block - no gotos needed
+        if block.successors.is_empty() {
+            return Ok(());
+        }
+
+        for edge in &block.successors {
+            match &edge.edge_type {
+                crate::cfg::EdgeType::Unconditional => {
+                    let target_block = &cfg_program.blocks[edge.to];
+
+                    // Only generate goto if target is in the same hop
+                    if target_block.hop_id == current_hop_id {
+                        if let Some(target_label) = self.get_commutative_block_label(
+                            cfg_program,
+                            edge.to,
+                            current_hop_id,
+                            execution_index,
+                            suffix,
+                        ) {
+                            lines.push(BoogieLine::Goto(target_label));
+                        }
+                    }
+                    // If target is in different hop, don't generate goto (hop isolation)
+                }
+                crate::cfg::EdgeType::ConditionalTrue { condition } => {
+                    let target_block = &cfg_program.blocks[edge.to];
+
+                    // Only generate goto if target is in the same hop
+                    if target_block.hop_id == current_hop_id {
+                        if let Some(target_label) = self.get_commutative_block_label(
+                            cfg_program,
+                            edge.to,
+                            current_hop_id,
+                            execution_index,
+                            suffix,
+                        ) {
+                            match generator.convert_operand(cfg_program, condition, None) {
+                                Ok(condition_expr) => {
+                                    lines.push(BoogieLine::If {
+                                        cond: condition_expr,
+                                        then_body: vec![Box::new(BoogieLine::Goto(target_label))],
+                                        else_body: vec![],
+                                    });
+                                }
+                                Err(_) => {
+                                    lines.push(BoogieLine::Goto(target_label));
+                                }
+                            }
+                        }
+                    }
+                }
+                crate::cfg::EdgeType::ConditionalFalse { condition } => {
+                    let target_block = &cfg_program.blocks[edge.to];
+
+                    // Only generate goto if target is in the same hop
+                    if target_block.hop_id == current_hop_id {
+                        if let Some(target_label) = self.get_commutative_block_label(
+                            cfg_program,
+                            edge.to,
+                            current_hop_id,
+                            execution_index,
+                            suffix,
+                        ) {
+                            match generator.convert_operand(cfg_program, condition, None) {
+                                Ok(condition_expr) => {
+                                    let negated_condition = BoogieExpr {
+                                        kind: BoogieExprKind::UnOp(
+                                            BoogieUnOp::Not,
+                                            Box::new(condition_expr),
+                                        ),
+                                    };
+                                    lines.push(BoogieLine::If {
+                                        cond: negated_condition,
+                                        then_body: vec![Box::new(BoogieLine::Goto(target_label))],
+                                        else_body: vec![],
+                                    });
+                                }
+                                Err(_) => {
+                                    lines.push(BoogieLine::Goto(target_label));
+                                }
+                            }
+                        }
+                    }
+                }
+                crate::cfg::EdgeType::HopExit { .. } => {
+                    // For commutative verification, HopExit means this hop execution is complete
+                    // Don't generate any goto - just let execution continue to next statement
+                }
+                crate::cfg::EdgeType::Return { .. } => {
+                    // For commutative verification, return means this hop execution is complete
+                    // Don't generate any goto - just let execution continue
+                }
+                crate::cfg::EdgeType::Abort => {
+                    // For commutative verification, abort means this hop execution is complete
+                    // Don't generate any goto - just let execution continue
+                }
+            }
+        }
         Ok(())
+    }
+
+    /// Generate block label for commutative verification with hop-specific prefix
+    fn get_commutative_block_label(
+        &self,
+        cfg_program: &CfgProgram,
+        block_id: crate::cfg::BasicBlockId,
+        hop_id: crate::cfg::HopId,
+        execution_index: usize,
+        suffix: &str,
+    ) -> Option<String> {
+        let hop = &cfg_program.hops[hop_id];
+
+        // Find the index of this block within the hop
+        if let Some(block_index) = hop.blocks.iter().position(|&b| b == block_id) {
+            let prefix_str = format!(
+                "hop_{}_{}_exec_{}_{}",
+                hop_id.index(),
+                block_index,
+                execution_index,
+                suffix
+            );
+            Some(BoogieProgramGenerator::gen_basic_block_label(
+                block_index,
+                Some(&prefix_str),
+                None,
+            ))
+        } else {
+            None
+        }
     }
 
     /// Snapshot the final state of variables after execution

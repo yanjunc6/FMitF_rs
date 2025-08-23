@@ -231,83 +231,13 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
             VariableKind::Temporary => format!("{}", var.name),
         };
 
-        if let Some(prefix) = prefix {
+        let var_name = if let Some(prefix) = prefix {
             format!("{}_{}", prefix, base_name)
         } else {
             base_name
-        }
-    }
-
-    /// Generate a unique label name for a basic block with optional prefix and suffix  
-    pub fn gen_block_label_with_suffix(
-        function_name: &str,
-        hop_index: usize,
-        block_index: usize,
-        prefix: Option<&str>,
-        suffix: Option<&str>,
-    ) -> String {
-        let base_label = format!("{}_hop{}_block{}", function_name, hop_index, block_index);
-        let mut label = if let Some(prefix) = prefix {
-            format!("{}_{}", prefix, base_label)
-        } else {
-            base_label
         };
 
-        if let Some(suffix) = suffix {
-            label = format!("{}_{}", label, suffix);
-        }
-
-        label
-    }
-
-    /// Generate a unique label name for a basic block with optional prefix
-    pub fn gen_block_label(
-        function_name: &str,
-        hop_index: usize,
-        block_index: usize,
-        prefix: Option<&str>,
-    ) -> String {
-        Self::gen_block_label_with_suffix(function_name, hop_index, block_index, prefix, None)
-    }
-
-    /// Generate function start label
-    pub fn gen_function_start_label(function_name: &str) -> String {
-        format!("{}_start", function_name)
-    }
-
-    /// Generate function end label  
-    pub fn gen_function_end_label(function_name: &str) -> String {
-        format!("{}_end", function_name)
-    }
-
-    /// Generate label for a basic block by its BasicBlockId
-    pub fn gen_basic_block_label(
-        &self,
-        cfg_program: &CfgProgram,
-        block_id: BasicBlockId,
-        function_name: &str,
-    ) -> Option<String> {
-        let block = &cfg_program.blocks[block_id];
-        let hop_id = block.hop_id;
-
-        // Find which hop index this hop_id corresponds to
-        let function = cfg_program
-            .functions
-            .iter()
-            .find(|(_, func)| func.hops.contains(&hop_id))?;
-
-        let hop_index = function.1.hops.iter().position(|&h| h == hop_id)?;
-
-        // Find block index within the hop
-        let hop = &cfg_program.hops[hop_id];
-        let block_index = hop.blocks.iter().position(|&b| b == block_id)?;
-
-        Some(Self::gen_block_label(
-            function_name,
-            hop_index,
-            block_index,
-            None,
-        ))
+        var_name
     }
 
     /// Convert CFG operand to Boogie expression with optional prefix
@@ -407,7 +337,7 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
                     }),
                     TypeName::Bool => Ok(BoogieExpr {
                         kind: BoogieExprKind::FunctionCall {
-                            name: "BoolToString".to_string(), // TODO: Add this function to axioms
+                            name: "BoolToString".to_string(),
                             args: vec![BoogieExpr {
                                 kind: BoogieExprKind::Var(var_name),
                             }],
@@ -418,44 +348,42 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
                     }
                 }
             }
-            Operand::Const(constant) => {
-                match constant {
-                    Constant::String(s) => {
-                        let const_name = self.add_string_literal(s);
-                        Ok(BoogieExpr {
-                            kind: BoogieExprKind::Var(const_name),
-                        })
-                    }
-                    Constant::Int(i) => Ok(BoogieExpr {
-                        kind: BoogieExprKind::FunctionCall {
-                            name: "IntToString".to_string(),
-                            args: vec![BoogieExpr {
-                                kind: BoogieExprKind::IntConst(*i),
-                            }],
-                        },
-                    }),
-                    Constant::Float(f) => Ok(BoogieExpr {
-                        kind: BoogieExprKind::FunctionCall {
-                            name: "RealToString".to_string(),
-                            args: vec![BoogieExpr {
-                                kind: BoogieExprKind::RealConst(f.into_inner()),
-                            }],
-                        },
-                    }),
-                    Constant::Bool(b) => Ok(BoogieExpr {
-                        kind: BoogieExprKind::FunctionCall {
-                            name: "BoolToString".to_string(), // TODO: Add this function to axioms
-                            args: vec![BoogieExpr {
-                                kind: BoogieExprKind::BoolConst(*b),
-                            }],
-                        },
-                    }),
-                    Constant::Array(_) => Err(vec![SpannedError {
-                        error: VerificationError::ArrayConstantNotSupported,
-                        span: None,
-                    }]),
+            Operand::Const(constant) => match constant {
+                Constant::String(s) => {
+                    let const_name = self.add_string_literal(s);
+                    Ok(BoogieExpr {
+                        kind: BoogieExprKind::Var(const_name),
+                    })
                 }
-            }
+                Constant::Int(i) => Ok(BoogieExpr {
+                    kind: BoogieExprKind::FunctionCall {
+                        name: "IntToString".to_string(),
+                        args: vec![BoogieExpr {
+                            kind: BoogieExprKind::IntConst(*i),
+                        }],
+                    },
+                }),
+                Constant::Float(f) => Ok(BoogieExpr {
+                    kind: BoogieExprKind::FunctionCall {
+                        name: "RealToString".to_string(),
+                        args: vec![BoogieExpr {
+                            kind: BoogieExprKind::RealConst(f.into_inner()),
+                        }],
+                    },
+                }),
+                Constant::Bool(b) => Ok(BoogieExpr {
+                    kind: BoogieExprKind::FunctionCall {
+                        name: "BoolToString".to_string(),
+                        args: vec![BoogieExpr {
+                            kind: BoogieExprKind::BoolConst(*b),
+                        }],
+                    },
+                }),
+                Constant::Array(_) => Err(vec![SpannedError {
+                    error: VerificationError::ArrayConstantNotSupported,
+                    span: None,
+                }]),
+            },
         }
     }
 
@@ -745,111 +673,6 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
         Ok(generator.program)
     }
 
-    /// Generate goto edges for basic block control flow
-    pub fn gen_basic_block_edges(
-        &mut self,
-        lines: &mut Vec<BoogieLine>,
-        cfg_program: &CfgProgram,
-        block_id: BasicBlockId,
-        function_name: &str,
-        _hop_index: usize,
-    ) {
-        let block = &cfg_program.blocks[block_id];
-
-        // If no successors, this is a terminal block - no gotos needed
-        if block.successors.is_empty() {
-            return;
-        }
-
-        for edge in &block.successors {
-            match &edge.edge_type {
-                EdgeType::Unconditional => {
-                    // Generate goto to target block
-                    if let Some(target_label) =
-                        self.gen_basic_block_label(cfg_program, edge.to, function_name)
-                    {
-                        lines.push(BoogieLine::Goto(target_label));
-                    }
-                }
-                EdgeType::ConditionalTrue { condition } => {
-                    // Generate conditional goto: if (condition) goto target
-                    if let Some(target_label) =
-                        self.gen_basic_block_label(cfg_program, edge.to, function_name)
-                    {
-                        // Convert condition operand to Boogie expression
-                        match self.convert_operand(cfg_program, condition, None) {
-                            Ok(condition_expr) => {
-                                lines.push(BoogieLine::If {
-                                    cond: condition_expr,
-                                    then_body: vec![Box::new(BoogieLine::Goto(target_label))],
-                                    else_body: vec![], // Empty else body
-                                });
-                            }
-                            Err(_) => {
-                                // If condition conversion fails, generate unconditional goto as fallback
-                                lines.push(BoogieLine::Goto(target_label));
-                            }
-                        }
-                    }
-                }
-                EdgeType::ConditionalFalse { condition } => {
-                    // Generate conditional goto: if (!condition) goto target
-                    if let Some(target_label) =
-                        self.gen_basic_block_label(cfg_program, edge.to, function_name)
-                    {
-                        // Convert condition operand to Boogie expression and negate it
-                        match self.convert_operand(cfg_program, condition, None) {
-                            Ok(condition_expr) => {
-                                let negated_condition = BoogieExpr {
-                                    kind: BoogieExprKind::UnOp(
-                                        BoogieUnOp::Not,
-                                        Box::new(condition_expr),
-                                    ),
-                                };
-                                lines.push(BoogieLine::If {
-                                    cond: negated_condition,
-                                    then_body: vec![Box::new(BoogieLine::Goto(target_label))],
-                                    else_body: vec![], // Empty else body
-                                });
-                            }
-                            Err(_) => {
-                                // If condition conversion fails, generate unconditional goto as fallback
-                                lines.push(BoogieLine::Goto(target_label));
-                            }
-                        }
-                    }
-                }
-                EdgeType::HopExit { next_hop } => {
-                    if let Some(next_hop_id) = next_hop {
-                        // Generate goto to next hop's entry block
-                        let next_hop = &cfg_program.hops[*next_hop_id];
-                        if let Some(entry_block) = next_hop.entry_block {
-                            if let Some(target_label) =
-                                self.gen_basic_block_label(cfg_program, entry_block, function_name)
-                            {
-                                lines.push(BoogieLine::Goto(target_label));
-                            }
-                        }
-                    } else {
-                        // HopExit with no next hop - goto function end
-                        let end_label = Self::gen_function_end_label(function_name);
-                        lines.push(BoogieLine::Goto(end_label));
-                    }
-                }
-                EdgeType::Return { value: _ } => {
-                    // Return statement - goto function end (ignore return value for now)
-                    let end_label = Self::gen_function_end_label(function_name);
-                    lines.push(BoogieLine::Goto(end_label));
-                }
-                EdgeType::Abort => {
-                    // Abort statement - same as return, goto function end
-                    let end_label = Self::gen_function_end_label(function_name);
-                    lines.push(BoogieLine::Goto(end_label));
-                }
-            }
-        }
-    }
-
     /// Add a Boogie assertion to the current procedure
     pub fn add_assertion(
         lines: &mut Vec<BoogieLine>,
@@ -946,6 +769,182 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
         }
 
         modified_globals.into_iter().collect()
+    }
+
+    /// add suffix and prefix
+    pub fn add_suffix_prefix_helper(
+        name: &str,
+        prefix: Option<&str>,
+        suffix: Option<&str>,
+    ) -> String {
+        let mut result = name.to_string();
+        if let Some(prefix) = prefix {
+            result = format!("{}_{}", prefix, result);
+        }
+        if let Some(suffix) = suffix {
+            result = format!("{}_{}", result, suffix);
+        }
+        result
+    }
+
+    /// Generate a unique label name for a basic block with optional prefix and suffix  
+    pub fn gen_basic_block_label(
+        block_id: BasicBlockId,
+        prefix: Option<&str>,
+        suffix: Option<&str>,
+    ) -> String {
+        let label = format!("block{}", block_id.index());
+        Self::add_suffix_prefix_helper(&label, prefix, suffix)
+    }
+
+    /// Generate function start label
+    pub fn gen_function_start_label(
+        function_name: &str,
+        prefix: Option<&str>,
+        suffix: Option<&str>,
+    ) -> String {
+        let label = format!("{}_start", function_name);
+        Self::add_suffix_prefix_helper(&label, prefix, suffix)
+    }
+
+    /// Generate function end label
+    pub fn gen_function_end_label(
+        function_name: &str,
+        prefix: Option<&str>,
+        suffix: Option<&str>,
+    ) -> String {
+        let label = format!("{}_end", function_name);
+        Self::add_suffix_prefix_helper(&label, prefix, suffix)
+    }
+
+    /// Generate function return label,
+    /// should be placed at the same place as function end if the function is generated fully
+    pub fn gen_function_return_label(
+        function_name: &str,
+        prefix: Option<&str>,
+        suffix: Option<&str>,
+    ) -> String {
+        let label = format!("{}_return", function_name);
+        Self::add_suffix_prefix_helper(&label, prefix, suffix)
+    }
+
+    /// Generate function abort label,
+    /// should be placed at the same place as function end if the function is generated fully
+    pub fn gen_function_abort_label(
+        function_name: &str,
+        prefix: Option<&str>,
+        suffix: Option<&str>,
+    ) -> String {
+        let label = format!("{}_abort", function_name);
+        Self::add_suffix_prefix_helper(&label, prefix, suffix)
+    }
+
+    /// Generate goto edges for basic block control flow
+    pub fn gen_basic_block_edges(
+        &mut self,
+        lines: &mut Vec<BoogieLine>,
+        cfg_program: &CfgProgram,
+        block_id: BasicBlockId,
+        function_name: &str,
+        prefix: Option<&str>,
+        suffix: Option<&str>,
+        _hop_index: usize,
+    ) {
+        let block = &cfg_program.blocks[block_id];
+
+        // If no successors, this is a terminal block - no gotos needed
+        if block.successors.is_empty() {
+            return;
+        }
+
+        for edge in &block.successors {
+            match &edge.edge_type {
+                EdgeType::Unconditional => {
+                    // Generate goto to target block
+                    if let Some(target_label) =
+                        self.get_block_label(cfg_program, edge.to, prefix, suffix)
+                    {
+                        lines.push(BoogieLine::Goto(target_label));
+                    }
+                }
+                EdgeType::ConditionalTrue { condition } => {
+                    // Generate conditional goto: if (condition) goto target
+                    if let Some(target_label) =
+                        self.get_block_label(cfg_program, edge.to, prefix, suffix)
+                    {
+                        // Convert condition operand to Boogie expression
+                        match self.convert_operand(cfg_program, condition, None) {
+                            Ok(condition_expr) => {
+                                lines.push(BoogieLine::If {
+                                    cond: condition_expr,
+                                    then_body: vec![Box::new(BoogieLine::Goto(target_label))],
+                                    else_body: vec![], // Empty else body
+                                });
+                            }
+                            Err(_) => {
+                                // If condition conversion fails, generate unconditional goto as fallback
+                                lines.push(BoogieLine::Goto(target_label));
+                            }
+                        }
+                    }
+                }
+                EdgeType::ConditionalFalse { condition } => {
+                    // Generate conditional goto: if (!condition) goto target
+                    if let Some(target_label) =
+                        self.get_block_label(cfg_program, edge.to, prefix, suffix)
+                    {
+                        // Convert condition operand to Boogie expression and negate it
+                        match self.convert_operand(cfg_program, condition, None) {
+                            Ok(condition_expr) => {
+                                let negated_condition = BoogieExpr {
+                                    kind: BoogieExprKind::UnOp(
+                                        BoogieUnOp::Not,
+                                        Box::new(condition_expr),
+                                    ),
+                                };
+                                lines.push(BoogieLine::If {
+                                    cond: negated_condition,
+                                    then_body: vec![Box::new(BoogieLine::Goto(target_label))],
+                                    else_body: vec![], // Empty else body
+                                });
+                            }
+                            Err(_) => {
+                                // If condition conversion fails, generate unconditional goto as fallback
+                                lines.push(BoogieLine::Goto(target_label));
+                            }
+                        }
+                    }
+                }
+                EdgeType::HopExit { next_hop } => {
+                    if let Some(next_hop_id) = next_hop {
+                        // Generate goto to next hop's entry block
+                        let next_hop = &cfg_program.hops[*next_hop_id];
+                        if let Some(entry_block) = next_hop.entry_block {
+                            if let Some(target_label) =
+                                self.get_block_label(cfg_program, entry_block, prefix, suffix)
+                            {
+                                lines.push(BoogieLine::Goto(target_label));
+                            }
+                        }
+                    } else {
+                        // HopExit with no next hop - goto function end
+                        let end_label = Self::gen_function_end_label(function_name, prefix, suffix);
+                        lines.push(BoogieLine::Goto(end_label));
+                    }
+                }
+                EdgeType::Return { value: _ } => {
+                    // Return statement - goto function return label
+                    let return_label =
+                        Self::gen_function_return_label(function_name, prefix, suffix);
+                    lines.push(BoogieLine::Goto(return_label));
+                }
+                EdgeType::Abort => {
+                    // Abort statement - goto function abort label
+                    let abort_label = Self::gen_function_abort_label(function_name, prefix, suffix);
+                    lines.push(BoogieLine::Goto(abort_label));
+                }
+            }
+        }
     }
 }
 
