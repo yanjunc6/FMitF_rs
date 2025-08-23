@@ -81,7 +81,8 @@ impl PartitionVerificationManager {
         );
 
         // Generate function start label
-        let start_label = BoogieProgramGenerator::gen_function_start_label(&function.name);
+        let start_label =
+            BoogieProgramGenerator::gen_function_start_label(&function.name, None, None);
         lines.push(BoogieLine::Label(start_label));
 
         // Track partition calls per hop for consistency checking
@@ -98,16 +99,12 @@ impl PartitionVerificationManager {
             BoogieProgramGenerator::add_comment(&mut lines, format!("--- Hop {} ---", hop_index));
 
             // Process each basic block in the hop
-            for (block_index, &block_id) in hop.blocks.iter().enumerate() {
+            for &block_id in hop.blocks.iter() {
                 let block = &cfg_program.blocks[block_id];
 
-                // Generate block label
-                let block_label = BoogieProgramGenerator::gen_block_label(
-                    &function.name,
-                    hop_index,
-                    block_index,
-                    None,
-                );
+                // Generate block label using gen_basic_block_label with block_id
+                let block_label =
+                    BoogieProgramGenerator::gen_basic_block_label(block_id, None, None);
                 lines.push(BoogieLine::Label(block_label));
 
                 // Process each statement in the block
@@ -127,20 +124,31 @@ impl PartitionVerificationManager {
                     )?;
                 }
 
-                // Generate control flow using the existing gen_Boogie.rs function
+                // Generate control flow using the existing gen_basic_block_edges function
                 generator.gen_basic_block_edges(
                     &mut lines,
                     cfg_program,
                     block_id,
                     &function.name,
-                    hop_index,
+                    None,
+                    None,
                 );
             }
         }
 
         // Generate function end label
-        let end_label = BoogieProgramGenerator::gen_function_end_label(&function.name);
+        let end_label = BoogieProgramGenerator::gen_function_end_label(&function.name, None, None);
         lines.push(BoogieLine::Label(end_label));
+
+        // Generate function return label
+        let return_label =
+            BoogieProgramGenerator::gen_function_return_label(&function.name, None, None);
+        lines.push(BoogieLine::Label(return_label));
+
+        // Generate function abort label
+        let abort_label =
+            BoogieProgramGenerator::gen_function_abort_label(&function.name, None, None);
+        lines.push(BoogieLine::Label(abort_label));
 
         // Generate procedure parameters
         let params = BoogieProgramGenerator::gen_procedure_params(cfg_program, function, None);
