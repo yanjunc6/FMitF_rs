@@ -2,7 +2,7 @@ use super::errors::Results;
 pub use super::errors::{SpannedError, VerificationError};
 use super::Boogie::{
     self, gen_Boogie::BoogieProgramGenerator, BoogieBinOp, BoogieExpr, BoogieExprKind, BoogieLine,
-    BoogieProcedure, BoogieUnOp, ErrorMessage,
+    BoogieProcedure, ErrorMessage,
 };
 use crate::cfg::{CfgProgram, FunctionId, HopId, VarId};
 use crate::sc_graph::{EdgeType, SCGraph, SCGraphEdge};
@@ -37,8 +37,6 @@ struct SpecialInterleavings {
 
 /// Analysis results for slice commutativity verification
 struct SliceAnalysisInfo {
-    /// All variables that are live-in or live-out for either slice
-    live_vars: Vec<VarId>,
     /// Variables live-in to slice A
     live_in_a: HashSet<VarId>,
     /// Variables live-out from slice A
@@ -531,7 +529,6 @@ impl CommutativeVerificationManager {
         let func_a = &cfg_program.functions[unit.func_id_A];
         let func_b = &cfg_program.functions[unit.func_id_B];
 
-        let mut all_live_vars = HashSet::new();
         let mut live_in_a = HashSet::new();
         let mut live_out_a = HashSet::new();
         let mut live_in_b = HashSet::new();
@@ -545,13 +542,11 @@ impl CommutativeVerificationManager {
             let first_hop_cfg_a = &cfg_program.hops[first_hop_a];
             if let Some(entry_block_a) = first_hop_cfg_a.entry_block {
                 live_in_a = collect_live_vars_entry(&liveness_results_a, entry_block_a);
-                all_live_vars.extend(&live_in_a);
             }
         }
 
         if let Some(&last_hop_a) = slice_a.last() {
             live_out_a = collect_live_vars_exit(&liveness_results_a, cfg_program, last_hop_a);
-            all_live_vars.extend(&live_out_a);
         }
 
         // Analyze liveness for function B (if different from A)
@@ -562,13 +557,11 @@ impl CommutativeVerificationManager {
                 let first_hop_cfg_b = &cfg_program.hops[first_hop_b];
                 if let Some(entry_block_b) = first_hop_cfg_b.entry_block {
                     live_in_b = collect_live_vars_entry(&liveness_results_b, entry_block_b);
-                    all_live_vars.extend(&live_in_b);
                 }
             }
 
             if let Some(&last_hop_b) = slice_b.last() {
                 live_out_b = collect_live_vars_exit(&liveness_results_b, cfg_program, last_hop_b);
-                all_live_vars.extend(&live_out_b);
             }
         } else {
             // Same function, use the same liveness results
@@ -576,13 +569,11 @@ impl CommutativeVerificationManager {
                 let first_hop_cfg_b = &cfg_program.hops[first_hop_b];
                 if let Some(entry_block_b) = first_hop_cfg_b.entry_block {
                     live_in_b = collect_live_vars_entry(&liveness_results_a, entry_block_b);
-                    all_live_vars.extend(&live_in_b);
                 }
             }
 
             if let Some(&last_hop_b) = slice_b.last() {
                 live_out_b = collect_live_vars_exit(&liveness_results_a, cfg_program, last_hop_b);
-                all_live_vars.extend(&live_out_b);
             }
         }
 
@@ -671,7 +662,6 @@ impl CommutativeVerificationManager {
         }
 
         Ok(SliceAnalysisInfo {
-            live_vars: all_live_vars.into_iter().collect(),
             live_in_a,
             live_out_a,
             live_in_b,
@@ -824,8 +814,35 @@ impl CommutativeVerificationManager {
         is_special: bool,
     ) -> Results<VariableSnapshots> {
         // Execute each hop in the interleaving
-        for (i, &(hop_id, _is_from_a)) in interleaving.iter().enumerate() {
-            self.execute_hop_with_unique_labels(generator, cfg_program, hop_id, i, suffix, lines)?;
+        for &(hop_id, is_from_a) in interleaving.iter() {
+            let label_suffix = if is_from_a {
+                format!("A_{}", suffix)
+            } else {
+                format!("B_{}", suffix)
+            };
+            let function_name = if is_from_a { "functionA" } else { "functionB" };
+            // check if it is last hop that has same value of is_from_a
+            let is_last_hop = {
+                let mut found = false;
+                for &(next_hop_id, next_is_from_a) in interleaving.iter().rev() {
+                    if next_is_from_a == is_from_a {
+                        if next_hop_id == hop_id {
+                            found = true;
+                        }
+                        break;
+                    }
+                }
+                found
+            };
+            self.execute_hop_with_unique_labels(
+                generator,
+                cfg_program,
+                hop_id,
+                &label_suffix,
+                function_name,
+                lines,
+                is_last_hop,
+            )?;
         }
 
         // Snapshot final state if this is a special interleaving
@@ -846,35 +863,23 @@ impl CommutativeVerificationManager {
         generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
         hop_id: HopId,
-        execution_index: usize,
         suffix: &str,
+        function_name: &str,
         lines: &mut Vec<BoogieLine>,
+        is_last_hop: bool,
     ) -> Results<()> {
         let hop = &cfg_program.hops[hop_id];
 
-        BoogieProgramGenerator::add_comment(
-            lines,
-            format!(
-                "Executing hop {} (execution {})",
-                hop_id.index(),
-                execution_index
-            ),
-        );
+        BoogieProgramGenerator::add_comment(lines, format!("Executing hop {}", hop_id.index(),));
 
         // Process each basic block in the hop
-        for (block_idx, &block_id) in hop.blocks.iter().enumerate() {
+        for &block_id in hop.blocks.iter() {
             let block = &cfg_program.blocks[block_id];
 
-            // Generate unique label using gen_Boogie.rs functions
-            let prefix_str = format!(
-                "hop_{}_{}_exec_{}_{}",
-                hop_id.index(),
-                block_idx,
-                execution_index,
-                suffix
-            );
+            // Generate unique label using gen_basic_block_label
+            let prefix_str = format!("exec_{}", suffix);
             let label =
-                BoogieProgramGenerator::gen_basic_block_label(block_idx, Some(&prefix_str), None);
+                BoogieProgramGenerator::gen_basic_block_label(block_id, Some(&prefix_str), None);
             lines.push(BoogieLine::Label(label));
 
             // Convert statements
@@ -883,165 +888,43 @@ impl CommutativeVerificationManager {
                 lines.extend(boogie_lines);
             }
 
-            // Add control flow edges - for commutative verification, handle specially
-            self.add_commutative_control_flow_edges(
-                generator,
-                cfg_program,
-                block_id,
-                &prefix_str,
-                execution_index,
-                suffix,
-                lines,
-            )?;
-        }
+            if !is_last_hop {
+                // Use gen_basic_block_edges for control flow - it will handle hop isolation properly
+                generator.gen_basic_block_edges(
+                    lines,
+                    cfg_program,
+                    block_id,
+                    function_name,
+                    Some(&prefix_str),
+                    None,
+                );
+            } else {
+                // Last hop, no need to generate edges
+                // generate function end, function abort, function return label
+                let end_label = BoogieProgramGenerator::gen_function_end_label(
+                    function_name,
+                    Some(&prefix_str),
+                    None,
+                );
+                lines.push(BoogieLine::Label(end_label));
 
-        Ok(())
-    }
+                let abort_label = BoogieProgramGenerator::gen_function_abort_label(
+                    function_name,
+                    Some(&prefix_str),
+                    None,
+                );
+                lines.push(BoogieLine::Label(abort_label));
 
-    /// Add control flow edges specifically for commutative verification
-    /// Handles hop isolation properly - only generates gotos within the same hop
-    fn add_commutative_control_flow_edges(
-        &self,
-        generator: &mut BoogieProgramGenerator,
-        cfg_program: &CfgProgram,
-        block_id: crate::cfg::BasicBlockId,
-        _current_prefix: &str,
-        execution_index: usize,
-        suffix: &str,
-        lines: &mut Vec<BoogieLine>,
-    ) -> Results<()> {
-        let block = &cfg_program.blocks[block_id];
-        let current_hop_id = block.hop_id;
-
-        // If no successors, this is a terminal block - no gotos needed
-        if block.successors.is_empty() {
-            return Ok(());
-        }
-
-        for edge in &block.successors {
-            match &edge.edge_type {
-                crate::cfg::EdgeType::Unconditional => {
-                    let target_block = &cfg_program.blocks[edge.to];
-
-                    // Only generate goto if target is in the same hop
-                    if target_block.hop_id == current_hop_id {
-                        if let Some(target_label) = self.get_commutative_block_label(
-                            cfg_program,
-                            edge.to,
-                            current_hop_id,
-                            execution_index,
-                            suffix,
-                        ) {
-                            lines.push(BoogieLine::Goto(target_label));
-                        }
-                    }
-                    // If target is in different hop, don't generate goto (hop isolation)
-                }
-                crate::cfg::EdgeType::ConditionalTrue { condition } => {
-                    let target_block = &cfg_program.blocks[edge.to];
-
-                    // Only generate goto if target is in the same hop
-                    if target_block.hop_id == current_hop_id {
-                        if let Some(target_label) = self.get_commutative_block_label(
-                            cfg_program,
-                            edge.to,
-                            current_hop_id,
-                            execution_index,
-                            suffix,
-                        ) {
-                            match generator.convert_operand(cfg_program, condition, None) {
-                                Ok(condition_expr) => {
-                                    lines.push(BoogieLine::If {
-                                        cond: condition_expr,
-                                        then_body: vec![Box::new(BoogieLine::Goto(target_label))],
-                                        else_body: vec![],
-                                    });
-                                }
-                                Err(_) => {
-                                    lines.push(BoogieLine::Goto(target_label));
-                                }
-                            }
-                        }
-                    }
-                }
-                crate::cfg::EdgeType::ConditionalFalse { condition } => {
-                    let target_block = &cfg_program.blocks[edge.to];
-
-                    // Only generate goto if target is in the same hop
-                    if target_block.hop_id == current_hop_id {
-                        if let Some(target_label) = self.get_commutative_block_label(
-                            cfg_program,
-                            edge.to,
-                            current_hop_id,
-                            execution_index,
-                            suffix,
-                        ) {
-                            match generator.convert_operand(cfg_program, condition, None) {
-                                Ok(condition_expr) => {
-                                    let negated_condition = BoogieExpr {
-                                        kind: BoogieExprKind::UnOp(
-                                            BoogieUnOp::Not,
-                                            Box::new(condition_expr),
-                                        ),
-                                    };
-                                    lines.push(BoogieLine::If {
-                                        cond: negated_condition,
-                                        then_body: vec![Box::new(BoogieLine::Goto(target_label))],
-                                        else_body: vec![],
-                                    });
-                                }
-                                Err(_) => {
-                                    lines.push(BoogieLine::Goto(target_label));
-                                }
-                            }
-                        }
-                    }
-                }
-                crate::cfg::EdgeType::HopExit { .. } => {
-                    // For commutative verification, HopExit means this hop execution is complete
-                    // Don't generate any goto - just let execution continue to next statement
-                }
-                crate::cfg::EdgeType::Return { .. } => {
-                    // For commutative verification, return means this hop execution is complete
-                    // Don't generate any goto - just let execution continue
-                }
-                crate::cfg::EdgeType::Abort => {
-                    // For commutative verification, abort means this hop execution is complete
-                    // Don't generate any goto - just let execution continue
-                }
+                let return_label = BoogieProgramGenerator::gen_function_return_label(
+                    function_name,
+                    Some(&prefix_str),
+                    None,
+                );
+                lines.push(BoogieLine::Label(return_label));
             }
         }
+
         Ok(())
-    }
-
-    /// Generate block label for commutative verification with hop-specific prefix
-    fn get_commutative_block_label(
-        &self,
-        cfg_program: &CfgProgram,
-        block_id: crate::cfg::BasicBlockId,
-        hop_id: crate::cfg::HopId,
-        execution_index: usize,
-        suffix: &str,
-    ) -> Option<String> {
-        let hop = &cfg_program.hops[hop_id];
-
-        // Find the index of this block within the hop
-        if let Some(block_index) = hop.blocks.iter().position(|&b| b == block_id) {
-            let prefix_str = format!(
-                "hop_{}_{}_exec_{}_{}",
-                hop_id.index(),
-                block_index,
-                execution_index,
-                suffix
-            );
-            Some(BoogieProgramGenerator::gen_basic_block_label(
-                block_index,
-                Some(&prefix_str),
-                None,
-            ))
-        } else {
-            None
-        }
     }
 
     /// Snapshot the final state of variables after execution
