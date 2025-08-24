@@ -1,5 +1,5 @@
 use super::{
-    BoogieBinOp, BoogieExpr, BoogieExprKind, BoogieLine, BoogieProgram, BoogieType, BoogieUnOp,
+    BoogieBinOp, BoogieExpr, BoogieExprKind, BoogieLine, BoogieProcedure, BoogieProgram, BoogieType, BoogieUnOp,
     BoogieVarDecl, ErrorMessage,
 };
 use crate::cfg::{
@@ -14,6 +14,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub struct BoogieProgramGenerator {
     pub program: BoogieProgram,
+    pub current_procedure_index: Option<usize>, // index of current procedure being worked on
 }
 
 impl BoogieProgramGenerator {
@@ -27,12 +28,41 @@ impl BoogieProgramGenerator {
                 global_string_literals: HashMap::new(),
                 procedures: Vec::new(),
             },
+            current_procedure_index: None,
         }
     }
 
     /// Create a new generator with a provided Boogie program
     pub fn with_program(program: BoogieProgram) -> Self {
-        BoogieProgramGenerator { program }
+        BoogieProgramGenerator { 
+            program,
+            current_procedure_index: None,
+        }
+    }
+
+    /// Set the current procedure being worked on by index
+    pub fn set_current_procedure(&mut self, procedure_index: usize) {
+        self.current_procedure_index = Some(procedure_index);
+    }
+
+    /// Clear the current procedure reference
+    pub fn clear_current_procedure(&mut self) {
+        self.current_procedure_index = None;
+    }
+
+    /// Get a reference to the current procedure being worked on
+    pub fn get_current_procedure(&self) -> Option<&BoogieProcedure> {
+        self.current_procedure_index
+            .map(|idx| &self.program.procedures[idx])
+    }
+
+    /// Get a mutable reference to the current procedure being worked on
+    pub fn get_current_procedure_mut(&mut self) -> Option<&mut BoogieProcedure> {
+        if let Some(idx) = self.current_procedure_index {
+            Some(&mut self.program.procedures[idx])
+        } else {
+            None
+        }
     }
 
     /// Generate string axioms and add to other_declarations
@@ -221,8 +251,62 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
         format!("{}_{}", table_name, field_name)
     }
 
-    /// Generate variable name for a CFG variable with optional prefix
-    pub fn gen_var_name(cfg_program: &CfgProgram, var_id: VarId, prefix: Option<&str>) -> String {
+    /// Helper function to check if a variable exists in current procedure's scope
+    /// Returns true if found, false if not found
+    fn check_variable_exists_in_procedure(&self, var_name: &str) -> bool {
+        // Check global variables first
+        if self.program.global_vars.contains_key(var_name) {
+            return true;
+        }
+
+        // Check current procedure parameters and local variables
+        if let Some(current_proc) = self.get_current_procedure() {
+            // Check parameters
+            for param in &current_proc.params {
+                if param.var_name == var_name {
+                    return true;
+                }
+            }
+            // Check local variables
+            for local_var in &current_proc.local_vars {
+                if local_var.var_name == var_name {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Helper function to add a local variable to current procedure if it doesn't exist
+    /// Returns true if variable was added, false if it already existed
+    fn ensure_local_variable_exists(&mut self, var_name: &str, var_type: BoogieType) -> bool {
+        if self.check_variable_exists_in_procedure(var_name) {
+            return false; // Variable already exists
+        }
+
+        // Add to current procedure's local variables
+        if let Some(current_proc) = self.get_current_procedure_mut() {
+            let var_decl = BoogieVarDecl {
+                var_name: var_name.to_string(),
+                var_type,
+                is_const: false,
+            };
+            current_proc.local_vars.push(var_decl);
+            return true; // Variable was added
+        }
+
+        false // No current procedure set
+    }
+
+    /// Add a local variable to the current procedure
+    /// This is for cases where generators need to create additional local variables
+    pub fn add_local_var(&mut self, var_name: &str, var_type: BoogieType) -> bool {
+        self.ensure_local_variable_exists(var_name, var_type)
+    }
+
+    /// Generate static variable name without adding to local variables (for procedure parameters)
+    pub fn gen_var_name_static(cfg_program: &CfgProgram, var_id: VarId, prefix: Option<&str>) -> String {
         let var = &cfg_program.variables[var_id];
         let base_name = match var.kind {
             VariableKind::Global => var.name.clone(),
@@ -231,11 +315,31 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
             VariableKind::Temporary => format!("{}", var.name),
         };
 
-        let var_name = if let Some(prefix) = prefix {
+        if let Some(prefix) = prefix {
             format!("{}_{}", prefix, base_name)
         } else {
             base_name
-        };
+        }
+    }
+
+    /// Generate variable name for a CFG variable with optional prefix
+    /// Only automatically adds variables to local_vars for Local and Temporary variable kinds
+    pub fn gen_var_name(&mut self, cfg_program: &CfgProgram, var_id: VarId, prefix: Option<&str>) -> String {
+        
+        let var = &cfg_program.variables[var_id];
+        let var_name = Self::gen_var_name_static(cfg_program, var_id, prefix);
+
+        // For Local and Temporary variables, ensure they are declared in current procedure
+        match var.kind {
+            VariableKind::Local | VariableKind::Temporary => {
+                let boogie_type = Self::convert_type(&var.ty);
+                self.ensure_local_variable_exists(&var_name, boogie_type);
+            },
+            VariableKind::Global | VariableKind::Parameter => {
+                // Global and parameter variables should already be declared, just check they exist
+                // If they don't exist, it's likely a programming error, but we'll still return the name
+            }
+        }
 
         var_name
     }
@@ -249,7 +353,7 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
     ) -> Results<BoogieExpr> {
         match operand {
             Operand::Var(var_id) => {
-                let var_name = Self::gen_var_name(cfg_program, *var_id, prefix);
+                let var_name = self.gen_var_name(cfg_program, *var_id, prefix);
                 Ok(BoogieExpr {
                     kind: BoogieExprKind::Var(var_name),
                 })
@@ -313,7 +417,7 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
         match operand {
             Operand::Var(var_id) => {
                 let var = &cfg_program.variables[*var_id];
-                let var_name = Self::gen_var_name(cfg_program, *var_id, prefix);
+                let var_name = self.gen_var_name(cfg_program, *var_id, prefix);
 
                 match var.ty {
                     TypeName::String => Ok(BoogieExpr {
@@ -529,11 +633,11 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
 
         match lvalue {
             LValue::Variable { var } => {
-                let var_name = Self::gen_var_name(cfg_program, *var, prefix);
+                let var_name = self.gen_var_name(cfg_program, *var, prefix);
                 Ok(BoogieLine::Assign(var_name, rvalue_expr))
             }
             LValue::ArrayElement { array, index } => {
-                let array_name = Self::gen_var_name(cfg_program, *array, prefix);
+                let array_name = self.gen_var_name(cfg_program, *array, prefix);
                 let base_expr = Box::new(BoogieExpr {
                     kind: BoogieExprKind::Var(array_name.clone()),
                 });
@@ -630,7 +734,7 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
             .map(|&var_id| {
                 let var = &cfg_program.variables[var_id];
                 BoogieVarDecl {
-                    var_name: Self::gen_var_name(cfg_program, var_id, prefix),
+                    var_name: Self::gen_var_name_static(cfg_program, var_id, prefix),
                     var_type: Self::convert_type(&var.ty),
                     is_const: false,
                 }
@@ -674,17 +778,35 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
     }
 
     /// Add a Boogie assertion to the current procedure
-    pub fn add_assertion(
-        lines: &mut Vec<BoogieLine>,
+    pub fn add_assertion_to_current_procedure(
+        &mut self,
         condition: BoogieExpr,
         error_msg: ErrorMessage,
     ) {
-        lines.push(BoogieLine::Assert(condition, error_msg));
+        if let Some(proc) = self.get_current_procedure_mut() {
+            proc.lines.push(BoogieLine::Assert(condition, error_msg));
+        }
     }
 
     /// Add a Boogie comment to the current procedure  
-    pub fn add_comment(lines: &mut Vec<BoogieLine>, comment: String) {
-        lines.push(BoogieLine::Comment(comment));
+    pub fn add_comment_to_current_procedure(&mut self, comment: String) {
+        if let Some(proc) = self.get_current_procedure_mut() {
+            proc.lines.push(BoogieLine::Comment(comment));
+        }
+    }
+
+    /// Add any Boogie line to the current procedure
+    pub fn add_line_to_current_procedure(&mut self, line: BoogieLine) {
+        if let Some(proc) = self.get_current_procedure_mut() {
+            proc.lines.push(line);
+        }
+    }
+
+    /// Add multiple Boogie lines to the current procedure
+    pub fn add_lines_to_current_procedure(&mut self, lines: Vec<BoogieLine>) {
+        if let Some(proc) = self.get_current_procedure_mut() {
+            proc.lines.extend(lines);
+        }
     }
 
     /// Generate boolean conjunction (AND) of multiple expressions

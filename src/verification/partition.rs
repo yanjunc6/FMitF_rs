@@ -75,10 +75,10 @@ impl PartitionVerificationManager {
         let mut lines = Vec::new();
 
         // Add procedure header comment
-        BoogieProgramGenerator::add_comment(
-            &mut lines,
-            format!("Partition verification for function: {}", function.name),
-        );
+        generator.add_comment_to_current_procedure(format!(
+            "Partition verification for function: {}",
+            function.name
+        ));
 
         // Generate function start label
         let start_label =
@@ -96,7 +96,7 @@ impl PartitionVerificationManager {
         for (hop_index, &hop_id) in function.hops.iter().enumerate() {
             let hop = &cfg_program.hops[hop_id];
 
-            BoogieProgramGenerator::add_comment(&mut lines, format!("--- Hop {} ---", hop_index));
+            generator.add_comment_to_current_procedure(format!("--- Hop {} ---", hop_index));
 
             // Process each basic block in the hop
             for &block_id in hop.blocks.iter() {
@@ -162,6 +162,7 @@ impl PartitionVerificationManager {
         let procedure = BoogieProcedure {
             name: format!("verify_partition_{}", function.name),
             params,
+            local_vars: Vec::new(), // Will be populated by gen_var_name calls  
             modifies,
             lines,
         };
@@ -180,7 +181,7 @@ impl PartitionVerificationManager {
             (crate::cfg::HopId, crate::cfg::FunctionId),
             Vec<Operand>,
         >,
-        lines: &mut Vec<BoogieLine>,
+        _lines: &mut Vec<BoogieLine>,
     ) -> Results<()> {
         let Statement::Assign { lvalue, rvalue, .. } = statement;
 
@@ -196,7 +197,6 @@ impl PartitionVerificationManager {
                 *table,
                 pk_values,
                 partition_call_tracker,
-                lines,
             )?;
         }
 
@@ -212,7 +212,6 @@ impl PartitionVerificationManager {
                 *table,
                 pk_values,
                 partition_call_tracker,
-                lines,
             )?;
         }
 
@@ -231,7 +230,6 @@ impl PartitionVerificationManager {
             (crate::cfg::HopId, crate::cfg::FunctionId),
             Vec<Operand>,
         >,
-        lines: &mut Vec<BoogieLine>,
     ) -> Results<()> {
         // Get the partition function for this table
         let table = &cfg_program.tables[table_id];
@@ -263,7 +261,6 @@ impl PartitionVerificationManager {
                 partition_function_id,
                 previous_args,
                 &partition_args,
-                lines,
             )?;
         } else {
             // First call to this partition function in this hop - just record it
@@ -281,17 +278,13 @@ impl PartitionVerificationManager {
         partition_function_id: crate::cfg::FunctionId,
         previous_args: &[Operand],
         current_args: &[Operand],
-        lines: &mut Vec<BoogieLine>,
     ) -> Results<()> {
         let partition_function = &cfg_program.functions[partition_function_id];
 
-        BoogieProgramGenerator::add_comment(
-            lines,
-            format!(
-                "Partition consistency check for function '{}': all calls in same hop must have same args",
-                partition_function.name
-            ),
-        );
+        generator.add_comment_to_current_procedure(format!(
+            "Partition consistency check for function '{}': all calls in same hop must have same args",
+            partition_function.name
+        ));
 
         // Generate equality conditions for each argument pair
         let mut equality_conditions = Vec::new();
@@ -322,7 +315,7 @@ impl PartitionVerificationManager {
             ),
         };
 
-        BoogieProgramGenerator::add_assertion(lines, args_equal, error_msg);
+        generator.add_assertion_to_current_procedure(args_equal, error_msg);
 
         Ok(())
     }
