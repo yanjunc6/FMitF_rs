@@ -100,6 +100,15 @@ impl Display for BoogieProcedure {
 
         // Procedure body
         writeln!(f, "{{")?;
+
+        // Local variable declarations
+        if !self.local_vars.is_empty() {
+            for local_var in &self.local_vars {
+                writeln!(f, "  var {} : {};", local_var.var_name, local_var.var_type)?;
+            }
+            writeln!(f)?; // Empty line after variable declarations
+        }
+
         for line in &self.lines {
             write!(f, "{}", line)?;
         }

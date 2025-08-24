@@ -64,6 +64,7 @@ table Account {
 - **Inline simple checks**: `if node.status == NodeStatus::Ready` instead of `if node.is_ready()`
 - **Name complex functions descriptively**: Use algorithm names or descriptive names that indicate computational cost
 - **Minimize parameter passing**: Don't pass 5+ arguments to avoid "elegant" constructors
+- **No backward compatibility**: Remove legacy methods and functions, never create backward-compatible versions
 
 ### Arena-Based Memory Management
 - Use `id_arena::Arena<T>` for large collections (tables, functions, variables)

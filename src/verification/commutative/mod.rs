@@ -1,6 +1,6 @@
 use crate::verification::errors::Results;
 pub use crate::verification::errors::{SpannedError, VerificationError};
-use crate::verification::Boogie::{self, gen_Boogie::BoogieProgramGenerator, BoogieLine, BoogieProcedure};
+use crate::verification::Boogie::{self, gen_Boogie::BoogieProgramGenerator, BoogieProcedure};
 use crate::cfg::{CfgProgram, FunctionId, HopId};
 use crate::sc_graph::{EdgeType, SCGraph, SCGraphEdge};
 use std::collections::HashSet;
@@ -124,23 +124,40 @@ impl CommutativeVerificationManager {
         // Analyze liveness for both slices
         let analysis_info = analyzer.analyze_slice_info(cfg_program, unit)?;
 
-        let mut lines = Vec::new();
+        // Generate procedure parameters (empty for this verification)
+        let params = Vec::new();
+
+        // Collect all modified globals using analysis info
+        let mut modifies = HashSet::new();
+        // Add table variables that are written by either slice
+        modifies.extend(analysis_info.tables_written_a.iter().cloned());
+        modifies.extend(analysis_info.tables_written_b.iter().cloned());
+
+        // Create the procedure and add it to the generator
+        let procedure = BoogieProcedure {
+            name: procedure_name,
+            params,
+            local_vars: Vec::new(), // Will be populated automatically
+            modifies: modifies.into_iter().collect(),
+            lines: Vec::new(), // Will be populated by generator methods
+        };
+
+        generator.program.procedures.push(procedure);
+        let proc_index = generator.program.procedures.len() - 1;
+        generator.set_current_procedure(proc_index);
 
         // Add procedure header comment
-        BoogieProgramGenerator::add_comment(
-            &mut lines,
-            format!(
-                "Slice commutativity verification: hop {} vs hop {}",
-                unit.c_edge.source.hop_id.index(),
-                unit.c_edge.target.hop_id.index()
-            ),
-        );
+        generator.add_comment_to_current_procedure(format!(
+            "Slice commutativity verification: hop {} vs hop {}",
+            unit.c_edge.source.hop_id.index(),
+            unit.c_edge.target.hop_id.index()
+        ));
 
         // Step 1: Havoc all tables and live-in variables to create initial state
-        state_manager.havoc_initial_state(generator, cfg_program, &analysis_info, &mut lines)?;
+        state_manager.havoc_initial_state(generator, cfg_program, &analysis_info)?;
 
         // Step 2: Save initial state for restoration
-        state_manager.save_initial_state(generator, cfg_program, &analysis_info, &mut lines)?;
+        state_manager.save_initial_state(generator, cfg_program, &analysis_info)?;
 
         // Step 3: Execute the two special interleavings and save their final states
         let (a_then_b_vars, b_then_a_vars) = self.execute_special_interleavings(
@@ -148,43 +165,29 @@ impl CommutativeVerificationManager {
             cfg_program,
             &special,
             &analysis_info,
-            &mut lines,
             &state_manager,
         )?;
 
         // Step 4: For each legal interleaving, verify it produces one of the special results
         for (i, interleaving) in interleavings.iter().enumerate() {
+            let interleaving_hops: Vec<HopId> = interleaving.iter().map(|(hop_id, _)| *hop_id).collect();
             self.verify_interleaving_equivalence(
                 generator,
                 cfg_program,
-                interleaving,
+                &interleaving_hops,
                 i,
                 &analysis_info,
                 &a_then_b_vars,
                 &b_then_a_vars,
-                &mut lines,
                 &state_manager,
             )?;
         }
 
-        // Generate procedure parameters (empty for this verification)
-        let params = Vec::new();
+        // Clear current procedure reference
+        generator.clear_current_procedure();
 
-        // Collect all modified globals using analysis info
-        let mut modifies = HashSet::new();
-
-        // Add table variables that are written by either slice
-        modifies.extend(analysis_info.tables_written_a.iter().cloned());
-        modifies.extend(analysis_info.tables_written_b.iter().cloned());
-
-        let procedure = BoogieProcedure {
-            name: procedure_name,
-            params,
-            modifies: modifies.into_iter().collect(),
-            lines,
-        };
-
-        Ok(procedure)
+        // Return the completed procedure  
+        Ok(generator.program.procedures.pop().unwrap())
     }
 
     /// Execute the two special interleavings and return their final state variable names
@@ -194,39 +197,37 @@ impl CommutativeVerificationManager {
         cfg_program: &CfgProgram,
         special: &SpecialInterleavings,
         analysis_info: &slice_analyzer::SliceAnalysisInfo,
-        lines: &mut Vec<BoogieLine>,
         state_manager: &BoogieStateManager,
     ) -> Results<(VariableSnapshots, VariableSnapshots)> {
-        BoogieProgramGenerator::add_comment(
-            lines,
+        generator.add_comment_to_current_procedure(
             "--- Step 3: Execute special interleavings ---".to_string(),
         );
 
         // Execute A then B
-        BoogieProgramGenerator::add_comment(lines, "Executing A then B:".to_string());
+        generator.add_comment_to_current_procedure("Executing A then B:".to_string());
+        let a_then_b_hops: Vec<HopId> = special.a_then_b.iter().map(|(hop_id, _)| *hop_id).collect();
         let a_then_b_vars = self.execute_interleaving_and_snapshot(
             generator,
             cfg_program,
-            &special.a_then_b,
+            &a_then_b_hops,
             "a_then_b",
             analysis_info,
-            lines,
             true,
             state_manager,
         )?;
 
         // Reset state
-        state_manager.restore_initial_state(generator, cfg_program, analysis_info, lines)?;
+        state_manager.restore_initial_state(generator, cfg_program, analysis_info)?;
 
         // Execute B then A
-        BoogieProgramGenerator::add_comment(lines, "Executing B then A:".to_string());
+        generator.add_comment_to_current_procedure("Executing B then A:".to_string());
+        let b_then_a_hops: Vec<HopId> = special.b_then_a.iter().map(|(hop_id, _)| *hop_id).collect();
         let b_then_a_vars = self.execute_interleaving_and_snapshot(
             generator,
             cfg_program,
-            &special.b_then_a,
+            &b_then_a_hops,
             "b_then_a",
             analysis_info,
-            lines,
             true,
             state_manager,
         )?;
@@ -239,11 +240,10 @@ impl CommutativeVerificationManager {
         &self,
         generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
-        interleaving: &Interleaving,
+        interleaving: &[HopId],
         suffix: &str,
         analysis_info: &slice_analyzer::SliceAnalysisInfo,
-        lines: &mut Vec<BoogieLine>,
-        is_special: bool,
+        should_snapshot: bool,
         state_manager: &BoogieStateManager,
     ) -> Results<VariableSnapshots> {
         // Execute each hop in the interleaving
@@ -271,67 +271,64 @@ impl CommutativeVerificationManager {
                 generator,
                 cfg_program,
                 hop_id,
-                &label_suffix,
+                suffix,
                 function_name,
-                lines,
                 is_last_hop,
             )?;
         }
 
-        // Snapshot final state if this is a special interleaving
-        if is_special {
-            state_manager.snapshot_final_state(generator, cfg_program, analysis_info, suffix, lines)
+        // Snapshot final state if requested
+        if should_snapshot {
+            state_manager.snapshot_final_state(generator, cfg_program, analysis_info, suffix)
         } else {
-            // For regular interleavings, just return empty snapshots
             Ok(VariableSnapshots::empty())
         }
     }
 
-    /// Verify that each interleaving produces results equivalent to one of the special interleavings
+    /// Verify that a specific interleaving produces equivalent results to the special interleavings
     fn verify_interleaving_equivalence(
         &self,
         generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
-        interleaving: &Interleaving,
+        interleaving: &[HopId],
         interleaving_index: usize,
         analysis_info: &slice_analyzer::SliceAnalysisInfo,
         a_then_b_vars: &VariableSnapshots,
         b_then_a_vars: &VariableSnapshots,
-        lines: &mut Vec<BoogieLine>,
         state_manager: &BoogieStateManager,
     ) -> Results<()> {
-        BoogieProgramGenerator::add_comment(
-            lines,
-            format!("--- Verifying interleaving {} ---", interleaving_index),
-        );
+        generator.add_comment_to_current_procedure(format!(
+            "--- Verifying interleaving {} ---",
+            interleaving_index + 1
+        ));
 
-        // Reset to initial state
-        state_manager.restore_initial_state(generator, cfg_program, analysis_info, lines)?;
+        // Reset to initial state before executing this interleaving
+        state_manager.restore_initial_state(generator, cfg_program, analysis_info)?;
 
-        // Execute this interleaving
-        let suffix = format!("interleaving_{}", interleaving_index);
+        // Execute the interleaving (without snapshotting intermediate states)
         self.execute_interleaving_and_snapshot(
             generator,
             cfg_program,
             interleaving,
-            &suffix,
+            &format!("interleaving_{}", interleaving_index),
             analysis_info,
-            lines,
-            false,
+            false, // Don't snapshot final state
             state_manager,
         )?;
 
-        // Generate assertions comparing final state to special interleavings
+        // Assert equivalence to one of the special interleavings
         state_manager.assert_equivalence_to_special_interleavings(
             generator,
             cfg_program,
             analysis_info,
             a_then_b_vars,
             b_then_a_vars,
-            lines,
         )?;
 
         Ok(())
     }
+
+
+
 }
 

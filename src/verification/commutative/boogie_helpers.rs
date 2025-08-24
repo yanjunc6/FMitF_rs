@@ -1,7 +1,7 @@
 use crate::verification::errors::Results;
 use crate::verification::Boogie::{
     gen_Boogie::BoogieProgramGenerator, BoogieBinOp, BoogieExpr, BoogieExprKind, BoogieLine,
-    ErrorMessage,
+    BoogieType, ErrorMessage,
 };
 use crate::cfg::{CfgProgram, HopId, VarId};
 use std::collections::{HashMap, HashSet};
@@ -32,16 +32,14 @@ impl BoogieStateManager {
         BoogieStateManager
     }
 
-    /// Havoc all tables and live-in variables to create initial state
+    /// Havoc all tables and live-in variables to create initial state (working on current procedure)
     pub fn havoc_initial_state(
         &self,
-        _generator: &mut BoogieProgramGenerator,
+        generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
         analysis_info: &SliceAnalysisInfo,
-        lines: &mut Vec<BoogieLine>,
     ) -> Results<()> {
-        BoogieProgramGenerator::add_comment(
-            lines,
+        generator.add_comment_to_current_procedure(
             "--- Step 1: Havoc initial state ---".to_string(),
         );
 
@@ -53,7 +51,7 @@ impl BoogieStateManager {
         tables_to_havoc.extend(&analysis_info.tables_written_b);
 
         for table_var_name in tables_to_havoc {
-            lines.push(BoogieLine::Havoc(table_var_name.clone()));
+            generator.add_line_to_current_procedure(BoogieLine::Havoc(table_var_name.clone()));
         }
 
         // Havoc live-IN variables only
@@ -62,24 +60,22 @@ impl BoogieStateManager {
         live_in_vars.extend(&analysis_info.live_in_b);
 
         for &var_id in &live_in_vars {
-            let var_name = BoogieProgramGenerator::gen_var_name(cfg_program, var_id, None);
-            lines.push(BoogieLine::Havoc(var_name));
+            let var_name = generator.gen_var_name(cfg_program, var_id, None);
+            generator.add_line_to_current_procedure(BoogieLine::Havoc(var_name));
         }
 
         Ok(())
     }
 
-    /// Save initial state by copying variables to snapshot versions
+    /// Save initial state by copying variables to snapshot versions (working on current procedure)
     pub fn save_initial_state(
         &self,
-        _generator: &mut BoogieProgramGenerator,
+        generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
         analysis_info: &SliceAnalysisInfo,
-        lines: &mut Vec<BoogieLine>,
     ) -> Results<()> {
-        //TODO: when create new variable, maybe need to call gen_Boogie.rs to make sure it is declared
-        BoogieProgramGenerator::add_comment(
-            lines,
+        // TODO: Need to create new variables so that the variable declarations should be done at beginning of procedure
+        generator.add_comment_to_current_procedure(
             "--- Step 2: Save initial state ---".to_string(),
         );
 
@@ -92,10 +88,15 @@ impl BoogieStateManager {
 
         for table_var_name in tables_to_save {
             let snapshot_name = format!("{}_init", table_var_name);
+            // TODO: check how gen_Boogie resolve the table type
+            // Add the snapshot variable as a local variable
+            let table_type = BoogieType::Map(vec![Box::new(BoogieType::Int)], Box::new(BoogieType::Int)); // Placeholder type
+            generator.add_local_var(&snapshot_name, table_type);
+            
             let assign_expr = BoogieExpr {
                 kind: BoogieExprKind::Var(table_var_name.clone()),
             };
-            lines.push(BoogieLine::Assign(snapshot_name, assign_expr));
+            generator.add_line_to_current_procedure(BoogieLine::Assign(snapshot_name, assign_expr));
         }
 
         // Save live-IN variables only
@@ -104,26 +105,29 @@ impl BoogieStateManager {
         live_in_vars.extend(&analysis_info.live_in_b);
 
         for &var_id in &live_in_vars {
-            let var_name = BoogieProgramGenerator::gen_var_name(cfg_program, var_id, None);
+            let var_name = generator.gen_var_name(cfg_program, var_id, None);
             let snapshot_name = format!("{}_init", var_name);
+            // Add the snapshot variable as a local variable  
+            let var_type = BoogieProgramGenerator::convert_type(&cfg_program.variables[var_id].ty);
+            generator.add_local_var(&snapshot_name, var_type);
+            
             let assign_expr = BoogieExpr {
                 kind: BoogieExprKind::Var(var_name),
             };
-            lines.push(BoogieLine::Assign(snapshot_name, assign_expr));
+            generator.add_line_to_current_procedure(BoogieLine::Assign(snapshot_name, assign_expr));
         }
 
         Ok(())
     }
 
-    /// Restore initial state from snapshots
+    /// Restore initial state from snapshots (working on current procedure)
     pub fn restore_initial_state(
         &self,
-        _generator: &mut BoogieProgramGenerator,
+        generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
         analysis_info: &SliceAnalysisInfo,
-        lines: &mut Vec<BoogieLine>,
     ) -> Results<()> {
-        BoogieProgramGenerator::add_comment(lines, "Restoring initial state:".to_string());
+        generator.add_comment_to_current_procedure("Restoring initial state:".to_string());
 
         // Restore tables read/written by both slices
         let mut tables_to_restore = HashSet::new();
@@ -137,7 +141,7 @@ impl BoogieStateManager {
             let assign_expr = BoogieExpr {
                 kind: BoogieExprKind::Var(snapshot_name),
             };
-            lines.push(BoogieLine::Assign(table_var_name.clone(), assign_expr));
+            generator.add_line_to_current_procedure(BoogieLine::Assign(table_var_name.clone(), assign_expr));
         }
 
         // Restore live-IN variables only
@@ -146,18 +150,18 @@ impl BoogieStateManager {
         live_in_vars.extend(&analysis_info.live_in_b);
 
         for &var_id in &live_in_vars {
-            let var_name = BoogieProgramGenerator::gen_var_name(cfg_program, var_id, None);
+            let var_name = generator.gen_var_name(cfg_program, var_id, None);
             let snapshot_name = format!("{}_init", var_name);
             let assign_expr = BoogieExpr {
                 kind: BoogieExprKind::Var(snapshot_name),
             };
-            lines.push(BoogieLine::Assign(var_name, assign_expr));
+            generator.add_line_to_current_procedure(BoogieLine::Assign(var_name, assign_expr));
         }
 
         Ok(())
     }
 
-    /// Execute a single hop with unique labels to avoid conflicts
+    /// Execute a single hop with unique labels to avoid conflicts (working on current procedure)
     pub fn execute_hop_with_unique_labels(
         &self,
         generator: &mut BoogieProgramGenerator,
@@ -165,12 +169,11 @@ impl BoogieStateManager {
         hop_id: HopId,
         suffix: &str,
         function_name: &str,
-        lines: &mut Vec<BoogieLine>,
         is_last_hop: bool,
     ) -> Results<()> {
         let hop = &cfg_program.hops[hop_id];
 
-        BoogieProgramGenerator::add_comment(lines, format!("Executing hop {}", hop_id.index(),));
+        generator.add_comment_to_current_procedure(format!("Executing hop {}", hop_id.index()));
 
         // Process each basic block in the hop
         for &block_id in hop.blocks.iter() {
@@ -178,71 +181,67 @@ impl BoogieStateManager {
 
             // Generate unique label using gen_basic_block_label
             let prefix_str = format!("exec_{}", suffix);
-            let label =
-                BoogieProgramGenerator::gen_basic_block_label(block_id, Some(&prefix_str), None);
-            lines.push(BoogieLine::Label(label));
+            let label = BoogieProgramGenerator::gen_basic_block_label(block_id, Some(&prefix_str), None);
+            generator.add_line_to_current_procedure(BoogieLine::Label(label));
 
             // Convert statements
             for statement in &cfg_program.blocks[block_id].statements {
                 let boogie_lines = generator.convert_statement(cfg_program, statement, None)?;
-                lines.extend(boogie_lines);
+                generator.add_lines_to_current_procedure(boogie_lines);
             }
 
             if !is_last_hop {
-                // Use gen_basic_block_edges for control flow - it will handle hop isolation properly
+                // Generate control flow edges directly to current procedure
+                let mut temp_lines = Vec::new();
                 generator.gen_basic_block_edges(
-                    lines,
+                    &mut temp_lines,
                     cfg_program,
                     block_id,
                     function_name,
                     Some(&prefix_str),
                     None,
                 );
+                generator.add_lines_to_current_procedure(temp_lines);
             } else {
-                // Last hop, no need to generate edges
-                // generate function end, function abort, function return label
+                // Last hop, generate function end, abort, return labels
                 let end_label = BoogieProgramGenerator::gen_function_end_label(
                     function_name,
                     Some(&prefix_str),
                     None,
                 );
-                lines.push(BoogieLine::Label(end_label));
+                generator.add_line_to_current_procedure(BoogieLine::Label(end_label));
 
                 let abort_label = BoogieProgramGenerator::gen_function_abort_label(
                     function_name,
                     Some(&prefix_str),
                     None,
                 );
-                lines.push(BoogieLine::Label(abort_label));
+                generator.add_line_to_current_procedure(BoogieLine::Label(abort_label));
 
                 let return_label = BoogieProgramGenerator::gen_function_return_label(
                     function_name,
                     Some(&prefix_str),
                     None,
                 );
-                lines.push(BoogieLine::Label(return_label));
+                generator.add_line_to_current_procedure(BoogieLine::Label(return_label));
             }
         }
 
         Ok(())
     }
 
-    /// Snapshot the final state of variables after execution
+    /// Snapshot the final state of variables after execution (working on current procedure)
     pub fn snapshot_final_state(
         &self,
-        _generator: &mut BoogieProgramGenerator,
+        generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
         analysis_info: &SliceAnalysisInfo,
         suffix: &str,
-        lines: &mut Vec<BoogieLine>,
     ) -> Results<VariableSnapshots> {
         let mut table_snapshots = HashMap::new();
         let mut var_snapshots = HashMap::new();
 
-        BoogieProgramGenerator::add_comment(
-            lines,
-            format!("Snapshotting final state for {}", suffix),
-        );
+        generator.add_comment_to_current_procedure(format!("Snapshotting final state for {}", suffix));
 
         // Snapshot tables written by last hop only
         let mut tables_written_last_hop = HashSet::new();
@@ -252,10 +251,16 @@ impl BoogieStateManager {
         for table_var_name in tables_written_last_hop {
             let snapshot_name = format!("{}_{}", table_var_name, suffix);
             table_snapshots.insert(table_var_name.clone(), snapshot_name.clone());
+            
+            // Add the snapshot variable as a local variable
+            // TODO: resolve table type
+            let table_type = BoogieType::Map(vec![Box::new(BoogieType::Int)], Box::new(BoogieType::Int)); // Placeholder type
+            generator.add_local_var(&snapshot_name, table_type);
+            
             let assign_expr = BoogieExpr {
                 kind: BoogieExprKind::Var(table_var_name.clone()),
             };
-            lines.push(BoogieLine::Assign(snapshot_name, assign_expr));
+            generator.add_line_to_current_procedure(BoogieLine::Assign(snapshot_name, assign_expr));
         }
 
         // Snapshot live-OUT variables only
@@ -264,13 +269,18 @@ impl BoogieStateManager {
         live_out_vars.extend(&analysis_info.live_out_b);
 
         for &var_id in &live_out_vars {
-            let var_name = BoogieProgramGenerator::gen_var_name(cfg_program, var_id, None);
+            let var_name = generator.gen_var_name(cfg_program, var_id, None);
             let snapshot_name = format!("{}_{}", var_name, suffix);
             var_snapshots.insert(var_id, snapshot_name.clone());
+            
+            // Add the snapshot variable as a local variable  
+            let var_type = BoogieProgramGenerator::convert_type(&cfg_program.variables[var_id].ty);
+            generator.add_local_var(&snapshot_name, var_type);
+            
             let assign_expr = BoogieExpr {
                 kind: BoogieExprKind::Var(var_name),
             };
-            lines.push(BoogieLine::Assign(snapshot_name, assign_expr));
+            generator.add_line_to_current_procedure(BoogieLine::Assign(snapshot_name, assign_expr));
         }
 
         Ok(VariableSnapshots {
@@ -279,16 +289,14 @@ impl BoogieStateManager {
         })
     }
 
-    /// Assert that current state equals one of the special interleaving states
-    /// Compare tables written by "last hop" only, and compare live-OUT variables only
+    /// Assert that current state equals one of the special interleaving states (working on current procedure)
     pub fn assert_equivalence_to_special_interleavings(
         &self,
-        _generator: &mut BoogieProgramGenerator,
+        generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
         analysis_info: &SliceAnalysisInfo,
         a_then_b_vars: &VariableSnapshots,
         b_then_a_vars: &VariableSnapshots,
-        lines: &mut Vec<BoogieLine>,
     ) -> Results<()> {
         let mut equality_conditions_a_then_b = Vec::new();
         let mut equality_conditions_b_then_a = Vec::new();
@@ -340,7 +348,7 @@ impl BoogieStateManager {
         live_out_vars.extend(&analysis_info.live_out_b);
 
         for &var_id in &live_out_vars {
-            let var_name = BoogieProgramGenerator::gen_var_name(cfg_program, var_id, None);
+            let var_name = generator.gen_var_name(cfg_program, var_id, None);
 
             // Current var == a_then_b snapshot
             if let Some(a_then_b_snapshot) = a_then_b_vars.var_snapshots.get(&var_id) {
@@ -388,7 +396,7 @@ impl BoogieStateManager {
             msg: "Slice commutativity violation: interleaving produces different result than both special orderings".to_string(),
         };
 
-        BoogieProgramGenerator::add_assertion(lines, final_assertion, error_msg);
+        generator.add_assertion_to_current_procedure(final_assertion, error_msg);
 
         Ok(())
     }
