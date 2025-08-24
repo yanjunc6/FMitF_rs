@@ -72,7 +72,28 @@ impl PartitionVerificationManager {
         function_id: FunctionId,
     ) -> Results<BoogieProcedure> {
         let function = &cfg_program.functions[function_id];
-        let mut lines = Vec::new();
+
+        // Generate procedure parameters
+        let params = BoogieProgramGenerator::gen_procedure_params(cfg_program, function, None);
+
+        // Collect modified global variables using dataflow analysis
+        let modifies = BoogieProgramGenerator::collect_modified_globals_from_dataflow(
+            cfg_program,
+            function_id,
+        );
+
+        // Create the procedure and add it to the generator
+        let procedure = BoogieProcedure {
+            name: format!("verify_partition_{}", function.name),
+            params,
+            local_vars: Vec::new(), // Will be populated automatically
+            modifies,
+            lines: Vec::new(), // Will be populated by generator methods
+        };
+
+        generator.program.procedures.push(procedure);
+        let proc_index = generator.program.procedures.len() - 1;
+        generator.set_current_procedure(proc_index);
 
         // Add procedure header comment
         generator.add_comment_to_current_procedure(format!(
@@ -83,7 +104,7 @@ impl PartitionVerificationManager {
         // Generate function start label
         let start_label =
             BoogieProgramGenerator::gen_function_start_label(&function.name, None, None);
-        lines.push(BoogieLine::Label(start_label));
+        generator.add_line_to_current_procedure(BoogieLine::Label(start_label));
 
         // Track partition calls per hop for consistency checking
         // Key: (hop_id, partition_function_id) - same partition function across different tables
@@ -105,13 +126,13 @@ impl PartitionVerificationManager {
                 // Generate block label using gen_basic_block_label with block_id
                 let block_label =
                     BoogieProgramGenerator::gen_basic_block_label(block_id, None, None);
-                lines.push(BoogieLine::Label(block_label));
+                generator.add_line_to_current_procedure(BoogieLine::Label(block_label));
 
                 // Process each statement in the block
                 for statement in &block.statements {
                     // First, translate the statement to Boogie
                     let boogie_lines = generator.convert_statement(cfg_program, statement, None)?;
-                    lines.extend(boogie_lines);
+                    generator.add_lines_to_current_procedure(boogie_lines);
 
                     // Then check if this statement contains table accesses and insert assertions
                     self.check_and_insert_partition_assertion(
@@ -120,54 +141,42 @@ impl PartitionVerificationManager {
                         statement,
                         hop_id,
                         &mut partition_call_tracker,
-                        &mut lines,
                     )?;
                 }
 
                 // Generate control flow using the existing gen_basic_block_edges function
+                let mut block_edges = Vec::new();
                 generator.gen_basic_block_edges(
-                    &mut lines,
+                    &mut block_edges,
                     cfg_program,
                     block_id,
                     &function.name,
                     None,
                     None,
                 );
+                generator.add_lines_to_current_procedure(block_edges);
             }
         }
 
         // Generate function end label
         let end_label = BoogieProgramGenerator::gen_function_end_label(&function.name, None, None);
-        lines.push(BoogieLine::Label(end_label));
+        generator.add_line_to_current_procedure(BoogieLine::Label(end_label));
 
         // Generate function return label
         let return_label =
             BoogieProgramGenerator::gen_function_return_label(&function.name, None, None);
-        lines.push(BoogieLine::Label(return_label));
+        generator.add_line_to_current_procedure(BoogieLine::Label(return_label));
 
         // Generate function abort label
         let abort_label =
             BoogieProgramGenerator::gen_function_abort_label(&function.name, None, None);
-        lines.push(BoogieLine::Label(abort_label));
+        generator.add_line_to_current_procedure(BoogieLine::Label(abort_label));
 
-        // Generate procedure parameters
-        let params = BoogieProgramGenerator::gen_procedure_params(cfg_program, function, None);
+        // Clear current procedure reference
+        generator.clear_current_procedure();
 
-        // Collect modified global variables using dataflow analysis
-        let modifies = BoogieProgramGenerator::collect_modified_globals_from_dataflow(
-            cfg_program,
-            function_id,
-        );
-
-        let procedure = BoogieProcedure {
-            name: format!("verify_partition_{}", function.name),
-            params,
-            local_vars: Vec::new(), // Will be populated by gen_var_name calls  
-            modifies,
-            lines,
-        };
-
-        Ok(procedure)
+        // Return the completed procedure
+        Ok(generator.program.procedures.pop().unwrap())
     }
 
     /// Check statement for table accesses and insert partition consistency assertions if needed
@@ -181,7 +190,6 @@ impl PartitionVerificationManager {
             (crate::cfg::HopId, crate::cfg::FunctionId),
             Vec<Operand>,
         >,
-        _lines: &mut Vec<BoogieLine>,
     ) -> Results<()> {
         let Statement::Assign { lvalue, rvalue, .. } = statement;
 
