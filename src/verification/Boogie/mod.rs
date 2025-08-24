@@ -33,9 +33,9 @@ pub struct BoogieProcedure {
     pub name: String,
     pub params: Vec<BoogieVarDecl>,
     pub local_vars: Vec<BoogieVarDecl>, // local variables declared at beginning of procedure
-    pub modifies: Vec<String>, // modified global variables
-    pub lines: Vec<BoogieLine>, // lines in the procedure
-                               // We never use returns for procedures for now
+    pub modifies: Vec<String>,          // modified global variables
+    pub lines: Vec<BoogieLine>,         // lines in the procedure
+                                        // We never use returns for procedures for now
 }
 
 #[derive(Debug, Clone)]

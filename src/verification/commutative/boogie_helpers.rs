@@ -1,9 +1,9 @@
+use crate::cfg::{CfgProgram, HopId, VarId};
 use crate::verification::errors::Results;
 use crate::verification::Boogie::{
     gen_Boogie::BoogieProgramGenerator, BoogieBinOp, BoogieExpr, BoogieExprKind, BoogieLine,
-    BoogieType, ErrorMessage,
+    ErrorMessage,
 };
-use crate::cfg::{CfgProgram, HopId, VarId};
 use std::collections::{HashMap, HashSet};
 
 use super::slice_analyzer::SliceAnalysisInfo;
@@ -39,9 +39,8 @@ impl BoogieStateManager {
         cfg_program: &CfgProgram,
         analysis_info: &SliceAnalysisInfo,
     ) -> Results<()> {
-        generator.add_comment_to_current_procedure(
-            "--- Step 1: Havoc initial state ---".to_string(),
-        );
+        generator
+            .add_comment_to_current_procedure("--- Step 1: Havoc initial state ---".to_string());
 
         // Havoc tables read/written by both slices (exclude primary keys)
         let mut tables_to_havoc = HashSet::new();
@@ -75,9 +74,8 @@ impl BoogieStateManager {
         analysis_info: &SliceAnalysisInfo,
     ) -> Results<()> {
         // TODO: Need to create new variables so that the variable declarations should be done at beginning of procedure
-        generator.add_comment_to_current_procedure(
-            "--- Step 2: Save initial state ---".to_string(),
-        );
+        generator
+            .add_comment_to_current_procedure("--- Step 2: Save initial state ---".to_string());
 
         // Save tables read/written by both slices
         let mut tables_to_save = HashSet::new();
@@ -88,11 +86,14 @@ impl BoogieStateManager {
 
         for table_var_name in tables_to_save {
             let snapshot_name = format!("{}_init", table_var_name);
-            // TODO: check how gen_Boogie resolve the table type
-            // Add the snapshot variable as a local variable
-            let table_type = BoogieType::Map(vec![Box::new(BoogieType::Int)], Box::new(BoogieType::Int)); // Placeholder type
+            // Resolve table type using the simplified table_var_types map
+            let table_type = // Look up the type directly from the table_var_types map
+        analysis_info.table_var_types
+            .get(table_var_name)
+            .cloned()
+            .unwrap();
             generator.add_local_var(&snapshot_name, table_type);
-            
+
             let assign_expr = BoogieExpr {
                 kind: BoogieExprKind::Var(table_var_name.clone()),
             };
@@ -107,10 +108,10 @@ impl BoogieStateManager {
         for &var_id in &live_in_vars {
             let var_name = generator.gen_var_name(cfg_program, var_id, None);
             let snapshot_name = format!("{}_init", var_name);
-            // Add the snapshot variable as a local variable  
+            // Add the snapshot variable as a local variable
             let var_type = BoogieProgramGenerator::convert_type(&cfg_program.variables[var_id].ty);
             generator.add_local_var(&snapshot_name, var_type);
-            
+
             let assign_expr = BoogieExpr {
                 kind: BoogieExprKind::Var(var_name),
             };
@@ -141,7 +142,10 @@ impl BoogieStateManager {
             let assign_expr = BoogieExpr {
                 kind: BoogieExprKind::Var(snapshot_name),
             };
-            generator.add_line_to_current_procedure(BoogieLine::Assign(table_var_name.clone(), assign_expr));
+            generator.add_line_to_current_procedure(BoogieLine::Assign(
+                table_var_name.clone(),
+                assign_expr,
+            ));
         }
 
         // Restore live-IN variables only
@@ -181,7 +185,8 @@ impl BoogieStateManager {
 
             // Generate unique label using gen_basic_block_label
             let prefix_str = format!("exec_{}", suffix);
-            let label = BoogieProgramGenerator::gen_basic_block_label(block_id, Some(&prefix_str), None);
+            let label =
+                BoogieProgramGenerator::gen_basic_block_label(block_id, Some(&prefix_str), None);
             generator.add_line_to_current_procedure(BoogieLine::Label(label));
 
             // Convert statements
@@ -241,7 +246,8 @@ impl BoogieStateManager {
         let mut table_snapshots = HashMap::new();
         let mut var_snapshots = HashMap::new();
 
-        generator.add_comment_to_current_procedure(format!("Snapshotting final state for {}", suffix));
+        generator
+            .add_comment_to_current_procedure(format!("Snapshotting final state for {}", suffix));
 
         // Snapshot tables written by last hop only
         let mut tables_written_last_hop = HashSet::new();
@@ -251,12 +257,15 @@ impl BoogieStateManager {
         for table_var_name in tables_written_last_hop {
             let snapshot_name = format!("{}_{}", table_var_name, suffix);
             table_snapshots.insert(table_var_name.clone(), snapshot_name.clone());
-            
-            // Add the snapshot variable as a local variable
-            // TODO: resolve table type
-            let table_type = BoogieType::Map(vec![Box::new(BoogieType::Int)], Box::new(BoogieType::Int)); // Placeholder type
+
+            // Resolve table type using the simplified table_var_types map
+            let table_type = // Look up the type directly from the table_var_types map
+        analysis_info.table_var_types
+            .get(table_var_name)
+            .cloned()
+            .unwrap();
             generator.add_local_var(&snapshot_name, table_type);
-            
+
             let assign_expr = BoogieExpr {
                 kind: BoogieExprKind::Var(table_var_name.clone()),
             };
@@ -272,11 +281,11 @@ impl BoogieStateManager {
             let var_name = generator.gen_var_name(cfg_program, var_id, None);
             let snapshot_name = format!("{}_{}", var_name, suffix);
             var_snapshots.insert(var_id, snapshot_name.clone());
-            
-            // Add the snapshot variable as a local variable  
+
+            // Add the snapshot variable as a local variable
             let var_type = BoogieProgramGenerator::convert_type(&cfg_program.variables[var_id].ty);
             generator.add_local_var(&snapshot_name, var_type);
-            
+
             let assign_expr = BoogieExpr {
                 kind: BoogieExprKind::Var(var_name),
             };

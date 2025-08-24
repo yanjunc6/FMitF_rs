@@ -1,6 +1,6 @@
 use super::{
-    BoogieBinOp, BoogieExpr, BoogieExprKind, BoogieLine, BoogieProcedure, BoogieProgram, BoogieType, BoogieUnOp,
-    BoogieVarDecl, ErrorMessage,
+    BoogieBinOp, BoogieExpr, BoogieExprKind, BoogieLine, BoogieProcedure, BoogieProgram,
+    BoogieType, BoogieUnOp, BoogieVarDecl, ErrorMessage,
 };
 use crate::cfg::{
     BasicBlockId, BinaryOp, CfgProgram, Constant, EdgeType, FunctionCfg, FunctionId, LValue,
@@ -34,7 +34,7 @@ impl BoogieProgramGenerator {
 
     /// Create a new generator with a provided Boogie program
     pub fn with_program(program: BoogieProgram) -> Self {
-        BoogieProgramGenerator { 
+        BoogieProgramGenerator {
             program,
             current_procedure_index: None,
         }
@@ -181,14 +181,8 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
                 let field = &cfg_program.fields[field_id];
                 if !field.is_primary {
                     let var_name = Self::gen_table_field_var_name(&table.name, &field.name);
-                    let key_types: Vec<Box<BoogieType>> = table
-                        .primary_keys
-                        .iter()
-                        .map(|&pk_id| Box::new(Self::convert_type(&cfg_program.fields[pk_id].ty)))
-                        .collect();
-                    let value_type = Box::new(Self::convert_type(&field.ty));
+                    let map_type = Self::gen_table_field_type(cfg_program, table_id, field_id);
 
-                    let map_type = BoogieType::Map(key_types, value_type);
                     let var_decl = BoogieVarDecl {
                         var_name: var_name.clone(),
                         var_type: map_type,
@@ -251,6 +245,25 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
         format!("{}_{}", table_name, field_name)
     }
 
+    /// Generate Boogie type for a table field (used for both global variables and local snapshots)
+    pub fn gen_table_field_type(
+        cfg_program: &CfgProgram,
+        table_id: crate::cfg::TableId,
+        field_id: crate::cfg::FieldId,
+    ) -> BoogieType {
+        let table = &cfg_program.tables[table_id];
+        let field = &cfg_program.fields[field_id];
+
+        let key_types: Vec<Box<BoogieType>> = table
+            .primary_keys
+            .iter()
+            .map(|&pk_id| Box::new(Self::convert_type(&cfg_program.fields[pk_id].ty)))
+            .collect();
+        let value_type = Box::new(Self::convert_type(&field.ty));
+
+        BoogieType::Map(key_types, value_type)
+    }
+
     /// Helper function to check if a variable exists in current procedure's scope
     /// Returns true if found, false if not found
     fn check_variable_exists_in_procedure(&self, var_name: &str) -> bool {
@@ -306,7 +319,11 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
     }
 
     /// Generate static variable name without adding to local variables (for procedure parameters)
-    pub fn gen_var_name_static(cfg_program: &CfgProgram, var_id: VarId, prefix: Option<&str>) -> String {
+    pub fn gen_var_name_static(
+        cfg_program: &CfgProgram,
+        var_id: VarId,
+        prefix: Option<&str>,
+    ) -> String {
         let var = &cfg_program.variables[var_id];
         let base_name = match var.kind {
             VariableKind::Global => var.name.clone(),
@@ -324,8 +341,12 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
 
     /// Generate variable name for a CFG variable with optional prefix
     /// Only automatically adds variables to local_vars for Local and Temporary variable kinds
-    pub fn gen_var_name(&mut self, cfg_program: &CfgProgram, var_id: VarId, prefix: Option<&str>) -> String {
-        
+    pub fn gen_var_name(
+        &mut self,
+        cfg_program: &CfgProgram,
+        var_id: VarId,
+        prefix: Option<&str>,
+    ) -> String {
         let var = &cfg_program.variables[var_id];
         let var_name = Self::gen_var_name_static(cfg_program, var_id, prefix);
 
@@ -334,7 +355,7 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
             VariableKind::Local | VariableKind::Temporary => {
                 let boogie_type = Self::convert_type(&var.ty);
                 self.ensure_local_variable_exists(&var_name, boogie_type);
-            },
+            }
             VariableKind::Global | VariableKind::Parameter => {
                 // Global and parameter variables should already be declared, just check they exist
                 // If they don't exist, it's likely a programming error, but we'll still return the name

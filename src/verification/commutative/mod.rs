@@ -1,17 +1,17 @@
+use crate::cfg::{CfgProgram, FunctionId, HopId};
+use crate::sc_graph::{EdgeType, SCGraph, SCGraphEdge};
 use crate::verification::errors::Results;
 pub use crate::verification::errors::{SpannedError, VerificationError};
 use crate::verification::Boogie::{self, gen_Boogie::BoogieProgramGenerator, BoogieProcedure};
-use crate::cfg::{CfgProgram, FunctionId, HopId};
-use crate::sc_graph::{EdgeType, SCGraph, SCGraphEdge};
 use std::collections::HashSet;
 
+mod boogie_helpers;
 mod interleaving_generator;
 mod slice_analyzer;
-mod boogie_helpers;
 
+use boogie_helpers::{BoogieStateManager, VariableSnapshots};
 use interleaving_generator::{InterleavingGenerator, SpecialInterleavings};
 use slice_analyzer::SliceAnalyzer;
-use boogie_helpers::{BoogieStateManager, VariableSnapshots};
 
 pub struct CommutativeUnit {
     pub c_edge: SCGraphEdge,
@@ -170,11 +170,10 @@ impl CommutativeVerificationManager {
 
         // Step 4: For each legal interleaving, verify it produces one of the special results
         for (i, interleaving) in interleavings.iter().enumerate() {
-            let interleaving_hops: Vec<HopId> = interleaving.iter().map(|(hop_id, _)| *hop_id).collect();
             self.verify_interleaving_equivalence(
                 generator,
                 cfg_program,
-                &interleaving_hops,
+                interleaving,
                 i,
                 &analysis_info,
                 &a_then_b_vars,
@@ -186,7 +185,7 @@ impl CommutativeVerificationManager {
         // Clear current procedure reference
         generator.clear_current_procedure();
 
-        // Return the completed procedure  
+        // Return the completed procedure
         Ok(generator.program.procedures.pop().unwrap())
     }
 
@@ -205,11 +204,10 @@ impl CommutativeVerificationManager {
 
         // Execute A then B
         generator.add_comment_to_current_procedure("Executing A then B:".to_string());
-        let a_then_b_hops: Vec<HopId> = special.a_then_b.iter().map(|(hop_id, _)| *hop_id).collect();
         let a_then_b_vars = self.execute_interleaving_and_snapshot(
             generator,
             cfg_program,
-            &a_then_b_hops,
+            &special.a_then_b,
             "a_then_b",
             analysis_info,
             true,
@@ -221,11 +219,10 @@ impl CommutativeVerificationManager {
 
         // Execute B then A
         generator.add_comment_to_current_procedure("Executing B then A:".to_string());
-        let b_then_a_hops: Vec<HopId> = special.b_then_a.iter().map(|(hop_id, _)| *hop_id).collect();
         let b_then_a_vars = self.execute_interleaving_and_snapshot(
             generator,
             cfg_program,
-            &b_then_a_hops,
+            &special.b_then_a,
             "b_then_a",
             analysis_info,
             true,
@@ -240,7 +237,7 @@ impl CommutativeVerificationManager {
         &self,
         generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
-        interleaving: &[HopId],
+        interleaving: &Interleaving,
         suffix: &str,
         analysis_info: &slice_analyzer::SliceAnalysisInfo,
         should_snapshot: bool,
@@ -271,7 +268,7 @@ impl CommutativeVerificationManager {
                 generator,
                 cfg_program,
                 hop_id,
-                suffix,
+                &label_suffix,
                 function_name,
                 is_last_hop,
             )?;
@@ -290,7 +287,7 @@ impl CommutativeVerificationManager {
         &self,
         generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
-        interleaving: &[HopId],
+        interleaving: &Interleaving,
         interleaving_index: usize,
         analysis_info: &slice_analyzer::SliceAnalysisInfo,
         a_then_b_vars: &VariableSnapshots,
@@ -327,8 +324,4 @@ impl CommutativeVerificationManager {
 
         Ok(())
     }
-
-
-
 }
-

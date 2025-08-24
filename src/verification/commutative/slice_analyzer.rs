@@ -1,9 +1,12 @@
-use crate::verification::errors::Results;
-use crate::cfg::{CfgProgram, VarId, HopId};
-use crate::dataflow::{analyze_live_variables, analyze_table_mod_ref, AccessType, LiveVar, TableAccess};
-use crate::verification::Boogie::gen_Boogie::BoogieProgramGenerator;
 use super::CommutativeUnit;
-use std::collections::HashSet;
+use crate::cfg::{CfgProgram, HopId, VarId};
+use crate::dataflow::{
+    analyze_live_variables, analyze_table_mod_ref, AccessType, LiveVar, TableAccess,
+};
+use crate::verification::errors::Results;
+use crate::verification::Boogie::gen_Boogie::BoogieProgramGenerator;
+use crate::verification::Boogie::BoogieType;
+use std::collections::{HashMap, HashSet};
 
 /// Analysis results for slice commutativity verification
 pub struct SliceAnalysisInfo {
@@ -27,6 +30,8 @@ pub struct SliceAnalysisInfo {
     pub tables_written_last_hop_a: HashSet<String>,
     /// Tables written by last hop of slice B
     pub tables_written_last_hop_b: HashSet<String>,
+    /// Table variable name to type mapping for easy type resolution
+    pub table_var_types: HashMap<String, BoogieType>,
 }
 
 pub struct SliceAnalyzer;
@@ -236,12 +241,21 @@ impl SliceAnalyzer {
         let mut tables_written_a = HashSet::new();
         let mut tables_written_last_hop_a_strings = HashSet::new();
 
+        // Build table variable name to type mapping directly
+        let mut table_var_types = HashMap::new();
+
         for access in table_reads_a {
             let table = &cfg_program.tables[access.table];
             let field = &cfg_program.fields[access.field];
             let var_name =
                 BoogieProgramGenerator::gen_table_field_var_name(&table.name, &field.name);
-            tables_read_a.insert(var_name);
+            tables_read_a.insert(var_name.clone());
+            let var_type = BoogieProgramGenerator::gen_table_field_type(
+                cfg_program,
+                access.table,
+                access.field,
+            );
+            table_var_types.insert(var_name, var_type);
         }
 
         for access in table_writes_a {
@@ -249,7 +263,13 @@ impl SliceAnalyzer {
             let field = &cfg_program.fields[access.field];
             let var_name =
                 BoogieProgramGenerator::gen_table_field_var_name(&table.name, &field.name);
-            tables_written_a.insert(var_name);
+            tables_written_a.insert(var_name.clone());
+            let var_type = BoogieProgramGenerator::gen_table_field_type(
+                cfg_program,
+                access.table,
+                access.field,
+            );
+            table_var_types.insert(var_name, var_type);
         }
 
         for access in table_writes_last_hop_a {
@@ -257,7 +277,13 @@ impl SliceAnalyzer {
             let field = &cfg_program.fields[access.field];
             let var_name =
                 BoogieProgramGenerator::gen_table_field_var_name(&table.name, &field.name);
-            tables_written_last_hop_a_strings.insert(var_name);
+            tables_written_last_hop_a_strings.insert(var_name.clone());
+            let var_type = BoogieProgramGenerator::gen_table_field_type(
+                cfg_program,
+                access.table,
+                access.field,
+            );
+            table_var_types.insert(var_name, var_type);
         }
 
         let mut tables_read_b = HashSet::new();
@@ -269,7 +295,13 @@ impl SliceAnalyzer {
             let field = &cfg_program.fields[access.field];
             let var_name =
                 BoogieProgramGenerator::gen_table_field_var_name(&table.name, &field.name);
-            tables_read_b.insert(var_name);
+            tables_read_b.insert(var_name.clone());
+            let var_type = BoogieProgramGenerator::gen_table_field_type(
+                cfg_program,
+                access.table,
+                access.field,
+            );
+            table_var_types.insert(var_name, var_type);
         }
 
         for access in table_writes_b {
@@ -277,7 +309,13 @@ impl SliceAnalyzer {
             let field = &cfg_program.fields[access.field];
             let var_name =
                 BoogieProgramGenerator::gen_table_field_var_name(&table.name, &field.name);
-            tables_written_b.insert(var_name);
+            tables_written_b.insert(var_name.clone());
+            let var_type = BoogieProgramGenerator::gen_table_field_type(
+                cfg_program,
+                access.table,
+                access.field,
+            );
+            table_var_types.insert(var_name, var_type);
         }
 
         for access in table_writes_last_hop_b {
@@ -285,7 +323,13 @@ impl SliceAnalyzer {
             let field = &cfg_program.fields[access.field];
             let var_name =
                 BoogieProgramGenerator::gen_table_field_var_name(&table.name, &field.name);
-            tables_written_last_hop_b_strings.insert(var_name);
+            tables_written_last_hop_b_strings.insert(var_name.clone());
+            let var_type = BoogieProgramGenerator::gen_table_field_type(
+                cfg_program,
+                access.table,
+                access.field,
+            );
+            table_var_types.insert(var_name, var_type);
         }
 
         Ok(SliceAnalysisInfo {
@@ -299,6 +343,7 @@ impl SliceAnalyzer {
             tables_written_b,
             tables_written_last_hop_a: tables_written_last_hop_a_strings,
             tables_written_last_hop_b: tables_written_last_hop_b_strings,
+            table_var_types,
         })
     }
 }
