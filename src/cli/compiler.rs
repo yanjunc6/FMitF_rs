@@ -7,6 +7,7 @@ use crate::{
     ast::parse_and_analyze, cfg::CfgBuilder, sc_graph::SCGraphBuilder,
     verification::VerificationManager, AstProgram, CfgProgram,
 };
+use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Instant;
 
 #[derive(Debug, Default)]
@@ -157,8 +158,8 @@ impl Compiler {
             };
         output_manager.write_boogie_programs(&boogie_programs)?;
 
-        // Stage 6: Run Boogie Verification
-        self.run_boogie_verification(&mut output_manager)?;
+        // Stage 5 part 2: Run Boogie Verification
+        self.run_boogie_verification(&mut output_manager, cli)?;
 
         // Write final compilation statistics and summary
         let compilation_time_ms = start.elapsed().as_millis() as u64;
@@ -336,6 +337,7 @@ impl Compiler {
     fn run_boogie_verification(
         &mut self,
         output_manager: &mut OutputManager,
+        cli: &Cli,
     ) -> Result<(), String> {
         output_manager.write_log_section("Boogie Verification Results")?;
 
@@ -351,9 +353,32 @@ impl Compiler {
             bpl_files.len()
         ))?;
 
+        // Create progress bar
+        let pb = ProgressBar::new(bpl_files.len() as u64);
+        
+        // Configure progress bar style based on --no-color flag
+        let style = if cli.no_color {
+            ProgressStyle::default_bar()
+                .template("{spinner} [{elapsed_precise}] [{bar:40}] {pos}/{len} {msg}")
+                .unwrap()
+                .progress_chars("#>-")
+        } else {
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+                .unwrap()
+                .progress_chars("#>-")
+        };
+        
+        pb.set_style(style);
+        pb.set_message("Verifying Boogie files...");
+
         // Run Boogie on each .bpl file
-        for bpl_file in bpl_files {
+        for (index, bpl_file) in bpl_files.iter().enumerate() {
             let file_name = bpl_file.file_name().unwrap().to_string_lossy();
+            
+            // Update progress bar with current file
+            pb.set_message(format!("Verifying {}", file_name));
+            pb.set_position(index as u64);
 
             // Run boogie command: boogie <path> /quiet /errorTrace:0
             let output = std::process::Command::new("boogie")
@@ -371,6 +396,11 @@ impl Compiler {
             output_manager
                 .write_boogie_verification_result(&file_name, success, &stdout, &stderr)?;
         }
+
+        // Complete progress bar
+        pb.set_position(bpl_files.len() as u64);
+        pb.set_message("Boogie verification completed");
+        pb.finish_with_message(format!("✓ Verified {} Boogie files", bpl_files.len()));
 
         Ok(())
     }
