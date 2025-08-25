@@ -1,0 +1,16 @@
+// Minimal test case for hops_for infinite loop
+partition simple_partition(int x) = x * 3 + 7;
+
+table TestData {
+    primary int id;
+    node simple_partition(id);
+    float value;
+}
+
+void minimal_hops_for_test() {
+    hops for int i = 1 to 3 {
+        float batch_total = 0.0;
+        batch_total = batch_total + 25.5;
+        TestData[id: i].value = batch_total;
+    }
+}

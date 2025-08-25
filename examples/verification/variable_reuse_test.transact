@@ -1,0 +1,25 @@
+// Test case for variable reuse across hops for loops
+partition simple_partition(int x) = x * 3 + 7;
+
+table TestData {
+    primary int id;
+    node simple_partition(id);
+    float value;
+    int count;
+}
+
+void variable_reuse_test() {
+    hops for int i = 1 to 3 {
+        float batch_total = 0.0;
+        int processed = 0;
+        
+        // Simulate more complex operations that might cause variable reuse
+        for (int j = 0; j < 2; j++) {
+            batch_total = batch_total + 25.5;
+            processed = processed + 1;
+        }
+        
+        TestData[id: i].value = batch_total;
+        TestData[id: i].count = processed;
+    }
+}
