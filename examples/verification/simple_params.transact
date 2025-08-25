@@ -1,0 +1,18 @@
+// Simple transaction with parameters test
+partition param_part(int x) = x + 100;
+
+table ParamTest {
+    primary int test_id;
+    node param_part(test_id);
+    string name;
+    int value;
+    bool flag;
+}
+
+void test_params(int test_id, string input_name, int input_value, bool input_flag) {
+    hop {
+        ParamTest[test_id: test_id].name = input_name;
+        ParamTest[test_id: test_id].value = input_value;
+        ParamTest[test_id: test_id].flag = input_flag;
+    }
+}

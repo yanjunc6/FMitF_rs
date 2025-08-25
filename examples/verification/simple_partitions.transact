@@ -1,0 +1,28 @@
+// Multiple partition functions test
+partition part_a(int x) = x * 5;
+partition part_b(string s, int y) = y + 10;
+
+table TableA {
+    primary int id;
+    node part_a(id);
+    string data;
+}
+
+table TableB {
+    primary string key;
+    primary int num;
+    node part_b(key, num);
+    int result;
+}
+
+void test_partitions(int id_val, string key_val, int num_val) {
+    hop {
+        // Access table with first partition
+        TableA[id: id_val].data = "test";
+    }
+    
+    hop {
+        // Access table with second partition
+        TableB[key: key_val, num: num_val].result = 42;
+    }
+}

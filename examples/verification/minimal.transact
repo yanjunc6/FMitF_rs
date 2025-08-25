@@ -1,0 +1,14 @@
+// Very minimal test - just basic assignment
+partition minimal_part(int x) = x;
+
+table MinimalTable {
+    primary int id;
+    node minimal_part(id);
+    int data;
+}
+
+void minimal_test(int id) {
+    hop {
+        MinimalTable[id: id].data = 42;
+    }
+}

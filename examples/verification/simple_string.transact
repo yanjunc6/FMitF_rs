@@ -1,0 +1,16 @@
+// Simple string concatenation test
+partition node_hash(int x) = x * 3;
+
+table Users {
+    primary int id;
+    node node_hash(id);
+    string name;
+}
+
+void test_string_concat(int user_id) {
+    hop {
+        string prefix = "user";
+        string full_name = prefix ~ "_name";
+        Users[id: user_id].name = full_name;
+    }
+}

@@ -1,0 +1,22 @@
+// Simple conditional statements test
+partition basic_part(int x) = x;
+
+table Items {
+    primary int item_id;
+    node basic_part(item_id);
+    bool active;
+    int count;
+}
+
+void test_conditionals(int item_id, int quantity) {
+    hop {
+        bool is_large = quantity > 100;
+        Items[item_id: item_id].active = is_large;
+        
+        if (quantity > 50) {
+            Items[item_id: item_id].count = quantity;
+        } else {
+            Items[item_id: item_id].count = 0;
+        }
+    }
+}
