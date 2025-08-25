@@ -195,20 +195,10 @@ impl BoogieStateManager {
                 generator.add_lines_to_current_procedure(boogie_lines);
             }
 
-            if !is_last_hop {
-                // Generate control flow edges directly to current procedure
-                let mut temp_lines = Vec::new();
-                generator.gen_basic_block_edges(
-                    &mut temp_lines,
-                    cfg_program,
-                    block_id,
-                    function_name,
-                    Some(&prefix_str),
-                    None,
-                );
-                generator.add_lines_to_current_procedure(temp_lines);
-            } else {
-                // Last hop, generate function end, abort, return labels
+            let is_last_basic_block = block_id == *hop.blocks.last().unwrap();
+
+            if is_last_hop && is_last_basic_block {
+                // Last hop, last basic block, generate function end, abort, return labels
                 let end_label = BoogieProgramGenerator::gen_function_end_label(
                     function_name,
                     Some(&prefix_str),
@@ -229,6 +219,18 @@ impl BoogieStateManager {
                     None,
                 );
                 generator.add_line_to_current_procedure(BoogieLine::Label(return_label));
+            } else {
+                // Generate control flow edges directly to current procedure
+                let mut temp_lines = Vec::new();
+                generator.gen_basic_block_edges(
+                    &mut temp_lines,
+                    cfg_program,
+                    block_id,
+                    function_name,
+                    Some(&prefix_str),
+                    None,
+                );
+                generator.add_lines_to_current_procedure(temp_lines);
             }
         }
 
