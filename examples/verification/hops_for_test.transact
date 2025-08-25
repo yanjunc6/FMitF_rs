@@ -1,0 +1,117 @@
+// Test file for 'hops for' loops
+// Tests iteration over hops with meaningful computations
+
+partition item_partition(int item_id) = item_id * 13 + 31;
+partition batch_partition(int batch_id) = batch_id * 5 + 19;
+
+table Items {
+    primary int item_id;
+    node item_partition(item_id);
+    string name;
+    int quantity;
+    float price;
+    string category;
+}
+
+table BatchProcessing {
+    primary int batch_id;
+    node batch_partition(batch_id);
+    int processed_count;
+    string status;
+    float total_value;
+}
+
+table ProcessingLog {
+    primary int log_id;
+    node item_partition(log_id);  // Reuse item partition for some logs
+    string operation;
+    int item_count;
+}
+
+void hops_for_item_processing(int start_id, int count, float base_price) {
+    // Process items in sequence using hops for with constant bounds
+    hops for int i = 1 to 10 {
+        // Each iteration processes one item
+        Items[item_id: start_id + i].quantity = Items[item_id: start_id + i].quantity + 10;
+        Items[item_id: start_id + i].price = base_price + (i * 0.5);
+        
+        // Update category based on item_id to prevent optimization
+        string cat_name = "CAT_";
+        if (i > 5) {
+            Items[item_id: start_id + i].category = cat_name ~ "HIGH";
+        } else {
+            Items[item_id: start_id + i].category = cat_name ~ "LOW";
+        }
+        
+        Items[item_id: start_id + i].name = "Item_" ~ "Processed";
+    }
+}
+
+void hops_for_batch_creation(int batch_start, int batch_end, int items_per_batch) {
+    // Create batches using hops for with constant bounds
+    hops for int batch_id = 1 to 5 {
+        // Initialize batch
+        BatchProcessing[batch_id: batch_start + batch_id].processed_count = 0;
+        BatchProcessing[batch_id: batch_start + batch_id].status = "initialized";
+        BatchProcessing[batch_id: batch_start + batch_id].total_value = 0.0;
+        
+        // Process items for this batch
+        int item_start = batch_id * items_per_batch;
+        int item_end = item_start + items_per_batch;
+        
+        float batch_total = 0.0;
+        int processed = 0;
+        
+        // Note: This creates a nested loop structure in different hops
+        for (int item_idx = item_start; item_idx < item_end; item_idx++) {
+            batch_total = batch_total + 25.5;  // Simulate item value
+            processed = processed + 1;
+        }
+        
+        BatchProcessing[batch_id: batch_start + batch_id].processed_count = processed;
+        BatchProcessing[batch_id: batch_start + batch_id].total_value = batch_total;
+        BatchProcessing[batch_id: batch_start + batch_id].status = "processing";
+    }
+}
+
+void hops_for_logging(int start_log, int end_log, string operation_type) {
+    // Log operations using hops for with constant bounds
+    hops for int log_id = 1 to 7 {
+        ProcessingLog[log_id: start_log + log_id].operation = operation_type ~ "_LOG";
+        ProcessingLog[log_id: start_log + log_id].item_count = log_id * 2;  // Meaningful computation
+        
+        // Cross-reference with items to create dependencies
+        int referenced_item = start_log + log_id + 100;
+        // Note: This creates cross-partition dependencies
+        Items[item_id: referenced_item].name = "Referenced_" ~ operation_type;
+    }
+}
+
+void complex_hops_for_scenario(int base_value, int range_size) {
+    // Complex scenario with nested computations using constant bounds
+    hops for int outer = 1 to 8 {
+        // Compute derived values
+        int derived_id = (base_value + outer) * 3 + 7;
+        float computed_price = ((base_value + outer) * 1.25) + 10.0;
+        
+        Items[item_id: derived_id].quantity = (base_value + outer) + 5;
+        Items[item_id: derived_id].price = computed_price;
+        
+        // String operations to prevent optimization
+        string prefix = "COMPLEX_";
+        string suffix = "_ITEM";
+        Items[item_id: derived_id].name = prefix ~ suffix;
+        
+        // Conditional logic to add complexity
+        if (outer < 5) {
+            Items[item_id: derived_id].category = "SPECIAL";
+            
+            // Log special items
+            int log_ref = base_value + outer + 2000;
+            ProcessingLog[log_id: log_ref].operation = "SPECIAL_PROCESSING";
+            ProcessingLog[log_id: log_ref].item_count = 1;
+        } else {
+            Items[item_id: derived_id].category = "REGULAR";
+        }
+    }
+}

@@ -1,0 +1,109 @@
+// Test file for multiple partition functions with correct/wrong hop division
+// Tests partition function placement and hop assignment validation
+
+partition user_partition(int user_id) = user_id * 7 + 13;
+partition account_partition(int account_id) = account_id * 11 + 7;  
+partition order_partition(int customer_id) = customer_id * 5 + 19;
+partition location_partition(int region, int zone) = (region * 10 + zone) * 3 + 17;
+
+table Users {
+    primary int user_id;
+    node user_partition(user_id);
+    string name;
+    int balance;
+}
+
+table Accounts {
+    primary int account_id;
+    node account_partition(account_id);
+    int user_id;
+    string account_type;
+    int amount;
+}
+
+table Orders {
+    primary string order_id;
+    int customer_id;
+    string status;
+    float total;
+    node order_partition(customer_id);  // Single parameter
+}
+
+table Locations {
+    primary int location_id;
+    int region;
+    int zone;
+    string address;
+    node location_partition(region, zone);
+}
+
+// CORRECT: Each hop accesses tables with same partition
+void correct_partition_transaction(int uid, int aid) {
+    hop {
+        // Both tables use same partition function with same parameter
+        Users[user_id: uid].balance = Users[user_id: uid].balance + 100;
+        int related_account = uid + 1000;
+        Accounts[account_id: related_account].amount = 500;
+    }
+
+    hop {
+        // Different partition functions - should be in separate hops
+        string order_key = "ORD_" ~ "123";
+        Orders[order_id: order_key].customer_id = uid;
+        Orders[order_id: order_key].status = "pending";
+    }
+}
+
+// POTENTIALLY PROBLEMATIC: Mixing different partitions in same hop
+void mixed_partition_transaction(int uid, string oid, int region_val) {
+    hop {
+        // This hop mixes different partition functions - may cause conflicts
+        Users[user_id: uid].name = "Updated User";  // user_partition(uid)
+        
+        int acc_id = uid * 2;
+        Accounts[account_id: acc_id].user_id = uid;  // account_partition(acc_id) != user_partition(uid)
+        
+        Orders[order_id: oid].status = "processing";  // order_partition(...)
+    }
+
+    hop {
+        // Location partition with computed values
+        int zone_val = region_val + 1;
+        int loc_id = region_val * 100 + zone_val;
+        Locations[location_id: loc_id].region = region_val;
+        Locations[location_id: loc_id].zone = zone_val;
+        Locations[location_id: loc_id].address = "Region " ~ "Zone Address";
+    }
+}
+
+// CORRECT: Complex partition usage with meaningful computations
+void complex_correct_partition(int base_id, float amount_val) {
+    hop {
+        // All user-related operations in same hop
+        Users[user_id: base_id].balance = Users[user_id: base_id].balance + 200;
+        
+        // Related user operations
+        int secondary_user = base_id + 1;
+        Users[user_id: secondary_user].balance = Users[user_id: secondary_user].balance - 50;
+    }
+
+    hop {
+        // Account operations with computed IDs
+        int primary_account = base_id * 10;
+        int secondary_account = base_id * 10 + 1;
+        
+        Accounts[account_id: primary_account].amount = 1000;
+        Accounts[account_id: secondary_account].amount = 750;
+        Accounts[account_id: primary_account].account_type = "primary";
+        Accounts[account_id: secondary_account].account_type = "secondary";
+    }
+
+    hop {
+        // Order operations
+        string order_prefix = "ORDER_";
+        string primary_order = order_prefix ~ "P";
+        Orders[order_id: primary_order].customer_id = base_id;
+        Orders[order_id: primary_order].total = amount_val;
+        Orders[order_id: primary_order].status = "confirmed";
+    }
+}
