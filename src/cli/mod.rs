@@ -4,11 +4,12 @@ use std::path::PathBuf;
 
 mod compiler;
 mod logger;
+mod output_manager;
 // mod verification; // Temporarily disabled due to compilation errors
 
 pub use compiler::*;
 pub use logger::Logger;
-// pub use output::*; // Not needed anymore - output is handled directly in compiler
+pub use output_manager::OutputManager;
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "fmitf")]

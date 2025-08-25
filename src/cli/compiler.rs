@@ -2,7 +2,7 @@
 
 // Clean, modular compiler pipeline for FMitF. No function >20 lines. All error handling explicit.
 
-use super::{Cli, Logger};
+use super::{Cli, Logger, OutputManager};
 use crate::{
     ast::parse_and_analyze, cfg::CfgBuilder, sc_graph::SCGraphBuilder,
     verification::VerificationManager, AstProgram, CfgProgram,
@@ -75,6 +75,7 @@ impl Compiler {
     pub fn print_compilation_failed(&self, duration_ms: u64, failed_stage: usize) {
         self.logger.compilation_failed(duration_ms, failed_stage);
     }
+
     pub fn new() -> Self {
         Self {
             logger: Logger::new(),
@@ -85,17 +86,22 @@ impl Compiler {
         let start = Instant::now();
         self.logger.compilation_start(&cli.input);
 
+        // Initialize output manager
+        let output_dir = cli.get_output_dir();
+        let mut output_manager = OutputManager::new(output_dir)?;
+        output_manager.write_compilation_start(&cli.input)?;
+
         // Stage 1: AST
-        let ast = match self.stage_ast(source_code) {
+        let ast = match self.stage_ast(source_code, &mut output_manager) {
             Ok(ast) => ast,
             Err(_) => {
                 return Ok(self.fail_result(start, None, None, None, None, false));
             }
         };
-        self.write_ast_output(&ast, cli)?;
+        output_manager.write_ast_output(&ast)?;
 
         // Stage 2: CFG
-        let mut cfg = match self.stage_cfg(&ast) {
+        let mut cfg = match self.stage_cfg(&ast, &mut output_manager) {
             Ok(cfg) => cfg,
             Err(_) => {
                 return Ok(self.fail_result(start, Some(ast), None, None, None, false));
@@ -105,12 +111,12 @@ impl Compiler {
         // Stage 3: Optimization (modifies CFG in place)
         if !cli.no_optimize {
             // Write the original unoptimized CFG BEFORE optimization
-            self.write_cfg_output(&cfg, cli, "cfg")?;
+            output_manager.write_cfg_output(&cfg, "cfg")?;
 
-            match self.stage_optimization(&mut cfg, cli) {
+            match self.stage_optimization(&mut cfg, cli, &mut output_manager) {
                 Ok(_) => {
                     // Optimization succeeded, write optimized version
-                    self.write_cfg_output(&cfg, cli, "optimized_cfg")?;
+                    output_manager.write_cfg_output(&cfg, "optimized_cfg")?;
                 }
                 Err(_) => {
                     return Ok(self.fail_result(start, Some(ast), Some(cfg), None, None, false));
@@ -118,32 +124,59 @@ impl Compiler {
             };
         } else {
             // No optimization, just write the original CFG
-            self.write_cfg_output(&cfg, cli, "cfg")?;
+            output_manager.write_cfg_output(&cfg, "cfg")?;
             self.logger
                 .stage_start(3, 5, "Skipping Optimization Passes");
             self.logger.stage_success();
+            output_manager.write_stage_completion("Optimization", true, None)?;
         }
 
         // Stage 4: SC-Graph (using the optimized CFG)
-        let scg = match self.stage_scgraph(&cfg, cli) {
+        let scg = match self.stage_scgraph(&cfg, cli, &mut output_manager) {
             Ok(scg) => scg,
             Err(_) => {
                 return Ok(self.fail_result(start, Some(ast), Some(cfg), None, None, false));
             }
         };
-        self.write_scgraph_output(&scg, &cfg, cli)?;
+        output_manager.write_scgraph_output(&scg, &cfg)?;
 
         // Stage 5: Verification (Boogie)
-        let boogie_programs = match self.stage_verification(&cfg, &scg, source_code, cli) {
-            Ok(programs) => programs,
-            Err(_) => {
-                return Ok(self.fail_result(start, Some(ast), Some(cfg), None, Some(scg), false));
-            }
-        };
-        self.write_verification_output(&boogie_programs, cli)?;
+        let boogie_programs =
+            match self.stage_verification(&cfg, &scg, source_code, cli, &mut output_manager) {
+                Ok(programs) => programs,
+                Err(_) => {
+                    return Ok(self.fail_result(
+                        start,
+                        Some(ast),
+                        Some(cfg),
+                        None,
+                        Some(scg),
+                        false,
+                    ));
+                }
+            };
+        output_manager.write_boogie_programs(&boogie_programs)?;
 
-        // Write compilation summary files
-        self.write_compilation_summary(&ast, &cfg, &scg, &boogie_programs, start, cli)?;
+        // Stage 6: Run Boogie Verification
+        self.run_boogie_verification(&mut output_manager)?;
+
+        // Write final compilation statistics and summary
+        let compilation_time_ms = start.elapsed().as_millis() as u64;
+        output_manager.write_compilation_stats(
+            &ast,
+            &cfg,
+            &scg,
+            boogie_programs.len(),
+            compilation_time_ms,
+        )?;
+        output_manager.write_summary_markdown(
+            &cli.input,
+            &ast,
+            &cfg,
+            &scg,
+            boogie_programs.len(),
+            compilation_time_ms,
+        )?;
 
         Ok(CompilationResult {
             ast_program: ast,
@@ -152,7 +185,7 @@ impl Compiler {
             sc_graph: scg,
             boogie_programs,
             success: true,
-            compilation_time_ms: start.elapsed().as_millis() as u64,
+            compilation_time_ms,
         })
     }
 
@@ -182,6 +215,7 @@ impl Compiler {
         sc_graph: &crate::sc_graph::SCGraph,
         src: &str,
         cli: &Cli,
+        output_manager: &mut OutputManager,
     ) -> Result<Vec<crate::verification::Boogie::BoogieProgram>, String> {
         self.logger.stage_start(5, 5, "Verification Analysis");
         let verification_manager = VerificationManager::new();
@@ -195,10 +229,12 @@ impl Compiler {
             ) {
                 Ok(programs) => {
                     self.logger.stage_success();
+                    output_manager.write_stage_completion("Verification Analysis", true, None)?;
                     Ok(programs)
                 }
                 Err(errors) => {
                     self.logger.stage_error(errors.len());
+                    output_manager.write_stage_completion("Verification Analysis", false, None)?;
                     for error in &errors {
                         super::print_verification_spanned_error(error, src);
                     }
@@ -208,19 +244,26 @@ impl Compiler {
         } else {
             // Verification disabled - return empty programs
             self.logger.stage_success();
+            output_manager.write_stage_completion("Verification Analysis", true, None)?;
             Ok(Vec::new())
         }
     }
 
-    fn stage_ast(&mut self, src: &str) -> Result<AstProgram, String> {
+    fn stage_ast(
+        &mut self,
+        src: &str,
+        output_manager: &mut OutputManager,
+    ) -> Result<AstProgram, String> {
         self.logger.stage_start(1, 5, "Frontend Analysis");
         match parse_and_analyze(src) {
             Ok(ast) => {
                 self.logger.stage_success();
+                output_manager.write_stage_completion("Frontend Analysis", true, None)?;
                 Ok(ast)
             }
             Err(errors) => {
                 self.logger.stage_error(errors.len());
+                output_manager.write_stage_completion("Frontend Analysis", false, None)?;
                 for error in &errors {
                     super::print_ast_spanned_error(error, src);
                 }
@@ -229,15 +272,25 @@ impl Compiler {
         }
     }
 
-    fn stage_cfg(&mut self, ast: &AstProgram) -> Result<CfgProgram, String> {
+    fn stage_cfg(
+        &mut self,
+        ast: &AstProgram,
+        output_manager: &mut OutputManager,
+    ) -> Result<CfgProgram, String> {
         self.logger.stage_start(2, 5, "Building Control Flow Graph");
         match CfgBuilder::build_from_program(ast) {
             Ok(cfg_program) => {
                 self.logger.stage_success();
+                output_manager.write_stage_completion("Building Control Flow Graph", true, None)?;
                 Ok(cfg_program)
             }
             Err(e) => {
                 self.logger.stage_failed(&e.to_string());
+                output_manager.write_stage_completion(
+                    "Building Control Flow Graph",
+                    false,
+                    None,
+                )?;
                 Err(format!("CFG building failed: {}", e))
             }
         }
@@ -247,16 +300,27 @@ impl Compiler {
         &mut self,
         cfg: &CfgProgram,
         cli: &Cli,
+        output_manager: &mut OutputManager,
     ) -> Result<crate::sc_graph::SCGraph, String> {
         self.logger
             .stage_start(4, 5, "Building Serializability Conflict Graph");
         let builder = SCGraphBuilder::new(cli.instances);
         let graph = builder.build(cfg);
         self.logger.stage_success();
+        output_manager.write_stage_completion(
+            "Building Serializability Conflict Graph",
+            true,
+            None,
+        )?;
         Ok(graph)
     }
 
-    fn stage_optimization(&mut self, cfg: &mut CfgProgram, _cli: &Cli) -> Result<(), String> {
+    fn stage_optimization(
+        &mut self,
+        cfg: &mut CfgProgram,
+        _cli: &Cli,
+        output_manager: &mut OutputManager,
+    ) -> Result<(), String> {
         self.logger.stage_start(3, 5, "Running Optimization Passes");
 
         // Optimize the CFG in place
@@ -265,217 +329,48 @@ impl Compiler {
         let _results = optimizer.optimize_program(cfg);
 
         self.logger.stage_success();
+        output_manager.write_stage_completion("Running Optimization Passes", true, None)?;
         Ok(())
     }
 
-    fn write_ast_output(&self, ast: &AstProgram, cli: &Cli) -> Result<(), String> {
-        let output_dir = cli.get_output_dir();
-        std::fs::create_dir_all(&output_dir)
-            .map_err(|e| format!("Failed to create output directory: {}", e))?;
-
-        // Write AST files directly
-        let ast_dump_path = output_dir.join("ast_dump.txt");
-        let ast_pretty_path = output_dir.join("ast_pretty.txt");
-
-        // Write AST dump
-        let ast_dump = format!("{:#?}", ast);
-        std::fs::write(&ast_dump_path, ast_dump)
-            .map_err(|e| format!("Failed to write ast_dump.txt: {}", e))?;
-
-        // Write AST pretty print
-        use crate::pretty::print_program_to_string;
-        let ast_pretty = print_program_to_string(ast)
-            .map_err(|e| format!("Failed to pretty print AST: {}", e))?;
-        std::fs::write(&ast_pretty_path, ast_pretty)
-            .map_err(|e| format!("Failed to write ast_pretty.txt: {}", e))?;
-
-        Ok(())
-    }
-
-    fn write_cfg_output(&self, cfg: &CfgProgram, cli: &Cli, prefix: &str) -> Result<(), String> {
-        let output_dir = cli.get_output_dir();
-        std::fs::create_dir_all(&output_dir)
-            .map_err(|e| format!("Failed to create output directory: {}", e))?;
-
-        // Write CFG files with prefix for optimization comparison
-        let cfg_dump_path = output_dir.join(format!("{}_dump.txt", prefix));
-        let cfg_pretty_path = output_dir.join(format!("{}_pretty.txt", prefix));
-
-        // Write CFG dump
-        let cfg_dump = format!("{:#?}", cfg);
-        std::fs::write(&cfg_dump_path, cfg_dump)
-            .map_err(|e| format!("Failed to write {}_dump.txt: {}", prefix, e))?;
-
-        // Write CFG pretty print
-        use crate::pretty::{CfgPrinter, PrettyPrinter};
-        let printer = CfgPrinter::new();
-        let cfg_pretty = printer
-            .print_to_string(cfg)
-            .map_err(|e| format!("Failed to pretty print CFG: {}", e))?;
-        std::fs::write(&cfg_pretty_path, cfg_pretty)
-            .map_err(|e| format!("Failed to write {}_pretty.txt: {}", prefix, e))?;
-
-        Ok(())
-    }
-
-    fn write_scgraph_output(
-        &self,
-        scg: &crate::sc_graph::SCGraph,
-        cfg: &CfgProgram,
-        cli: &Cli,
+    fn run_boogie_verification(
+        &mut self,
+        output_manager: &mut OutputManager,
     ) -> Result<(), String> {
-        let output_dir = cli.get_output_dir();
-        std::fs::create_dir_all(&output_dir)
-            .map_err(|e| format!("Failed to create output directory: {}", e))?;
+        output_manager.write_log_section("Boogie Verification Results")?;
 
-        // Write SC-Graph files
-        let scgraph_dump_path = output_dir.join("scgraph_dump.txt");
-        let scgraph_pretty_path = output_dir.join("scgraph_pretty.txt");
-        let scgraph_dot_path = output_dir.join("scgraph.dot");
+        let bpl_files = output_manager.get_boogie_files()?;
 
-        // Write SC-Graph dump
-        let scgraph_dump = format!("{:#?}", scg);
-        std::fs::write(&scgraph_dump_path, scgraph_dump)
-            .map_err(|e| format!("Failed to write scgraph_dump.txt: {}", e))?;
-
-        // Write SC-Graph pretty print
-        use crate::pretty::{DotPrinter, PrettyPrinter, SCGraphPrinter};
-        let printer = SCGraphPrinter::new();
-        let scgraph_pretty = printer
-            .print_to_string(scg)
-            .map_err(|e| format!("Failed to pretty print SC-Graph: {}", e))?;
-        std::fs::write(&scgraph_pretty_path, scgraph_pretty)
-            .map_err(|e| format!("Failed to write scgraph_pretty.txt: {}", e))?;
-
-        // Write SC-Graph DOT file using generate_dot method
-        let dot_printer = DotPrinter::new();
-        let mut dot_content = Vec::new();
-        dot_printer
-            .generate_dot(scg, cfg, &mut dot_content)
-            .map_err(|e| format!("Failed to generate DOT file: {}", e))?;
-        std::fs::write(&scgraph_dot_path, dot_content)
-            .map_err(|e| format!("Failed to write scgraph.dot: {}", e))?;
-
-        Ok(())
-    }
-
-    fn write_verification_output(
-        &self,
-        boogie_programs: &[crate::verification::Boogie::BoogieProgram],
-        cli: &Cli,
-    ) -> Result<(), String> {
-        let output_dir = cli.get_output_dir();
-        let boogie_dir = output_dir.join("Boogie");
-        std::fs::create_dir_all(&boogie_dir)
-            .map_err(|e| format!("Failed to create Boogie directory: {}", e))?;
-
-        for program in boogie_programs.iter() {
-            let file_name = format!("{}.bpl", program.name);
-            let file_path = boogie_dir.join(file_name);
-
-            // Write Boogie program to file
-            let content = program.to_string();
-            std::fs::write(&file_path, content.as_bytes())
-                .map_err(|e| format!("Failed to write Boogie file: {}", e))?;
+        if bpl_files.is_empty() {
+            output_manager.write_log_line("No Boogie files found for verification")?;
+            return Ok(());
         }
 
-        Ok(())
-    }
+        output_manager.write_log_line(&format!(
+            "Found {} Boogie files for verification",
+            bpl_files.len()
+        ))?;
 
-    fn write_compilation_summary(
-        &self,
-        ast: &AstProgram,
-        cfg: &CfgProgram,
-        scg: &crate::sc_graph::SCGraph,
-        boogie_programs: &[crate::verification::Boogie::BoogieProgram],
-        start: Instant,
-        cli: &Cli,
-    ) -> Result<(), String> {
-        let output_dir = cli.get_output_dir();
-        let compilation_time_ms = start.elapsed().as_millis() as u64;
+        // Run Boogie on each .bpl file
+        for bpl_file in bpl_files {
+            let file_name = bpl_file.file_name().unwrap().to_string_lossy();
 
-        // Write compilation.log (simple text log)
-        let log_path = output_dir.join("compilation.log");
-        let log_content = format!(
-            "Compilation completed successfully in {} ms\n\
-             AST: {} functions, {} tables, {} partitions\n\
-             CFG: {} basic blocks\n\
-             SC-Graph: {} nodes, {} S-edges, {} C-edges\n\
-             Verification: {} Boogie programs generated\n",
-            compilation_time_ms,
-            ast.functions.len(),
-            ast.tables.len(),
-            ast.partitions.len(),
-            cfg.functions
-                .iter()
-                .map(|(_, f)| f.blocks.len())
-                .sum::<usize>(),
-            scg.nodes.len(),
-            scg.edges
-                .iter()
-                .filter(|e| e.edge_type == crate::sc_graph::EdgeType::S)
-                .count(),
-            scg.edges
-                .iter()
-                .filter(|e| e.edge_type == crate::sc_graph::EdgeType::C)
-                .count(),
-            boogie_programs.len(),
-        );
-        std::fs::write(&log_path, log_content)
-            .map_err(|e| format!("Failed to write compilation.log: {}", e))?;
+            // Run boogie command: boogie <path> /quiet /errorTrace:0
+            let output = std::process::Command::new("boogie")
+                .arg(&bpl_file)
+                .arg("/quiet")
+                .arg("/errorTrace:0")
+                .output()
+                .map_err(|e| format!("Failed to execute boogie command: {}", e))?;
 
-        // Write summary.md (markdown summary)
-        let summary_path = output_dir.join("summary.md");
-        let summary_content = format!(
-            "# FMitF Compilation Report\n\n\
-             **Input**: {}\n\
-             **Output Directory**: {}\n\
-             **Compilation Time**: {} ms\n\
-             **Status**: ✅ Success\n\n\
-             ## Statistics\n\n\
-             | Stage | Count |\n\
-             |-------|-------|\n\
-             | Functions | {} |\n\
-             | Tables | {} |\n\
-             | Partitions | {} |\n\
-             | Basic Blocks | {} |\n\
-             | SC-Graph Nodes | {} |\n\
-             | S-edges | {} |\n\
-             | C-edges | {} |\n\
-             | Boogie Programs | {} |\n\n\
-             ## Generated Files\n\n\
-             - `ast_dump.txt` - AST debug dump\n\
-             - `ast_pretty.txt` - Pretty-printed AST\n\
-             - `cfg_dump.txt` - CFG debug dump\n\
-             - `cfg_pretty.txt` - Pretty-printed CFG\n\
-             - `scgraph_dump.txt` - SC-Graph debug dump\n\
-             - `scgraph_pretty.txt` - Pretty-printed SC-Graph\n\
-             - `scgraph.dot` - GraphViz DOT file\n\
-             - `Boogie/*.bpl` - Boogie verification programs\n\
-             - `compilation.log` - Compilation log\n",
-            cli.input.display(),
-            output_dir.display(),
-            compilation_time_ms,
-            ast.functions.len(),
-            ast.tables.len(),
-            ast.partitions.len(),
-            cfg.functions
-                .iter()
-                .map(|(_, f)| f.blocks.len())
-                .sum::<usize>(),
-            scg.nodes.len(),
-            scg.edges
-                .iter()
-                .filter(|e| e.edge_type == crate::sc_graph::EdgeType::S)
-                .count(),
-            scg.edges
-                .iter()
-                .filter(|e| e.edge_type == crate::sc_graph::EdgeType::C)
-                .count(),
-            boogie_programs.len(),
-        );
-        std::fs::write(&summary_path, summary_content)
-            .map_err(|e| format!("Failed to write summary.md: {}", e))?;
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let success = output.status.success();
+
+            // Write results to compilation.log through OutputManager
+            output_manager
+                .write_boogie_verification_result(&file_name, success, &stdout, &stderr)?;
+        }
 
         Ok(())
     }
