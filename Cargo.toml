@@ -13,3 +13,4 @@ chrono = { version = "0.4", features = ["serde"] }
 id-arena = "2.2"
 ordered-float = { version = "5.0", default-features = false }
 colored = "3"
+indicatif = "0.18"
