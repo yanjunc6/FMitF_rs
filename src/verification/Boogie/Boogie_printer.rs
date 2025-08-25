@@ -248,6 +248,7 @@ impl Display for BoogieBinOp {
                 Sub => "-",
                 Mul => "*",
                 Div => "/",
+                IntDiv => "div",
                 Eq => "==",
                 Ne => "!=",
                 Lt => "<",

@@ -112,6 +112,7 @@ pub enum BoogieBinOp {
     Sub,
     Mul,
     Div,
+    IntDiv,
     Eq,
     Ne,
     Lt,

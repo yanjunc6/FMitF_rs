@@ -352,11 +352,11 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
 
         // For Local and Temporary variables, ensure they are declared in current procedure
         match var.kind {
-            VariableKind::Local | VariableKind::Temporary => {
+            VariableKind::Local | VariableKind::Temporary | VariableKind::Parameter => {
                 let boogie_type = Self::convert_type(&var.ty);
                 self.ensure_local_variable_exists(&var_name, boogie_type);
             }
-            VariableKind::Global | VariableKind::Parameter => {
+            VariableKind::Global => {
                 // Global and parameter variables should already be declared, just check they exist
                 // If they don't exist, it's likely a programming error, but we'll still return the name
             }
@@ -625,6 +625,26 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
                                 name: "Concat".to_string(),
                                 args: vec![left_converted, right_converted],
                             },
+                        })
+                    }
+                    BinaryOp::Div => {
+                        // Determine whether to use regular division or integer division
+                        // based on the types of the operands
+                        let left_type = self.infer_operand_type(cfg_program, left);
+                        let right_type = self.infer_operand_type(cfg_program, right);
+                        
+                        // Use integer division if both operands are integers
+                        let boogie_op = match (left_type, right_type) {
+                            (Some(TypeName::Int), Some(TypeName::Int)) => BoogieBinOp::IntDiv,
+                            _ => BoogieBinOp::Div, // Default to regular division for floats or mixed types
+                        };
+
+                        Ok(BoogieExpr {
+                            kind: BoogieExprKind::BinOp(
+                                Box::new(left_expr),
+                                boogie_op,
+                                Box::new(right_expr),
+                            ),
                         })
                     }
                     _ => {
