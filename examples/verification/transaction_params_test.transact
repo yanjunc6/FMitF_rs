@@ -1,0 +1,183 @@
+// Test file for transactions with various parameter types
+// Tests parameter passing and usage in meaningful contexts
+
+partition customer_partition(int customer_id) = customer_id * 7 + 13;
+partition product_partition(string product_code) = 123; // Simple hash for strings
+partition region_partition(int region_code) = region_code * 11 + 7;
+
+table Customers {
+    primary int customer_id;
+    node customer_partition(customer_id);
+    string name;
+    string email;
+    float balance;
+    bool premium_status;
+}
+
+table Products {
+    primary string product_code;
+    node product_partition(product_code);
+    string name;
+    float price;
+    int stock_quantity;
+    string category;
+    bool available;
+}
+
+table Orders {
+    primary int order_id;
+    node customer_partition(customer_id);  // Partitioned by customer
+    int customer_id;
+    string product_code;
+    int quantity;
+    float total_amount;
+    string status;
+}
+
+table Regions {
+    primary int region_id;
+    node region_partition(region_id);
+    string name;
+    float tax_rate;
+    bool active;
+}
+
+// Test basic parameter types
+void simple_parameter_transaction(int cust_id, string prod_code, int qty) {
+    hop {
+        // Use integer parameter for customer operations
+        Customers[customer_id: cust_id].name = "Customer_" ~ "Updated";
+        float current_balance = Customers[customer_id: cust_id].balance;
+        Customers[customer_id: cust_id].balance = current_balance - 50.0;
+    }
+
+    hop {
+        // Use string parameter for product operations
+        Products[product_code: prod_code].stock_quantity = Products[product_code: prod_code].stock_quantity - qty;
+        Products[product_code: prod_code].available = true;
+        
+        // Use quantity parameter in computations
+        string updated_name = "Product_" ~ prod_code;
+        Products[product_code: prod_code].name = updated_name;
+    }
+}
+
+// Test multiple parameter types with complex operations
+void multi_param_transaction(int customer_id, string product_id, float price_limit, bool is_premium, int region_code) {
+    hop {
+        // Customer operations using multiple parameters
+        Customers[customer_id: customer_id].premium_status = is_premium;
+        
+        if (is_premium) {
+            Customers[customer_id: customer_id].balance = Customers[customer_id: customer_id].balance * 1.1;
+        } else {
+            Customers[customer_id: customer_id].balance = Customers[customer_id: customer_id].balance * 0.95;
+        }
+        
+        string email_prefix = "premium_";
+        if (!is_premium) {
+            email_prefix = "regular_";
+        }
+        Customers[customer_id: customer_id].email = email_prefix ~ "@company.com";
+    }
+
+    hop {
+        // Product operations with price filtering
+        float current_price = Products[product_code: product_id].price;
+        
+        if (current_price <= price_limit) {
+            Products[product_code: product_id].available = true;
+            Products[product_code: product_id].category = "AFFORDABLE";
+        } else {
+            Products[product_code: product_id].available = false;
+            Products[product_code: product_id].category = "PREMIUM";
+        }
+        
+        // Modify price based on parameters
+        float adjusted_price = current_price * 0.9;
+        Products[product_code: product_id].price = adjusted_price;
+    }
+
+    hop {
+        // Region-based operations
+        Regions[region_id: region_code].active = true;
+        
+        // Compute tax based on region and premium status
+        float base_tax = 0.08;
+        if (is_premium) {
+            base_tax = base_tax * 1.2;
+        }
+        Regions[region_id: region_code].tax_rate = base_tax;
+        
+        string region_name = "Region_" ~ "Active";
+        Regions[region_id: region_code].name = region_name;
+    }
+}
+
+// Test parameter computation and derived values
+void computed_param_transaction(int base_id, string prefix, float multiplier) {
+    hop {
+        // Derive customer ID from base parameter
+        int primary_customer = base_id;
+        int secondary_customer = base_id + 100;
+        
+        Customers[customer_id: primary_customer].balance = 1000.0 * multiplier;
+        Customers[customer_id: secondary_customer].balance = 500.0 * multiplier;
+        
+        // Use string parameter in computations
+        string primary_name = prefix ~ "_PRIMARY";
+        string secondary_name = prefix ~ "_SECONDARY";
+        
+        Customers[customer_id: primary_customer].name = primary_name;
+        Customers[customer_id: secondary_customer].name = secondary_name;
+    }
+
+    hop {
+        // Create product codes from parameters
+        string product1 = prefix ~ "_PROD1";
+        string product2 = prefix ~ "_PROD2";
+        
+        Products[product_code: product1].price = 100.0 * multiplier;
+        Products[product_code: product2].price = 200.0 * multiplier;
+        
+        Products[product_code: product1].name = "Product " ~ prefix;
+        Products[product_code: product2].name = "Premium " ~ prefix;
+        
+        // Set availability based on multiplier
+        if (multiplier > 1.0) {
+            Products[product_code: product1].available = true;
+            Products[product_code: product2].available = true;
+        } else {
+            Products[product_code: product1].available = false;
+            Products[product_code: product2].available = false;
+        }
+    }
+}
+
+// Test array-like parameter usage (simulated with multiple calls)
+void batch_parameter_transaction(int start_customer, int end_customer, string batch_prefix, float discount_rate) {
+    hop {
+        // Process customer range with parameters
+        for (int cust = start_customer; cust <= end_customer; cust++) {
+            float original_balance = Customers[customer_id: cust].balance;
+            float discounted_balance = original_balance * (1.0 - discount_rate);
+            Customers[customer_id: cust].balance = discounted_balance;
+            
+            string batch_name = batch_prefix ~ "_BATCH";
+            Customers[customer_id: cust].name = batch_name;
+        }
+    }
+
+    hop {
+        // Create orders for processed customers
+        for (int cust = start_customer; cust <= end_customer; cust++) {
+            int order_id = cust + 10000;  // Derived order ID
+            
+            Orders[order_id: order_id].customer_id = cust;
+            Orders[order_id: order_id].product_code = batch_prefix ~ "_STANDARD";
+            Orders[order_id: order_id].quantity = 1;
+            Orders[order_id: order_id].total_amount = 100.0 * discount_rate;
+            Orders[order_id: order_id].status = "BATCH_PROCESSED";
+        }
+    }
+}

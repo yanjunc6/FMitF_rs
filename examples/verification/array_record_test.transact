@@ -1,0 +1,192 @@
+// Test file for array and record operations
+// Tests complex data structures and field access patterns
+
+partition array_partition(int array_id) = array_id * 3 + 17;
+partition record_partition(string record_type) = 789;
+
+table ArrayData {
+    primary int array_id;
+    node array_partition(array_id);
+    string element_type;
+    int size;
+    float sum_value;
+    bool is_sorted;
+}
+
+table RecordData {
+    primary string record_id;
+    node record_partition(record_id);
+    string field_name;
+    string field_value;
+    int field_order;
+    bool is_valid;
+}
+
+table IndexMapping {
+    primary int index_id;
+    node array_partition(index_id);  // Share partition with arrays
+    int array_ref;
+    string record_ref;
+    int position;
+}
+
+// Test array-like operations (simulated through multiple records)
+void array_operations(int array_base, int array_size, string element_prefix) {
+    hop {
+        // Initialize array metadata
+        ArrayData[array_id: array_base].element_type = element_prefix ~ "_TYPE";
+        ArrayData[array_id: array_base].size = array_size;
+        ArrayData[array_id: array_base].sum_value = 0.0;
+        ArrayData[array_id: array_base].is_sorted = false;
+        
+        // Simulate array element initialization
+        float running_sum = 0.0;
+        for (int i = 0; i < array_size; i++) {
+            int element_index = array_base + i + 1000;  // Offset to avoid conflicts
+            
+            // Create index mapping
+            IndexMapping[index_id: element_index].array_ref = array_base;
+            IndexMapping[index_id: element_index].position = i;
+            
+            // Compute element value
+            float element_value = i * 2.5 + 10.0;
+            running_sum = running_sum + element_value;
+            
+            // Store element data as string for compatibility
+            string element_data = element_prefix ~ "_" ~ "ELEM";
+            IndexMapping[index_id: element_index].record_ref = element_data;
+        }
+        
+        // Update array sum
+        ArrayData[array_id: array_base].sum_value = running_sum;
+    }
+
+    hop {
+        // Array processing operations
+        int processed_array = array_base + 100;
+        ArrayData[array_id: processed_array].element_type = "PROCESSED_" ~ element_prefix;
+        ArrayData[array_id: processed_array].size = array_size / 2;  // Simulate filtering
+        
+        // Process elements with conditions
+        float filtered_sum = 0.0;
+        int valid_elements = 0;
+        
+        for (int j = 0; j < array_size; j++) {
+            if (j > 50) {  // Process even indices
+                int elem_idx = processed_array + j + 1000;
+                IndexMapping[index_id: elem_idx].array_ref = processed_array;
+                IndexMapping[index_id: elem_idx].position = valid_elements;
+                
+                string processed_data = "PROC_" ~ element_prefix;
+                IndexMapping[index_id: elem_idx].record_ref = processed_data;
+                
+                filtered_sum = filtered_sum + (j * 1.5);
+                valid_elements = valid_elements + 1;
+            }
+        }
+        
+        ArrayData[array_id: processed_array].sum_value = filtered_sum;
+        ArrayData[array_id: processed_array].is_sorted = true;
+    }
+}
+
+// Test record-like operations
+void record_operations(string record_type, int field_count, string data_prefix) {
+    hop {
+        // Create record fields
+        for (int field_idx = 0; field_idx < field_count; field_idx++) {
+            string record_key = record_type ~ "_FIELD";
+            string field_name_val = data_prefix ~ "_FIELD";
+            
+            RecordData[record_id: record_key].field_name = field_name_val;
+            RecordData[record_id: record_key].field_order = field_idx;
+            RecordData[record_id: record_key].is_valid = true;
+            
+            // Compute field value based on index
+            if (field_idx > 50) {
+                RecordData[record_id: record_key].field_value = "EVEN_" ~ data_prefix;
+            } else {
+                RecordData[record_id: record_key].field_value = "ODD_" ~ data_prefix;
+            }
+        }
+    }
+
+    hop {
+        // Update and validate record fields
+        string validation_record = record_type ~ "_VALIDATED";
+        
+        for (int val_idx = 0; val_idx < field_count; val_idx++) {
+            string val_key = validation_record ~ "_FIELD";
+            
+            RecordData[record_id: val_key].field_name = "VALIDATED_" ~ data_prefix;
+            RecordData[record_id: val_key].field_order = val_idx + 100;  // Offset for validation
+            
+            // Validate based on field index
+            bool is_field_valid = (val_idx < field_count / 2);
+            RecordData[record_id: val_key].is_valid = is_field_valid;
+            
+            if (is_field_valid) {
+                RecordData[record_id: val_key].field_value = "VALID_" ~ data_prefix;
+            } else {
+                RecordData[record_id: val_key].field_value = "INVALID_" ~ data_prefix;
+            }
+        }
+    }
+}
+
+// Test complex nested operations
+void nested_array_record_operations(int base_array, string base_record, int dimension) {
+    hop {
+        // Create multi-dimensional array simulation
+        for (int row = 0; row < dimension; row++) {
+            for (int col = 0; col < dimension; col++) {
+                int matrix_id = base_array + (row * dimension) + col;
+                
+                ArrayData[array_id: matrix_id].element_type = "MATRIX_ELEMENT";
+                ArrayData[array_id: matrix_id].size = 1;  // Single element
+                ArrayData[array_id: matrix_id].sum_value = row * col * 1.0;
+                ArrayData[array_id: matrix_id].is_sorted = (row <= col);
+                
+                // Create index mapping for matrix position
+                int index_ref = matrix_id + 10000;
+                IndexMapping[index_id: index_ref].array_ref = matrix_id;
+                IndexMapping[index_id: index_ref].position = (row * dimension) + col;
+                
+                string matrix_record = base_record ~ "_MATRIX";
+                IndexMapping[index_id: index_ref].record_ref = matrix_record;
+            }
+        }
+    }
+
+    hop {
+        // Create corresponding record structure
+        for (int rec_row = 0; rec_row < dimension; rec_row++) {
+            string row_record = base_record ~ "_ROW";
+            
+            RecordData[record_id: row_record].field_name = "ROW_DATA";
+            RecordData[record_id: row_record].field_order = rec_row;
+            RecordData[record_id: row_record].is_valid = true;
+            
+            // Compute row summary
+            int row_sum = 0;
+            for (int sum_col = 0; sum_col < dimension; sum_col++) {
+                row_sum = row_sum + (rec_row * sum_col);
+            }
+            
+            string row_value = "SUM_" ~ row_record;
+            RecordData[record_id: row_record].field_value = row_value;
+        }
+        
+        // Create column records
+        for (int rec_col = 0; rec_col < dimension; rec_col++) {
+            string col_record = base_record ~ "_COL";
+            
+            RecordData[record_id: col_record].field_name = "COL_DATA";
+            RecordData[record_id: col_record].field_order = rec_col + 100;  // Offset from rows
+            RecordData[record_id: col_record].is_valid = (rec_col < dimension / 2);
+            
+            string col_value = "COL_" ~ col_record;
+            RecordData[record_id: col_record].field_value = col_value;
+        }
+    }
+}

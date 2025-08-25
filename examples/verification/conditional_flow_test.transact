@@ -1,0 +1,256 @@
+// Test file for conditional statements and control flow
+// Tests if-else chains, complex boolean logic, and nested control structures
+
+partition decision_partition(int decision_id) = (decision_id * 7) * 17 + 41;
+partition flow_partition(string flow_type) = 555;
+
+table DecisionData {
+    primary int decision_id;
+    node decision_partition(decision_id);
+    string decision_type;
+    bool condition_result;
+    int priority_level;
+    float confidence_score;
+}
+
+table FlowControl {
+    primary string flow_id;
+    node flow_partition(flow_id);
+    string flow_state;
+    int execution_count;
+    bool is_active;
+    string last_action;
+}
+
+table BranchHistory {
+    primary int branch_id;
+    node decision_partition(branch_id);  // Share partition with decisions
+    string branch_path;
+    int execution_order;
+    bool was_taken;
+}
+
+// Test complex conditional logic
+void complex_conditionals(int base_value, string condition_type, float threshold) {
+    hop {
+        // Multi-level conditional processing
+        if (base_value > 100) {
+            DecisionData[decision_id: base_value].decision_type = "HIGH_VALUE";
+            DecisionData[decision_id: base_value].priority_level = 10;
+            DecisionData[decision_id: base_value].confidence_score = 0.9;
+            
+            if (threshold > 50.0) {
+                DecisionData[decision_id: base_value].condition_result = true;
+                string high_priority_flow = condition_type ~ "_HIGH";
+                FlowControl[flow_id: high_priority_flow].flow_state = "PRIORITY_PROCESSING";
+                FlowControl[flow_id: high_priority_flow].execution_count = 5;
+                FlowControl[flow_id: high_priority_flow].is_active = true;
+                
+                // Log branch taken
+                BranchHistory[branch_id: base_value + 1].branch_path = "HIGH_HIGH";
+                BranchHistory[branch_id: base_value + 1].execution_order = 1;
+                BranchHistory[branch_id: base_value + 1].was_taken = true;
+            } else {
+                DecisionData[decision_id: base_value].condition_result = false;
+                string medium_priority_flow = condition_type ~ "_MEDIUM";
+                FlowControl[flow_id: medium_priority_flow].flow_state = "STANDARD_PROCESSING";
+                FlowControl[flow_id: medium_priority_flow].execution_count = 3;
+                FlowControl[flow_id: medium_priority_flow].is_active = true;
+                
+                BranchHistory[branch_id: base_value + 2].branch_path = "HIGH_LOW";
+                BranchHistory[branch_id: base_value + 2].execution_order = 2;
+                BranchHistory[branch_id: base_value + 2].was_taken = true;
+            }
+        } else {
+            DecisionData[decision_id: base_value].decision_type = "LOW_VALUE";
+            DecisionData[decision_id: base_value].priority_level = 1;
+            DecisionData[decision_id: base_value].confidence_score = 0.3;
+            
+            if (base_value > 50) {
+                DecisionData[decision_id: base_value].condition_result = true;
+                string low_priority_flow = condition_type ~ "_LOW_ACTIVE";
+                FlowControl[flow_id: low_priority_flow].flow_state = "MINIMAL_PROCESSING";
+                FlowControl[flow_id: low_priority_flow].execution_count = 1;
+                FlowControl[flow_id: low_priority_flow].is_active = true;
+                
+                BranchHistory[branch_id: base_value + 3].branch_path = "LOW_MEDIUM";
+                BranchHistory[branch_id: base_value + 3].execution_order = 3;
+                BranchHistory[branch_id: base_value + 3].was_taken = true;
+            } else {
+                DecisionData[decision_id: base_value].condition_result = false;
+                string inactive_flow = condition_type ~ "_INACTIVE";
+                FlowControl[flow_id: inactive_flow].flow_state = "NO_PROCESSING";
+                FlowControl[flow_id: inactive_flow].execution_count = 0;
+                FlowControl[flow_id: inactive_flow].is_active = false;
+                
+                BranchHistory[branch_id: base_value + 4].branch_path = "LOW_LOW";
+                BranchHistory[branch_id: base_value + 4].execution_order = 4;
+                BranchHistory[branch_id: base_value + 4].was_taken = true;
+            }
+        }
+    }
+
+    hop {
+        // Boolean logic combinations
+        bool complex_condition = (base_value > 75) && (threshold < 100.0);
+        bool alternate_condition = (base_value < 25) || (threshold > 200.0);
+        
+        if (complex_condition && alternate_condition) {
+            // Both conditions true
+            int complex_decision_id = base_value + 1000;
+            DecisionData[decision_id: complex_decision_id].decision_type = "COMPLEX_AND_ALT";
+            DecisionData[decision_id: complex_decision_id].priority_level = 15;
+            DecisionData[decision_id: complex_decision_id].condition_result = true;
+            DecisionData[decision_id: complex_decision_id].confidence_score = 0.95;
+            
+            string both_true_flow = condition_type ~ "_BOTH_TRUE";
+            FlowControl[flow_id: both_true_flow].flow_state = "MAXIMUM_PROCESSING";
+            FlowControl[flow_id: both_true_flow].execution_count = 10;
+            FlowControl[flow_id: both_true_flow].last_action = "BOTH_CONDITIONS_MET";
+            
+        } else {
+            if (complex_condition) {
+                // Only complex condition true
+                int complex_only_id = base_value + 2000;
+                DecisionData[decision_id: complex_only_id].decision_type = "COMPLEX_ONLY";
+                DecisionData[decision_id: complex_only_id].priority_level = 8;
+                DecisionData[decision_id: complex_only_id].condition_result = true;
+                DecisionData[decision_id: complex_only_id].confidence_score = 0.7;
+                
+                string complex_flow = condition_type ~ "_COMPLEX_ONLY";
+                FlowControl[flow_id: complex_flow].flow_state = "COMPLEX_PROCESSING";
+                FlowControl[flow_id: complex_flow].execution_count = 6;
+                FlowControl[flow_id: complex_flow].last_action = "COMPLEX_CONDITION_MET";
+                
+            } else {
+                if (alternate_condition) {
+                    // Only alternate condition true
+                    int alternate_only_id = base_value + 3000;
+                    DecisionData[decision_id: alternate_only_id].decision_type = "ALTERNATE_ONLY";
+                    DecisionData[decision_id: alternate_only_id].priority_level = 5;
+                    DecisionData[decision_id: alternate_only_id].condition_result = true;
+                    DecisionData[decision_id: alternate_only_id].confidence_score = 0.6;
+                    
+                    string alternate_flow = condition_type ~ "_ALTERNATE_ONLY";
+                    FlowControl[flow_id: alternate_flow].flow_state = "ALTERNATE_PROCESSING";
+                    FlowControl[flow_id: alternate_flow].execution_count = 4;
+                    FlowControl[flow_id: alternate_flow].last_action = "ALTERNATE_CONDITION_MET";
+                    
+                } else {
+                    // Neither condition true
+                    int neither_id = base_value + 4000;
+                    DecisionData[decision_id: neither_id].decision_type = "NEITHER_CONDITION";
+                    DecisionData[decision_id: neither_id].priority_level = 0;
+                    DecisionData[decision_id: neither_id].condition_result = false;
+                    DecisionData[decision_id: neither_id].confidence_score = 0.1;
+                    
+                    string neither_flow = condition_type ~ "_NEITHER";
+                    FlowControl[flow_id: neither_flow].flow_state = "NO_CONDITIONS_MET";
+                    FlowControl[flow_id: neither_flow].execution_count = 0;
+                    FlowControl[flow_id: neither_flow].last_action = "NO_CONDITIONS_MET";
+                }
+            }
+        }
+    }
+}
+
+// Test nested control structures with loops
+void nested_control_flow(string flow_prefix, int iteration_count, bool enable_processing) {
+    hop {
+        // Nested for loops with conditionals
+        int total_operations = 0;
+        
+        for (int outer = 0; outer < iteration_count; outer++) {
+            string outer_flow = flow_prefix ~ "_OUTER";
+            FlowControl[flow_id: outer_flow].flow_state = "OUTER_LOOP";
+            FlowControl[flow_id: outer_flow].execution_count = outer;
+            FlowControl[flow_id: outer_flow].is_active = true;
+            
+            if (enable_processing) {
+                for (int inner = 0; inner < 3; inner++) {
+                    total_operations = total_operations + 1;
+                    
+                    if ((outer + inner) > 50) {
+                        // Even combination
+                        int even_decision = outer * 100 + inner;
+                        DecisionData[decision_id: even_decision].decision_type = "NESTED_EVEN";
+                        DecisionData[decision_id: even_decision].priority_level = outer + inner;
+                        DecisionData[decision_id: even_decision].condition_result = true;
+                        DecisionData[decision_id: even_decision].confidence_score = 0.8;
+                        
+                        BranchHistory[branch_id: even_decision].branch_path = "NESTED_EVEN_PATH";
+                        BranchHistory[branch_id: even_decision].execution_order = total_operations;
+                        BranchHistory[branch_id: even_decision].was_taken = true;
+                    } else {
+                        // Odd combination
+                        int odd_decision = outer * 100 + inner + 50;
+                        DecisionData[decision_id: odd_decision].decision_type = "NESTED_ODD";
+                        DecisionData[decision_id: odd_decision].priority_level = outer - inner;
+                        DecisionData[decision_id: odd_decision].condition_result = false;
+                        DecisionData[decision_id: odd_decision].confidence_score = 0.4;
+                        
+                        BranchHistory[branch_id: odd_decision].branch_path = "NESTED_ODD_PATH";
+                        BranchHistory[branch_id: odd_decision].execution_order = total_operations;
+                        BranchHistory[branch_id: odd_decision].was_taken = true;
+                    }
+                }
+            } else {
+                // Processing disabled
+                string disabled_flow = flow_prefix ~ "_DISABLED";
+                FlowControl[flow_id: disabled_flow].flow_state = "PROCESSING_DISABLED";
+                FlowControl[flow_id: disabled_flow].execution_count = 0;
+                FlowControl[flow_id: disabled_flow].is_active = false;
+                FlowControl[flow_id: disabled_flow].last_action = "SKIPPED_INNER_LOOP";
+            }
+        }
+        
+        // Update summary
+        string summary_flow = flow_prefix ~ "_SUMMARY";
+        FlowControl[flow_id: summary_flow].flow_state = "COMPLETED";
+        FlowControl[flow_id: summary_flow].execution_count = total_operations;
+        FlowControl[flow_id: summary_flow].is_active = false;
+    }
+
+    hop {
+        // While loop with complex exit conditions
+        int while_counter = 0;
+        int max_iterations = iteration_count * 2;
+        
+        while (while_counter < max_iterations && enable_processing) {
+            string while_flow = flow_prefix ~ "_WHILE";
+            FlowControl[flow_id: while_flow].flow_state = "WHILE_PROCESSING";
+            FlowControl[flow_id: while_flow].execution_count = while_counter;
+            FlowControl[flow_id: while_flow].is_active = true;
+            
+            // Complex condition within while loop
+            if (while_counter < 10) {
+                // Every third iteration
+                int third_decision = 5000 + while_counter;
+                DecisionData[decision_id: third_decision].decision_type = "WHILE_THIRD";
+                DecisionData[decision_id: third_decision].priority_level = while_counter / 3;
+                DecisionData[decision_id: third_decision].condition_result = true;
+                DecisionData[decision_id: third_decision].confidence_score = 0.75;
+                
+                // Check for early exit condition
+                if (while_counter > max_iterations / 2) {
+                    FlowControl[flow_id: while_flow].last_action = "EARLY_EXIT_TRIGGERED";
+                    enable_processing = false;  // Force exit
+                }
+            }
+            
+            while_counter = while_counter + 1;
+        }
+        
+        // Final state update
+        string final_flow = flow_prefix ~ "_FINAL";
+        FlowControl[flow_id: final_flow].flow_state = "WHILE_COMPLETED";
+        FlowControl[flow_id: final_flow].execution_count = while_counter;
+        FlowControl[flow_id: final_flow].is_active = false;
+        
+        if (while_counter >= max_iterations) {
+            FlowControl[flow_id: final_flow].last_action = "MAX_ITERATIONS_REACHED";
+        } else {
+            FlowControl[flow_id: final_flow].last_action = "PROCESSING_DISABLED";
+        }
+    }
+}

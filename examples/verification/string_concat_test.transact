@@ -1,0 +1,59 @@
+// Test file for string concatenation (~) operator
+// Tests various string operations and variable usage to avoid optimization
+
+partition hash_string(string s) = 42;
+partition simple_partition(int x) = x * 7 + 3;
+
+table UserData {
+    primary string username;
+    node hash_string(username);
+    string display_name;
+    string email;
+    int score;
+}
+
+table LogTable {
+    primary int log_id;
+    node simple_partition(log_id);
+    string message;
+    string timestamp;
+}
+
+void string_concat_transaction(string prefix, string suffix, int user_score) {
+    hop {
+        // Test basic string concatenation
+        string full_name = prefix ~ "_" ~ suffix;
+        UserData[username: full_name].display_name = prefix ~ " " ~ suffix;
+        UserData[username: full_name].score = user_score;
+    }
+
+    hop {
+        // Test string concatenation with variables in different contexts
+        string log_msg = "User " ~ full_name ~ " scored: ";
+        string score_str = "points";  // Avoid direct string literal
+        LogTable[log_id: user_score].message = log_msg ~ score_str;
+        LogTable[log_id: user_score].timestamp = "2024-" ~ "08-" ~ "25";
+    }
+}
+
+void complex_string_ops(string base, int multiplier) {
+    hop {
+        // More complex string operations to prevent optimization
+        string domain = "@company.com";
+        string email_addr = base ~ domain;
+        UserData[username: base].email = email_addr;
+        
+        // Use multiplier to create meaningful computation
+        UserData[username: base].score = multiplier * 100;
+    }
+
+    hop {
+        // String concatenation in table access
+        string modified_base = base ~ "_modified";
+        UserData[username: modified_base].display_name = "Modified " ~ base;
+        
+        // Log the operation
+        int log_entry_id = multiplier + 1000;
+        LogTable[log_id: log_entry_id].message = "Modified user: " ~ base;
+    }
+}

@@ -1,0 +1,187 @@
+// Test file for complex variable operations and statement types
+// Tests variables, arrays, records, and control flow to prevent optimization
+
+partition data_partition(int key) = key * 9 + 23;
+partition metadata_partition(string category) = 456; // Simple hash
+
+table DataStore {
+    primary int data_id;
+    node data_partition(data_id);
+    string content;
+    float value;
+    bool processed;
+    int version;
+}
+
+table MetadataStore {
+    primary string meta_key;
+    node metadata_partition(meta_key);
+    string description;
+    int reference_count;
+    float weight;
+    bool active;
+}
+
+table ConfigStore {
+    primary int config_id;
+    node data_partition(config_id);  // Reuse data partition
+    string config_name;
+    string config_value;
+    int priority;
+}
+
+// Test complex variable operations with meaningful computations
+void complex_variable_operations(int base_key, string category_name, float threshold) {
+    hop {
+        // Local variable declarations and assignments
+        int primary_key = base_key;
+        int secondary_key = base_key * 2 + 1;
+        int tertiary_key = (base_key + secondary_key) / 2;
+        
+        // String variable operations
+        string base_content = "DATA_";
+        string primary_content = base_content ~ "PRIMARY";
+        string secondary_content = base_content ~ "SECONDARY";
+        
+        // Boolean computations
+        bool should_process = (primary_key > 100);
+        bool is_high_priority = (threshold > 100.0);
+        
+        // Update DataStore with computed values
+        DataStore[data_id: primary_key].content = primary_content;
+        DataStore[data_id: primary_key].processed = should_process;
+        DataStore[data_id: primary_key].version = 1;
+        
+        DataStore[data_id: secondary_key].content = secondary_content;
+        DataStore[data_id: secondary_key].processed = !should_process;
+        DataStore[data_id: secondary_key].version = 2;
+        
+        // Conditional assignments
+        if (is_high_priority) {
+            DataStore[data_id: primary_key].value = threshold * 1.5;
+            DataStore[data_id: secondary_key].value = threshold * 1.2;
+        } else {
+            DataStore[data_id: primary_key].value = threshold * 0.8;
+            DataStore[data_id: secondary_key].value = threshold * 0.6;
+        }
+    }
+
+    hop {
+        // Metadata operations with string computations
+        string primary_meta = category_name ~ "_META";
+        string config_meta = category_name ~ "_CONFIG";
+        
+        // Initialize metadata with computed values
+        MetadataStore[meta_key: primary_meta].description = "Metadata for " ~ category_name;
+        MetadataStore[meta_key: primary_meta].reference_count = base_key;
+        MetadataStore[meta_key: primary_meta].weight = threshold / 10.0;
+        MetadataStore[meta_key: primary_meta].active = true;
+        
+        // Configuration metadata
+        MetadataStore[meta_key: config_meta].description = "Config for " ~ category_name;
+        MetadataStore[meta_key: config_meta].reference_count = base_key + 100;
+        MetadataStore[meta_key: config_meta].weight = (threshold * 2.0) / 10.0;
+        MetadataStore[meta_key: config_meta].active = (threshold > 50.0);
+    }
+}
+
+// Test control flow statements with meaningful side effects
+void control_flow_operations(int start_val, int end_val, string operation_type) {
+    hop {
+        // For loop with meaningful operations
+        for (int i = start_val; i < end_val; i++) {
+            string data_content = operation_type ~ "_" ~ "LOOP";
+            DataStore[data_id: i].content = data_content;
+            DataStore[data_id: i].value = i * 3.14;
+            DataStore[data_id: i].processed = (i < 10);
+            DataStore[data_id: i].version = i;
+        }
+        
+        // While loop with condition updates
+        int counter = start_val;
+        int max_iterations = end_val - start_val;
+        while (counter < end_val && max_iterations > 0) {
+            int config_id = counter + 1000;
+            ConfigStore[config_id: config_id].config_name = operation_type ~ "_CONFIG";
+            ConfigStore[config_id: config_id].config_value = "VALUE_" ~ operation_type;
+            ConfigStore[config_id: config_id].priority = counter;
+            
+            counter = counter + 1;
+            max_iterations = max_iterations - 1;
+        }
+    }
+
+    hop {
+        // Nested conditionals with complex logic
+        for (int j = start_val; j <= end_val; j++) {
+            string meta_key = operation_type ~ "_KEY_" ~ "J";
+            
+            if (j > 50) {
+                MetadataStore[meta_key: meta_key].description = "EVEN_" ~ operation_type;
+                MetadataStore[meta_key: meta_key].reference_count = j * 2;
+                
+                if (j < 15) {
+                    MetadataStore[meta_key: meta_key].weight = 100.0;
+                    MetadataStore[meta_key: meta_key].active = true;
+                } else {
+                    MetadataStore[meta_key: meta_key].weight = 50.0;
+                    MetadataStore[meta_key: meta_key].active = false;
+                }
+            } else {
+                MetadataStore[meta_key: meta_key].description = "ODD_" ~ operation_type;
+                MetadataStore[meta_key: meta_key].reference_count = j * 3;
+                MetadataStore[meta_key: meta_key].weight = j * 1.5;
+                MetadataStore[meta_key: meta_key].active = (j > (start_val + end_val) / 2);
+            }
+        }
+    }
+}
+
+// Test assignment operators and compound operations
+void assignment_operations(int base_id, float initial_value, string prefix) {
+    hop {
+        // Test various assignment operators
+        int working_id = base_id;
+        
+        DataStore[data_id: working_id].value = initial_value;
+        DataStore[data_id: working_id].version = 1;
+        
+        // Compound assignments
+        working_id += 10;
+        DataStore[data_id: working_id].value = initial_value * 2.0;
+        DataStore[data_id: working_id].version = 2;
+        
+        working_id *= 2;
+        DataStore[data_id: working_id].value = initial_value + 100.0;
+        DataStore[data_id: working_id].version = 3;
+        
+        // String assignments with computations
+        string content_base = prefix ~ "_BASE";
+        DataStore[data_id: base_id].content = content_base;
+        DataStore[data_id: base_id + 10].content = prefix ~ "_PLUS10";
+        DataStore[data_id: base_id * 2].content = prefix ~ "_DOUBLED";
+        
+        // Boolean assignments based on computations
+        DataStore[data_id: base_id].processed = (initial_value > 0.0);
+        DataStore[data_id: base_id + 10].processed = (working_id > 50);
+        DataStore[data_id: base_id * 2].processed = true;
+    }
+
+    hop {
+        // Configuration updates with derived values
+        for (int config_idx = base_id; config_idx < base_id + 5; config_idx++) {
+            string config_key = prefix ~ "_CONFIG";
+            string config_val = "VAL_" ~ prefix;
+            
+            ConfigStore[config_id: config_idx].config_name = config_key;
+            ConfigStore[config_id: config_idx].config_value = config_val;
+            
+            // Priority assignment based on index
+            if (config_idx == base_id) {
+                ConfigStore[config_id: config_idx].priority = 1;  // Highest priority
+            } else {
+                ConfigStore[config_id: config_idx].priority = config_idx - base_id + 1;
+            }
+        }
+    }
+}
