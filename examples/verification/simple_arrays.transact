@@ -1,0 +1,26 @@
+// Simple array operations test
+partition arr_part(int x) = x * 2;
+
+table Storage {
+    primary int storage_id;
+    node arr_part(storage_id);
+    int[3] values;
+}
+
+void test_arrays(int storage_id) {
+    hop {
+        int[3] my_array;
+        my_array[0] = 10;
+        my_array[1] = 20;
+        my_array[2] = 30;
+        Storage[storage_id: storage_id].values = my_array;
+    }
+    
+    hop {
+        int[3] updated;
+        updated[0] = 15;
+        updated[1] = 25;
+        updated[2] = 35;
+        Storage[storage_id: storage_id].values = updated;
+    }
+}

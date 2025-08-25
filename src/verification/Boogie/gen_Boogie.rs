@@ -1008,6 +1008,7 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
         lines: &mut Vec<BoogieLine>,
         cfg_program: &CfgProgram,
         block_id: BasicBlockId,
+        is_last_hop: bool,
         function_name: &str,
         prefix: Option<&str>,
         suffix: Option<&str>,
@@ -1069,6 +1070,11 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
                     }
                 }
                 EdgeType::HopExit { next_hop } => {
+                    if is_last_hop {
+                        // HopExit with last hop -- goto function end
+                        let end_label = Self::gen_function_end_label(function_name, prefix, suffix);
+                        lines.push(BoogieLine::Goto(end_label));
+                    }
                     if let Some(next_hop_id) = next_hop {
                         // Generate goto to next hop's entry block
                         let next_hop = &cfg_program.hops[*next_hop_id];

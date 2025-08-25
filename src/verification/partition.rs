@@ -150,6 +150,7 @@ impl PartitionVerificationManager {
                     &mut block_edges,
                     cfg_program,
                     block_id,
+                    false,
                     &function.name,
                     None,
                     None,

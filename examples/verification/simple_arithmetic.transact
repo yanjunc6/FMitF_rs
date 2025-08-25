@@ -1,0 +1,22 @@
+// Simple arithmetic operations test  
+partition simple_part(int x) = x + 1;
+
+table Numbers {
+    primary int id;
+    node simple_part(id);
+    int value;
+    float result;
+}
+
+void test_arithmetic(int num_id, int base_value) {
+    hop {
+        int sum = base_value + 10;
+        int product = base_value * 2;
+        Numbers[id: num_id].value = sum + product;
+    }
+    
+    hop {
+        float division = 15.0 / 3.0;
+        Numbers[id: num_id].result = division;
+    }
+}
