@@ -156,7 +156,8 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                     .iter()
                     .any(|e| matches!(e.edge_type, EdgeType::Return { .. } | EdgeType::Abort))
             {
-                block_exit.insert(block_id, self.transfer.boundary_value(func, block));
+                let boundary_val = self.transfer.boundary_value(func, block);
+                block_exit.insert(block_id, boundary_val);
             }
         }
 
@@ -169,7 +170,15 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                 let block = &cfg_program.blocks[block_id];
 
                 // Compute block exit by merging successors
-                let new_exit = if block.successors.is_empty() {
+                // TODO: not sure why we have to check return and abort, might be a problem from cfg.
+                let is_exit_block = block.successors.is_empty()
+                    || block
+                        .successors
+                        .iter()
+                        .any(|e| matches!(e.edge_type, EdgeType::Return { .. } | EdgeType::Abort));
+                
+                let new_exit = if is_exit_block {
+                    // Exit blocks should use their boundary value, not compute from successors
                     block_exit[&block_id].clone()
                 } else {
                     let mut merged = self.transfer.initial_value();
@@ -202,7 +211,9 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                         block: block_id,
                         index: idx,
                     };
+                    // For backward analysis: current state represents what's live after this statement (live-out)
                     stmt_exit.insert(loc, state.clone());
+                    // Apply transfer function to get what's live before this statement (live-in)
                     state = self.transfer.transfer_statement(stmt, loc.clone(), &state);
                     stmt_entry.insert(loc, state.clone());
                 }
