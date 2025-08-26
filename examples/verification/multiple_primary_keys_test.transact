@@ -15,7 +15,8 @@ table BankAccount {
 table TransactionLog {
     primary int account_id;
     primary int transaction_id;
-    node multi_key_partition(account_id, 0);
+    primary int just_id;
+    node multi_key_partition(account_id, transaction_id);
     int amount;
     string type;
 }
@@ -55,8 +56,8 @@ void cross_table_operations(int acc_id, int txn_id, int amount) {
         BankAccount[account_id: acc_id, branch_id: 1].balance += amount;
         
         // Log the transaction
-        TransactionLog[account_id: acc_id, transaction_id: txn_id].amount = amount;
-        TransactionLog[account_id: acc_id, transaction_id: txn_id].type = "deposit";
+        TransactionLog[account_id: acc_id, transaction_id: txn_id, just_id: 1].amount = amount;
+        TransactionLog[account_id: acc_id, transaction_id: txn_id, just_id: 1].type = "deposit";
     }
     
     hop {
@@ -64,8 +65,8 @@ void cross_table_operations(int acc_id, int txn_id, int amount) {
         BankAccount[account_id: acc_id, branch_id: 1].balance -= 50;
         
         // Log withdrawal
-        TransactionLog[account_id: acc_id, transaction_id: txn_id + 1].amount = -50;
-        TransactionLog[account_id: acc_id, transaction_id: txn_id + 1].type = "withdrawal";
+        TransactionLog[account_id: acc_id, transaction_id: txn_id + 1, just_id: 1].amount = -50;
+        TransactionLog[account_id: acc_id, transaction_id: txn_id + 1, just_id: 1].type = "withdrawal";
     }
 }
 
