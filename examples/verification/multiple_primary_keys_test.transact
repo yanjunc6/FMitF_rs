@@ -1,0 +1,85 @@
+// Test for tables with multiple primary keys
+// This test checks how Boogie verification handles complex key scenarios
+
+partition multi_key_partition(int account_id, int branch_id) = 100 * account_id + branch_id;
+
+table BankAccount {
+    primary int account_id;
+    primary int branch_id;
+    node multi_key_partition(account_id, branch_id);
+    int balance;
+    string status;
+    float interest_rate;
+}
+
+table TransactionLog {
+    primary int account_id;
+    primary int transaction_id;
+    node multi_key_partition(account_id, 0);
+    int amount;
+    string type;
+}
+
+// Test 1: Basic operations with multiple primary keys
+void basic_multi_key_ops(int acc_id, int br_id, int amount) {
+    hop {
+        // Simple assignment with multiple keys
+        BankAccount[account_id: acc_id, branch_id: br_id].balance = amount;
+        BankAccount[account_id: acc_id, branch_id: br_id].status = "active";
+    }
+    
+    hop {
+        // Update operations with multiple keys
+        BankAccount[account_id: acc_id, branch_id: br_id].balance += 100;
+        BankAccount[account_id: acc_id, branch_id: br_id].interest_rate = 2.5;
+    }
+}
+
+// Test 2: Different key ordering (should be same record)
+void key_ordering_test(int acc_id, int br_id, int deposit_amount) {
+    hop {
+        // First ordering
+        BankAccount[account_id: acc_id, branch_id: br_id].balance = 1000;
+    }
+    
+    hop {
+        // Different key ordering - should reference same record
+        BankAccount[branch_id: br_id, account_id: acc_id].balance += deposit_amount;
+    }
+}
+
+// Test 3: Cross-table operations with shared keys
+void cross_table_operations(int acc_id, int txn_id, int amount) {
+    hop {
+        // Update account balance
+        BankAccount[account_id: acc_id, branch_id: 1].balance += amount;
+        
+        // Log the transaction
+        TransactionLog[account_id: acc_id, transaction_id: txn_id].amount = amount;
+        TransactionLog[account_id: acc_id, transaction_id: txn_id].type = "deposit";
+    }
+    
+    hop {
+        // Another transaction on same account
+        BankAccount[account_id: acc_id, branch_id: 1].balance -= 50;
+        
+        // Log withdrawal
+        TransactionLog[account_id: acc_id, transaction_id: txn_id + 1].amount = -50;
+        TransactionLog[account_id: acc_id, transaction_id: txn_id + 1].type = "withdrawal";
+    }
+}
+
+// Test 4: Potential conflict scenarios
+void conflict_scenario_1(int acc_id, int br_id) {
+    hop {
+        BankAccount[account_id: acc_id, branch_id: br_id].balance = 5000;
+        BankAccount[account_id: acc_id, branch_id: br_id].status = "premium";
+    }
+}
+
+void conflict_scenario_2(int acc_id, int br_id) {
+    hop {
+        BankAccount[account_id: acc_id, branch_id: br_id].balance = 3000;
+        BankAccount[account_id: acc_id, branch_id: br_id].status = "standard";
+    }
+}
