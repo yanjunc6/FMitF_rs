@@ -7,6 +7,7 @@ use crate::cfg::{
     BasicBlockId, CfgProgram, EdgeType, FunctionId, FunctionType, LValue, Operand, RValue,
     Statement,
 };
+
 use std::collections::HashMap;
 
 pub use super::errors::{SpannedError, VerificationError};
@@ -142,6 +143,7 @@ impl PartitionVerificationManager {
                         generator,
                         cfg_program,
                         statement,
+                        function_id,
                         hop_id,
                         &mut partition_call_tracker,
                     )?;
@@ -190,13 +192,18 @@ impl PartitionVerificationManager {
         generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
         statement: &Statement,
+        function_id: FunctionId,
         hop_id: crate::cfg::HopId,
         partition_call_tracker: &mut HashMap<
             (crate::cfg::HopId, crate::cfg::FunctionId),
             Vec<Operand>,
         >,
     ) -> Results<()> {
-        let Statement::Assign { lvalue, rvalue, .. } = statement;
+        let Statement::Assign {
+            lvalue,
+            rvalue,
+            span,
+        } = statement;
 
         // Check LValue for table field assignments
         if let LValue::TableField {
@@ -206,9 +213,11 @@ impl PartitionVerificationManager {
             self.handle_table_access(
                 generator,
                 cfg_program,
+                function_id,
                 hop_id,
                 *table,
                 pk_values,
+                span,
                 partition_call_tracker,
             )?;
         }
@@ -221,9 +230,11 @@ impl PartitionVerificationManager {
             self.handle_table_access(
                 generator,
                 cfg_program,
+                function_id,
                 hop_id,
                 *table,
                 pk_values,
+                span,
                 partition_call_tracker,
             )?;
         }
@@ -236,9 +247,11 @@ impl PartitionVerificationManager {
         &self,
         generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
+        function_id: FunctionId,
         hop_id: crate::cfg::HopId,
         table_id: crate::cfg::TableId,
         pk_values: &[Operand],
+        span: &crate::ast::Span,
         partition_call_tracker: &mut HashMap<
             (crate::cfg::HopId, crate::cfg::FunctionId),
             Vec<Operand>,
@@ -272,6 +285,9 @@ impl PartitionVerificationManager {
                 generator,
                 cfg_program,
                 partition_function_id,
+                function_id,
+                table_id,
+                span,
                 previous_args,
                 &partition_args,
             )?;
@@ -289,13 +305,16 @@ impl PartitionVerificationManager {
         generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
         partition_function_id: crate::cfg::FunctionId,
+        function_id: FunctionId,
+        table_id: crate::cfg::TableId,
+        span: &crate::ast::Span,
         previous_args: &[Operand],
         current_args: &[Operand],
     ) -> Results<()> {
         let partition_function = &cfg_program.functions[partition_function_id];
 
         generator.add_comment_to_current_procedure(format!(
-            "Partition consistency check for function '{}': all calls in same hop must have same args",
+            "Partition con`sistency check for function '{}': all calls in same hop must have same args",
             partition_function.name
         ));
 
@@ -324,9 +343,11 @@ impl PartitionVerificationManager {
         let error_msg = ErrorMessage {
             spanned_error: SpannedError {
                 error: VerificationError::PartitionFunctionArgumentInconsistency {
-                    partition_function_name: partition_function.name.clone(),
+                    partition_function_id: partition_function_id.index(),
+                    function_id: function_id.index(),
+                    table_id: table_id.index(),
                 },
-                span: None, // TODO: Add proper span information if available
+                span: Some(span.clone()),
             },
         };
 

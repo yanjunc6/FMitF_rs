@@ -16,7 +16,7 @@ void test_conditionals(int item_id, int quantity) {
         if (quantity > 50) {
             Items[item_id: item_id].count = quantity;
         } else {
-            Items[item_id: item_id].count = 0;
+            Items[item_id: quantity].count = 0;
         }
     }
 }
