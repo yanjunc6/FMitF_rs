@@ -164,7 +164,14 @@ impl Display for BoogieExprKind {
             // ───── scalars ─────
             BoogieExprKind::Var(name) => write!(f, "{}", name),
             BoogieExprKind::IntConst(n) => write!(f, "{}", n),
-            BoogieExprKind::RealConst(r) => write!(f, "{}", r),
+            BoogieExprKind::RealConst(r) => {
+                // Ensure real constants have decimal point for Boogie syntax
+                if r.fract() == 0.0 {
+                    write!(f, "{:.1}", r)
+                } else {
+                    write!(f, "{}", r)
+                }
+            }
             BoogieExprKind::BoolConst(b) => write!(f, "{}", b),
 
             // ───── function call ─────
