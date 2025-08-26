@@ -15,7 +15,11 @@ pub enum VerificationError {
     ArrayConstantNotSupported,
     IncrementDecrementNotSupported,
     HopNotFoundInFunction,
-    PartitionFunctionArgumentInconsistency { partition_function_name: String },
+    PartitionFunctionArgumentInconsistency {
+        partition_function_id: usize,
+        function_id: usize,
+        table_id: usize,
+    },
     SliceCommutativityViolation,
     SpecialInterleavingNonEquivalence,
 }
@@ -59,10 +63,10 @@ impl VerificationError {
                 "Increment/decrement operators are not supported".to_string()
             }
             VerificationError::HopNotFoundInFunction => "Hop not found in any function".to_string(),
-            VerificationError::PartitionFunctionArgumentInconsistency { partition_function_name } => {
+            VerificationError::PartitionFunctionArgumentInconsistency { partition_function_id, function_id, table_id } => {
                 format!(
-                    "Partition function '{}' called with different arguments in the same hop, violating single-node constraint",
-                    partition_function_name
+                    "Function {} (table {} with partition {}) has different arguments in the same hop, violating single-node constraint",
+                    function_id, table_id, partition_function_id
                 )
             }
             VerificationError::SliceCommutativityViolation => {
