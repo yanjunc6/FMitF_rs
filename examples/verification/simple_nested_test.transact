@@ -1,0 +1,19 @@
+// Simple test file to verify our nested map generation
+partition simple_part(int x, int y) = x * 10 + y;
+
+table TestTable {
+    primary int key1;
+    primary int key2; 
+    node simple_part(key1, key2);
+    int value;
+}
+
+void simple_nested_test(int k1, int k2, int val) {
+    hop {
+        TestTable[key1: k1, key2: k2].value = val;
+    }
+    
+    hop {
+        TestTable[key1: k1, key2: k2].value += 100;
+    }
+}

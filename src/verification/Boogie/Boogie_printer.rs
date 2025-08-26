@@ -194,16 +194,13 @@ impl Display for BoogieExprKind {
 
             // ───── map select ─────
             BoogieExprKind::MapSelect { base, indices } => {
-                write!(
-                    f,
-                    "{}[{}]",
-                    base,
-                    indices
-                        .iter()
-                        .map(|e| format!("{}", e))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                // For nested maps, we need to chain selects: base[index1][index2]...
+                // instead of the flat syntax: base[index1, index2, ...]
+                let mut result = format!("{}", base);
+                for index in indices {
+                    result = format!("{}[{}]", result, index);
+                }
+                write!(f, "{}", result)
             }
 
             // ───── map store ─────
@@ -212,17 +209,35 @@ impl Display for BoogieExprKind {
                 indices,
                 value,
             } => {
-                write!(
-                    f,
-                    "{}[{} := {}]",
-                    base,
-                    indices
-                        .iter()
-                        .map(|e| format!("{}", e))
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    value
-                )
+                // For nested maps, we need to generate nested store operations:
+                // For 2D: base[k1 := base[k1][k2 := value]]
+                // For 3D: base[k1 := base[k1][k2 := base[k1][k2][k3 := value]]]
+
+                if indices.len() == 1 {
+                    // Single index: base[key := value]
+                    write!(f, "{}[{} := {}]", base, indices[0], value)
+                } else {
+                    // Build nested store from innermost to outermost
+                    // For indices [k1, k2, ..., kn], we need:
+                    // base[k1 := base[k1][k2 := ... base[k1][k2]...[kn := value]]]
+
+                    let mut inner_value = format!("{}", value);
+
+                    // Build the innermost expressions first
+                    for i in (1..indices.len()).rev() {
+                        // Create select chain: base[k1][k2]...[ki-1]
+                        let mut select_chain = format!("{}", base);
+                        for j in 0..i {
+                            select_chain = format!("{}[{}]", select_chain, indices[j]);
+                        }
+                        // Wrap in store: select_chain[ki := inner_value]
+                        inner_value =
+                            format!("{}[{} := {}]", select_chain, indices[i], inner_value);
+                    }
+
+                    // Final outermost store
+                    write!(f, "{}[{} := {}]", base, indices[0], inner_value)
+                }
             }
         }
     }
