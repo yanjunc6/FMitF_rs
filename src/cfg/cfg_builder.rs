@@ -370,8 +370,11 @@ impl<'a> CfgBuilder<'a> {
             if !function.hops.is_empty() {
                 let mut cfg_hops = Vec::new();
                 for &hop_id in &function.hops {
-                    let cfg_hop_id = builder.visit_hop(hop_id, cfg_func_id);
-                    cfg_hops.push(cfg_hop_id);
+                    if let Some(cfg_hop_id) = builder.visit_hop(hop_id, cfg_func_id) {
+                        cfg_hops.push(cfg_hop_id);
+                    }
+                    // If visit_hop returns None, it means the hop was unrolled
+                    // and the individual iteration hops have been registered separately
                 }
 
                 // Connect sequential hops with HopExit edges
@@ -453,7 +456,7 @@ impl<'a> CfgBuilder<'a> {
         cfg_params
     }
 
-    fn visit_hop(&mut self, hop_id: ast::HopId, func_id: FunctionId) -> HopId {
+    fn visit_hop(&mut self, hop_id: ast::HopId, func_id: FunctionId) -> Option<HopId> {
         let hop = &self.ast.hops[hop_id];
 
         let cfg_hop_id = self.create_hop(func_id);
@@ -479,6 +482,8 @@ impl<'a> CfgBuilder<'a> {
                 if !self.cfg.functions[func_id].hop_order.contains(&cfg_hop_id) {
                     self.cfg.functions[func_id].hop_order.push(cfg_hop_id);
                 }
+                
+                Some(cfg_hop_id)
             }
             ast::HopType::ForLoop {
                 loop_var,
@@ -501,6 +506,8 @@ impl<'a> CfgBuilder<'a> {
                             &hop.statements,
                         );
                         // process_unrolled_hop_loop handles hop registration
+                        // For unrolled loops, return None to indicate no single hop should be connected
+                        None
                     }
                     (None, _) => {
                         panic!("Hop loop start value must be a compile-time constant, but got dynamic expression");
@@ -511,8 +518,6 @@ impl<'a> CfgBuilder<'a> {
                 }
             }
         }
-
-        cfg_hop_id
     }
 
     // ===== Statement visitors =====
@@ -2097,7 +2102,7 @@ impl<'a> CfgBuilder<'a> {
 
     fn process_unrolled_hop_loop(
         &mut self,
-        hop_id: HopId,
+        _hop_id: HopId, // Unused - each iteration creates its own hop
         func_id: FunctionId,
         loop_var: &str,
         loop_var_type: &TypeName,
@@ -2105,8 +2110,9 @@ impl<'a> CfgBuilder<'a> {
         end_val: i64,
         statements: &[ast::StatementId],
     ) -> Vec<BasicBlockId> {
-        let mut all_blocks = Vec::new();
-
+        // For unrolled hop loops, we don't use the container hop_id at all
+        // Instead, we create completely independent hops for each iteration
+        
         // Create a separate hop for each loop iteration
         for iteration in start_val..=end_val {
             // Create a new hop for this iteration
@@ -2144,10 +2150,10 @@ impl<'a> CfgBuilder<'a> {
                 builder.add_statement_to_current_block(init_stmt);
 
                 // Process all statements in this hop iteration
-                let stmt_blocks = builder.visit_statement_list(statements);
+                let _stmt_blocks = builder.visit_statement_list(statements);
 
-                // The first block is the one we created, subsequent blocks come from complex statements
-                all_blocks.extend(stmt_blocks);
+                // Note: stmt_blocks are automatically registered with their own hops
+                // Each iteration hop owns its blocks exclusively
             });
 
             // Finalize this hop iteration
@@ -2163,23 +2169,14 @@ impl<'a> CfgBuilder<'a> {
             {
                 self.cfg.functions[func_id].hop_order.push(iteration_hop_id);
             }
-
-            all_blocks.push(block_id);
         }
 
-        // Update the original hop to be the container/parent hop
-        self.cfg.hops[hop_id].entry_block = all_blocks.first().copied();
-        self.cfg.hops[hop_id].blocks = all_blocks.clone();
-
-        // Register the main container hop in function (avoiding duplicates)
-        if !self.cfg.functions[func_id].hops.contains(&hop_id) {
-            self.cfg.functions[func_id].hops.push(hop_id);
-        }
-        if !self.cfg.functions[func_id].hop_order.contains(&hop_id) {
-            self.cfg.functions[func_id].hop_order.push(hop_id);
-        }
-
-        all_blocks
+        // The original hop_id is not used at all for unrolled loops
+        // Each iteration creates its own independent hop
+        // We don't register the original hop_id anywhere
+        
+        // Return empty blocks since we don't use the container hop
+        Vec::new()
     }
 
     fn lvalue_to_operand(&mut self, lvalue: &LValue) -> Operand {
