@@ -179,6 +179,8 @@ impl CommutativeVerificationManager {
             &a_then_b_vars,
             &b_then_a_vars,
             &state_manager,
+            unit.c_edge.source.hop_id.index(),
+            unit.c_edge.target.hop_id.index(),
         )?;
 
         // Step 5: For each legal interleaving, verify it produces one of the special results
@@ -192,6 +194,8 @@ impl CommutativeVerificationManager {
                 &a_then_b_vars,
                 &b_then_a_vars,
                 &state_manager,
+                unit.c_edge.source.hop_id.index(),
+                unit.c_edge.target.hop_id.index(),
             )?;
         }
 
@@ -304,6 +308,8 @@ impl CommutativeVerificationManager {
         a_then_b_vars: &VariableSnapshots,
         b_then_a_vars: &VariableSnapshots,
         state_manager: &BoogieStateManager,
+        hop_id_a: usize,
+        hop_id_b: usize,
     ) -> Results<()> {
         generator.add_comment_to_current_procedure(
             "--- Step 4: Verify A→B ≡ B→A (Special interleavings equivalence) ---".to_string(),
@@ -315,6 +321,8 @@ impl CommutativeVerificationManager {
             analysis_info,
             a_then_b_vars,
             b_then_a_vars,
+            hop_id_a,
+            hop_id_b,
         )?;
 
         Ok(())
@@ -331,6 +339,8 @@ impl CommutativeVerificationManager {
         a_then_b_vars: &VariableSnapshots,
         b_then_a_vars: &VariableSnapshots,
         state_manager: &BoogieStateManager,
+        hop_id_a: usize,
+        hop_id_b: usize,
     ) -> Results<()> {
         generator.add_comment_to_current_procedure(format!(
             "--- Verifying interleaving {} ---",
@@ -358,6 +368,8 @@ impl CommutativeVerificationManager {
             analysis_info,
             a_then_b_vars,
             b_then_a_vars,
+            hop_id_a,
+            hop_id_b,
         )?;
 
         Ok(())
