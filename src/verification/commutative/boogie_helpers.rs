@@ -481,6 +481,8 @@ impl BoogieStateManager {
         analysis_info: &SliceAnalysisInfo,
         a_then_b_vars: &VariableSnapshots,
         b_then_a_vars: &VariableSnapshots,
+        hop_id_a: usize,
+        hop_id_b: usize,
     ) -> Results<()> {
         generator
             .add_comment_to_current_procedure("Verifying A->B === B->A equivalence:".to_string());
@@ -544,7 +546,10 @@ impl BoogieStateManager {
 
         let error_msg = ErrorMessage {
             spanned_error: SpannedError {
-                error: VerificationError::SpecialInterleavingNonEquivalence,
+                error: VerificationError::SpecialInterleavingNonEquivalence {
+                    hop_id_1: hop_id_a,
+                    hop_id_2: hop_id_b,
+                },
                 span: None, // TODO: Add proper span information if available
             },
         };
@@ -562,6 +567,8 @@ impl BoogieStateManager {
         analysis_info: &SliceAnalysisInfo,
         a_then_b_vars: &VariableSnapshots,
         b_then_a_vars: &VariableSnapshots,
+        hop_id_a: usize,
+        hop_id_b: usize,
     ) -> Results<()> {
         let mut equality_conditions_a_then_b = Vec::new();
         let mut equality_conditions_b_then_a = Vec::new();
@@ -659,7 +666,10 @@ impl BoogieStateManager {
 
         let error_msg = ErrorMessage {
             spanned_error: SpannedError {
-                error: VerificationError::SliceCommutativityViolation,
+                error: VerificationError::SliceCommutativityViolation {
+                    hop_id_1: hop_id_a,
+                    hop_id_2: hop_id_b,
+                },
                 span: None, // TODO: Add proper span information if available
             },
         };

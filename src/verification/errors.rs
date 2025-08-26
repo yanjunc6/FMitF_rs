@@ -20,8 +20,14 @@ pub enum VerificationError {
         function_id: usize,
         table_id: usize,
     },
-    SliceCommutativityViolation,
-    SpecialInterleavingNonEquivalence,
+    SliceCommutativityViolation {
+        hop_id_1: usize,
+        hop_id_2: usize,
+    },
+    SpecialInterleavingNonEquivalence {
+        hop_id_1: usize,
+        hop_id_2: usize,
+    },
 }
 
 impl std::fmt::Display for VerificationError {
@@ -43,8 +49,8 @@ impl VerificationError {
             VerificationError::PartitionFunctionArgumentInconsistency { .. } => {
                 "PartitionFunctionArgumentInconsistency"
             }
-            VerificationError::SliceCommutativityViolation => "SliceCommutativityViolation",
-            VerificationError::SpecialInterleavingNonEquivalence => {
+            VerificationError::SliceCommutativityViolation { .. } => "SliceCommutativityViolation",
+            VerificationError::SpecialInterleavingNonEquivalence { .. } => {
                 "SpecialInterleavingNonEquivalence"
             }
         }
@@ -63,17 +69,27 @@ impl VerificationError {
                 "Increment/decrement operators are not supported".to_string()
             }
             VerificationError::HopNotFoundInFunction => "Hop not found in any function".to_string(),
-            VerificationError::PartitionFunctionArgumentInconsistency { partition_function_id, function_id, table_id } => {
+            VerificationError::PartitionFunctionArgumentInconsistency {
+                partition_function_id,
+                function_id,
+                table_id,
+            } => {
                 format!(
                     "Function {} (table {} with partition {}) has different arguments in the same hop, violating single-node constraint",
                     function_id, table_id, partition_function_id
                 )
             }
-            VerificationError::SliceCommutativityViolation => {
-                "Slice commutativity violation: interleaving produces different result than both special orderings".to_string()
+            VerificationError::SliceCommutativityViolation { hop_id_1, hop_id_2 } => {
+                format!(
+                    "Slice commutativity violation: interleaving between hop {} and hop {} produces different result than both special orderings",
+                    hop_id_1, hop_id_2
+                )
             }
-            VerificationError::SpecialInterleavingNonEquivalence => {
-                "Special interleavings non-equivalence: A→B and B→A produce different results, slices are not commutative".to_string()
+            VerificationError::SpecialInterleavingNonEquivalence { hop_id_1, hop_id_2 } => {
+                format!(
+                    "Special interleavings non-equivalence: hop {} → hop {} and hop {} → hop {} produce different results, slices are not commutative",
+                    hop_id_1, hop_id_2, hop_id_2, hop_id_1
+                )
             }
         }
     }
