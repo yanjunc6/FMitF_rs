@@ -592,7 +592,7 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
                     },
                 })
             }
-            RValue::ArrayAccess { array, index, result_type: _ } => {
+            RValue::ArrayAccess { array, index } => {
                 let array_expr = self.convert_operand(cfg_program, array, prefix)?;
                 let index_expr = self.convert_operand(cfg_program, index, prefix)?;
 
@@ -711,11 +711,11 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
         let rvalue_expr = self.convert_rvalue(cfg_program, rvalue, prefix)?;
 
         match lvalue {
-            LValue::Variable { var, var_type: _ } => {
+            LValue::Variable { var } => {
                 let var_name = self.gen_var_name(cfg_program, *var, prefix);
                 Ok(BoogieLine::Assign(var_name, rvalue_expr))
             }
-            LValue::ArrayElement { array, index, array_type: _ } => {
+            LValue::ArrayElement { array, index } => {
                 let array_name = self.gen_var_name(cfg_program, *array, prefix);
                 let base_expr = Box::new(BoogieExpr {
                     kind: BoogieExprKind::Var(array_name.clone()),
@@ -1043,17 +1043,7 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
         prefix: Option<&str>,
         suffix: Option<&str>,
     ) -> String {
-        // Use the raw ID value to ensure uniqueness across the entire program
-        // BasicBlockId is globally unique across all hops and functions
-        // Using a hash of the block_id as a unique identifier
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        
-        let mut hasher = DefaultHasher::new();
-        block_id.hash(&mut hasher);
-        let unique_id = hasher.finish();
-        
-        let label = format!("block{}", unique_id);
+        let label = format!("block{}", block_id.index());
         Self::add_suffix_prefix_helper(&label, prefix, suffix)
     }
 

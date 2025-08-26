@@ -65,6 +65,7 @@ table Account {
 - **Name complex functions descriptively**: Use algorithm names or descriptive names that indicate computational cost
 - **Minimize parameter passing**: Don't pass 5+ arguments to avoid "elegant" constructors
 - **No backward compatibility**: Remove legacy methods and functions, never create backward-compatible versions
+- **No echo/grep/head**: Please don't use those echo/grep/head but use the copilot tools directly. I have to accept your commands, which is too much to do, please not use them if possible.
 
 ### Arena-Based Memory Management
 - Use `id_arena::Arena<T>` for large collections (tables, functions, variables)

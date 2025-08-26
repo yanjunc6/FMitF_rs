@@ -73,7 +73,6 @@ impl BoogieStateManager {
         cfg_program: &CfgProgram,
         analysis_info: &SliceAnalysisInfo,
     ) -> Results<()> {
-        // TODO: Need to create new variables so that the variable declarations should be done at beginning of procedure
         generator
             .add_comment_to_current_procedure("--- Step 2: Save initial state ---".to_string());
 
@@ -483,7 +482,7 @@ impl BoogieStateManager {
         a_then_b_vars: &VariableSnapshots,
         b_then_a_vars: &VariableSnapshots,
     ) -> Results<()> {
-        generator.add_comment_to_current_procedure("Verifying A→B ≡ B→A equivalence:".to_string());
+        generator.add_comment_to_current_procedure("Verifying A->B === B->A equivalence:".to_string());
 
         let mut equality_conditions = Vec::new();
 
