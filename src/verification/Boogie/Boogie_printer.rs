@@ -126,7 +126,12 @@ impl Display for BoogieLine {
             BoogieLine::Label(name) => writeln!(f, "  {}:", name),
             BoogieLine::Goto(tgt) => writeln!(f, "    goto {};", tgt),
             BoogieLine::Assign(lhs, rhs) => writeln!(f, "    {} := {};", lhs, rhs),
-            BoogieLine::Assert(e, msg) => writeln!(f, "    assert {{:msg \"{}\"}} {};", msg.msg, e),
+            BoogieLine::Assert(e, msg) => writeln!(
+                f,
+                "    assert {{:msg \"{}\"}} {};",
+                msg.to_boogie_string(),
+                e
+            ),
             BoogieLine::Assume(e) => writeln!(f, "    assume {};", e),
             BoogieLine::Havoc(var) => writeln!(f, "    havoc {};", var),
             BoogieLine::If {

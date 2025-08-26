@@ -1,19 +1,23 @@
 use crate::ast::Span;
+use serde::{Deserialize, Serialize};
 
 pub type Results<T> = Result<T, Vec<SpannedError>>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpannedError {
     pub error: VerificationError,
     pub span: Option<Span>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum VerificationError {
     StringConstantNotSupported,
     ArrayConstantNotSupported,
     IncrementDecrementNotSupported,
     HopNotFoundInFunction,
+    PartitionFunctionArgumentInconsistency { partition_function_name: String },
+    SliceCommutativityViolation,
+    SpecialInterleavingNonEquivalence,
 }
 
 impl std::fmt::Display for VerificationError {
@@ -32,6 +36,13 @@ impl VerificationError {
             VerificationError::ArrayConstantNotSupported => "ArrayConstantNotSupported",
             VerificationError::IncrementDecrementNotSupported => "IncrementDecrementNotSupported",
             VerificationError::HopNotFoundInFunction => "HopNotFoundInFunction",
+            VerificationError::PartitionFunctionArgumentInconsistency { .. } => {
+                "PartitionFunctionArgumentInconsistency"
+            }
+            VerificationError::SliceCommutativityViolation => "SliceCommutativityViolation",
+            VerificationError::SpecialInterleavingNonEquivalence => {
+                "SpecialInterleavingNonEquivalence"
+            }
         }
     }
 
@@ -48,6 +59,18 @@ impl VerificationError {
                 "Increment/decrement operators are not supported".to_string()
             }
             VerificationError::HopNotFoundInFunction => "Hop not found in any function".to_string(),
+            VerificationError::PartitionFunctionArgumentInconsistency { partition_function_name } => {
+                format!(
+                    "Partition function '{}' called with different arguments in the same hop, violating single-node constraint",
+                    partition_function_name
+                )
+            }
+            VerificationError::SliceCommutativityViolation => {
+                "Slice commutativity violation: interleaving produces different result than both special orderings".to_string()
+            }
+            VerificationError::SpecialInterleavingNonEquivalence => {
+                "Special interleavings non-equivalence: A→B and B→A produce different results, slices are not commutative".to_string()
+            }
         }
     }
 }

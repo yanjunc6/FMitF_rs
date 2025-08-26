@@ -55,10 +55,20 @@ pub enum BoogieLine {
     },
 }
 
-/// Attach an optional user-defined message to an assertion.
+/// Attach an error message with structured error information to an assertion.
 #[derive(Debug, Clone)]
 pub struct ErrorMessage {
-    pub msg: String, // We might want to parse this later, for now it's just a string
+    pub spanned_error: crate::verification::SpannedError,
+}
+
+impl ErrorMessage {
+    /// Serialize the error to S-expression format with proper quote escaping for Boogie
+    pub fn to_boogie_string(&self) -> String {
+        let sexpr = serde_lexpr::to_string(&self.spanned_error)
+            .unwrap_or_else(|_| format!("{:?}", self.spanned_error));
+        // Escape quotes for Boogie grammar: " becomes \"
+        sexpr.replace('"', "\\\"")
+    }
 }
 
 /// A complete expression node.

@@ -2,11 +2,11 @@ use super::{
     BoogieBinOp, BoogieExpr, BoogieExprKind, BoogieLine, BoogieProcedure, BoogieProgram,
     BoogieType, BoogieUnOp, BoogieVarDecl, ErrorMessage,
 };
+use crate::ast::TypeName;
 use crate::cfg::{
     BasicBlockId, BinaryOp, CfgProgram, Constant, FunctionCfg, FunctionId, LValue, Operand, RValue,
     Statement, UnaryOp, VarId, VariableKind,
 };
-use crate::ast::TypeName;
 use crate::verification::errors::{Results, SpannedError, VerificationError};
 use std::collections::HashMap;
 
@@ -611,7 +611,9 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
                     kind: BoogieExprKind::UnOp(boogie_op, Box::new(operand_expr)),
                 })
             }
-            RValue::BinaryOp { op, left, right, .. } => {
+            RValue::BinaryOp {
+                op, left, right, ..
+            } => {
                 let left_expr = self.convert_operand(cfg_program, left, prefix)?;
                 let right_expr = self.convert_operand(cfg_program, right, prefix)?;
 
@@ -655,7 +657,7 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
                         let left_type = self.infer_operand_type(cfg_program, left);
                         let right_type = self.infer_operand_type(cfg_program, right);
                         let boogie_op = Self::convert_binary_op(op);
-                        
+
                         // Convert int to real if needed for mixed arithmetic
                         let (final_left, final_right) = match (left_type, right_type) {
                             (Some(TypeName::Int), Some(TypeName::Float)) => {
@@ -669,7 +671,7 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
                                 (Box::new(converted_left), Box::new(right_expr))
                             }
                             (Some(TypeName::Float), Some(TypeName::Int)) => {
-                                // Convert right (int) to real  
+                                // Convert right (int) to real
                                 let converted_right = BoogieExpr {
                                     kind: BoogieExprKind::FunctionCall {
                                         name: "int2real".to_string(),
@@ -680,7 +682,7 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
                             }
                             _ => (Box::new(left_expr), Box::new(right_expr)),
                         };
-                        
+
                         Ok(BoogieExpr {
                             kind: BoogieExprKind::BinOp(final_left, boogie_op, final_right),
                         })
@@ -760,7 +762,7 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
                     return Err(errors);
                 }
 
-                // Check if we need type conversion for the stored value  
+                // Check if we need type conversion for the stored value
                 // For int fields, we need to be careful about type mismatches from arithmetic
                 let final_rvalue_expr = match field_info.ty {
                     TypeName::Int => {
@@ -794,14 +796,21 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
 
     /// Check if an RValue needs real2int conversion when stored in an int field
     /// This handles both direct arithmetic and variables that might hold real values
-    fn rvalue_needs_real_to_int_conversion(&self, cfg_program: &CfgProgram, rvalue: &RValue, _prefix: Option<&str>) -> bool {
+    fn rvalue_needs_real_to_int_conversion(
+        &self,
+        cfg_program: &CfgProgram,
+        rvalue: &RValue,
+        _prefix: Option<&str>,
+    ) -> bool {
         match rvalue {
-            RValue::BinaryOp { op, left, right, .. } => {
+            RValue::BinaryOp {
+                op, left, right, ..
+            } => {
                 // Direct arithmetic operations that mix int/real will produce real results
                 if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) {
                     let left_type = self.infer_operand_type(cfg_program, left);
                     let right_type = self.infer_operand_type(cfg_program, right);
-                    
+
                     // If we have mixed int/real types, the result will be real
                     match (left_type, right_type) {
                         (Some(TypeName::Int), Some(TypeName::Float)) => true,

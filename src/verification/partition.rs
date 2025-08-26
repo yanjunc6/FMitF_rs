@@ -322,10 +322,12 @@ impl PartitionVerificationManager {
 
         // Assert (args are equal) - all accesses to same partition function in same hop must have same args
         let error_msg = ErrorMessage {
-            msg: format!(
-                "Partition function '{}' called with different arguments in the same hop, violating single-node constraint",
-                partition_function.name
-            ),
+            spanned_error: SpannedError {
+                error: VerificationError::PartitionFunctionArgumentInconsistency {
+                    partition_function_name: partition_function.name.clone(),
+                },
+                span: None, // TODO: Add proper span information if available
+            },
         };
 
         generator.add_assertion_to_current_procedure(args_equal, error_msg);

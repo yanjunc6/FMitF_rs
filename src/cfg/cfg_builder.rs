@@ -482,7 +482,7 @@ impl<'a> CfgBuilder<'a> {
                 if !self.cfg.functions[func_id].hop_order.contains(&cfg_hop_id) {
                     self.cfg.functions[func_id].hop_order.push(cfg_hop_id);
                 }
-                
+
                 Some(cfg_hop_id)
             }
             ast::HopType::ForLoop {
@@ -2112,7 +2112,7 @@ impl<'a> CfgBuilder<'a> {
     ) -> Vec<BasicBlockId> {
         // For unrolled hop loops, we don't use the container hop_id at all
         // Instead, we create completely independent hops for each iteration
-        
+
         // Create a separate hop for each loop iteration
         for iteration in start_val..=end_val {
             // Create a new hop for this iteration
@@ -2174,7 +2174,7 @@ impl<'a> CfgBuilder<'a> {
         // The original hop_id is not used at all for unrolled loops
         // Each iteration creates its own independent hop
         // We don't register the original hop_id anywhere
-        
+
         // Return empty blocks since we don't use the container hop
         Vec::new()
     }
