@@ -189,9 +189,19 @@ impl BoogieStateManager {
                 BoogieProgramGenerator::gen_basic_block_label(block_id, Some(&prefix_str), None);
             generator.add_line_to_current_procedure(BoogieLine::Label(label));
 
-            // Convert statements
+            // Convert statements with execution context prefix
+            // Extract function context (A or B) from suffix for variable naming
+            let execution_context = if suffix.starts_with("A_") {
+                Some("A")
+            } else if suffix.starts_with("B_") {
+                Some("B")
+            } else {
+                None
+            };
+
             for statement in &cfg_program.blocks[block_id].statements {
-                let boogie_lines = generator.convert_statement(cfg_program, statement, None)?;
+                let boogie_lines =
+                    generator.convert_statement(cfg_program, statement, execution_context)?;
                 generator.add_lines_to_current_procedure(boogie_lines);
             }
 
