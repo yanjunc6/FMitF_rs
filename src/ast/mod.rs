@@ -47,7 +47,7 @@ mod name_resolver;
 pub use errors::{AstError, Results, SpannedError};
 
 /// Represents a span in the source code with start and end positions, line, and column.
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Span {
     pub start: usize,
     pub end: usize,

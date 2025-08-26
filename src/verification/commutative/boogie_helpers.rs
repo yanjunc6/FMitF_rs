@@ -1,5 +1,5 @@
 use crate::cfg::{BasicBlockId, CfgProgram, EdgeType, HopCfg, HopId, VarId};
-use crate::verification::errors::Results;
+use crate::verification::errors::{Results, SpannedError, VerificationError};
 use crate::verification::Boogie::{
     gen_Boogie::BoogieProgramGenerator, BoogieBinOp, BoogieExpr, BoogieExprKind, BoogieLine,
     BoogieUnOp, ErrorMessage,
@@ -482,7 +482,8 @@ impl BoogieStateManager {
         a_then_b_vars: &VariableSnapshots,
         b_then_a_vars: &VariableSnapshots,
     ) -> Results<()> {
-        generator.add_comment_to_current_procedure("Verifying A->B === B->A equivalence:".to_string());
+        generator
+            .add_comment_to_current_procedure("Verifying A->B === B->A equivalence:".to_string());
 
         let mut equality_conditions = Vec::new();
 
@@ -542,7 +543,10 @@ impl BoogieStateManager {
         let equivalence_assertion = BoogieProgramGenerator::gen_conjunction(equality_conditions);
 
         let error_msg = ErrorMessage {
-            msg: "Special interleavings non-equivalence: A→B and B→A produce different results, slices are not commutative".to_string(),
+            spanned_error: SpannedError {
+                error: VerificationError::SpecialInterleavingNonEquivalence,
+                span: None, // TODO: Add proper span information if available
+            },
         };
 
         generator.add_assertion_to_current_procedure(equivalence_assertion, error_msg);
@@ -654,7 +658,10 @@ impl BoogieStateManager {
             BoogieProgramGenerator::gen_disjunction(vec![a_then_b_equal, b_then_a_equal]);
 
         let error_msg = ErrorMessage {
-            msg: "Slice commutativity violation: interleaving produces different result than both special orderings".to_string(),
+            spanned_error: SpannedError {
+                error: VerificationError::SliceCommutativityViolation,
+                span: None, // TODO: Add proper span information if available
+            },
         };
 
         generator.add_assertion_to_current_procedure(final_assertion, error_msg);

@@ -4,8 +4,11 @@
 
 use super::{Cli, Logger, OutputManager};
 use crate::{
-    ast::parse_and_analyze, cfg::CfgBuilder, sc_graph::SCGraphBuilder,
-    verification::VerificationManager, AstProgram, CfgProgram,
+    ast::parse_and_analyze,
+    cfg::CfgBuilder,
+    sc_graph::SCGraphBuilder,
+    verification::{SpannedError, VerificationManager},
+    AstProgram, CfgProgram,
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Instant;
@@ -353,6 +356,9 @@ impl Compiler {
             bpl_files.len()
         ))?;
 
+        // Collect all verification errors
+        let mut all_verification_errors: Vec<SpannedError> = Vec::new();
+
         // Create progress bar
         let pb = ProgressBar::new(bpl_files.len() as u64);
 
@@ -394,6 +400,10 @@ impl Compiler {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let success = output.status.success();
 
+            // Extract verification errors from Boogie output
+            let errors = Self::extract_verification_errors(&stdout, &stderr);
+            all_verification_errors.extend(errors);
+
             // Write results to compilation.log through OutputManager
             output_manager
                 .write_boogie_verification_result(&file_name, success, &stdout, &stderr)?;
@@ -404,6 +414,45 @@ impl Compiler {
         pb.set_message("Boogie verification completed");
         pb.finish_with_message(format!("✓ Verified {} Boogie files", bpl_files.len()));
 
+        // Print collected verification errors
+        if !all_verification_errors.is_empty() {
+            println!("\nVerification errors found: {:?}", all_verification_errors);
+        }
+
         Ok(())
+    }
+
+    /// Parse SpannedError from escaped S-expression string
+    fn parse_spanned_error_from_boogie_output(escaped_sexpr: &str) -> Option<SpannedError> {
+        // First, unescape the string: \" becomes "
+        let unescaped = escaped_sexpr.replace("\\\"", "\"");
+
+        // Try to parse as S-expression
+        match serde_lexpr::from_str::<SpannedError>(&unescaped) {
+            Ok(error) => Some(error),
+            Err(_) => {
+                // Fallback: could not parse, maybe it's a legacy format
+                None
+            }
+        }
+    }
+
+    /// Extract verification errors from Boogie output
+    fn extract_verification_errors(stdout: &str, stderr: &str) -> Vec<SpannedError> {
+        let mut errors = Vec::new();
+
+        // Look for assertion violations in Boogie output
+        // Boogie typically reports assertion violations with the message
+        let combined_output = format!("{}\n{}", stdout, stderr);
+
+        // Look for patterns like 'assert {:msg "..."} failed'
+        // This is a simple regex-based approach - could be improved
+        for line in combined_output.lines() {
+            if let Some(spanned_error) = Self::parse_spanned_error_from_boogie_output(line) {
+                errors.push(spanned_error);
+            }
+        }
+
+        errors
     }
 }
