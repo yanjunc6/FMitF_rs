@@ -1,8 +1,8 @@
-use crate::cfg::{CfgProgram, HopId, VarId};
+use crate::cfg::{BasicBlockId, CfgProgram, EdgeType, HopCfg, HopId, VarId};
 use crate::verification::errors::Results;
 use crate::verification::Boogie::{
     gen_Boogie::BoogieProgramGenerator, BoogieBinOp, BoogieExpr, BoogieExprKind, BoogieLine,
-    ErrorMessage,
+    BoogieUnOp, ErrorMessage,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -197,16 +197,16 @@ impl BoogieStateManager {
 
             let is_last_basic_block = block_id == *hop.blocks.last().unwrap();
 
-            // Generate control flow edges directly to current procedure
+            // Generate control flow edges with commutative-aware logic
             let mut temp_lines = Vec::new();
-            generator.gen_basic_block_edges(
+            self.gen_commutative_block_edges(
                 &mut temp_lines,
+                generator,
                 cfg_program,
                 block_id,
                 is_last_hop,
                 function_name,
-                Some(&prefix_str),
-                None,
+                suffix,
             );
             generator.add_lines_to_current_procedure(temp_lines);
 
@@ -236,6 +236,169 @@ impl BoogieStateManager {
         }
 
         Ok(())
+    }
+
+    /// Generate control flow edges with commutative execution context awareness
+    fn gen_commutative_block_edges(
+        &self,
+        lines: &mut Vec<BoogieLine>,
+        generator: &mut BoogieProgramGenerator,
+        cfg_program: &CfgProgram,
+        block_id: BasicBlockId,
+        is_last_hop: bool,
+        function_name: &str,
+        current_suffix: &str,
+    ) {
+        let block = &cfg_program.blocks[block_id];
+        let current_prefix = format!("exec_{}", current_suffix);
+
+        // If no successors, this is a terminal block - no gotos needed
+        if block.successors.is_empty() {
+            return;
+        }
+
+        for edge in &block.successors {
+            match &edge.edge_type {
+                EdgeType::Unconditional => {
+                    // Generate goto to target block using current prefix
+                    let target_label = BoogieProgramGenerator::gen_basic_block_label(
+                        edge.to,
+                        Some(&current_prefix),
+                        None,
+                    );
+                    lines.push(BoogieLine::Goto(target_label));
+                }
+                EdgeType::ConditionalTrue { condition } => {
+                    // Generate conditional goto using current prefix
+                    let target_label = BoogieProgramGenerator::gen_basic_block_label(
+                        edge.to,
+                        Some(&current_prefix),
+                        None,
+                    );
+                    match generator.convert_operand(cfg_program, condition, None) {
+                        Ok(condition_expr) => {
+                            lines.push(BoogieLine::If {
+                                cond: condition_expr,
+                                then_body: vec![Box::new(BoogieLine::Goto(target_label))],
+                                else_body: vec![],
+                            });
+                        }
+                        Err(_) => {
+                            lines.push(BoogieLine::Goto(target_label));
+                        }
+                    }
+                }
+                EdgeType::ConditionalFalse { condition } => {
+                    // Generate conditional goto using current prefix
+                    let target_label = BoogieProgramGenerator::gen_basic_block_label(
+                        edge.to,
+                        Some(&current_prefix),
+                        None,
+                    );
+                    match generator.convert_operand(cfg_program, condition, None) {
+                        Ok(condition_expr) => {
+                            let negated_condition = BoogieExpr {
+                                kind: BoogieExprKind::UnOp(
+                                    BoogieUnOp::Not,
+                                    Box::new(condition_expr),
+                                ),
+                            };
+                            lines.push(BoogieLine::If {
+                                cond: negated_condition,
+                                then_body: vec![Box::new(BoogieLine::Goto(target_label))],
+                                else_body: vec![],
+                            });
+                        }
+                        Err(_) => {
+                            lines.push(BoogieLine::Goto(target_label));
+                        }
+                    }
+                }
+                EdgeType::HopExit { next_hop } => {
+                    if is_last_hop {
+                        // HopExit with last hop -- goto function end
+                        let end_label = BoogieProgramGenerator::gen_function_end_label(
+                            function_name,
+                            Some(&current_prefix),
+                            None,
+                        );
+                        lines.push(BoogieLine::Goto(end_label));
+                    } else if let Some(next_hop_id) = next_hop {
+                        // Generate goto to next hop's entry block with correct prefix
+                        let next_hop = &cfg_program.hops[*next_hop_id];
+                        if let Some(entry_block) = next_hop.entry_block {
+                            // Determine the function for the next hop and generate correct prefix
+                            let target_suffix =
+                                self.get_target_hop_suffix(current_suffix, next_hop, cfg_program);
+                            let target_prefix = format!("exec_{}", target_suffix);
+
+                            let target_label = BoogieProgramGenerator::gen_basic_block_label(
+                                entry_block,
+                                Some(&target_prefix),
+                                None,
+                            );
+                            lines.push(BoogieLine::Goto(target_label));
+                        }
+                    } else {
+                        // HopExit with no next hop - goto function end
+                        let end_label = BoogieProgramGenerator::gen_function_end_label(
+                            function_name,
+                            Some(&current_prefix),
+                            None,
+                        );
+                        lines.push(BoogieLine::Goto(end_label));
+                    }
+                }
+                EdgeType::Abort => {
+                    // Abort execution - no successors
+                    let abort_label = BoogieProgramGenerator::gen_function_abort_label(
+                        function_name,
+                        Some(&current_prefix),
+                        None,
+                    );
+                    lines.push(BoogieLine::Goto(abort_label));
+                }
+                EdgeType::Return { value: _ } => {
+                    // Return statement - goto function return label
+                    let return_label = BoogieProgramGenerator::gen_function_return_label(
+                        function_name,
+                        Some(&current_prefix),
+                        None,
+                    );
+                    lines.push(BoogieLine::Goto(return_label));
+                }
+            }
+        }
+    }
+
+    /// Determine the correct suffix for the target hop in commutative execution
+    fn get_target_hop_suffix(
+        &self,
+        current_suffix: &str,
+        target_hop: &HopCfg,
+        cfg_program: &CfgProgram,
+    ) -> String {
+        // Parse the current suffix to understand the execution context
+        // Format is typically: A_ordering or B_ordering (e.g., A_a_then_b, B_a_then_b)
+
+        // Determine which function the target hop belongs to
+        let target_function = &cfg_program.functions[target_hop.function_id];
+
+        // Extract the ordering part from current suffix (everything after A_ or B_)
+        let ordering = if current_suffix.starts_with("A_") {
+            &current_suffix[2..]
+        } else if current_suffix.starts_with("B_") {
+            &current_suffix[2..]
+        } else {
+            current_suffix // fallback to entire suffix
+        };
+
+        // Generate target suffix based on target function name
+        if target_function.name == "simple_part" {
+            format!("A_{}", ordering)
+        } else {
+            format!("B_{}", ordering)
+        }
     }
 
     /// Snapshot the final state of variables after execution (working on current procedure)
@@ -310,9 +473,7 @@ impl BoogieStateManager {
         a_then_b_vars: &VariableSnapshots,
         b_then_a_vars: &VariableSnapshots,
     ) -> Results<()> {
-        generator.add_comment_to_current_procedure(
-            "Verifying A→B ≡ B→A equivalence:".to_string(),
-        );
+        generator.add_comment_to_current_procedure("Verifying A→B ≡ B→A equivalence:".to_string());
 
         let mut equality_conditions = Vec::new();
 

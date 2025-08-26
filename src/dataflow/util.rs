@@ -176,7 +176,7 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                         .successors
                         .iter()
                         .any(|e| matches!(e.edge_type, EdgeType::Return { .. } | EdgeType::Abort));
-                
+
                 let new_exit = if is_exit_block {
                     // Exit blocks should use their boundary value, not compute from successors
                     block_exit[&block_id].clone()

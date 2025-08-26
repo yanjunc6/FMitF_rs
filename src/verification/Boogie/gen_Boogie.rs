@@ -3,8 +3,8 @@ use super::{
     BoogieType, BoogieUnOp, BoogieVarDecl, ErrorMessage,
 };
 use crate::cfg::{
-    BasicBlockId, BinaryOp, CfgProgram, Constant, EdgeType, FunctionCfg, FunctionId, LValue,
-    Operand, RValue, Statement, TypeName, UnaryOp, VarId, VariableKind,
+    BasicBlockId, BinaryOp, CfgProgram, Constant, FunctionCfg, FunctionId, LValue, Operand, RValue,
+    Statement, TypeName, UnaryOp, VarId, VariableKind,
 };
 use crate::verification::errors::{Results, SpannedError, VerificationError};
 use std::collections::HashMap;
@@ -632,7 +632,7 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
                         // based on the types of the operands
                         let left_type = self.infer_operand_type(cfg_program, left);
                         let right_type = self.infer_operand_type(cfg_program, right);
-                        
+
                         // Use integer division if both operands are integers
                         let boogie_op = match (left_type, right_type) {
                             (Some(TypeName::Int), Some(TypeName::Int)) => BoogieBinOp::IntDiv,
@@ -1002,106 +1002,26 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
         Self::add_suffix_prefix_helper(&label, prefix, suffix)
     }
 
-    /// Generate goto edges for basic block control flow
+    /// Generate goto edges for basic block control flow (moved to individual verification modules)
+    /// Each verification type (partition, commutative, etc.) should implement its own edge generation
+    /// This is kept as a deprecated placeholder - use the specific implementations instead
+    #[deprecated(
+        note = "Use partition-specific or commutative-specific edge generation methods instead"
+    )]
     pub fn gen_basic_block_edges(
         &mut self,
-        lines: &mut Vec<BoogieLine>,
-        cfg_program: &CfgProgram,
-        block_id: BasicBlockId,
-        is_last_hop: bool,
-        function_name: &str,
-        prefix: Option<&str>,
-        suffix: Option<&str>,
+        _lines: &mut Vec<BoogieLine>,
+        _cfg_program: &CfgProgram,
+        _block_id: BasicBlockId,
+        _is_last_hop: bool,
+        _function_name: &str,
+        _prefix: Option<&str>,
+        _suffix: Option<&str>,
     ) {
-        let block = &cfg_program.blocks[block_id];
-
-        // If no successors, this is a terminal block - no gotos needed
-        if block.successors.is_empty() {
-            return;
-        }
-
-        for edge in &block.successors {
-            match &edge.edge_type {
-                EdgeType::Unconditional => {
-                    // Generate goto to target block
-                    let target_label = Self::gen_basic_block_label(edge.to, prefix, suffix);
-                    lines.push(BoogieLine::Goto(target_label));
-                }
-                EdgeType::ConditionalTrue { condition } => {
-                    // Generate conditional goto: if (condition) goto target
-                    let target_label = Self::gen_basic_block_label(edge.to, prefix, suffix);
-                    // Convert condition operand to Boogie expression
-                    match self.convert_operand(cfg_program, condition, None) {
-                        Ok(condition_expr) => {
-                            lines.push(BoogieLine::If {
-                                cond: condition_expr,
-                                then_body: vec![Box::new(BoogieLine::Goto(target_label))],
-                                else_body: vec![], // Empty else body
-                            });
-                        }
-                        Err(_) => {
-                            // If condition conversion fails, generate unconditional goto as fallback
-                            lines.push(BoogieLine::Goto(target_label));
-                        }
-                    }
-                }
-                EdgeType::ConditionalFalse { condition } => {
-                    // Generate conditional goto: if (!condition) goto target
-                    let target_label = Self::gen_basic_block_label(edge.to, prefix, suffix);
-                    // Convert condition operand to Boogie expression and negate it
-                    match self.convert_operand(cfg_program, condition, None) {
-                        Ok(condition_expr) => {
-                            let negated_condition = BoogieExpr {
-                                kind: BoogieExprKind::UnOp(
-                                    BoogieUnOp::Not,
-                                    Box::new(condition_expr),
-                                ),
-                            };
-                            lines.push(BoogieLine::If {
-                                cond: negated_condition,
-                                then_body: vec![Box::new(BoogieLine::Goto(target_label))],
-                                else_body: vec![], // Empty else body
-                            });
-                        }
-                        Err(_) => {
-                            // If condition conversion fails, generate unconditional goto as fallback
-                            lines.push(BoogieLine::Goto(target_label));
-                        }
-                    }
-                }
-                EdgeType::HopExit { next_hop } => {
-                    if is_last_hop {
-                        // HopExit with last hop -- goto function end
-                        let end_label = Self::gen_function_end_label(function_name, prefix, suffix);
-                        lines.push(BoogieLine::Goto(end_label));
-                    }
-                    if let Some(next_hop_id) = next_hop {
-                        // Generate goto to next hop's entry block
-                        let next_hop = &cfg_program.hops[*next_hop_id];
-                        if let Some(entry_block) = next_hop.entry_block {
-                            let target_label =
-                                Self::gen_basic_block_label(entry_block, prefix, suffix);
-                            lines.push(BoogieLine::Goto(target_label));
-                        }
-                    } else {
-                        // HopExit with no next hop - goto function end
-                        let end_label = Self::gen_function_end_label(function_name, prefix, suffix);
-                        lines.push(BoogieLine::Goto(end_label));
-                    }
-                }
-                EdgeType::Return { value: _ } => {
-                    // Return statement - goto function return label
-                    let return_label =
-                        Self::gen_function_return_label(function_name, prefix, suffix);
-                    lines.push(BoogieLine::Goto(return_label));
-                }
-                EdgeType::Abort => {
-                    // Abort statement - goto function abort label
-                    let abort_label = Self::gen_function_abort_label(function_name, prefix, suffix);
-                    lines.push(BoogieLine::Goto(abort_label));
-                }
-            }
-        }
+        // This method has been moved to individual verification modules
+        // - Partition verification: PartitionVerificationManager::gen_partition_basic_block_edges
+        // - Commutative verification: BoogieStateManager::gen_commutative_block_edges
+        panic!("gen_basic_block_edges has been moved to individual verification modules")
     }
 }
 

@@ -355,7 +355,7 @@ impl Compiler {
 
         // Create progress bar
         let pb = ProgressBar::new(bpl_files.len() as u64);
-        
+
         // Configure progress bar style based on --no-color flag
         let style = if cli.no_color {
             ProgressStyle::default_bar()
@@ -364,18 +364,20 @@ impl Compiler {
                 .progress_chars("#>-")
         } else {
             ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+                .template(
+                    "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}",
+                )
                 .unwrap()
                 .progress_chars("#>-")
         };
-        
+
         pb.set_style(style);
         pb.set_message("Verifying Boogie files...");
 
         // Run Boogie on each .bpl file
         for (index, bpl_file) in bpl_files.iter().enumerate() {
             let file_name = bpl_file.file_name().unwrap().to_string_lossy();
-            
+
             // Update progress bar with current file
             pb.set_message(format!("Verifying {}", file_name));
             pb.set_position(index as u64);
