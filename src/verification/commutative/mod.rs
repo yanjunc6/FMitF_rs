@@ -129,8 +129,11 @@ impl CommutativeVerificationManager {
 
         // Collect all modified globals using analysis info
         let mut modifies = HashSet::new();
-        // Add table variables that are written by either slice
+        // Add all table variables that are read or written by either slice
+        // (since all of them get havoc'd, which counts as assignment in Boogie)
+        modifies.extend(analysis_info.tables_read_a.iter().cloned());
         modifies.extend(analysis_info.tables_written_a.iter().cloned());
+        modifies.extend(analysis_info.tables_read_b.iter().cloned());
         modifies.extend(analysis_info.tables_written_b.iter().cloned());
 
         // Create the procedure and add it to the generator

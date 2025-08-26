@@ -1,0 +1,39 @@
+// Bug #3: Duplicate block labels in partition verification
+// This test reproduces duplicate block label generation in Boogie output
+
+partition node_selector(int x) = x;
+
+table TestTable {
+    primary int id;
+    node node_selector(id);
+    int value;
+    float amount;
+}
+
+void complex_transaction(int test_id) {
+    hop {
+        // Multiple basic blocks within single hop
+        int x = TestTable[id: test_id].value;
+        if (x > 10) {
+            TestTable[id: test_id].amount = 100.0;
+        } else {
+            TestTable[id: test_id].amount = 50.0;
+        }
+        
+        // More control flow to create multiple basic blocks
+        int y = x * 2;
+        if (y > 20) {
+            TestTable[id: test_id].value = y;
+        }
+    }
+    
+    hop {
+        // Another hop with similar control flow patterns
+        int z = TestTable[id: test_id].value;
+        if (z > 5) {
+            TestTable[id: test_id].amount = TestTable[id: test_id].amount + 10.0;
+        } else {
+            TestTable[id: test_id].value = z + 1;
+        }
+    }
+}
