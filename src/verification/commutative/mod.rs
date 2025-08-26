@@ -168,7 +168,17 @@ impl CommutativeVerificationManager {
             &state_manager,
         )?;
 
-        // Step 4: For each legal interleaving, verify it produces one of the special results
+        // Step 4: Verify that the two special interleavings produce equivalent results
+        self.verify_special_interleavings_equivalence(
+            generator,
+            cfg_program,
+            &analysis_info,
+            &a_then_b_vars,
+            &b_then_a_vars,
+            &state_manager,
+        )?;
+
+        // Step 5: For each legal interleaving, verify it produces one of the special results
         for (i, interleaving) in interleavings.iter().enumerate() {
             self.verify_interleaving_equivalence(
                 generator,
@@ -280,6 +290,31 @@ impl CommutativeVerificationManager {
         } else {
             Ok(VariableSnapshots::empty())
         }
+    }
+
+    /// Verify that the two special interleavings (A→B and B→A) produce equivalent results
+    fn verify_special_interleavings_equivalence(
+        &self,
+        generator: &mut BoogieProgramGenerator,
+        cfg_program: &CfgProgram,
+        analysis_info: &slice_analyzer::SliceAnalysisInfo,
+        a_then_b_vars: &VariableSnapshots,
+        b_then_a_vars: &VariableSnapshots,
+        state_manager: &BoogieStateManager,
+    ) -> Results<()> {
+        generator.add_comment_to_current_procedure(
+            "--- Step 4: Verify A→B ≡ B→A (Special interleavings equivalence) ---".to_string(),
+        );
+
+        state_manager.assert_special_interleavings_equivalence(
+            generator,
+            cfg_program,
+            analysis_info,
+            a_then_b_vars,
+            b_then_a_vars,
+        )?;
+
+        Ok(())
     }
 
     /// Verify that a specific interleaving produces equivalent results to the special interleavings

@@ -301,6 +301,85 @@ impl BoogieStateManager {
         })
     }
 
+    /// Assert that the two special interleavings (A→B and B→A) produce equivalent results
+    pub fn assert_special_interleavings_equivalence(
+        &self,
+        generator: &mut BoogieProgramGenerator,
+        _cfg_program: &CfgProgram,
+        analysis_info: &SliceAnalysisInfo,
+        a_then_b_vars: &VariableSnapshots,
+        b_then_a_vars: &VariableSnapshots,
+    ) -> Results<()> {
+        generator.add_comment_to_current_procedure(
+            "Verifying A→B ≡ B→A equivalence:".to_string(),
+        );
+
+        let mut equality_conditions = Vec::new();
+
+        // Compare tables written by last hop only
+        let mut tables_written_last_hop = HashSet::new();
+        tables_written_last_hop.extend(&analysis_info.tables_written_last_hop_a);
+        tables_written_last_hop.extend(&analysis_info.tables_written_last_hop_b);
+
+        for table_var_name in tables_written_last_hop {
+            if let (Some(a_then_b_snapshot), Some(b_then_a_snapshot)) = (
+                a_then_b_vars.table_snapshots.get(table_var_name),
+                b_then_a_vars.table_snapshots.get(table_var_name),
+            ) {
+                let a_then_b_expr = BoogieExpr {
+                    kind: BoogieExprKind::Var(a_then_b_snapshot.clone()),
+                };
+                let b_then_a_expr = BoogieExpr {
+                    kind: BoogieExprKind::Var(b_then_a_snapshot.clone()),
+                };
+                equality_conditions.push(BoogieExpr {
+                    kind: BoogieExprKind::BinOp(
+                        Box::new(a_then_b_expr),
+                        BoogieBinOp::Eq,
+                        Box::new(b_then_a_expr),
+                    ),
+                });
+            }
+        }
+
+        // Compare live-OUT variables only
+        let mut live_out_vars = HashSet::new();
+        live_out_vars.extend(&analysis_info.live_out_a);
+        live_out_vars.extend(&analysis_info.live_out_b);
+
+        for &var_id in &live_out_vars {
+            if let (Some(a_then_b_snapshot), Some(b_then_a_snapshot)) = (
+                a_then_b_vars.var_snapshots.get(&var_id),
+                b_then_a_vars.var_snapshots.get(&var_id),
+            ) {
+                let a_then_b_expr = BoogieExpr {
+                    kind: BoogieExprKind::Var(a_then_b_snapshot.clone()),
+                };
+                let b_then_a_expr = BoogieExpr {
+                    kind: BoogieExprKind::Var(b_then_a_snapshot.clone()),
+                };
+                equality_conditions.push(BoogieExpr {
+                    kind: BoogieExprKind::BinOp(
+                        Box::new(a_then_b_expr),
+                        BoogieBinOp::Eq,
+                        Box::new(b_then_a_expr),
+                    ),
+                });
+            }
+        }
+
+        // Create assertion: (A→B result) == (B→A result)
+        let equivalence_assertion = BoogieProgramGenerator::gen_conjunction(equality_conditions);
+
+        let error_msg = ErrorMessage {
+            msg: "Special interleavings non-equivalence: A→B and B→A produce different results, slices are not commutative".to_string(),
+        };
+
+        generator.add_assertion_to_current_procedure(equivalence_assertion, error_msg);
+
+        Ok(())
+    }
+
     /// Assert that current state equals one of the special interleaving states (working on current procedure)
     pub fn assert_equivalence_to_special_interleavings(
         &self,
