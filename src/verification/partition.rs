@@ -117,16 +117,16 @@ impl PartitionVerificationManager {
         > = HashMap::new();
 
         // Traverse each hop in order
-        for (hop_index, &hop_id) in function.hops.iter().enumerate() {
+        for &hop_id in function.hops.iter() {
             let hop = &cfg_program.hops[hop_id];
 
-            generator.add_comment_to_current_procedure(format!("--- Hop {} ---", hop_index));
+            generator.add_comment_to_current_procedure(format!("--- Hop {} ---", hop_id.index()));
 
             // Process each basic block in the hop
             for &block_id in hop.blocks.iter() {
                 let block = &cfg_program.blocks[block_id];
 
-                // Generate block label using gen_basic_block_label with block_id
+                // Generate block label with hop prefix to ensure uniqueness across hops
                 let block_label =
                     BoogieProgramGenerator::gen_basic_block_label(block_id, None, None);
                 generator.add_line_to_current_procedure(BoogieLine::Label(block_label));
