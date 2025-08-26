@@ -4,8 +4,9 @@ use super::{
 };
 use crate::cfg::{
     BasicBlockId, BinaryOp, CfgProgram, Constant, FunctionCfg, FunctionId, LValue, Operand, RValue,
-    Statement, TypeName, UnaryOp, VarId, VariableKind,
+    Statement, UnaryOp, VarId, VariableKind,
 };
+use crate::ast::TypeName;
 use crate::verification::errors::{Results, SpannedError, VerificationError};
 use std::collections::HashMap;
 
@@ -79,6 +80,8 @@ function Concat(x: String, y: String): String;
 function IntToString(i: int): String;
 function RealToString(r: real): String;
 function BoolToString(b: bool): String;
+function int2real(i: int): real;
+function real2int(r: real): int;
 
 
 // --------------------------
@@ -589,7 +592,7 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
                     },
                 })
             }
-            RValue::ArrayAccess { array, index } => {
+            RValue::ArrayAccess { array, index, result_type: _ } => {
                 let array_expr = self.convert_operand(cfg_program, array, prefix)?;
                 let index_expr = self.convert_operand(cfg_program, index, prefix)?;
 
@@ -600,7 +603,7 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
                     },
                 })
             }
-            RValue::UnaryOp { op, operand } => {
+            RValue::UnaryOp { op, operand, .. } => {
                 let boogie_op = Self::convert_unary_op(op)?;
                 let operand_expr = self.convert_operand(cfg_program, operand, prefix)?;
 
@@ -608,7 +611,7 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
                     kind: BoogieExprKind::UnOp(boogie_op, Box::new(operand_expr)),
                 })
             }
-            RValue::BinaryOp { op, left, right } => {
+            RValue::BinaryOp { op, left, right, .. } => {
                 let left_expr = self.convert_operand(cfg_program, left, prefix)?;
                 let right_expr = self.convert_operand(cfg_program, right, prefix)?;
 
@@ -647,6 +650,41 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
                             ),
                         })
                     }
+                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul => {
+                        // Handle type conversion for arithmetic operations
+                        let left_type = self.infer_operand_type(cfg_program, left);
+                        let right_type = self.infer_operand_type(cfg_program, right);
+                        let boogie_op = Self::convert_binary_op(op);
+                        
+                        // Convert int to real if needed for mixed arithmetic
+                        let (final_left, final_right) = match (left_type, right_type) {
+                            (Some(TypeName::Int), Some(TypeName::Float)) => {
+                                // Convert left (int) to real
+                                let converted_left = BoogieExpr {
+                                    kind: BoogieExprKind::FunctionCall {
+                                        name: "int2real".to_string(),
+                                        args: vec![left_expr],
+                                    },
+                                };
+                                (Box::new(converted_left), Box::new(right_expr))
+                            }
+                            (Some(TypeName::Float), Some(TypeName::Int)) => {
+                                // Convert right (int) to real  
+                                let converted_right = BoogieExpr {
+                                    kind: BoogieExprKind::FunctionCall {
+                                        name: "int2real".to_string(),
+                                        args: vec![right_expr],
+                                    },
+                                };
+                                (Box::new(left_expr), Box::new(converted_right))
+                            }
+                            _ => (Box::new(left_expr), Box::new(right_expr)),
+                        };
+                        
+                        Ok(BoogieExpr {
+                            kind: BoogieExprKind::BinOp(final_left, boogie_op, final_right),
+                        })
+                    }
                     _ => {
                         let boogie_op = Self::convert_binary_op(op);
                         Ok(BoogieExpr {
@@ -673,11 +711,11 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
         let rvalue_expr = self.convert_rvalue(cfg_program, rvalue, prefix)?;
 
         match lvalue {
-            LValue::Variable { var } => {
+            LValue::Variable { var, var_type: _ } => {
                 let var_name = self.gen_var_name(cfg_program, *var, prefix);
                 Ok(BoogieLine::Assign(var_name, rvalue_expr))
             }
-            LValue::ArrayElement { array, index } => {
+            LValue::ArrayElement { array, index, array_type: _ } => {
                 let array_name = self.gen_var_name(cfg_program, *array, prefix);
                 let base_expr = Box::new(BoogieExpr {
                     kind: BoogieExprKind::Var(array_name.clone()),
@@ -722,16 +760,65 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
                     return Err(errors);
                 }
 
+                // Check if we need type conversion for the stored value  
+                // For int fields, we need to be careful about type mismatches from arithmetic
+                let final_rvalue_expr = match field_info.ty {
+                    TypeName::Int => {
+                        // Use a more comprehensive check for when real2int conversion is needed
+                        if self.rvalue_needs_real_to_int_conversion(cfg_program, rvalue, prefix) {
+                            BoogieExpr {
+                                kind: BoogieExprKind::FunctionCall {
+                                    name: "real2int".to_string(),
+                                    args: vec![rvalue_expr],
+                                },
+                            }
+                        } else {
+                            rvalue_expr
+                        }
+                    }
+                    _ => rvalue_expr, // No conversion needed for other types
+                };
+
                 let store_expr = BoogieExpr {
                     kind: BoogieExprKind::MapStore {
                         base: base_expr,
                         indices,
-                        value: Box::new(rvalue_expr),
+                        value: Box::new(final_rvalue_expr),
                     },
                 };
 
                 Ok(BoogieLine::Assign(var_name, store_expr))
             }
+        }
+    }
+
+    /// Check if an RValue needs real2int conversion when stored in an int field
+    /// This handles both direct arithmetic and variables that might hold real values
+    fn rvalue_needs_real_to_int_conversion(&self, cfg_program: &CfgProgram, rvalue: &RValue, _prefix: Option<&str>) -> bool {
+        match rvalue {
+            RValue::BinaryOp { op, left, right, .. } => {
+                // Direct arithmetic operations that mix int/real will produce real results
+                if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) {
+                    let left_type = self.infer_operand_type(cfg_program, left);
+                    let right_type = self.infer_operand_type(cfg_program, right);
+                    
+                    // If we have mixed int/real types, the result will be real
+                    match (left_type, right_type) {
+                        (Some(TypeName::Int), Some(TypeName::Float)) => true,
+                        (Some(TypeName::Float), Some(TypeName::Int)) => true,
+                        _ => false,
+                    }
+                } else {
+                    false
+                }
+            }
+            RValue::Use(Operand::Var(var_id)) => {
+                // Check if the variable might hold a real value
+                let var = &cfg_program.variables[*var_id];
+                // If it's a temp variable with Float type, it needs conversion for int storage
+                var.ty == TypeName::Float && var.kind == crate::cfg::VariableKind::Temporary
+            }
+            _ => false, // Constants, table access, etc. don't need conversion
         }
     }
 
@@ -956,7 +1043,17 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
         prefix: Option<&str>,
         suffix: Option<&str>,
     ) -> String {
-        let label = format!("block{}", block_id.index());
+        // Use the raw ID value to ensure uniqueness across the entire program
+        // BasicBlockId is globally unique across all hops and functions
+        // Using a hash of the block_id as a unique identifier
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        
+        let mut hasher = DefaultHasher::new();
+        block_id.hash(&mut hasher);
+        let unique_id = hasher.finish();
+        
+        let label = format!("block{}", unique_id);
         Self::add_suffix_prefix_helper(&label, prefix, suffix)
     }
 
