@@ -16,17 +16,9 @@ pub enum VerificationError {
     IncrementDecrementNotSupported,
     HopNotFoundInFunction,
     PartitionFunctionArgumentInconsistency {
-        partition_function_id: usize,
-        function_id: usize,
-        table_id: usize,
-    },
-    SliceCommutativityViolation {
-        hop_id_1: usize,
-        hop_id_2: usize,
-    },
-    SpecialInterleavingNonEquivalence {
-        hop_id_1: usize,
-        hop_id_2: usize,
+        function_name: String,
+        table_name: String,
+        partition_function_name: String,
     },
 }
 
@@ -49,10 +41,6 @@ impl VerificationError {
             VerificationError::PartitionFunctionArgumentInconsistency { .. } => {
                 "PartitionFunctionArgumentInconsistency"
             }
-            VerificationError::SliceCommutativityViolation { .. } => "SliceCommutativityViolation",
-            VerificationError::SpecialInterleavingNonEquivalence { .. } => {
-                "SpecialInterleavingNonEquivalence"
-            }
         }
     }
 
@@ -70,27 +58,13 @@ impl VerificationError {
             }
             VerificationError::HopNotFoundInFunction => "Hop not found in any function".to_string(),
             VerificationError::PartitionFunctionArgumentInconsistency {
-                partition_function_id,
-                function_id,
-                table_id,
-            } => {
-                format!(
-                    "Function {} (table {} with partition {}) has different arguments in the same hop, violating single-node constraint",
-                    function_id, table_id, partition_function_id
-                )
-            }
-            VerificationError::SliceCommutativityViolation { hop_id_1, hop_id_2 } => {
-                format!(
-                    "Slice commutativity violation: interleaving between hop {} and hop {} produces different result than both special orderings",
-                    hop_id_1, hop_id_2
-                )
-            }
-            VerificationError::SpecialInterleavingNonEquivalence { hop_id_1, hop_id_2 } => {
-                format!(
-                    "Special interleavings non-equivalence: hop {} → hop {} and hop {} → hop {} produce different results, slices are not commutative",
-                    hop_id_1, hop_id_2, hop_id_2, hop_id_1
-                )
-            }
+                function_name,
+                table_name,
+                partition_function_name,
+            } => format!(
+                "Function '{}' uses table '{}' with partition function '{}' with inconsistent arguments",
+                function_name, table_name, partition_function_name
+            ),
         }
     }
 }

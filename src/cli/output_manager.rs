@@ -201,20 +201,25 @@ impl OutputManager {
         Ok(())
     }
 
-    /// Write SC-Graph output files
-    pub fn write_scgraph_output(
+    /// Write SC-Graph output files with custom filename prefix
+    pub fn write_scgraph_output_with_name(
         &self,
         scg: &crate::sc_graph::SCGraph,
         cfg: &CfgProgram,
+        filename_prefix: &str,
     ) -> Result<(), String> {
-        let scgraph_dump_path = self.output_dir.join("scgraph_dump.txt");
-        let scgraph_pretty_path = self.output_dir.join("scgraph_pretty.txt");
-        let scgraph_dot_path = self.output_dir.join("scgraph.dot");
+        let scgraph_dump_path = self
+            .output_dir
+            .join(format!("{}_dump.txt", filename_prefix));
+        let scgraph_pretty_path = self
+            .output_dir
+            .join(format!("{}_pretty.txt", filename_prefix));
+        let scgraph_dot_path = self.output_dir.join(format!("{}.dot", filename_prefix));
 
         // Write SC-Graph dump
         let scgraph_dump = format!("{:#?}", scg);
         std::fs::write(&scgraph_dump_path, scgraph_dump)
-            .map_err(|e| format!("Failed to write scgraph_dump.txt: {}", e))?;
+            .map_err(|e| format!("Failed to write {}_dump.txt: {}", filename_prefix, e))?;
 
         // Write SC-Graph pretty print
         use crate::pretty::{DotPrinter, PrettyPrinter, SCGraphPrinter};
@@ -223,7 +228,7 @@ impl OutputManager {
             .print_to_string(scg)
             .map_err(|e| format!("Failed to pretty print SC-Graph: {}", e))?;
         std::fs::write(&scgraph_pretty_path, scgraph_pretty)
-            .map_err(|e| format!("Failed to write scgraph_pretty.txt: {}", e))?;
+            .map_err(|e| format!("Failed to write {}_pretty.txt: {}", filename_prefix, e))?;
 
         // Write SC-Graph DOT file
         let dot_printer = DotPrinter::new();
@@ -232,7 +237,7 @@ impl OutputManager {
             .generate_dot(scg, cfg, &mut dot_content)
             .map_err(|e| format!("Failed to generate DOT file: {}", e))?;
         std::fs::write(&scgraph_dot_path, dot_content)
-            .map_err(|e| format!("Failed to write scgraph.dot: {}", e))?;
+            .map_err(|e| format!("Failed to write {}.dot: {}", filename_prefix, e))?;
 
         Ok(())
     }

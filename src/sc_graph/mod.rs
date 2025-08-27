@@ -4,6 +4,9 @@ use std::collections::HashSet;
 mod sc_graph_builder;
 pub use sc_graph_builder::SCGraphBuilder;
 
+mod sc_graph_simplify;
+pub use sc_graph_simplify::update_scgraph_for_commutative_errors;
+
 /// Represents a unique node identifier in the SC-Graph.
 /// Since HopId is only unique within a function, we need both FunctionId and HopId.
 /// We also include an instance number to handle multiple concurrent instances
