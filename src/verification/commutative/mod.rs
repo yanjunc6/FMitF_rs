@@ -103,7 +103,7 @@ impl CommutativeVerificationManager {
         &self,
         generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
-        sc_graph: &SCGraph,
+        _sc_graph: &SCGraph, // underscore prefix to indicate unused parameter
         unit: &CommutativeUnit,
     ) -> Results<BoogieProcedure> {
         let procedure_name = format!(
@@ -118,7 +118,7 @@ impl CommutativeVerificationManager {
         let state_manager = BoogieStateManager::new();
 
         // Generate all legal interleavings
-        let interleavings = interleaving_gen.generate_legal_interleavings(sc_graph, unit);
+        // let interleavings = interleaving_gen.generate_legal_interleavings(sc_graph, unit);
         let special = interleaving_gen.extract_special_interleavings(&unit.hops_A, &unit.hops_B);
 
         // Analyze liveness for both slices
@@ -157,10 +157,10 @@ impl CommutativeVerificationManager {
         ));
 
         // Step 1: Havoc all tables and live-in variables to create initial state
-        state_manager.havoc_initial_state(generator, cfg_program, &analysis_info)?;
+        state_manager.havoc_initial_state(generator, cfg_program, &analysis_info, unit)?;
 
         // Step 2: Save initial state for restoration
-        state_manager.save_initial_state(generator, cfg_program, &analysis_info)?;
+        state_manager.save_initial_state(generator, cfg_program, &analysis_info, unit)?;
 
         // Step 3: Execute the two special interleavings and save their final states
         let (a_then_b_vars, b_then_a_vars) = self.execute_special_interleavings(
@@ -169,6 +169,7 @@ impl CommutativeVerificationManager {
             &special,
             &analysis_info,
             &state_manager,
+            unit,
         )?;
 
         // Step 4: Verify that the two special interleavings produce equivalent results
@@ -184,20 +185,20 @@ impl CommutativeVerificationManager {
         )?;
 
         // Step 5: For each legal interleaving, verify it produces one of the special results
-        for (i, interleaving) in interleavings.iter().enumerate() {
-            self.verify_interleaving_equivalence(
-                generator,
-                cfg_program,
-                interleaving,
-                i,
-                &analysis_info,
-                &a_then_b_vars,
-                &b_then_a_vars,
-                &state_manager,
-                unit.c_edge.source.hop_id.index(),
-                unit.c_edge.target.hop_id.index(),
-            )?;
-        }
+        // for (i, interleaving) in interleavings.iter().enumerate() {
+        //     self.verify_interleaving_equivalence(
+        //         generator,
+        //         cfg_program,
+        //         interleaving,
+        //         i,
+        //         &analysis_info,
+        //         &a_then_b_vars,
+        //         &b_then_a_vars,
+        //         &state_manager,
+        //         unit.c_edge.source.hop_id.index(),
+        //         unit.c_edge.target.hop_id.index(),
+        //     )?;
+        // }
 
         // Clear current procedure reference
         generator.clear_current_procedure();
@@ -214,6 +215,7 @@ impl CommutativeVerificationManager {
         special: &SpecialInterleavings,
         analysis_info: &slice_analyzer::SliceAnalysisInfo,
         state_manager: &BoogieStateManager,
+        unit: &CommutativeUnit,
     ) -> Results<(VariableSnapshots, VariableSnapshots)> {
         generator.add_comment_to_current_procedure(
             "--- Step 3: Execute special interleavings ---".to_string(),
@@ -232,7 +234,7 @@ impl CommutativeVerificationManager {
         )?;
 
         // Reset state
-        state_manager.restore_initial_state(generator, cfg_program, analysis_info)?;
+        state_manager.restore_initial_state(generator, cfg_program, analysis_info, unit)?;
 
         // Execute B then A
         generator.add_comment_to_current_procedure("Executing B then A:".to_string());
@@ -328,50 +330,50 @@ impl CommutativeVerificationManager {
         Ok(())
     }
 
-    /// Verify that a specific interleaving produces equivalent results to the special interleavings
-    fn verify_interleaving_equivalence(
-        &self,
-        generator: &mut BoogieProgramGenerator,
-        cfg_program: &CfgProgram,
-        interleaving: &Interleaving,
-        interleaving_index: usize,
-        analysis_info: &slice_analyzer::SliceAnalysisInfo,
-        a_then_b_vars: &VariableSnapshots,
-        b_then_a_vars: &VariableSnapshots,
-        state_manager: &BoogieStateManager,
-        hop_id_a: usize,
-        hop_id_b: usize,
-    ) -> Results<()> {
-        generator.add_comment_to_current_procedure(format!(
-            "--- Verifying interleaving {} ---",
-            interleaving_index + 1
-        ));
+    // Verify that a specific interleaving produces equivalent results to the special interleavings
+    // fn verify_interleaving_equivalence(
+    //     &self,
+    //     generator: &mut BoogieProgramGenerator,
+    //     cfg_program: &CfgProgram,
+    //     interleaving: &Interleaving,
+    //     interleaving_index: usize,
+    //     analysis_info: &slice_analyzer::SliceAnalysisInfo,
+    //     a_then_b_vars: &VariableSnapshots,
+    //     b_then_a_vars: &VariableSnapshots,
+    //     state_manager: &BoogieStateManager,
+    //     hop_id_a: usize,
+    //     hop_id_b: usize,
+    // ) -> Results<()> {
+    //     generator.add_comment_to_current_procedure(format!(
+    //         "--- Verifying interleaving {} ---",
+    //         interleaving_index + 1
+    //     ));
 
-        // Reset to initial state before executing this interleaving
-        state_manager.restore_initial_state(generator, cfg_program, analysis_info)?;
+    //     // Reset to initial state before executing this interleaving
+    //     state_manager.restore_initial_state(generator, cfg_program, analysis_info)?;
 
-        // Execute the interleaving (without snapshotting intermediate states)
-        self.execute_interleaving_and_snapshot(
-            generator,
-            cfg_program,
-            interleaving,
-            &format!("interleaving_{}", interleaving_index),
-            analysis_info,
-            false, // Don't snapshot final state
-            state_manager,
-        )?;
+    //     // Execute the interleaving (without snapshotting intermediate states)
+    //     self.execute_interleaving_and_snapshot(
+    //         generator,
+    //         cfg_program,
+    //         interleaving,
+    //         &format!("interleaving_{}", interleaving_index),
+    //         analysis_info,
+    //         false, // Don't snapshot final state
+    //         state_manager,
+    //     )?;
 
-        // Assert equivalence to one of the special interleavings
-        state_manager.assert_equivalence_to_special_interleavings(
-            generator,
-            cfg_program,
-            analysis_info,
-            a_then_b_vars,
-            b_then_a_vars,
-            hop_id_a,
-            hop_id_b,
-        )?;
+    //     // Assert equivalence to one of the special interleavings
+    //     state_manager.assert_equivalence_to_special_interleavings(
+    //         generator,
+    //         cfg_program,
+    //         analysis_info,
+    //         a_then_b_vars,
+    //         b_then_a_vars,
+    //         hop_id_a,
+    //         hop_id_b,
+    //     )?;
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 }

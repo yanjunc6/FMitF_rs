@@ -6,7 +6,7 @@ use crate::verification::Boogie::{
 };
 use std::collections::{HashMap, HashSet};
 
-use super::slice_analyzer::SliceAnalysisInfo;
+use super::{slice_analyzer::SliceAnalysisInfo, CommutativeUnit};
 
 /// Variable snapshot names for tracking state
 pub struct VariableSnapshots {
@@ -38,6 +38,7 @@ impl BoogieStateManager {
         generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
         analysis_info: &SliceAnalysisInfo,
+        _unit: &CommutativeUnit,
     ) -> Results<()> {
         generator
             .add_comment_to_current_procedure("--- Step 1: Havoc initial state ---".to_string());
@@ -59,8 +60,10 @@ impl BoogieStateManager {
         live_in_vars.extend(&analysis_info.live_in_b);
 
         for &var_id in &live_in_vars {
-            let var_name = generator.gen_var_name(cfg_program, var_id, None);
-            generator.add_line_to_current_procedure(BoogieLine::Havoc(var_name));
+            let var_name_a = generator.gen_var_name(cfg_program, var_id, Some("A_"));
+            generator.add_line_to_current_procedure(BoogieLine::Havoc(var_name_a));
+            let var_name_b = generator.gen_var_name(cfg_program, var_id, Some("B_"));
+            generator.add_line_to_current_procedure(BoogieLine::Havoc(var_name_b));
         }
 
         Ok(())
@@ -72,6 +75,7 @@ impl BoogieStateManager {
         generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
         analysis_info: &SliceAnalysisInfo,
+        _unit: &CommutativeUnit,
     ) -> Results<()> {
         generator
             .add_comment_to_current_procedure("--- Step 2: Save initial state ---".to_string());
@@ -105,7 +109,20 @@ impl BoogieStateManager {
         live_in_vars.extend(&analysis_info.live_in_b);
 
         for &var_id in &live_in_vars {
-            let var_name = generator.gen_var_name(cfg_program, var_id, None);
+            let var_name = generator.gen_var_name(cfg_program, var_id, Some("A_"));
+            let snapshot_name = format!("{}_init", var_name);
+            // Add the snapshot variable as a local variable
+            let var_type = BoogieProgramGenerator::convert_type(&cfg_program.variables[var_id].ty);
+            generator.add_local_var(&snapshot_name, var_type);
+
+            let assign_expr = BoogieExpr {
+                kind: BoogieExprKind::Var(var_name),
+            };
+            generator.add_line_to_current_procedure(BoogieLine::Assign(snapshot_name, assign_expr));
+        }
+
+        for &var_id in &live_in_vars {
+            let var_name = generator.gen_var_name(cfg_program, var_id, Some("B_"));
             let snapshot_name = format!("{}_init", var_name);
             // Add the snapshot variable as a local variable
             let var_type = BoogieProgramGenerator::convert_type(&cfg_program.variables[var_id].ty);
@@ -126,6 +143,7 @@ impl BoogieStateManager {
         generator: &mut BoogieProgramGenerator,
         cfg_program: &CfgProgram,
         analysis_info: &SliceAnalysisInfo,
+        _unit: &CommutativeUnit,
     ) -> Results<()> {
         generator.add_comment_to_current_procedure("Restoring initial state:".to_string());
 
@@ -153,7 +171,16 @@ impl BoogieStateManager {
         live_in_vars.extend(&analysis_info.live_in_b);
 
         for &var_id in &live_in_vars {
-            let var_name = generator.gen_var_name(cfg_program, var_id, None);
+            let var_name = generator.gen_var_name(cfg_program, var_id, Some("A_"));
+            let snapshot_name = format!("{}_init", var_name);
+            let assign_expr = BoogieExpr {
+                kind: BoogieExprKind::Var(snapshot_name),
+            };
+            generator.add_line_to_current_procedure(BoogieLine::Assign(var_name, assign_expr));
+        }
+
+        for &var_id in &live_in_vars {
+            let var_name = generator.gen_var_name(cfg_program, var_id, Some("B_"));
             let snapshot_name = format!("{}_init", var_name);
             let assign_expr = BoogieExpr {
                 kind: BoogieExprKind::Var(snapshot_name),
@@ -556,120 +583,120 @@ impl BoogieStateManager {
         Ok(())
     }
 
-    /// Assert that current state equals one of the special interleaving states (working on current procedure)
-    pub fn assert_equivalence_to_special_interleavings(
-        &self,
-        generator: &mut BoogieProgramGenerator,
-        cfg_program: &CfgProgram,
-        analysis_info: &SliceAnalysisInfo,
-        a_then_b_vars: &VariableSnapshots,
-        b_then_a_vars: &VariableSnapshots,
-        hop_id_a: usize,
-        hop_id_b: usize,
-    ) -> Results<()> {
-        let mut equality_conditions_a_then_b = Vec::new();
-        let mut equality_conditions_b_then_a = Vec::new();
+    // Assert that current state equals one of the special interleaving states (working on current procedure)
+    // pub fn assert_equivalence_to_special_interleavings(
+    //     &self,
+    //     generator: &mut BoogieProgramGenerator,
+    //     cfg_program: &CfgProgram,
+    //     analysis_info: &SliceAnalysisInfo,
+    //     a_then_b_vars: &VariableSnapshots,
+    //     b_then_a_vars: &VariableSnapshots,
+    //     hop_id_a: usize,
+    //     hop_id_b: usize,
+    // ) -> Results<()> {
+    //     let mut equality_conditions_a_then_b = Vec::new();
+    //     let mut equality_conditions_b_then_a = Vec::new();
 
-        // Compare tables written by last hop only
-        let mut tables_written_last_hop = HashSet::new();
-        tables_written_last_hop.extend(&analysis_info.tables_written_last_hop_a);
-        tables_written_last_hop.extend(&analysis_info.tables_written_last_hop_b);
+    //     // Compare tables written by last hop only
+    //     let mut tables_written_last_hop = HashSet::new();
+    //     tables_written_last_hop.extend(&analysis_info.tables_written_last_hop_a);
+    //     tables_written_last_hop.extend(&analysis_info.tables_written_last_hop_b);
 
-        for table_var_name in tables_written_last_hop {
-            // Current var == a_then_b snapshot
-            if let Some(a_then_b_snapshot) = a_then_b_vars.table_snapshots.get(table_var_name) {
-                let current_expr = BoogieExpr {
-                    kind: BoogieExprKind::Var(table_var_name.clone()),
-                };
-                let a_then_b_expr = BoogieExpr {
-                    kind: BoogieExprKind::Var(a_then_b_snapshot.clone()),
-                };
-                equality_conditions_a_then_b.push(BoogieExpr {
-                    kind: BoogieExprKind::BinOp(
-                        Box::new(current_expr.clone()),
-                        BoogieBinOp::Eq,
-                        Box::new(a_then_b_expr),
-                    ),
-                });
-            }
+    //     for table_var_name in tables_written_last_hop {
+    //         // Current var == a_then_b snapshot
+    //         if let Some(a_then_b_snapshot) = a_then_b_vars.table_snapshots.get(table_var_name) {
+    //             let current_expr = BoogieExpr {
+    //                 kind: BoogieExprKind::Var(table_var_name.clone()),
+    //             };
+    //             let a_then_b_expr = BoogieExpr {
+    //                 kind: BoogieExprKind::Var(a_then_b_snapshot.clone()),
+    //             };
+    //             equality_conditions_a_then_b.push(BoogieExpr {
+    //                 kind: BoogieExprKind::BinOp(
+    //                     Box::new(current_expr.clone()),
+    //                     BoogieBinOp::Eq,
+    //                     Box::new(a_then_b_expr),
+    //                 ),
+    //             });
+    //         }
 
-            // Current var == b_then_a snapshot
-            if let Some(b_then_a_snapshot) = b_then_a_vars.table_snapshots.get(table_var_name) {
-                let current_expr = BoogieExpr {
-                    kind: BoogieExprKind::Var(table_var_name.clone()),
-                };
-                let b_then_a_expr = BoogieExpr {
-                    kind: BoogieExprKind::Var(b_then_a_snapshot.clone()),
-                };
-                equality_conditions_b_then_a.push(BoogieExpr {
-                    kind: BoogieExprKind::BinOp(
-                        Box::new(current_expr),
-                        BoogieBinOp::Eq,
-                        Box::new(b_then_a_expr),
-                    ),
-                });
-            }
-        }
+    //         // Current var == b_then_a snapshot
+    //         if let Some(b_then_a_snapshot) = b_then_a_vars.table_snapshots.get(table_var_name) {
+    //             let current_expr = BoogieExpr {
+    //                 kind: BoogieExprKind::Var(table_var_name.clone()),
+    //             };
+    //             let b_then_a_expr = BoogieExpr {
+    //                 kind: BoogieExprKind::Var(b_then_a_snapshot.clone()),
+    //             };
+    //             equality_conditions_b_then_a.push(BoogieExpr {
+    //                 kind: BoogieExprKind::BinOp(
+    //                     Box::new(current_expr),
+    //                     BoogieBinOp::Eq,
+    //                     Box::new(b_then_a_expr),
+    //                 ),
+    //             });
+    //         }
+    //     }
 
-        // Compare live-OUT variables only
-        let mut live_out_vars = HashSet::new();
-        live_out_vars.extend(&analysis_info.live_out_a);
-        live_out_vars.extend(&analysis_info.live_out_b);
+    //     // Compare live-OUT variables only
+    //     let mut live_out_vars = HashSet::new();
+    //     live_out_vars.extend(&analysis_info.live_out_a);
+    //     live_out_vars.extend(&analysis_info.live_out_b);
 
-        for &var_id in &live_out_vars {
-            let var_name = generator.gen_var_name(cfg_program, var_id, None);
+    //     for &var_id in &live_out_vars {
+    //         let var_name = generator.gen_var_name(cfg_program, var_id, None);
 
-            // Current var == a_then_b snapshot
-            if let Some(a_then_b_snapshot) = a_then_b_vars.var_snapshots.get(&var_id) {
-                let current_expr = BoogieExpr {
-                    kind: BoogieExprKind::Var(var_name.clone()),
-                };
-                let a_then_b_expr = BoogieExpr {
-                    kind: BoogieExprKind::Var(a_then_b_snapshot.clone()),
-                };
-                equality_conditions_a_then_b.push(BoogieExpr {
-                    kind: BoogieExprKind::BinOp(
-                        Box::new(current_expr.clone()),
-                        BoogieBinOp::Eq,
-                        Box::new(a_then_b_expr),
-                    ),
-                });
-            }
+    //         // Current var == a_then_b snapshot
+    //         if let Some(a_then_b_snapshot) = a_then_b_vars.var_snapshots.get(&var_id) {
+    //             let current_expr = BoogieExpr {
+    //                 kind: BoogieExprKind::Var(var_name.clone()),
+    //             };
+    //             let a_then_b_expr = BoogieExpr {
+    //                 kind: BoogieExprKind::Var(a_then_b_snapshot.clone()),
+    //             };
+    //             equality_conditions_a_then_b.push(BoogieExpr {
+    //                 kind: BoogieExprKind::BinOp(
+    //                     Box::new(current_expr.clone()),
+    //                     BoogieBinOp::Eq,
+    //                     Box::new(a_then_b_expr),
+    //                 ),
+    //             });
+    //         }
 
-            // Current var == b_then_a snapshot
-            if let Some(b_then_a_snapshot) = b_then_a_vars.var_snapshots.get(&var_id) {
-                let current_expr = BoogieExpr {
-                    kind: BoogieExprKind::Var(var_name),
-                };
-                let b_then_a_expr = BoogieExpr {
-                    kind: BoogieExprKind::Var(b_then_a_snapshot.clone()),
-                };
-                equality_conditions_b_then_a.push(BoogieExpr {
-                    kind: BoogieExprKind::BinOp(
-                        Box::new(current_expr),
-                        BoogieBinOp::Eq,
-                        Box::new(b_then_a_expr),
-                    ),
-                });
-            }
-        }
+    //         // Current var == b_then_a snapshot
+    //         if let Some(b_then_a_snapshot) = b_then_a_vars.var_snapshots.get(&var_id) {
+    //             let current_expr = BoogieExpr {
+    //                 kind: BoogieExprKind::Var(var_name),
+    //             };
+    //             let b_then_a_expr = BoogieExpr {
+    //                 kind: BoogieExprKind::Var(b_then_a_snapshot.clone()),
+    //             };
+    //             equality_conditions_b_then_a.push(BoogieExpr {
+    //                 kind: BoogieExprKind::BinOp(
+    //                     Box::new(current_expr),
+    //                     BoogieBinOp::Eq,
+    //                     Box::new(b_then_a_expr),
+    //                 ),
+    //             });
+    //         }
+    //     }
 
-        // Create final assertion: (current == a_then_b) OR (current == b_then_a)
-        let a_then_b_equal = BoogieProgramGenerator::gen_conjunction(equality_conditions_a_then_b);
-        let b_then_a_equal = BoogieProgramGenerator::gen_conjunction(equality_conditions_b_then_a);
+    //     // Create final assertion: (current == a_then_b) OR (current == b_then_a)
+    //     let a_then_b_equal = BoogieProgramGenerator::gen_conjunction(equality_conditions_a_then_b);
+    //     let b_then_a_equal = BoogieProgramGenerator::gen_conjunction(equality_conditions_b_then_a);
 
-        let final_assertion =
-            BoogieProgramGenerator::gen_disjunction(vec![a_then_b_equal, b_then_a_equal]);
+    //     let final_assertion =
+    //         BoogieProgramGenerator::gen_disjunction(vec![a_then_b_equal, b_then_a_equal]);
 
-        let error_msg = ErrorMessage {
-            boogie_error: BoogieError::SliceCommutativityViolation {
-                hop_id_1: hop_id_a,
-                hop_id_2: hop_id_b,
-            },
-        };
+    //     let error_msg = ErrorMessage {
+    //         boogie_error: BoogieError::SliceCommutativityViolation {
+    //             hop_id_1: hop_id_a,
+    //             hop_id_2: hop_id_b,
+    //         },
+    //     };
 
-        generator.add_assertion_to_current_procedure(final_assertion, error_msg);
+    //     generator.add_assertion_to_current_procedure(final_assertion, error_msg);
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 }

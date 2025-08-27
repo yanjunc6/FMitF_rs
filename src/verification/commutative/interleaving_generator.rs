@@ -29,6 +29,7 @@ impl InterleavingGenerator {
     }
 
     /// Generate all legal interleavings of two hop slices based on conflict constraints
+    #[allow(dead_code)]
     pub fn generate_legal_interleavings(
         &self,
         sc_graph: &SCGraph,
@@ -43,6 +44,7 @@ impl InterleavingGenerator {
     }
 
     /// Find conflict edges between two hop slices, excluding the given edge
+    #[allow(dead_code)]
     fn find_cross_slice_conflicts(
         &self,
         sc_graph: &SCGraph,
@@ -73,6 +75,7 @@ impl InterleavingGenerator {
     }
 
     /// Generate all legal merges based on conflict constraints (implements Algorithm 1 from verification.md)
+    #[allow(dead_code)]
     fn generate_all_merges(
         &self,
         slice_a: &[HopId],

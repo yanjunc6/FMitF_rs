@@ -16,8 +16,6 @@ use std::io::Write;
 /// - `dot -Tsvg combined_graph.dot -o combined_graph.svg` (SVG image)
 /// - Online GraphViz viewers
 pub struct CombinedDotPrinter {
-    /// Whether to include detailed labels showing hop IDs
-    show_details: bool,
     /// Whether to use colors for different edges and pieces
     use_colors: bool,
     /// Whether to show individual hop IDs within pieces
@@ -28,16 +26,14 @@ impl CombinedDotPrinter {
     /// Creates a new combined DOT printer with default settings.
     pub fn new() -> Self {
         Self {
-            show_details: true,
-            use_colors: true,
+            use_colors: false,
             show_hop_details: true,
         }
     }
 
     /// Creates a new combined DOT printer with custom settings.
-    pub fn with_options(show_details: bool, use_colors: bool, show_hop_details: bool) -> Self {
+    pub fn with_options(use_colors: bool, show_hop_details: bool) -> Self {
         Self {
-            show_details,
             use_colors,
             show_hop_details,
         }
@@ -122,38 +118,36 @@ impl CombinedDotPrinter {
         let vertex_name = self.vertex_name(vertex.id);
 
         // Build the label showing all pieces in this vertex
-        let mut label = format!("Vertex {}", vertex.id);
+        let mut label = "".to_string();
+        label.push_str("\\n");
 
-        if self.show_details {
+        for (piece_idx, piece) in vertex.pieces.iter().enumerate() {
+            if piece_idx > 0 {
+                label.push_str("\\n");
+            }
+
+            if self.show_hop_details && !piece.hop_ids.is_empty() {
+                let hop_list: Vec<String> = piece
+                    .hop_ids
+                    .iter()
+                    .map(|hop_id| self.format_hop_id(*hop_id))
+                    .collect();
+                label.push_str(&format!("Hop [{}]", hop_list.join(",")));
+            }
             label.push_str("\\n");
 
-            for (piece_idx, piece) in vertex.pieces.iter().enumerate() {
-                if piece_idx > 0 {
-                    label.push_str("\\n");
-                }
+            // Get function name from CFG program
+            let function_name = if let Some(function) = cfg_program.functions.get(piece.function_id)
+            {
+                function.name.clone()
+            } else {
+                format!(
+                    "unknown_func_{}",
+                    self.format_function_id(piece.function_id)
+                )
+            };
 
-                // Get function name from CFG program
-                let function_name =
-                    if let Some(function) = cfg_program.functions.get(piece.function_id) {
-                        function.name.clone()
-                    } else {
-                        format!(
-                            "unknown_func_{}",
-                            self.format_function_id(piece.function_id)
-                        )
-                    };
-
-                label.push_str(&format!("{} #{}", function_name, piece.instance + 1));
-
-                if self.show_hop_details && !piece.hop_ids.is_empty() {
-                    let hop_list: Vec<String> = piece
-                        .hop_ids
-                        .iter()
-                        .map(|hop_id| self.format_hop_id(*hop_id))
-                        .collect();
-                    label.push_str(&format!(" [{}]", hop_list.join(",")));
-                }
-            }
+            label.push_str(&format!("{} #{}", function_name, piece.instance + 1));
         }
 
         // Choose color based on number of pieces
