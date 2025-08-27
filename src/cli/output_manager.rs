@@ -242,6 +242,70 @@ impl OutputManager {
         Ok(())
     }
 
+    /// Write combined SC-Graph output files for deadlock elimination analysis
+    pub fn write_combined_scgraph_output(
+        &self,
+        combined_scg: &crate::sc_graph::CombinedSCGraph,
+        cfg: &CfgProgram,
+    ) -> Result<(), String> {
+        let combined_dump_path = self.output_dir.join("combined_scgraph_dump.txt");
+        let combined_pretty_path = self.output_dir.join("combined_scgraph_pretty.txt");
+        let combined_dot_path = self.output_dir.join("combined_scgraph.dot");
+
+        // Write Combined SC-Graph dump
+        let combined_dump = format!("{:#?}", combined_scg);
+        std::fs::write(&combined_dump_path, combined_dump)
+            .map_err(|e| format!("Failed to write combined_scgraph_dump.txt: {}", e))?;
+
+        // Write Combined SC-Graph pretty print
+        let mut pretty_content = String::new();
+        pretty_content.push_str(&format!("Combined SC-Graph (Deadlock-Free)\n"));
+        pretty_content.push_str(&format!(
+            "Vertices: {} | Edges: {} | Acyclic: {}\n\n",
+            combined_scg.vertices.len(),
+            combined_scg.edges.len(),
+            combined_scg.is_acyclic()
+        ));
+
+        for vertex in &combined_scg.vertices {
+            pretty_content.push_str(&format!("Vertex {}:\n", vertex.id));
+            for piece in &vertex.pieces {
+                let function_name = cfg
+                    .functions
+                    .get(piece.function_id)
+                    .map(|f| f.name.clone())
+                    .unwrap_or_else(|| format!("unknown_{:?}", piece.function_id));
+                pretty_content.push_str(&format!(
+                    "  {} #{} [hops: {:?}]\n",
+                    function_name,
+                    piece.instance + 1,
+                    piece.hop_ids
+                ));
+            }
+            pretty_content.push_str("\n");
+        }
+
+        pretty_content.push_str("Edges:\n");
+        for edge in &combined_scg.edges {
+            pretty_content.push_str(&format!("  {} -> {}\n", edge.source, edge.target));
+        }
+
+        std::fs::write(&combined_pretty_path, pretty_content)
+            .map_err(|e| format!("Failed to write combined_scgraph_pretty.txt: {}", e))?;
+
+        // Write Combined SC-Graph DOT file
+        use crate::pretty::CombinedDotPrinter;
+        let combined_dot_printer = CombinedDotPrinter::new();
+        let mut dot_content = Vec::new();
+        combined_dot_printer
+            .generate_dot(combined_scg, cfg, &mut dot_content)
+            .map_err(|e| format!("Failed to generate combined DOT file: {}", e))?;
+        std::fs::write(&combined_dot_path, dot_content)
+            .map_err(|e| format!("Failed to write combined_scgraph.dot: {}", e))?;
+
+        Ok(())
+    }
+
     /// Write Boogie verification programs
     pub fn write_boogie_programs(
         &self,
@@ -317,6 +381,9 @@ impl OutputManager {
              - `scgraph_dump.txt` - SC-Graph debug dump\n\
              - `scgraph_pretty.txt` - Pretty-printed SC-Graph\n\
              - `scgraph.dot` - GraphViz DOT file\n\
+             - `combined_scgraph_dump.txt` - Combined SC-Graph debug dump\n\
+             - `combined_scgraph_pretty.txt` - Combined SC-Graph human-readable format\n\
+             - `combined_scgraph.dot` - Combined SC-Graph GraphViz DOT file (deadlock-free)\n\
              - `Boogie/*.bpl` - Boogie verification programs\n\
              - `compilation.log` - Detailed compilation log with Boogie verification results\n",
             input_path.display(),
