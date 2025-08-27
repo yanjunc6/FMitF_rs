@@ -7,7 +7,8 @@ use crate::{
     ast::parse_and_analyze, cfg::CfgBuilder, sc_graph::SCGraphBuilder,
     verification::VerificationManager, AstProgram, CfgProgram,
 };
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
+use rayon::prelude::*;
 use std::time::Instant;
 
 #[derive(Debug, Default)]
@@ -373,6 +374,14 @@ impl Compiler {
             bpl_files.len()
         ))?;
 
+        struct BoogieRunResult {
+            file_name: String,
+            success: bool,
+            stdout: String,
+            stderr: String,
+            errors: Vec<crate::verification::Boogie::BoogieError>,
+        }
+
         // Collect all verification errors
         let mut all_verification_errors: Vec<crate::verification::Boogie::BoogieError> = Vec::new();
 
@@ -397,42 +406,61 @@ impl Compiler {
         pb.set_style(style);
         pb.set_message("Verifying Boogie files...");
 
-        // Run Boogie on each .bpl file
-        for (index, bpl_file) in bpl_files.iter().enumerate() {
-            let file_name = bpl_file.file_name().unwrap().to_string_lossy();
+        // Run Boogie on each .bpl file in parallel
+        let results: Result<Vec<BoogieRunResult>, String> = bpl_files
+            .par_iter()
+            .progress_with(pb.clone()) // updates pb as items complete
+            .map(|bpl_file| {
+                let file_name = bpl_file.file_name().unwrap().to_string_lossy().to_string();
 
-            // Update progress bar with current file
-            pb.set_message(format!("Verifying {}", file_name));
-            pb.set_position(index as u64);
+                // Run boogie command: boogie <path> /quiet /errorTrace:0
+                let output = std::process::Command::new("boogie")
+                    .arg(&bpl_file)
+                    .arg("/quiet")
+                    .arg("/errorTrace:0")
+                    .output()
+                    .map_err(|e| {
+                        format!("Failed to execute boogie command for {file_name}: {e}")
+                    })?;
 
-            // Run boogie command: boogie <path> /quiet /errorTrace:0
-            let output = std::process::Command::new("boogie")
-                .arg(&bpl_file)
-                .arg("/quiet")
-                .arg("/errorTrace:0")
-                .output()
-                .map_err(|e| format!("Failed to execute boogie command: {}", e))?;
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                let success = output.status.success();
 
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let success = output.status.success();
+                // Extract verification errors from Boogie output
+                let errors = Self::extract_verification_errors(&stdout, &stderr);
 
-            // Extract verification errors from Boogie output
-            let errors = Self::extract_verification_errors(&stdout, &stderr);
+                Ok(BoogieRunResult {
+                    file_name,
+                    success,
+                    stdout,
+                    stderr,
+                    errors,
+                })
+            })
+            .collect();
+
+        let mut results = results?; // Propagate error if any boogie invocation failed
+
+        // Complete progress bar
+        pb.finish_with_message(format!("✓ Verified {} Boogie files", bpl_files.len()));
+
+        // Write results to compilation.log through OutputManager (sequentially) and collect errors
+        for BoogieRunResult {
+            file_name,
+            success,
+            stdout,
+            stderr,
+            errors,
+        } in results.drain(..)
+        {
             all_verification_errors.extend(errors);
 
-            // Write results to compilation.log through OutputManager
             output_manager
                 .write_boogie_verification_result(&file_name, success, &stdout, &stderr)?;
         }
 
-        // Complete progress bar
-        pb.set_position(bpl_files.len() as u64);
-        pb.set_message("Boogie verification completed");
-        pb.finish_with_message(format!("✓ Verified {} Boogie files", bpl_files.len()));
-
         // Process verification errors and update SC graph
-
         output_manager.write_log_line(&format!(
             "Processing {} verification errors...",
             all_verification_errors.len()

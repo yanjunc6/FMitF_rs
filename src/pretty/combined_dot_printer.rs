@@ -26,7 +26,7 @@ impl CombinedDotPrinter {
     /// Creates a new combined DOT printer with default settings.
     pub fn new() -> Self {
         Self {
-            use_colors: false,
+            use_colors: true,
             show_hop_details: true,
         }
     }
