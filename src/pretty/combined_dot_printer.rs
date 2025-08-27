@@ -1,6 +1,6 @@
 use crate::cfg::CfgProgram;
 use crate::pretty::PrettyPrinter;
-use crate::sc_graph::{CombinedEdge, CombinedSCGraph, CombinedVertex, CombinedVertexId};
+use crate::sc_graph::{CombinedEdge, CombinedSCGraph, CombinedVertex, CombinedVertexId, EdgeType};
 use std::io::Write;
 
 /// DOT file generator for Combined SC-Graph visualization.
@@ -8,7 +8,7 @@ use std::io::Write;
 /// This generates GraphViz DOT format files for the combined SC-Graph after
 /// deadlock elimination. The combined graph represents:
 /// - Combined vertices as rectangular nodes showing merged pieces
-/// - Directed edges between combined vertices (only S-edges remain)
+/// - Both S-edges (sequential) and C-edges (conflict) between combined vertices
 /// - Transaction pieces grouped by function and instance within each vertex
 ///
 /// The visualization can be rendered using:
@@ -18,7 +18,7 @@ use std::io::Write;
 pub struct CombinedDotPrinter {
     /// Whether to include detailed labels showing hop IDs
     show_details: bool,
-    /// Whether to use colors for different pieces
+    /// Whether to use colors for different edges and pieces
     use_colors: bool,
     /// Whether to show individual hop IDs within pieces
     show_hop_details: bool,
@@ -50,20 +50,21 @@ impl CombinedDotPrinter {
         cfg_program: &CfgProgram,
         writer: &mut dyn Write,
     ) -> std::io::Result<()> {
-        // Start as digraph since all remaining edges are directed
+        // Start as digraph like regular SC-Graph
         writeln!(writer, "digraph CombinedSCGraph {{")?;
         writeln!(writer, "    rankdir=TB;")?;
         writeln!(writer, "    node [shape=box, style=\"rounded,filled\"];")?;
 
         if self.use_colors {
-            writeln!(writer, "    edge [penwidth=2, color=blue];")?;
+            writeln!(writer, "    edge [penwidth=2];")?;
         }
 
         writeln!(writer)?;
         writeln!(writer, "    // Graph metadata")?;
-        writeln!(writer, "    label=\"Combined SC-Graph (Deadlock-Free)\\nVertices: {} | Edges: {} | Acyclic: {}\";",
+        writeln!(writer, "    label=\"Combined SC-Graph (Deadlock-Free)\\nVertices: {} | S-edges: {} | C-edges: {} | Acyclic: {}\";",
             combined_graph.vertices.len(),
-            combined_graph.edges.len(),
+            combined_graph.edges.iter().filter(|e| e.edge_type == EdgeType::S).count(),
+            combined_graph.edges.iter().filter(|e| e.edge_type == EdgeType::C).count(),
             combined_graph.is_acyclic()
         )?;
         writeln!(writer, "    labelloc=t;")?;
@@ -77,11 +78,30 @@ impl CombinedDotPrinter {
         }
         writeln!(writer)?;
 
-        // Generate edges
-        if !combined_graph.edges.is_empty() {
-            writeln!(writer, "    // Edges (All Sequential - Directed)")?;
-            for edge in &combined_graph.edges {
-                self.generate_combined_edge(edge, writer)?;
+        // Generate edges - separate S and C edges for clarity (exactly like DotPrinter)
+        let s_edges: Vec<_> = combined_graph
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::S)
+            .collect();
+        let c_edges: Vec<_> = combined_graph
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == EdgeType::C)
+            .collect();
+
+        if !s_edges.is_empty() {
+            writeln!(writer, "    // S-edges (Sequential - Directed)")?;
+            for edge in s_edges {
+                self.generate_s_edge(edge, writer)?;
+            }
+            writeln!(writer)?;
+        }
+
+        if !c_edges.is_empty() {
+            writeln!(writer, "    // C-edges (Conflict - Undirected)")?;
+            for edge in c_edges {
+                self.generate_c_edge(edge, writer)?;
             }
             writeln!(writer)?;
         }
@@ -158,12 +178,8 @@ impl CombinedDotPrinter {
         Ok(())
     }
 
-    /// Generate a combined edge (all edges are directed S-edges)
-    fn generate_combined_edge(
-        &self,
-        edge: &CombinedEdge,
-        writer: &mut dyn Write,
-    ) -> std::io::Result<()> {
+    /// Generate an S-edge (directed)
+    fn generate_s_edge(&self, edge: &CombinedEdge, writer: &mut dyn Write) -> std::io::Result<()> {
         let source_name = self.vertex_name(edge.source);
         let target_name = self.vertex_name(edge.target);
 
@@ -177,6 +193,28 @@ impl CombinedDotPrinter {
             writeln!(
                 writer,
                 "    {} -> {} [label=\"S\"];",
+                source_name, target_name
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Generate a C-edge (undirected)
+    fn generate_c_edge(&self, edge: &CombinedEdge, writer: &mut dyn Write) -> std::io::Result<()> {
+        let source_name = self.vertex_name(edge.source);
+        let target_name = self.vertex_name(edge.target);
+
+        if self.use_colors {
+            writeln!(
+                writer,
+                "    {} -> {} [dir=none, color=red, label=\"C\"];",
+                source_name, target_name
+            )?;
+        } else {
+            writeln!(
+                writer,
+                "    {} -> {} [dir=none, label=\"C\"];",
                 source_name, target_name
             )?;
         }

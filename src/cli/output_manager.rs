@@ -242,28 +242,42 @@ impl OutputManager {
         Ok(())
     }
 
-    /// Write combined SC-Graph output files for deadlock elimination analysis
-    pub fn write_combined_scgraph_output(
+    /// Write combined SC-Graph output files with custom filename prefix
+    pub fn write_combined_scgraph_output_with_name(
         &self,
         combined_scg: &crate::sc_graph::CombinedSCGraph,
         cfg: &CfgProgram,
+        filename_prefix: &str,
     ) -> Result<(), String> {
-        let combined_dump_path = self.output_dir.join("combined_scgraph_dump.txt");
-        let combined_pretty_path = self.output_dir.join("combined_scgraph_pretty.txt");
-        let combined_dot_path = self.output_dir.join("combined_scgraph.dot");
+        let combined_dump_path = self
+            .output_dir
+            .join(format!("{}_dump.txt", filename_prefix));
+        let combined_pretty_path = self
+            .output_dir
+            .join(format!("{}_pretty.txt", filename_prefix));
+        let combined_dot_path = self.output_dir.join(format!("{}.dot", filename_prefix));
 
         // Write Combined SC-Graph dump
         let combined_dump = format!("{:#?}", combined_scg);
         std::fs::write(&combined_dump_path, combined_dump)
-            .map_err(|e| format!("Failed to write combined_scgraph_dump.txt: {}", e))?;
+            .map_err(|e| format!("Failed to write {}_dump.txt: {}", filename_prefix, e))?;
 
         // Write Combined SC-Graph pretty print
         let mut pretty_content = String::new();
-        pretty_content.push_str(&format!("Combined SC-Graph (Deadlock-Free)\n"));
+        pretty_content.push_str(&format!("Combined SC-Graph ({})\n", filename_prefix));
         pretty_content.push_str(&format!(
-            "Vertices: {} | Edges: {} | Acyclic: {}\n\n",
+            "Vertices: {} | S-edges: {} | C-edges: {} | Acyclic: {}\n\n",
             combined_scg.vertices.len(),
-            combined_scg.edges.len(),
+            combined_scg
+                .edges
+                .iter()
+                .filter(|e| e.edge_type == crate::sc_graph::EdgeType::S)
+                .count(),
+            combined_scg
+                .edges
+                .iter()
+                .filter(|e| e.edge_type == crate::sc_graph::EdgeType::C)
+                .count(),
             combined_scg.is_acyclic()
         ));
 
@@ -287,11 +301,18 @@ impl OutputManager {
 
         pretty_content.push_str("Edges:\n");
         for edge in &combined_scg.edges {
-            pretty_content.push_str(&format!("  {} -> {}\n", edge.source, edge.target));
+            let edge_type_str = match edge.edge_type {
+                crate::sc_graph::EdgeType::S => "S",
+                crate::sc_graph::EdgeType::C => "C",
+            };
+            pretty_content.push_str(&format!(
+                "  {} -> {} ({})\n",
+                edge.source, edge.target, edge_type_str
+            ));
         }
 
         std::fs::write(&combined_pretty_path, pretty_content)
-            .map_err(|e| format!("Failed to write combined_scgraph_pretty.txt: {}", e))?;
+            .map_err(|e| format!("Failed to write {}_pretty.txt: {}", filename_prefix, e))?;
 
         // Write Combined SC-Graph DOT file
         use crate::pretty::CombinedDotPrinter;
@@ -301,7 +322,7 @@ impl OutputManager {
             .generate_dot(combined_scg, cfg, &mut dot_content)
             .map_err(|e| format!("Failed to generate combined DOT file: {}", e))?;
         std::fs::write(&combined_dot_path, dot_content)
-            .map_err(|e| format!("Failed to write combined_scgraph.dot: {}", e))?;
+            .map_err(|e| format!("Failed to write {}.dot: {}", filename_prefix, e))?;
 
         Ok(())
     }
