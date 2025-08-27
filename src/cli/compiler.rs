@@ -141,6 +141,11 @@ impl Compiler {
         };
         output_manager.write_scgraph_output_with_name(&scg, &cfg, "scgraph")?;
 
+        // Generate Combined SC-Graph for deadlock elimination analysis
+        use crate::sc_graph::combine_for_deadlock_elimination;
+        let combined_scg = combine_for_deadlock_elimination(&scg);
+        output_manager.write_combined_scgraph_output(&combined_scg, &cfg)?;
+
         // Stage 5: Verification (Boogie)
         let boogie_programs =
             match self.stage_verification(&cfg, &scg, source_code, cli, &mut output_manager) {

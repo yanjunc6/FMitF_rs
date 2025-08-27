@@ -2,6 +2,7 @@ use std::io::Write;
 
 mod ast_printer;
 mod cfg_printer;
+mod combined_dot_printer;
 mod dot_printer;
 mod sc_graph_printer;
 
@@ -10,6 +11,7 @@ pub use ast_printer::{
     PrintOptions,
 };
 pub use cfg_printer::CfgPrinter;
+pub use combined_dot_printer::CombinedDotPrinter;
 pub use dot_printer::DotPrinter;
 pub use sc_graph_printer::SCGraphPrinter;
 
