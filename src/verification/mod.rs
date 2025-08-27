@@ -2,6 +2,7 @@ pub mod Boogie;
 pub mod commutative;
 pub mod errors;
 pub mod partition;
+pub mod verify_result_process;
 
 use crate::cfg::CfgProgram;
 use crate::sc_graph::SCGraph;

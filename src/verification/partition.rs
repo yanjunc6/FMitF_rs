@@ -1,7 +1,7 @@
 use super::errors::Results;
 use super::Boogie::{
-    gen_Boogie::BoogieProgramGenerator, BoogieBinOp, BoogieExpr, BoogieExprKind, BoogieLine,
-    BoogieProcedure, BoogieProgram, BoogieUnOp, ErrorMessage,
+    gen_Boogie::BoogieProgramGenerator, BoogieBinOp, BoogieError, BoogieExpr, BoogieExprKind,
+    BoogieLine, BoogieProcedure, BoogieProgram, BoogieUnOp, ErrorMessage,
 };
 use crate::cfg::{
     BasicBlockId, CfgProgram, EdgeType, FunctionId, FunctionType, LValue, Operand, RValue,
@@ -341,12 +341,10 @@ impl PartitionVerificationManager {
 
         // Assert (args are equal) - all accesses to same partition function in same hop must have same args
         let error_msg = ErrorMessage {
-            spanned_error: SpannedError {
-                error: VerificationError::PartitionFunctionArgumentInconsistency {
-                    partition_function_id: partition_function_id.index(),
-                    function_id: function_id.index(),
-                    table_id: table_id.index(),
-                },
+            boogie_error: BoogieError::PartitionFunctionArgumentInconsistency {
+                partition_function_id: partition_function_id.index(),
+                function_id: function_id.index(),
+                table_id: table_id.index(),
                 span: Some(span.clone()),
             },
         };

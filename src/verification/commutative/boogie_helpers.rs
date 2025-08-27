@@ -1,8 +1,8 @@
 use crate::cfg::{BasicBlockId, CfgProgram, EdgeType, HopCfg, HopId, VarId};
-use crate::verification::errors::{Results, SpannedError, VerificationError};
+use crate::verification::errors::Results;
 use crate::verification::Boogie::{
-    gen_Boogie::BoogieProgramGenerator, BoogieBinOp, BoogieExpr, BoogieExprKind, BoogieLine,
-    BoogieUnOp, ErrorMessage,
+    gen_Boogie::BoogieProgramGenerator, BoogieBinOp, BoogieError, BoogieExpr, BoogieExprKind,
+    BoogieLine, BoogieUnOp, ErrorMessage,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -545,12 +545,9 @@ impl BoogieStateManager {
         let equivalence_assertion = BoogieProgramGenerator::gen_conjunction(equality_conditions);
 
         let error_msg = ErrorMessage {
-            spanned_error: SpannedError {
-                error: VerificationError::SpecialInterleavingNonEquivalence {
-                    hop_id_1: hop_id_a,
-                    hop_id_2: hop_id_b,
-                },
-                span: None, // TODO: Add proper span information if available
+            boogie_error: BoogieError::SpecialInterleavingNonEquivalence {
+                hop_id_1: hop_id_a,
+                hop_id_2: hop_id_b,
             },
         };
 
@@ -665,12 +662,9 @@ impl BoogieStateManager {
             BoogieProgramGenerator::gen_disjunction(vec![a_then_b_equal, b_then_a_equal]);
 
         let error_msg = ErrorMessage {
-            spanned_error: SpannedError {
-                error: VerificationError::SliceCommutativityViolation {
-                    hop_id_1: hop_id_a,
-                    hop_id_2: hop_id_b,
-                },
-                span: None, // TODO: Add proper span information if available
+            boogie_error: BoogieError::SliceCommutativityViolation {
+                hop_id_1: hop_id_a,
+                hop_id_2: hop_id_b,
             },
         };
 

@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 mod Boogie_printer;
@@ -55,19 +56,51 @@ pub enum BoogieLine {
     },
 }
 
+/// Boogie-specific verification errors that get embedded in Boogie assertions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BoogieError {
+    PartitionFunctionArgumentInconsistency {
+        partition_function_id: usize,
+        function_id: usize,
+        table_id: usize,
+        span: Option<crate::ast::Span>,
+    },
+    SliceCommutativityViolation {
+        hop_id_1: usize,
+        hop_id_2: usize,
+    },
+    SpecialInterleavingNonEquivalence {
+        hop_id_1: usize,
+        hop_id_2: usize,
+    },
+}
 /// Attach an error message with structured error information to an assertion.
 #[derive(Debug, Clone)]
 pub struct ErrorMessage {
-    pub spanned_error: crate::verification::SpannedError,
+    pub boogie_error: BoogieError,
 }
 
 impl ErrorMessage {
     /// Serialize the error to S-expression format with proper quote escaping for Boogie
     pub fn to_boogie_string(&self) -> String {
-        let sexpr = serde_lexpr::to_string(&self.spanned_error)
-            .unwrap_or_else(|_| format!("{:?}", self.spanned_error));
+        let sexpr = serde_lexpr::to_string(&self.boogie_error)
+            .unwrap_or_else(|_| format!("{:?}", self.boogie_error));
         // Escape quotes for Boogie grammar: " becomes \"
         sexpr.replace('"', "\\\"")
+    }
+}
+
+impl BoogieError {
+    /// Parse BoogieError from escaped S-expression string
+    pub fn from_boogie_string(escaped_sexpr: &str) -> Option<BoogieError> {
+        // First, unescape the string: \" becomes "
+        let unescaped = escaped_sexpr.replace("\\\"", "\"");
+
+        // Try to parse as S-expression
+        match serde_lexpr::from_str::<BoogieError>(&unescaped) {
+            Ok(error) => Some(error),
+            Err(_) => None,
+        }
     }
 }
 
