@@ -7,6 +7,12 @@ pub use sc_graph_builder::SCGraphBuilder;
 mod sc_graph_simplify;
 pub use sc_graph_simplify::update_scgraph_for_commutative_errors;
 
+mod sc_graph_deadlock_elimination;
+pub use sc_graph_deadlock_elimination::{
+    combine_for_deadlock_elimination, CombinedEdge, CombinedPiece, CombinedSCGraph, CombinedVertex,
+    CombinedVertexId,
+};
+
 /// Represents a unique node identifier in the SC-Graph.
 /// Since HopId is only unique within a function, we need both FunctionId and HopId.
 /// We also include an instance number to handle multiple concurrent instances
