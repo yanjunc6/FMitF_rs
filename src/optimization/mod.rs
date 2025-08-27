@@ -37,7 +37,7 @@ impl CfgOptimizer {
     pub fn new() -> Self {
         Self {
             passes: Vec::new(),
-            max_iterations: 10, // Prevent infinite loops
+            max_iterations: 1000, // Prevent infinite loops
         }
     }
 
