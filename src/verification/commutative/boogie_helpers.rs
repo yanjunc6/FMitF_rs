@@ -13,14 +13,16 @@ pub struct VariableSnapshots {
     /// Names for table state snapshots
     pub table_snapshots: HashMap<String, String>,
     /// Names for variable snapshots
-    pub var_snapshots: HashMap<VarId, String>,
+    pub var_a_snapshots: HashMap<VarId, String>,
+    pub var_b_snapshots: HashMap<VarId, String>,
 }
 
 impl VariableSnapshots {
     pub fn empty() -> Self {
         VariableSnapshots {
             table_snapshots: HashMap::new(),
-            var_snapshots: HashMap::new(),
+            var_a_snapshots: HashMap::new(),
+            var_b_snapshots: HashMap::new(),
         }
     }
 }
@@ -55,13 +57,12 @@ impl BoogieStateManager {
         }
 
         // Havoc live-IN variables only
-        let mut live_in_vars = HashSet::new();
-        live_in_vars.extend(&analysis_info.live_in_a);
-        live_in_vars.extend(&analysis_info.live_in_b);
-
-        for &var_id in &live_in_vars {
+        for &var_id in &analysis_info.live_in_a {
             let var_name_a = generator.gen_var_name(cfg_program, var_id, Some("A_"));
             generator.add_line_to_current_procedure(BoogieLine::Havoc(var_name_a));
+        }
+
+        for &var_id in &analysis_info.live_in_b {
             let var_name_b = generator.gen_var_name(cfg_program, var_id, Some("B_"));
             generator.add_line_to_current_procedure(BoogieLine::Havoc(var_name_b));
         }
@@ -104,11 +105,7 @@ impl BoogieStateManager {
         }
 
         // Save live-IN variables only
-        let mut live_in_vars = HashSet::new();
-        live_in_vars.extend(&analysis_info.live_in_a);
-        live_in_vars.extend(&analysis_info.live_in_b);
-
-        for &var_id in &live_in_vars {
+        for &var_id in &analysis_info.live_in_a {
             let var_name = generator.gen_var_name(cfg_program, var_id, Some("A_"));
             let snapshot_name = format!("{}_init", var_name);
             // Add the snapshot variable as a local variable
@@ -121,7 +118,7 @@ impl BoogieStateManager {
             generator.add_line_to_current_procedure(BoogieLine::Assign(snapshot_name, assign_expr));
         }
 
-        for &var_id in &live_in_vars {
+        for &var_id in &analysis_info.live_in_b {
             let var_name = generator.gen_var_name(cfg_program, var_id, Some("B_"));
             let snapshot_name = format!("{}_init", var_name);
             // Add the snapshot variable as a local variable
@@ -166,11 +163,7 @@ impl BoogieStateManager {
         }
 
         // Restore live-IN variables only
-        let mut live_in_vars = HashSet::new();
-        live_in_vars.extend(&analysis_info.live_in_a);
-        live_in_vars.extend(&analysis_info.live_in_b);
-
-        for &var_id in &live_in_vars {
+        for &var_id in &analysis_info.live_in_a {
             let var_name = generator.gen_var_name(cfg_program, var_id, Some("A_"));
             let snapshot_name = format!("{}_init", var_name);
             let assign_expr = BoogieExpr {
@@ -179,7 +172,7 @@ impl BoogieStateManager {
             generator.add_line_to_current_procedure(BoogieLine::Assign(var_name, assign_expr));
         }
 
-        for &var_id in &live_in_vars {
+        for &var_id in &analysis_info.live_in_b {
             let var_name = generator.gen_var_name(cfg_program, var_id, Some("B_"));
             let snapshot_name = format!("{}_init", var_name);
             let assign_expr = BoogieExpr {
@@ -446,7 +439,8 @@ impl BoogieStateManager {
         suffix: &str,
     ) -> Results<VariableSnapshots> {
         let mut table_snapshots = HashMap::new();
-        let mut var_snapshots = HashMap::new();
+        let mut var_a_snapshots = HashMap::new();
+        let mut var_b_snapshots = HashMap::new();
 
         generator
             .add_comment_to_current_procedure(format!("Snapshotting final state for {}", suffix));
@@ -475,14 +469,10 @@ impl BoogieStateManager {
         }
 
         // Snapshot live-OUT variables only
-        let mut live_out_vars = HashSet::new();
-        live_out_vars.extend(&analysis_info.live_out_a);
-        live_out_vars.extend(&analysis_info.live_out_b);
-
-        for &var_id in &live_out_vars {
-            let var_name = generator.gen_var_name(cfg_program, var_id, None);
+        for &var_id in &analysis_info.live_out_a {
+            let var_name = generator.gen_var_name(cfg_program, var_id, Some("A_"));
             let snapshot_name = format!("{}_{}", var_name, suffix);
-            var_snapshots.insert(var_id, snapshot_name.clone());
+            var_a_snapshots.insert(var_id, snapshot_name.clone());
 
             // Add the snapshot variable as a local variable
             let var_type = BoogieProgramGenerator::convert_type(&cfg_program.variables[var_id].ty);
@@ -494,9 +484,26 @@ impl BoogieStateManager {
             generator.add_line_to_current_procedure(BoogieLine::Assign(snapshot_name, assign_expr));
         }
 
+        for &var_id in &analysis_info.live_out_b {
+            let var_name = generator.gen_var_name(cfg_program, var_id, Some("B_"));
+            let snapshot_name = format!("{}_{}", var_name, suffix);
+            var_b_snapshots.insert(var_id, snapshot_name.clone());
+
+            // Add the snapshot variable as a local variable
+            let var_type = BoogieProgramGenerator::convert_type(&cfg_program.variables[var_id].ty);
+            generator.add_local_var(&snapshot_name, var_type);
+
+            let assign_expr = BoogieExpr {
+                kind: BoogieExprKind::Var(var_name),
+            };
+            generator.add_line_to_current_procedure(BoogieLine::Assign(snapshot_name, assign_expr));
+        }
+
+
         Ok(VariableSnapshots {
             table_snapshots,
-            var_snapshots,
+            var_a_snapshots,
+            var_b_snapshots,
         })
     }
 
@@ -543,14 +550,31 @@ impl BoogieStateManager {
         }
 
         // Compare live-OUT variables only
-        let mut live_out_vars = HashSet::new();
-        live_out_vars.extend(&analysis_info.live_out_a);
-        live_out_vars.extend(&analysis_info.live_out_b);
-
-        for &var_id in &live_out_vars {
+        for &var_id in &analysis_info.live_out_a {
             if let (Some(a_then_b_snapshot), Some(b_then_a_snapshot)) = (
-                a_then_b_vars.var_snapshots.get(&var_id),
-                b_then_a_vars.var_snapshots.get(&var_id),
+                a_then_b_vars.var_a_snapshots.get(&var_id),
+                b_then_a_vars.var_a_snapshots.get(&var_id),
+            ) {
+                let a_then_b_expr = BoogieExpr {
+                    kind: BoogieExprKind::Var(a_then_b_snapshot.clone()),
+                };
+                let b_then_a_expr = BoogieExpr {
+                    kind: BoogieExprKind::Var(b_then_a_snapshot.clone()),
+                };
+                equality_conditions.push(BoogieExpr {
+                    kind: BoogieExprKind::BinOp(
+                        Box::new(a_then_b_expr),
+                        BoogieBinOp::Eq,
+                        Box::new(b_then_a_expr),
+                    ),
+                });
+            }
+        }
+
+        for &var_id in &analysis_info.live_out_b {
+            if let (Some(a_then_b_snapshot), Some(b_then_a_snapshot)) = (
+                a_then_b_vars.var_b_snapshots.get(&var_id),
+                b_then_a_vars.var_b_snapshots.get(&var_id),
             ) {
                 let a_then_b_expr = BoogieExpr {
                     kind: BoogieExprKind::Var(a_then_b_snapshot.clone()),
