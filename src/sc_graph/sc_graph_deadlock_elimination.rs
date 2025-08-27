@@ -6,14 +6,17 @@ use super::{EdgeType, SCGraph, SCGraphNodeId};
 use crate::cfg::{FunctionId, HopId};
 
 /// The final, combined SC-Graph after eliminating deadlock-prone SC-cycles.
-/// - Vertices are acyclical after merging SCCs over S-edges (post C-edge contraction).
-/// - Each vertex contains "pieces" that are grouped by (function_id, instance).
-/// - Edges are directed and are induced only by S-edges between the final vertices.
+/// - Vertices are acyclical under S-edges after merging SCCs over S-edges (post C-edge contraction).
+/// - Each final vertex corresponds to a single transaction instance (function_id + instance),
+///   containing all hop_ids from that transaction that were in the same merged SCC.
+/// - Directed S-edges connect these vertices; Undirected C-edges connect all vertices that
+///   were part of the same merged SCC (pairwise).
 #[derive(Debug, Clone)]
 pub struct CombinedSCGraph {
-    /// The final, acyclic set of vertices.
+    /// The final set of vertices (each typically corresponds to exactly one CombinedPiece).
     pub vertices: Vec<CombinedVertex>,
-    /// Directed edges between combined vertices (acyclic).
+    /// Edges between combined vertices. S-edges are directed; C-edges are undirected
+    /// (we store them once with source <= target).
     pub edges: Vec<CombinedEdge>,
     /// Mapping from original nodes to the final combined vertex ID they belong to.
     pub original_to_combined: HashMap<SCGraphNodeId, CombinedVertexId>,
@@ -23,10 +26,13 @@ pub struct CombinedSCGraph {
 pub type CombinedVertexId = usize;
 
 /// A vertex in the final combined graph.
+/// Note: After splitting by transaction, each vertex will contain exactly one CombinedPiece,
+/// but we keep it as a Vec for extensibility.
 #[derive(Debug, Clone)]
 pub struct CombinedVertex {
     pub id: CombinedVertexId,
     /// Pieces in this vertex grouped by (function_id, instance).
+    /// After splitting, this will contain exactly one entry.
     pub pieces: Vec<CombinedPiece>,
 }
 
@@ -40,15 +46,18 @@ pub struct CombinedPiece {
     pub hop_ids: BTreeSet<HopId>,
 }
 
-/// A directed edge in the final combined graph.
-#[derive(Debug, Clone)]
+/// An edge in the final combined graph.
+/// - For S edges (directed), source -> target.
+/// - For C edges (undirected), we store canonical source <= target.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CombinedEdge {
     pub source: CombinedVertexId,
     pub target: CombinedVertexId,
+    pub edge_type: EdgeType,
 }
 
 impl CombinedSCGraph {
-    /// Sanity check that this combined graph is acyclic.
+    /// Sanity check that this combined graph is acyclic under S-edges.
     pub fn is_acyclic(&self) -> bool {
         is_acyclic_dag(self.vertices.len(), &self.edges)
     }
@@ -58,7 +67,8 @@ impl CombinedSCGraph {
 /// 1) Ensure S-edges are directed (already given by the SCGraphEdge).
 /// 2) Contract all nodes connected by C-edges (undirected) into single vertices.
 /// 3) On the graph of those vertices with S-edges only, contract strongly connected components (SCCs) into single vertices until acyclic.
-/// 4) Within each merged vertex, combine pieces that belong to the same transaction (same function_id + instance).
+/// 4) Split each merged SCC vertex into multiple per-transaction vertices (function_id + instance),
+///    and connect those per-transaction vertices with undirected C-edges.
 pub fn combine_for_deadlock_elimination(scg: &SCGraph) -> CombinedSCGraph {
     // Step 2: Contract all nodes connected by C-edges into single vertices (C-components).
     let (ccomp_id_of, _ccomp_nodes, ccomp_count) = contract_c_edges(scg);
@@ -71,67 +81,102 @@ pub fn combine_for_deadlock_elimination(scg: &SCGraph) -> CombinedSCGraph {
     // This is exactly computing the SCCs of the component S-graph, and contracting them.
     let (scc_id_of_ccomp, scc_count) = scc_kosaraju(&sgraph);
 
-    // Build final vertices: gather original nodes per final SCC.
-    let mut final_vertex_to_nodes: Vec<Vec<SCGraphNodeId>> = vec![Vec::new(); scc_count];
-    for (node, &ccomp_id) in ccomp_id_of.iter() {
-        let final_id = scc_id_of_ccomp[&ccomp_id];
-        final_vertex_to_nodes[final_id].push(*node);
+    // Build per-SCC grouping of original nodes by transaction (function_id + instance).
+    // scc_groups[scc_id][(function_id, instance)] -> Vec<SCGraphNodeId>
+    let mut scc_groups: Vec<BTreeMap<(FunctionId, u32), Vec<SCGraphNodeId>>> =
+        vec![BTreeMap::new(); scc_count];
+
+    for node in &scg.nodes {
+        let ccomp_id = ccomp_id_of[node];
+        let scc_id = scc_id_of_ccomp[&ccomp_id];
+        scc_groups[scc_id]
+            .entry((node.function_id, node.instance))
+            .or_default()
+            .push(*node);
     }
 
-    // Step 4: Within each merged vertex, combine pieces for the same transaction (function_id + instance).
-    let mut vertices: Vec<CombinedVertex> = Vec::with_capacity(scc_count);
+    // Step 4: Split each SCC into per-transaction vertices and record mapping.
+    let mut vertices: Vec<CombinedVertex> = Vec::new();
     let mut original_to_combined: HashMap<SCGraphNodeId, CombinedVertexId> = HashMap::new();
+    // Track which final vertices belong to each SCC, so we can add undirected C-edges among them.
+    let mut scc_vertex_ids: Vec<Vec<CombinedVertexId>> = vec![Vec::new(); scc_count];
 
-    for (final_id, nodes) in final_vertex_to_nodes.into_iter().enumerate() {
-        let mut by_tx: BTreeMap<(FunctionId, u32), BTreeSet<HopId>> = BTreeMap::new();
-        for n in &nodes {
-            by_tx
-                .entry((n.function_id, n.instance))
-                .or_default()
-                .insert(n.hop_id);
-            original_to_combined.insert(*n, final_id);
+    for scc_id in 0..scc_count {
+        for (&(function_id, instance), nodes) in &scc_groups[scc_id] {
+            // Aggregate hop_ids for this transaction instance within this SCC.
+            let hop_ids: BTreeSet<HopId> = nodes.iter().map(|n| n.hop_id).collect();
+
+            let id = vertices.len();
+            // Map all original nodes in this group to this final per-transaction vertex.
+            for n in nodes {
+                original_to_combined.insert(*n, id);
+            }
+
+            vertices.push(CombinedVertex {
+                id,
+                pieces: vec![CombinedPiece {
+                    function_id,
+                    instance,
+                    hop_ids,
+                }],
+            });
+
+            scc_vertex_ids[scc_id].push(id);
         }
-        let pieces = by_tx
-            .into_iter()
-            .map(|((function_id, instance), hop_ids)| CombinedPiece {
-                function_id,
-                instance,
-                hop_ids,
-            })
-            .collect();
-
-        vertices.push(CombinedVertex {
-            id: final_id,
-            pieces,
-        });
     }
 
-    // Build edges among final vertices: induced by original S-edges between SCCs.
-    let mut edge_set: HashSet<(CombinedVertexId, CombinedVertexId)> = HashSet::new();
+    // Build edges:
+    // - S-edges: induced by original S-edges between new per-transaction vertices.
+    // - C-edges: add undirected edges among all per-transaction vertices that came from the same SCC.
+    let mut edge_set: HashSet<CombinedEdge> = HashSet::new();
+
+    // Add S-edges (directed).
     for e in &scg.edges {
         if let EdgeType::S = e.edge_type {
-            if let (Some(&from_cc), Some(&to_cc)) =
-                (ccomp_id_of.get(&e.source), ccomp_id_of.get(&e.target))
-            {
-                let from_final = scc_id_of_ccomp[&from_cc];
-                let to_final = scc_id_of_ccomp[&to_cc];
-                if from_final != to_final {
-                    edge_set.insert((from_final, to_final));
+            if let (Some(&from_id), Some(&to_id)) = (
+                original_to_combined.get(&e.source),
+                original_to_combined.get(&e.target),
+            ) {
+                if from_id != to_id {
+                    edge_set.insert(CombinedEdge {
+                        source: from_id,
+                        target: to_id,
+                        edge_type: EdgeType::S,
+                    });
                 }
             }
         }
     }
 
-    let mut edges: Vec<CombinedEdge> = edge_set
-        .into_iter()
-        .map(|(s, t)| CombinedEdge {
-            source: s,
-            target: t,
-        })
-        .collect();
+    // Add C-edges (undirected) among all per-transaction vertices that originated from the same SCC.
+    for ids in scc_vertex_ids {
+        if ids.len() >= 2 {
+            // For each unordered pair (i, j), i < j, add one undirected C-edge.
+            let mut sorted_ids = ids.clone();
+            sorted_ids.sort_unstable();
+            for i in 0..sorted_ids.len() {
+                for j in (i + 1)..sorted_ids.len() {
+                    let a = sorted_ids[i];
+                    let b = sorted_ids[j];
+                    edge_set.insert(CombinedEdge {
+                        source: a,
+                        target: b,
+                        edge_type: EdgeType::C,
+                    });
+                }
+            }
+        }
+    }
 
-    // Optional: sort edges for stable output
-    edges.sort_by_key(|e| (e.source, e.target));
+    // Materialize edges with a stable order: (edge_type, source, target).
+    let mut edges: Vec<CombinedEdge> = edge_set.into_iter().collect();
+    edges.sort_by_key(|e| {
+        let et = match e.edge_type {
+            EdgeType::C => 0usize,
+            EdgeType::S => 1usize,
+        };
+        (et, e.source, e.target)
+    });
 
     CombinedSCGraph {
         vertices,
@@ -287,17 +332,17 @@ fn scc_kosaraju(adj: &Vec<Vec<usize>>) -> (HashMap<usize, usize>, usize) {
     (comp_id, current_id)
 }
 
-/// Check acyclicity of a directed graph given number of vertices and edges.
-fn is_acyclic_dag(
-    vertex_count: usize,
-    edges: &Vec<crate::sc_graph::sc_graph_deadlock_elimination::CombinedEdge>,
-) -> bool {
-    // Kahn's algorithm
+/// Check acyclicity under S-edges of a directed graph given number of vertices and edges.
+/// C-edges are undirected and are ignored for acyclicity.
+fn is_acyclic_dag(vertex_count: usize, edges: &Vec<CombinedEdge>) -> bool {
+    // Kahn's algorithm using only S-edges
     let mut indeg = vec![0usize; vertex_count];
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); vertex_count];
     for e in edges {
-        adj[e.source].push(e.target);
-        indeg[e.target] += 1;
+        if let EdgeType::S = e.edge_type {
+            adj[e.source].push(e.target);
+            indeg[e.target] += 1;
+        }
     }
 
     let mut q: VecDeque<usize> = (0..vertex_count).filter(|&i| indeg[i] == 0).collect();
