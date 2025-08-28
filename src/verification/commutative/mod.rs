@@ -3,6 +3,7 @@ use crate::sc_graph::{EdgeType, SCGraph, SCGraphEdge};
 use crate::verification::errors::Results;
 pub use crate::verification::errors::{SpannedError, VerificationError};
 use crate::verification::Boogie::{self, gen_Boogie::BoogieProgramGenerator, BoogieProcedure};
+use rayon::prelude::*;
 use std::collections::HashSet;
 
 mod boogie_helpers;
@@ -61,40 +62,64 @@ impl CommutativeVerificationManager {
         cfg_program: &CfgProgram,
         sc_graph: &SCGraph,
     ) -> Results<Vec<Boogie::BoogieProgram>> {
-        let mut programs = Vec::new();
         let base_program =
             Boogie::gen_Boogie::BoogieProgramGenerator::gen_base_program(cfg_program)?;
 
         // Create simple commutative units from the SC-graph
         self.create_simple_commutative_units(sc_graph);
 
-        for unit in self.commutative_units.iter() {
-            let slice_a: &Vec<HopId> = &unit.hops_A;
-            let slice_b: &Vec<HopId> = &unit.hops_B;
+        // Process units in parallel using rayon
+        let results: Result<
+            Vec<Option<Boogie::BoogieProgram>>,
+            Vec<crate::verification::errors::SpannedError>,
+        > = self
+            .commutative_units
+            .par_iter()
+            .map(
+                |unit| -> Result<
+                    Option<Boogie::BoogieProgram>,
+                    Vec<crate::verification::errors::SpannedError>,
+                > {
+                    let slice_a: &Vec<HopId> = &unit.hops_A;
+                    let slice_b: &Vec<HopId> = &unit.hops_B;
 
-            if !slice_a.is_empty() && !slice_b.is_empty() {
-                let mut program = base_program.clone();
-                program.name = format!(
-                    "commutative_simple_hop{}_vs_hop{}",
-                    unit.c_edge.source.hop_id.index(),
-                    unit.c_edge.target.hop_id.index()
-                );
+                    if !slice_a.is_empty() && !slice_b.is_empty() {
+                        let mut program = base_program.clone();
+                        program.name = format!(
+                            "commutative_simple_hop{}_vs_hop{}",
+                            unit.c_edge.source.hop_id.index(),
+                            unit.c_edge.target.hop_id.index()
+                        );
 
-                let mut generator =
-                    Boogie::gen_Boogie::BoogieProgramGenerator::with_program(program);
+                        let mut generator =
+                            Boogie::gen_Boogie::BoogieProgramGenerator::with_program(program);
 
-                // Generate commutative verification procedure
-                let procedure = self.create_commutative_verification_procedure(
-                    &mut generator,
-                    cfg_program,
-                    &sc_graph,
-                    &unit,
-                )?;
+                        // Create a temporary manager for this parallel execution
+                        let temp_manager = CommutativeVerificationManager::new();
 
-                generator.program.procedures.push(procedure);
-                programs.push(generator.program);
-            }
-        }
+                        // Generate commutative verification procedure
+                        match temp_manager.create_commutative_verification_procedure(
+                            &mut generator,
+                            cfg_program,
+                            &sc_graph,
+                            &unit,
+                        ) {
+                            Ok(procedure) => {
+                                generator.program.procedures.push(procedure);
+                                Ok(Some(generator.program))
+                            }
+                            Err(e) => Err(e),
+                        }
+                    } else {
+                        Ok(None)
+                    }
+                },
+            )
+            .collect();
+
+        // Filter out None values and collect results
+        let programs = results?.into_iter().filter_map(|opt| opt).collect();
+
         Ok(programs)
     }
 

@@ -499,7 +499,6 @@ impl BoogieStateManager {
             generator.add_line_to_current_procedure(BoogieLine::Assign(snapshot_name, assign_expr));
         }
 
-
         Ok(VariableSnapshots {
             table_snapshots,
             var_a_snapshots,
