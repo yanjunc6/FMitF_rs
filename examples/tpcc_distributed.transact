@@ -251,8 +251,3 @@ void Payment(int w_id, int d_id, int c_w_id, int c_d_id, int c_id, float amount)
         Customer[C_W_ID: c_w_id, C_D_ID: c_d_id, C_ID: c_id] = c;
     }
 }
-
-// For verification:
-// 1. Communitivity (like what we do before, under assumption, permutate the order of hops to check if the result is the same)
-// 1.1 TODO: Problem, in paper, communitive hops are executed in commit stage, can we optimize this?
-// 2. determine Rendezvous Piece (easy to do with SC_graph)
