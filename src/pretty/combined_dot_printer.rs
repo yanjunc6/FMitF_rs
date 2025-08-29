@@ -119,7 +119,7 @@ impl CombinedDotPrinter {
 
         // Build the label showing all pieces in this vertex
         let mut label = "".to_string();
-        label.push_str("\\n");
+        // label.push_str("\\n");
 
         for (piece_idx, piece) in vertex.pieces.iter().enumerate() {
             if piece_idx > 0 {
