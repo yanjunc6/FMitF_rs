@@ -58,12 +58,12 @@ impl BoogieStateManager {
 
         // Havoc live-IN variables only
         for &var_id in &analysis_info.live_in_a {
-            let var_name_a = generator.gen_var_name(cfg_program, var_id, Some("A_"));
+            let var_name_a = generator.gen_var_name(cfg_program, var_id, Some("A"));
             generator.add_line_to_current_procedure(BoogieLine::Havoc(var_name_a));
         }
 
         for &var_id in &analysis_info.live_in_b {
-            let var_name_b = generator.gen_var_name(cfg_program, var_id, Some("B_"));
+            let var_name_b = generator.gen_var_name(cfg_program, var_id, Some("B"));
             generator.add_line_to_current_procedure(BoogieLine::Havoc(var_name_b));
         }
 
@@ -106,7 +106,7 @@ impl BoogieStateManager {
 
         // Save live-IN variables only
         for &var_id in &analysis_info.live_in_a {
-            let var_name = generator.gen_var_name(cfg_program, var_id, Some("A_"));
+            let var_name = generator.gen_var_name(cfg_program, var_id, Some("A"));
             let snapshot_name = format!("{}_init", var_name);
             // Add the snapshot variable as a local variable
             let var_type = BoogieProgramGenerator::convert_type(&cfg_program.variables[var_id].ty);
@@ -119,7 +119,7 @@ impl BoogieStateManager {
         }
 
         for &var_id in &analysis_info.live_in_b {
-            let var_name = generator.gen_var_name(cfg_program, var_id, Some("B_"));
+            let var_name = generator.gen_var_name(cfg_program, var_id, Some("B"));
             let snapshot_name = format!("{}_init", var_name);
             // Add the snapshot variable as a local variable
             let var_type = BoogieProgramGenerator::convert_type(&cfg_program.variables[var_id].ty);
@@ -164,7 +164,7 @@ impl BoogieStateManager {
 
         // Restore live-IN variables only
         for &var_id in &analysis_info.live_in_a {
-            let var_name = generator.gen_var_name(cfg_program, var_id, Some("A_"));
+            let var_name = generator.gen_var_name(cfg_program, var_id, Some("A"));
             let snapshot_name = format!("{}_init", var_name);
             let assign_expr = BoogieExpr {
                 kind: BoogieExprKind::Var(snapshot_name),
@@ -173,7 +173,7 @@ impl BoogieStateManager {
         }
 
         for &var_id in &analysis_info.live_in_b {
-            let var_name = generator.gen_var_name(cfg_program, var_id, Some("B_"));
+            let var_name = generator.gen_var_name(cfg_program, var_id, Some("B"));
             let snapshot_name = format!("{}_init", var_name);
             let assign_expr = BoogieExpr {
                 kind: BoogieExprKind::Var(snapshot_name),
@@ -470,7 +470,7 @@ impl BoogieStateManager {
 
         // Snapshot live-OUT variables only
         for &var_id in &analysis_info.live_out_a {
-            let var_name = generator.gen_var_name(cfg_program, var_id, Some("A_"));
+            let var_name = generator.gen_var_name(cfg_program, var_id, Some("A"));
             let snapshot_name = format!("{}_{}", var_name, suffix);
             var_a_snapshots.insert(var_id, snapshot_name.clone());
 
@@ -485,7 +485,7 @@ impl BoogieStateManager {
         }
 
         for &var_id in &analysis_info.live_out_b {
-            let var_name = generator.gen_var_name(cfg_program, var_id, Some("B_"));
+            let var_name = generator.gen_var_name(cfg_program, var_id, Some("B"));
             let snapshot_name = format!("{}_{}", var_name, suffix);
             var_b_snapshots.insert(var_id, snapshot_name.clone());
 

@@ -255,7 +255,9 @@ impl SCGraphBuilder {
             for access2 in accesses2 {
                 // Same table accessed
                 if access1.table == access2.table {
-                    match (access1.access_type, access2.access_type) {
+                    if access1.field == access2.field {
+                        // Check access types for conflict
+                        match (access1.access_type, access2.access_type) {
                         // Read-Write conflict
                         (AccessType::Read, AccessType::Write) |
                         (AccessType::Write, AccessType::Read) |
@@ -266,6 +268,7 @@ impl SCGraphBuilder {
                         // Read-Read is not a conflict
                         (AccessType::Read, AccessType::Read) => {
                             // No conflict
+                            }
                         }
                     }
                 }
