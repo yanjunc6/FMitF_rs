@@ -1,272 +1,221 @@
+// ============================================================================
+// --- Final Grammar for the Distributed Data Processing DSL
+// ============================================================================
+// This grammar is organized from high-level constructs (program) down to
+// low-level tokens. It includes detailed comments on design choices and
+// implementation details to guide development.
+
+// ----------------------------------------------------------------------------
+// -- 1. Lexical Structure & Basic Tokens
+// ----------------------------------------------------------------------------
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 COMMENT    = _{ "//" ~ (!"\n" ~ ANY)* }
 
-// Basic tokens
-letter_or_underscore          = { ASCII_ALPHA | "_" }
-letter_or_digit_or_underscore = { ASCII_ALPHANUMERIC | "_" }
-
-identifier      = @{ letter_or_underscore ~ letter_or_digit_or_underscore* }
-integer_literal = @{ ASCII_DIGIT+ }
-float_literal   = @{ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
-string_literal  = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
-bool_literal    = @{ "true" | "false" }
-
-basic_type = { "int" | "float" | "string" | "bool" }
-user_defined_type = { identifier }
-array_type = { (basic_type | user_defined_type) ~ "[" ~ expression? ~ "]" }
-type_name = { array_type | basic_type | user_defined_type }
-ret_type = { "void" | type_name }
-primary_keyword = { "primary" }
-node_keyword = { "node" }
-
-// Grammar Start
-program = {
-    SOI ~ top_level_declaration* ~ EOI
+// -- IMPLEMENTATION NOTE: All keywords are reserved and cannot be used as identifiers.
+KEYWORD = @{
+    "assert" | "assume" | "const" | "else" | "false" | "for" | "function" |
+    "hop" | "hops" | "if" | "in" | "invariant" | "node" | "operator" |
+    "partition" | "primary" | "return" | "table" | "transaction" |
+    "true" | "type" | "var" | "void" | "to"
 }
 
-// Top-level declarations in any order
-top_level_declaration = {
-    partition_declaration
-  | table_declaration
+identifier = @{ !KEYWORD ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+// -- IMPLEMENTATION NOTE: An operator symbol is one or more characters from the allowed set.
+//    This allows for multi-character custom operators like `++-` or `=>`.
+operator_char   = _{ "*" | "/" | "%" | "+" | "-" | ":" | "<" | ">" | "=" | "!" | "&" | "^" | "|" | "$" | "@" | "~" }
+operator_symbol = @{ operator_char+ }
+
+// ----------------------------------------------------------------------------
+// -- 2. Types
+// ----------------------------------------------------------------------------
+type = { function_type | generic_type | primitive_type }
+
+// -- A basic type name, which can be a built-in primitive or a user-defined type/table name.
+primitive_type = { identifier }
+
+// -- A generic type like `List<T>` or `Map<K, V>`.
+generic_type = { identifier ~ "<" ~ type_list ~ ">" }
+
+// -- A function type like `(int, string) -> bool`. This is right-associative.
+function_type = { "(" ~ type_list? ~ ")" ~ "->" ~ type }
+
+type_list = { type ~ ("," ~ type)* }
+
+// ----------------------------------------------------------------------------
+// -- 3. Top-Level Program Structure
+// ----------------------------------------------------------------------------
+program = { SOI ~ declaration* ~ EOI }
+
+declaration = _{
+    callable_declaration
+  | type_declaration
   | const_declaration
-  | function_declaration
+  | table_declaration
 }
 
-// Partition Declarations (function-like with typed parameters, always returns int)
-partition_declaration = {
-    "partition" ~ identifier ~ "(" ~ partition_parameter_list? ~ ")" ~ ("=" ~ expression)? ~ ";"
+// ----------------------------------------------------------------------------
+// -- 4. Declarations
+// ----------------------------------------------------------------------------
+decorator = { "@" ~ identifier }
+
+// -- IMPLEMENTATION NOTE: This is a unified rule for all "callable" constructs.
+//    The parser can distinguish them by the keyword (`function`, `operator`, etc.) used.
+//    This approach simplifies the top-level grammar significantly.
+callable_declaration = {
+    decorator* ~
+    (
+      ("function" | "partition" | "transaction") ~ identifier
+      | "operator" ~ operator_symbol
+    ) ~
+    generic_param_list? ~
+    "(" ~ parameter_list? ~ ")" ~
+    ("->" ~ type)? ~
+    assume_statement* ~
+    (block | ";") // A body is a block `{}`, or `;` for a forward declaration.
 }
 
-partition_parameter_list = {
-    partition_parameter ~ ("," ~ partition_parameter)*
-}
+type_declaration = { decorator* ~ "type" ~ identifier ~ generic_param_list? ~ ";" }
 
-partition_parameter = {
-    type_name ~ identifier
-}
+const_declaration = { "const" ~ identifier ~ ":" ~ type ~ "=" ~ expression ~ ";" }
 
-// Constant Declarations
-const_declaration = {
-    "const" ~ type_name ~ identifier ~ "=" ~ expression ~ ";"
-}
-
-// Table Declarations
 table_declaration = {
-    "table" ~ identifier ~ "{" ~ field_declaration* ~ "}"
+    "table" ~ identifier ~ "{" ~ table_field* ~ "}"
+}
+table_field = {
+    ( "primary"? ~ identifier ~ ":" ~ type ~ ";" )
+  | ( "node" ~ identifier ~ "(" ~ expression_list? ~ ")" ~ ";" )
+  | ( "invariant" ~ expression ~ ";" )
 }
 
-field_declaration = {
-    (primary_keyword? ~ type_name ~ identifier ~ ";")
-  | (node_keyword ~ identifier ~ "(" ~ expression_list? ~ ")" ~ ";")
-}
+// -- Helpers for declarations
+generic_param_list = { "<" ~ identifier ~ ("," ~ identifier)* ~ ">" }
+parameter_list     = { parameter ~ ("," ~ parameter)* }
+parameter          = { identifier ~ ":" ~ type }
+assume_statement   = { "assume" ~ expression ~ ";" }
 
-// Function Declarations
-function_declaration = {
-    ret_type ~ identifier ~ "(" ~ parameter_list? ~ ")" ~ "{" ~ function_body_item* ~ "}"
-}
-
-parameter_list = {
-    parameter_decl ~ ("," ~ parameter_decl)*
-}
-
-parameter_decl = {
-    type_name ~ identifier
-}
-
-function_body_item = {
-    statement | hop_block | hops_for_loop
-}
-
-// Hop Blocks
-hop_block = {
-    "hop" ~ block
-}
-
-hops_for_loop = {
-    "hops" ~ "for" ~ type_name ~ identifier ~ "=" ~ expression ~ "to" ~ expression ~ block
-}
-
-// Statements
-statement = {
-    var_decl_statement
+// ----------------------------------------------------------------------------
+// -- 5. Statements & Blocks
+// ----------------------------------------------------------------------------
+statement = _{
+    var_declaration
   | if_statement
   | for_statement
-  | while_statement
   | return_statement
-  | abort_statement
-  | break_statement
-  | continue_statement
-  | assignment_statement
-  | expression_statement
-  | empty_statement
+  | assert_statement
+  | hop_block
+  | hops_for_loop
+  | block
+  | expression_statement // Must be last to avoid ambiguity with identifiers
 }
 
-var_decl_statement = {
-    type_name ~ identifier ~ ("=" ~ expression)? ~ ";"
-}
+block = { "{" ~ statement* ~ "}" }
+var_declaration = { "var" ~ identifier ~ (":" ~ type)? ~ ("=" ~ expression)? ~ ";" }
+if_statement = { "if" ~ expression ~ block ~ ("else" ~ block)? }
+return_statement = { "return" ~ expression? ~ ";" }
+assert_statement = { "assert" ~ expression ~ ";" }
+expression_statement = { expression ~ ";" }
 
-assignment_statement = {
-    lvalue ~ assignment_operator ~ expression ~ ";"
-}
+// -- A standard C-style for loop.
+for_statement = { "for" ~ "(" ~ (var_declaration | expression_statement | ";") ~ (expression? ~ ";") ~ (expression?) ~ ")" ~ block }
 
-assignment_operator = {
-    "+=" | "-=" | "*=" | "/=" | "="
-}
+// -- Distributed Constructs
+hop_block = { decorator* ~ "hop" ~ block }
 
-lvalue = {
-    table_field_access
-  | field_access
-  | table_access
-  | array_access
-  | identifier
-}
+// -- IMPLEMENTATION NOTE: `hops for` has a distinct syntax from the regular `for` loop.
+//    It defines a new variable over an explicit `start` to `end` range.
+hops_for_loop = { decorator* ~ "hops" ~ "for" ~ identifier ~ ":" ~ type ~ "=" ~ expression ~ "to" ~ expression ~ block }
 
-if_statement = {
-    "if" ~ "(" ~ expression ~ ")" ~ block ~ ("else" ~ block)?
-}
 
-for_statement = {
-    "for" ~ "(" ~ type_name ~ identifier ~ "=" ~ expression ~ ";" ~ expression ~ ";" ~ expression ~ ")" ~ block
-}
+// ----------------------------------------------------------------------------
+// -- 6. Expressions (Ordered by Precedence from Lowest to Highest)
+// ----------------------------------------------------------------------------
+expression = { assignment }
 
-while_statement = {
-    "while" ~ "(" ~ expression ~ ")" ~ block
-}
+// -- Precedence 11 (lowest): Assignment (=) - Right-associative
+assignment = { level10_expr ~ ("=" ~ assignment)? }
 
-return_statement = {
-    "return" ~ expression? ~ ";"
-}
+// -- IMPLEMENTATION NOTE (Operator Precedence):
+//    The grammar uses Pest's positive predicate `&` to check the FIRST char of an
+//    operator without consuming it. For example, `operator_symbol & ("+")` checks
+//    if the next token starts with `+`. If it does, `operator_symbol` then consumes
+//    the entire operator (e.g., `+` or `+-^`). This correctly implements the
+//    "first character determines precedence" rule from the specification.
 
-abort_statement = {
-    "abort" ~ ";"
-}
+// Precedence 10: $, | - Left-associative
+level10_expr = { level9_expr ~ (op10 ~ level9_expr)* }
+op10         = @{ & ("$" | "|") ~ operator_symbol }
 
-break_statement = {
-    "break" ~ ";"
-}
+// Precedence 9: ^ - Right-associative
+level9_expr = { level8_expr ~ (op9 ~ level9_expr)? }
+op9         = @{ & ("^") ~ operator_symbol }
 
-continue_statement = {
-    "continue" ~ ";"
-}
+// Precedence 8: & - Left-associative
+level8_expr = { level7_expr ~ (op8 ~ level7_expr)* }
+op8         = @{ & ("&") ~ operator_symbol }
 
-expression_statement = {
-    expression ~ ";"
-}
+// Precedence 7: @, ~ - Right-associative
+level7_expr = { level6_expr ~ (op7 ~ level7_expr)? }
+op7         = @{ & ("@" | "~") ~ operator_symbol }
 
-block = {
-    "{" ~ statement* ~ "}"
-}
+// Precedence 6: <, >, =, ! - Left-associative
+// -- IMPLEMENTATION NOTE: This rule is structured to correctly handle operators
+//    like `==` or `=>` at this precedence level, while specifically EXCLUDING
+//    the single `=` assignment operator.
+level6_expr = { level5_expr ~ (op6 ~ level5_expr)* }
+op6 = @{ (&("<" | ">" | "!") ~ operator_symbol) | ("=" ~ operator_char+) }
 
-empty_statement = { ";" }
+// Precedence 5: : - Right-associative
+level5_expr = { level4_expr ~ (op5 ~ level4_expr)? }
+op5         = @{ & (":") ~ operator_symbol }
 
-// Expressions (operator precedence)
-expression = { logic_or }
+// Precedence 4: +, - (infix) - Left-associative
+level4_expr = { level3_expr ~ (op4 ~ level3_expr)* }
+op4         = @{ & ("+" | "-") ~ operator_symbol }
 
-expression_list = {
-    expression ~ ("," ~ expression)*
-}
+// Precedence 3: *, /, % - Left-associative
+level3_expr = { prefix ~ (op3 ~ prefix)* }
+op3         = @{ & ("*" | "/" | "%") ~ operator_symbol }
 
-logic_or = {
-    logic_and ~ (logic_or_op ~ logic_and)*
-}
+// Precedence 2: Prefix operators !, -
+prefix = { (prefix_op ~ prefix) | postfix }
+prefix_op = @{ & ("!" | "-") ~ operator_symbol }
 
-logic_or_op = { "||" }
+// Precedence 1 (highest): Postfix operators (call, member access, index)
+postfix = { primary ~ (call | member_access | index_access)* }
+call          = { "(" ~ expression_list? ~ ")" }
+member_access = { "." ~ identifier }
+index_access  = { "[" ~ expression ~ "]" }
 
-logic_and = {
-    equality ~ (logic_and_op ~ equality)*
-}
-
-logic_and_op = { "&&" }
-
-equality = {
-    comparison ~ (equality_op ~ comparison)*
-}
-
-equality_op = { "==" | "!=" }
-
-comparison = {
-    addition ~ (comparison_op ~ addition)*
-}
-
-comparison_op = { "<=" | ">=" | "<" | ">" }
-
-addition = {
-    multiplication ~ (addition_op ~ multiplication)*
-}
-
-addition_op = { "+" | "-" | "~" }
-
-multiplication = {
-    unary ~ (multiplication_op ~ unary)*
-}
-
-multiplication_op = { "*" | "/" }
-
-unary = {
-    postfix
-  | (unary_op ~ unary)
-  | (prefix_unary_op ~ postfix)
-}
-
-postfix = {
-    primary ~ postfix_unary_op*
-}
-
-unary_op = { "!" | "-" }
-prefix_unary_op = { "++" | "--" }
-postfix_unary_op = { "++" | "--" }
-
+// ----------------------------------------------------------------------------
+// -- 7. Primary Expressions & Literals
+// ----------------------------------------------------------------------------
 primary = {
-    bool_literal
-  | table_field_access
-  | field_access
-  | table_access
-  | array_access
-  | array_literal
-  | record_literal
-  | float_literal
-  | integer_literal
-  | string_literal
+    literal
   | identifier
-  | "(" ~ expression ~ ")"
+  | "(" ~ expression ~ ")" // Grouped expression
 }
 
-field_access = {
-    identifier ~ "." ~ identifier
+// -- IMPLEMENTATION NOTE: All literal forms are unified under this rule.
+literal = {
+    primitive_literal
+  | list_literal
+  | map_literal
 }
 
-table_field_access = {
-    identifier ~ "[" ~ primary_key_list ~ "]" ~ "." ~ identifier
-}
+primitive_literal = _{ integer | float | string | bool }
+integer = @{ ASCII_DIGIT+ }
+float   = @{ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
+string  = @{ "\"" ~ ( !("\"" | "\\") ~ ANY | "\\" ~ ANY )* ~ "\"" }
+bool    = @{ "true" | "false" }
 
-table_access = {
-    identifier ~ "[" ~ primary_key_list ~ "]"
-}
+list_literal = { "[" ~ expression_list? ~ "]" }
 
-array_access = {
-    identifier ~ "[" ~ expression ~ "]"
-}
+// -- IMPLEMENTATION NOTE: `map_literal` `{...}` is distinguishable from a code `block` `{...}`
+//    because they appear in different contexts. Maps are expressions (e.g., on the RHS of `=`),
+//    while blocks are statements. The parser can differentiate based on this structure.
+map_literal = { "{" ~ (map_entry ~ ("," ~ map_entry)*)? ~ "}" }
+map_entry   = { expression ~ ":" ~ expression }
 
-array_literal = {
-    "{" ~ expression_list? ~ "}"
-}
-
-record_literal = {
-    "{" ~ field_assignment_list? ~ "}"
-}
-
-field_assignment_list = {
-    field_assignment ~ ("," ~ field_assignment)*
-}
-
-field_assignment = {
-    identifier ~ ":" ~ expression
-}
-
-primary_key_list = {
-    primary_key_pair ~ ("," ~ primary_key_pair)*
-}
-
-primary_key_pair = {
-    identifier ~ ":" ~ expression
-}
+// -- Helper for comma-separated expression lists in calls, lists, etc.
+expression_list = { expression ~ ("," ~ expression)* }
