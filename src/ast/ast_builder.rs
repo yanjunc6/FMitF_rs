@@ -1620,7 +1620,21 @@ pub fn parse_program(source: &str) -> Results<Program> {
     AstBuilder::parse(source)
 }
 
-/// Main entry point for parsing and initial analysis
-pub fn parse_and_analyze(source: &str) -> Results<Program> {
-    parse_program(source)
+/// Main entry point for parsing with prelude
+pub fn build_ast_with_prelude(source: &str) -> crate::util::StageResult<Program, crate::ast::ParseError> {
+    match parse_program(source) {
+        Results::Success(program) => crate::util::StageResult::Success(program),
+        Results::Failure(errors) => {
+            let spanned_errors = errors.into_iter().map(|e| {
+                let parse_error = match e.error {
+                    AstError::Parse(pe) => pe,
+                    _ => crate::ast::ParseError::SyntaxError { 
+                        message: "Unknown parse error".to_string() 
+                    },
+                };
+                crate::util::SpannedError::new(parse_error, e.span.map(|s| crate::util::Span::new(s.start, s.end, s.line, s.column)))
+            }).collect();
+            crate::util::StageResult::Failure(spanned_errors)
+        }
+    }
 }
