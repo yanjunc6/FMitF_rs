@@ -1,5 +1,5 @@
 // ============================================================================
-// --- Final Grammar for the Distributed Data Processing DSL
+// --- Final Grammar for the Distributed Data Processing DSL (Revised)
 // ============================================================================
 // This grammar is organized from high-level constructs (program) down to
 // low-level tokens. It includes detailed comments on design choices and
@@ -181,11 +181,13 @@ op3         = @{ & ("*" | "/" | "%") ~ operator_symbol }
 prefix = { (prefix_op ~ prefix) | postfix }
 prefix_op = @{ & ("!" | "-") ~ operator_symbol }
 
-// Precedence 1 (highest): Postfix operators (call, member access, index)
-postfix = { primary ~ (call | member_access | index_access)* }
-call          = { "(" ~ expression_list? ~ ")" }
-member_access = { "." ~ identifier }
-index_access  = { "[" ~ expression ~ "]" }
+// Precedence 1 (highest): Postfix operators (call, member access, table access)
+// -- NOTE: Method calls like `a.b(c)` are parsed as a `member_access` followed by a `call`.
+//    The semantic transformation to `b(a, c)` happens in a later compiler stage.
+postfix = { primary ~ (call | member_access | table_row_access)* }
+call             = { "(" ~ expression_list? ~ ")" }
+member_access    = { "." ~ identifier }
+table_row_access = { "[" ~ (key_value_pair ~ ("," ~ key_value_pair)*)? ~ "]" }
 
 // ----------------------------------------------------------------------------
 // -- 7. Primary Expressions & Literals
@@ -200,7 +202,7 @@ primary = {
 literal = {
     primitive_literal
   | list_literal
-  | map_literal
+  | row_literal
 }
 
 primitive_literal = _{ integer | float | string | bool }
@@ -211,11 +213,12 @@ bool    = @{ "true" | "false" }
 
 list_literal = { "[" ~ expression_list? ~ "]" }
 
-// -- IMPLEMENTATION NOTE: `map_literal` `{...}` is distinguishable from a code `block` `{...}`
-//    because they appear in different contexts. Maps are expressions (e.g., on the RHS of `=`),
-//    while blocks are statements. The parser can differentiate based on this structure.
-map_literal = { "{" ~ (map_entry ~ ("," ~ map_entry)*)? ~ "}" }
-map_entry   = { expression ~ ":" ~ expression }
+// -- A row literal is a set of key-value pairs, used for creating or updating table rows.
+//    It is syntactically distinguished from a code block by its context as an expression.
+row_literal = { "{" ~ (key_value_pair ~ ("," ~ key_value_pair)*)? ~ "}" }
+
+// -- A key-value pair with an identifier as the key, used in row literals and table row access.
+key_value_pair = { identifier ~ ":" ~ expression }
 
 // -- Helper for comma-separated expression lists in calls, lists, etc.
 expression_list = { expression ~ ("," ~ expression)* }
