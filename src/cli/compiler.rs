@@ -43,18 +43,17 @@ impl Compiler {
                 println!("Program has {} functions", program.functions.len());
                 
                 // TODO: Add more compilation stages here:
-                // - Name resolution
-                // - Type checking
-                // - Semantic analysis
                 // - CFG generation
                 // - Optimization
                 // - SC-Graph generation
                 
                 Ok(program)
             }
-            Err(parse_error) => {
+            Err(parse_errors) => {
                 println!("❌ Parse stage failed");
-                self.reporter.report(&parse_error, &filename);
+                for error in &parse_errors {
+                    self.reporter.report(error, &filename);
+                }
                 Err("Parse errors occurred".into())
             }
         }

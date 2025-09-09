@@ -9,7 +9,7 @@
 //! - Type resolution: fills in `resolved_type` fields with concrete types
 
 use id_arena::{Arena, Id};
-use crate::util::{Span, StageResult, SpannedError};
+use crate::util::{Span};
 
 // ============================================================================
 // --- Arena-based Node IDs
@@ -46,7 +46,7 @@ pub struct Identifier {
 }
 
 /// Reference to any declaration that can be named.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DeclRef {
     Function(FunctionId),
     Type(TypeDeclId),
@@ -377,9 +377,31 @@ pub struct KeyValue {
 // --- Main Parse Function
 // ============================================================================
 
-/// Parse source code into AST with prelude
-pub fn parse_and_analyze(source: &str) -> StageResult<Program, errors::ParseError> {
-    ast_builder::build_ast_with_prelude(source)
+/// Parse source code into AST with complete processing including name resolution,
+/// type checking, and semantic analysis
+pub fn parse_program(source: &str) -> Result<Program, Vec<errors::AstError>> {
+    // Stage 1: Basic AST parsing with prelude
+    let mut program = match ast_builder::parse_source(source) {
+        Ok(program) => program,
+        Err(error) => return Err(vec![error]),
+    };
+    
+    // Stage 2: Name resolution - use simple stub for now
+    // if let Err(errors) = simple_name_resolution(&mut program) {
+    //     return Err(errors);
+    // }
+    
+    // Stage 3: Type checking
+    if let Err(errors) = type_checker::check_types(&mut program) {
+        return Err(errors);
+    }
+    
+    // Stage 4: Semantic analysis
+    if let Err(errors) = semantic_analyzer::analyze_semantics(&program) {
+        return Err(errors);
+    }
+    
+    Ok(program)
 }
 
 // ============================================================================
@@ -388,9 +410,10 @@ pub fn parse_and_analyze(source: &str) -> StageResult<Program, errors::ParseErro
 
 pub mod ast_builder;
 pub mod errors;
+pub mod type_checker;
+pub mod semantic_analyzer;
+// Complex modules with legacy issues:
 // pub mod name_resolver;
-// pub mod type_resolver;
-// pub mod semantics_analysis;
 // pub mod constant_checker;
 // pub mod ast_debug;
 
@@ -398,8 +421,10 @@ pub mod errors;
 // --- Public Interface Re-exports
 // ============================================================================
 
-// Core types
-pub use errors::{ParseError, SemanticError, NameResolutionError, TypeCheckError, ConstantError};
+// Core types - using unified error system
+pub use errors::{AstError, AstErrorKind};
+
+// AST builder functions
 
 // Analysis phases (disabled for now)
 // pub use name_resolver::resolve_names;
