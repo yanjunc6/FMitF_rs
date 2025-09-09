@@ -1,116 +1,69 @@
-// src/cli/mod.rs
+//! CLI Module - Simple compiler entry point
+
+pub mod compiler;
+
 use clap::Parser;
 use std::path::PathBuf;
 
-mod compiler;
-mod logger;
-mod output_manager;
-// mod verification; // Temporarily disabled due to compilation errors
+use crate::cli::compiler::Compiler;
 
-pub use compiler::*;
-pub use logger::Logger;
-pub use output_manager::OutputManager;
+// ============================================================================
+// --- CLI Arguments
+// ============================================================================
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Debug)]
 #[command(name = "fmitf")]
-#[command(about = "A chopped transaction serializability verification compiler")]
-#[command(version = "0.1.0")]
-pub struct Cli {
+#[command(about = "Formal Methods in Transaction Framework")]
+pub struct Args {
     /// Input .transact file
     pub input: PathBuf,
-
-    /// Optional output directory (defaults to input filename without extension)
-    pub output_dir: Option<PathBuf>,
-
+    
+    /// Output directory (optional)
+    pub output: Option<PathBuf>,
+    
+    /// Number of transaction instances
+    #[arg(long, default_value = "2")]
+    pub instances: usize,
+    
     /// Skip optimization passes
-    #[arg(long = "no-optimize")]
+    #[arg(long)]
     pub no_optimize: bool,
-
+    
     /// Disable colored output
-    #[arg(long = "no-color")]
+    #[arg(long)]
     pub no_color: bool,
-
-    /// Number of instances to create for each transaction (default: 2)
-    #[arg(long = "instances", default_value = "2")]
-    pub instances: u32,
-
-    /// Verification type to generate (partition, commutative, all, or none). Default: all
-    #[arg(long = "verify", default_value = "all")]
-    pub verify: String,
 }
 
-impl Cli {
-    pub fn validate(&self) -> Result<(), String> {
-        // Check input file existence
-        if !self.input.exists() {
-            return Err(format!(
-                "Input file does not exist: {}",
-                self.input.display()
-            ));
-        }
-
-        if !self
-            .input
-            .extension()
-            .map_or(false, |ext| ext == "transact")
-        {
-            return Err("Input file must have .transact extension".to_string());
-        }
-
-        // Validate verification type
-        match self.verify.as_str() {
-            "partition" | "commutative" | "all" | "none" => {}
-            _ => {
-                return Err(format!(
-                "Invalid verification type '{}'. Valid options: partition, commutative, all, none",
-                self.verify
-            ))
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Get the verification type from CLI argument (simplified for AST-only mode)
-    pub fn get_verification_type(&self) -> Option<String> {
-        match self.verify.as_str() {
-            "partition" => Some("partition".to_string()),
-            "commutative" => Some("commutative".to_string()),
-            "all" => Some("all".to_string()),
-            "none" => None,
-            _ => Some("all".to_string()), // Default fallback
-        }
-    }
-
-    /// Get the output directory, using provided path or creating one from input filename
-    pub fn get_output_dir(&self) -> PathBuf {
-        match &self.output_dir {
-            Some(dir) => dir.clone(),
-            None => {
-                // Create directory with same name as input file (without extension)
-                let input_stem = self.input.file_stem().unwrap_or_default();
-                PathBuf::from(input_stem)
-            }
-        }
+impl Args {
+    pub fn output_dir(&self) -> PathBuf {
+        self.output.clone().unwrap_or_else(|| {
+            let stem = self.input.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("output");
+            PathBuf::from(format!("{}_output", stem))
+        })
     }
 }
 
-/// Print ast error using ariadne
-pub fn print_ast_spanned_error(
-    spanned_error: &crate::AstSpannedError,
-    source_code: &str,
-    file_name: &str,
-) {
-    use crate::util::{ErrorReporter, Span, SpannedDiagnostic};
+// ============================================================================
+// --- CLI Entry Point
+// ============================================================================
 
-    let mut reporter = ErrorReporter::new();
-    reporter.add_source(file_name.to_string(), source_code.to_string());
+pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let args = Args::parse();
+    
+    // Create compiler and run pipeline
+    let mut compiler = Compiler::new();
+    let output_dir = args.output_dir();
+    
+    compiler.run_pipeline(&args.input, &output_dir, args.instances)
+}
 
-    let diagnostic = SpannedDiagnostic::new(
-        spanned_error.error.clone(),
-        spanned_error.span.map(Span::from),
-    )
-    .with_file_name(file_name.to_string());
+// ============================================================================
+// --- Backwards Compatibility
+// ============================================================================
 
-    reporter.report_error(&diagnostic);
+/// Old entry point for backwards compatibility
+pub fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
+    run()
 }

@@ -9,27 +9,7 @@
 //! - Type resolution: fills in `resolved_type` fields with concrete types
 
 use id_arena::{Arena, Id};
-
-// ============================================================================
-// --- Source Location Tracking
-// ============================================================================
-
-/// Represents a location in the source code.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub struct Span {
-    pub start: usize,
-    pub end: usize,
-    pub line: usize,
-    pub column: usize,
-}
-
-/// Wraps any value with its source location.
-#[derive(Debug, Clone)]
-pub struct Spanned<T> {
-    pub value: T,
-    /// The location of this value in the source code. `None` for built-ins or generated code.
-    pub span: Option<Span>,
-}
+use crate::util::{Span, StageResult, SpannedError};
 
 // ============================================================================
 // --- Arena-based Node IDs
@@ -92,6 +72,14 @@ pub enum ResolvedType {
         return_type: Box<ResolvedType>,
     },
     Void,
+}
+
+/// Wraps any value with its source location.
+#[derive(Debug, Clone)]
+pub struct Spanned<T> {
+    pub value: T,
+    /// The location of this value in the source code. `None` for built-ins or generated code.
+    pub span: Option<Span>,
 }
 
 // ============================================================================
@@ -386,6 +374,15 @@ pub struct KeyValue {
 }
 
 // ============================================================================
+// --- Main Parse Function
+// ============================================================================
+
+/// Parse source code into AST with prelude
+pub fn parse_and_analyze(source: &str) -> StageResult<Program, errors::ParseError> {
+    ast_builder::build_ast_with_prelude(source)
+}
+
+// ============================================================================
 // --- Module Declarations
 // ============================================================================
 
@@ -401,11 +398,8 @@ pub mod errors;
 // --- Public Interface Re-exports
 // ============================================================================
 
-// Core parsing function
-pub use ast_builder::parse_and_analyze;
-
-// Error types
-pub use errors::{AstError, ErrorCollector, Results, SpannedError};
+// Core types
+pub use errors::{ParseError, SemanticError, NameResolutionError, TypeCheckError, ConstantError};
 
 // Analysis phases (disabled for now)
 // pub use name_resolver::resolve_names;

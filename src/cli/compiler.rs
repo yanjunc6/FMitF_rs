@@ -1,120 +1,87 @@
-use colored::*;
-use std::time::Instant;
+//! Compiler Implementation
+//!
+//! This module contains the main compilation orchestration logic.
 
-use crate::cli::{print_ast_spanned_error, Cli, Logger, OutputManager};
-use crate::pretty::print_program;
-use crate::{parse_and_analyze, AstProgram, AstSpannedError};
+use std::path::PathBuf;
+use crate::ast::{self, Program};
+use crate::util::DiagnosticReporter;
 
-/// Represents the result of compilation
-#[derive(Debug)]
-pub struct CompilationResult {
-    pub success: bool,
-    pub compilation_time_ms: u64,
-    pub ast: Option<AstProgram>,
-}
+// ============================================================================
+// --- Compiler Structure
+// ============================================================================
 
-/// Simple AST-only compiler that parses .transact files
+/// Main compiler orchestrator
 pub struct Compiler {
-    pub logger: Logger,
+    pub reporter: DiagnosticReporter,
 }
 
 impl Compiler {
     pub fn new() -> Self {
         Self {
-            logger: Logger::new(),
+            reporter: DiagnosticReporter::new(),
         }
     }
 
-    /// Main compilation method - simplified to only parse AST
-    pub fn compile(&mut self, source_code: &str, cli: &Cli) -> Result<CompilationResult, String> {
-        let start_time = Instant::now();
+    /// Add source file for error reporting
+    pub fn add_source(&mut self, filename: &str, content: &str) {
+        self.reporter.add_source(filename, content);
+    }
 
-        self.logger.process_start("AST parsing");
-
-        let ast_result = self.stage_ast(source_code, cli);
-
-        let compilation_time = start_time.elapsed();
-        let compilation_time_ms = compilation_time.as_millis() as u64;
-
-        match ast_result {
-            Ok(ast) => {
-                self.logger.success(&format!(
-                    "AST parsing completed successfully in {} ms",
-                    compilation_time_ms
-                ));
-
-                // Generate output
-                let output_manager = OutputManager::new(&cli.get_output_dir());
-                if let Err(e) = output_manager.write_ast_output(&ast) {
-                    self.logger
-                        .error(&format!("Failed to write AST output: {}", e));
-                }
-
-                Ok(CompilationResult {
-                    success: true,
-                    compilation_time_ms,
-                    ast: Some(ast),
-                })
+    /// Compile a single source file
+    pub fn compile_file(&mut self, input_path: &PathBuf) -> Result<Program, Box<dyn std::error::Error>> {
+        // Read input file
+        let input_content = std::fs::read_to_string(input_path)?;
+        let filename = input_path.to_string_lossy().to_string();
+        
+        // Add source for error reporting
+        self.add_source(&filename, &input_content);
+        
+        // Parse the program
+        match ast::parse_program(&input_content) {
+            Ok(program) => {
+                println!("✅ Parse stage successful!");
+                println!("Program has {} functions", program.functions.len());
+                
+                // TODO: Add more compilation stages here:
+                // - Name resolution
+                // - Type checking
+                // - Semantic analysis
+                // - CFG generation
+                // - Optimization
+                // - SC-Graph generation
+                
+                Ok(program)
             }
-            Err(errors) => {
-                self.logger
-                    .error_with_count("AST parsing failed", errors.len());
-
-                // Print all AST errors
-                for error in &errors {
-                    print_ast_spanned_error(error, source_code, "input.transact");
-                }
-
-                Ok(CompilationResult {
-                    success: false,
-                    compilation_time_ms,
-                    ast: None,
-                })
+            Err(parse_error) => {
+                println!("❌ Parse stage failed");
+                self.reporter.report(&parse_error, &filename);
+                Err("Parse errors occurred".into())
             }
         }
     }
 
-    /// Stage 1: Parse and analyze AST  
-    fn stage_ast(
-        &mut self,
-        source_code: &str,
-        _cli: &Cli,
-    ) -> Result<AstProgram, Vec<AstSpannedError>> {
-        self.logger.stage_start(1, 1, "Parsing AST");
-
-        match parse_and_analyze(source_code) {
-            crate::ast::errors::Results::Success(ast) => {
-                self.logger.stage_success();
-                self.logger.detail(&format!(
-                    "AST parsed successfully with {} functions",
-                    ast.functions.len()
-                ));
-                Ok(ast)
-            }
-            crate::ast::errors::Results::Failure(errors) => {
-                self.logger.stage_error(errors.len());
-                Err(errors)
-            }
-        }
-    }
-
-    /// Print compilation complete message
-    pub fn print_compilation_complete(&self, compilation_time_ms: u64) {
-        println!(
-            "{} Compilation completed successfully in {} ms",
-            "SUCCESS:".green().bold(),
-            compilation_time_ms.to_string().bright_green()
-        );
-    }
-
-    /// Print compilation failed message
-    pub fn print_compilation_failed(&self, compilation_time_ms: u64, error_count: usize) {
-        println!(
-            "{} Compilation failed with {} error(s) in {} ms",
-            "FAILED:".red().bold(),
-            error_count.to_string().bright_red(),
-            compilation_time_ms.to_string().bright_red()
-        );
+    /// Run the full compilation pipeline
+    pub fn run_pipeline(&mut self, input_path: &PathBuf, _output_dir: &PathBuf, _instances: usize) -> Result<(), Box<dyn std::error::Error>> {
+        println!("🚀 Starting compilation pipeline...");
+        println!("Input: {}", input_path.display());
+        
+        // Stage 1: Parse
+        let _program = self.compile_file(input_path)?;
+        
+        // TODO: Stage 2: CFG Generation
+        // let cfg_program = cfg::build_cfg(program)?;
+        
+        // TODO: Stage 3: Optimization  
+        // let optimized_cfg = optimization::optimize(cfg_program)?;
+        
+        // TODO: Stage 4: SC-Graph Generation
+        // let sc_graph = sc_graph::build_sc_graph(optimized_cfg, instances)?;
+        
+        // TODO: Stage 5: Output Generation
+        // output_manager::write_outputs(sc_graph, output_dir)?;
+        
+        println!("✅ Compilation pipeline completed successfully!");
+        Ok(())
     }
 }
 
