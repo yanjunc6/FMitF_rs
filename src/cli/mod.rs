@@ -71,15 +71,14 @@ impl Cli {
         Ok(())
     }
 
-    /// Get the verification type from CLI argument
-    pub fn get_verification_type(&self) -> Option<crate::verification::VerificationType> {
-        use crate::verification::VerificationType;
+    /// Get the verification type from CLI argument (simplified for AST-only mode)
+    pub fn get_verification_type(&self) -> Option<String> {
         match self.verify.as_str() {
-            "partition" => Some(VerificationType::Partition),
-            "commutative" => Some(VerificationType::Commutative),
-            "all" => Some(VerificationType::All),
+            "partition" => Some("partition".to_string()),
+            "commutative" => Some("commutative".to_string()),
+            "all" => Some("all".to_string()),
             "none" => None,
-            _ => Some(VerificationType::All), // Default fallback
+            _ => Some("all".to_string()), // Default fallback
         }
     }
 
@@ -96,57 +95,22 @@ impl Cli {
     }
 }
 
-/// Print ast error
-pub fn print_ast_spanned_error(spanned_error: &crate::AstSpannedError, source_code: &str) {
-    use colored::*;
-
-    if let Some(span_value) = &spanned_error.span {
-        eprintln!(
-            "{}: {} at line {}, column {}",
-            spanned_error.error.error_type().red().bold(),
-            spanned_error.error.message(),
-            span_value.line.to_string().red(),
-            span_value.column.to_string().red()
-        );
-        if let Some(line_content) = source_code.lines().nth(span_value.line.saturating_sub(1)) {
-            eprintln!("   |");
-            eprintln!("{} | {}", span_value.line.to_string().red(), line_content);
-            eprintln!("   | {}{}", " ".repeat(span_value.column), "^".red().bold());
-        }
-    } else {
-        eprintln!(
-            "{}: {}",
-            spanned_error.error.error_type().red().bold(),
-            spanned_error.error.message()
-        );
-    }
-}
-
-/// Print verification error
-pub fn print_verification_spanned_error(
-    spanned_error: &crate::VerificationSpannedError,
+/// Print ast error using ariadne
+pub fn print_ast_spanned_error(
+    spanned_error: &crate::AstSpannedError,
     source_code: &str,
+    file_name: &str,
 ) {
-    use colored::*;
+    use crate::util::{ErrorReporter, Span, SpannedDiagnostic};
 
-    if let Some(span_value) = &spanned_error.span {
-        eprintln!(
-            "{}: {} at line {}, column {}",
-            spanned_error.error.error_type().red().bold(),
-            spanned_error.error.message(),
-            span_value.line.to_string().red(),
-            span_value.column.to_string().red()
-        );
-        if let Some(line_content) = source_code.lines().nth(span_value.line.saturating_sub(1)) {
-            eprintln!("   |");
-            eprintln!("{} | {}", span_value.line.to_string().red(), line_content);
-            eprintln!("   | {}{}", " ".repeat(span_value.column), "^".red().bold());
-        }
-    } else {
-        eprintln!(
-            "{}: {}",
-            spanned_error.error.error_type().red().bold(),
-            spanned_error.error.message()
-        );
-    }
+    let mut reporter = ErrorReporter::new();
+    reporter.add_source(file_name.to_string(), source_code.to_string());
+
+    let diagnostic = SpannedDiagnostic::new(
+        spanned_error.error.clone(),
+        spanned_error.span.map(Span::from),
+    )
+    .with_file_name(file_name.to_string());
+
+    reporter.report_error(&diagnostic);
 }

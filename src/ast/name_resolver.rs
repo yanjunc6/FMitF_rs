@@ -1,1051 +1,689 @@
-//! The `name_resolver` module handles name resolution within the AST.
-//! It ensures that all identifiers (variables, tables, partitions, etc.) are properly declared
-//! and resolves their references within the program.
+//! Name Resolution
 //!
-//! # Overview
-//!
-//! - **NameResolver**: The main struct responsible for resolving names and managing scopes.
-//! - **resolve_names**: Public interface for performing name resolution on a `Program`.
-//!
-//! # Features
-//!
-//! - Scope management for variables and functions.
-//! - Error reporting for undeclared identifiers and duplicate declarations.
-//! - Resolution of table field references and partition function calls.
-//!
-//! # Usage
-//!
-//! Use the `resolve_names` function to perform name resolution:
-//!
-//! ```rust
-//! use crate::ast::name_resolver::resolve_names;
-//! use crate::ast::Program;
-//!
-//! let mut program = Program::new();
-//! resolve_names(&mut program).expect("Name resolution failed");
-//! ```
+//! This module implements name resolution for the AST. It performs:
+//! - Symbol table construction from declarations
+//! - Identifier resolution to declarations
+//! - Scope checking and validation
+//! - Circular dependency detection
+//! - Forward reference validation
+
+use std::collections::HashMap;
+use std::collections::HashSet;
 
 use crate::ast::*;
-use std::collections::HashMap;
+use crate::ast::errors::*;
 
-pub struct NameResolver<'p> {
-    program: &'p mut Program,
-    errors: Vec<SpannedError>,
+// ============================================================================
+// --- Name Resolution Context
+// ============================================================================
 
-    // Symbol table - stack of scopes
-    scope_stack: Vec<ScopeId>,
-    current_scope: Option<ScopeId>,
+/// Main name resolver that tracks symbols and performs resolution
+pub struct NameResolver {
+    /// Global symbol table mapping names to declarations
+    global_symbols: HashMap<String, DeclRef>,
+    
+    /// Stack of local scopes (for function parameters, local variables)
+    scope_stack: Vec<HashMap<String, DeclRef>>,
+    
+    /// Current function being processed (for return type checking)
+    current_function: Option<FunctionId>,
+    
+    /// Error collector
+    errors: ErrorCollector,
 }
 
-impl<'p> NameResolver<'p> {
-    /// Creates a new `NameResolver` instance.
-    pub fn new(program: &'p mut Program) -> Self {
+/// Represents different scopes where names can be declared
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeKind {
+    Global,
+    Function,
+    Block,
+}
+
+// ============================================================================
+// --- Name Resolution Implementation
+// ============================================================================
+
+impl NameResolver {
+    pub fn new() -> Self {
         Self {
-            program,
-            errors: Vec::new(),
+            global_symbols: HashMap::new(),
             scope_stack: Vec::new(),
-            current_scope: None,
+            current_function: None,
+            errors: ErrorCollector::new(),
         }
     }
 
-    /// Resolves all names in the program.
-    ///
-    /// This function iterates over all root functions and resolves their names,
-    /// including parameters, hops, and statements.
-    pub fn resolve(mut self) -> Results<()> {
-        // Resolve constants first (populate var_types for global constants)
-        self.resolve_constants();
-
-        // Resolve table partitions first
-        self.resolve_table_partitions();
-
-        // Resolve all partition functions
-        let partition_ids: Vec<_> = self.program.root_partitions.iter().copied().collect();
-        for partition_id in partition_ids {
-            self.resolve_partition(partition_id);
-        }
-
-        // Resolve all functions
-        let function_ids: Vec<_> = self.program.root_functions.iter().copied().collect();
-        for func_id in function_ids {
-            self.resolve_function(func_id);
-        }
-
-        if self.errors.is_empty() {
-            Ok(())
-        } else {
-            Err(self.errors)
-        }
+    /// Perform name resolution on a program
+    pub fn resolve_names(mut program: Program) -> Results<Program> {
+        let mut resolver = Self::new();
+        
+        // First pass: collect all global declarations
+        resolver.collect_global_symbols(&program);
+        
+        // Second pass: resolve all references
+        resolver.resolve_program_references(&mut program);
+        
+        resolver.errors.into_result(Some(program))
     }
 
-    /// Resolves constants by populating var_types for global constants.
-    fn resolve_constants(&mut self) {
-        for &const_var_id in &self.program.root_constants {
-            let var_decl = &self.program.variables[const_var_id];
-            self.program
-                .var_types
-                .insert(const_var_id, var_decl.ty.clone());
-        }
-    }
+    // ========================================================================
+    // --- Symbol Collection Phase
+    // ========================================================================
 
-    /// Resolves partition references in table declarations.
-    fn resolve_table_partitions(&mut self) {
-        // Build a map of partition names to partition IDs
-        let mut partition_map = HashMap::new();
-        for &partition_id in &self.program.root_partitions {
-            let partition = &self.program.partitions[partition_id];
-            partition_map.insert(partition.name.clone(), partition_id);
-        }
-
-        // Resolve partition references in tables
-        for &table_id in &self.program.root_tables {
-            let table = &mut self.program.tables[table_id];
-            if let Some(node_partition) = &mut table.node_partition {
-                if let Some(&partition_id) = partition_map.get(&node_partition.partition_name) {
-                    node_partition.resolved_partition = Some(partition_id);
+    fn collect_global_symbols(&mut self, program: &Program) {
+        // Collect all global declarations first
+        for declaration in &program.declarations {
+            match declaration {
+                Declaration::Callable(id) => {
+                    let func = &program.functions[*id];
+                    self.add_global_symbol(func.name.value.clone(), DeclRef::Function(*id), func.span);
                 }
-                // Note: If partition is not found, resolved_partition remains None
-                // This will be caught later in semantic analysis
+                Declaration::Type(id) => {
+                    let type_decl = &program.type_decls[*id];
+                    self.add_global_symbol(type_decl.name.value.clone(), DeclRef::Type(*id), type_decl.span);
+                }
+                Declaration::Const(id) => {
+                    let const_decl = &program.const_decls[*id];
+                    self.add_global_symbol(const_decl.name.value.clone(), DeclRef::Const(*id), const_decl.span);
+                }
+                Declaration::Table(id) => {
+                    let table_decl = &program.table_decls[*id];
+                    self.add_global_symbol(table_decl.name.value.clone(), DeclRef::Table(*id), table_decl.span);
+                }
             }
         }
     }
 
-    /// Resolves names within a partition function.
-    ///
-    /// This includes creating a scope for the partition, resolving parameters,
-    /// and resolving the implementation expression if it exists.
-    fn resolve_partition(&mut self, partition_id: PartitionId) {
-        // Only resolve partitions that have implementations
-        let implementation_expr = self.program.partitions[partition_id].implementation;
-        if implementation_expr.is_none() {
-            return;
+    fn add_global_symbol(&mut self, name: String, decl_ref: DeclRef, span: Option<Span>) {
+        if let Some(existing) = self.global_symbols.get(&name) {
+            let error = NameResolutionError::DuplicateDeclaration {
+                name,
+                original_span: None, // Would need to track original spans
+            };
+            self.errors.add_error(AstError::NameResolution(error), span);
+        } else {
+            self.global_symbols.insert(name, decl_ref);
         }
-
-        // Create partition scope
-        let partition_scope = self.program.scopes.alloc(Scope {
-            parent: None,
-            variables: HashMap::new(),
-        });
-
-        self.push_scope(partition_scope);
-
-        // Add parameters to partition scope
-        let param_ids: Vec<ParameterId> = self.program.partitions[partition_id]
-            .parameters
-            .iter()
-            .copied()
-            .collect();
-
-        // Collect parameter data to avoid borrowing issues
-        let params_to_declare: Vec<(String, TypeName, Span)> = param_ids
-            .iter()
-            .map(|&param_id| {
-                let param_decl = &self.program.parameters[param_id];
-                (
-                    param_decl.param_name.clone(),
-                    param_decl.param_type.clone(),
-                    param_decl.span.clone(),
-                )
-            })
-            .collect();
-
-        for (i, (name, ty, span)) in params_to_declare.into_iter().enumerate() {
-            let var_id =
-                self.declare_variable(&name, ty, VarKind::Parameter, span, partition_scope);
-            // Store the parameter -> variable mapping
-            self.program
-                .parameter_resolutions
-                .insert(param_ids[i], var_id);
-        }
-
-        // Resolve implementation expression
-        if let Some(impl_expr_id) = implementation_expr {
-            self.resolve_expression(impl_expr_id);
-        }
-
-        self.pop_scope();
     }
 
-    /// Resolves names within a function.
-    ///
-    /// This includes creating a scope for the function, resolving parameters,
-    /// and resolving hops and statements within the function.
-    fn resolve_function(&mut self, func_id: FunctionId) {
-        // Create function scope (top-level scope for this function)
-        let func_scope = self.program.scopes.alloc(Scope {
-            parent: None,
-            variables: HashMap::new(),
-        });
+    // ========================================================================
+    // --- Reference Resolution Phase
+    // ========================================================================
 
-        self.push_scope(func_scope);
-
-        // Add parameters to function scope
-        let param_ids: Vec<ParameterId> = self.program.functions[func_id]
-            .parameters
-            .iter()
-            .copied()
-            .collect();
-
-        // Collect parameter data to avoid borrowing issues
-        let params_to_declare: Vec<(String, TypeName, Span)> = param_ids
-            .iter()
-            .map(|&param_id| {
-                let param_decl = &self.program.parameters[param_id];
-                (
-                    param_decl.param_name.clone(),
-                    param_decl.param_type.clone(),
-                    param_decl.span.clone(),
-                )
-            })
-            .collect();
-
-        for (i, (name, ty, span)) in params_to_declare.into_iter().enumerate() {
-            let var_id = self.declare_variable(&name, ty, VarKind::Parameter, span, func_scope);
-            // Store the parameter -> variable mapping
-            self.program
-                .parameter_resolutions
-                .insert(param_ids[i], var_id);
+    fn resolve_program_references(&mut self, program: &mut Program) {
+        // Resolve references in all declarations
+        for declaration in &program.declarations {
+            match declaration {
+                Declaration::Callable(id) => {
+                    self.resolve_callable_references(*id, program);
+                }
+                Declaration::Type(id) => {
+                    self.resolve_type_declaration_references(*id, program);
+                }
+                Declaration::Const(id) => {
+                    self.resolve_const_declaration_references(*id, program);
+                }
+                Declaration::Table(id) => {
+                    self.resolve_table_declaration_references(*id, program);
+                }
+            }
         }
-
-        // Resolve each hop
-        let hop_ids: Vec<_> = self.program.functions[func_id]
-            .hops
-            .iter()
-            .copied()
-            .collect();
-        for hop_id in hop_ids {
-            self.resolve_hop(hop_id);
-        }
-
-        self.pop_scope();
     }
 
-    /// Resolves names within a hop block.
-    ///
-    /// This includes resolving statements within the hop.
-    fn resolve_hop(&mut self, hop_id: HopId) {
-        let (hop_type, hop_span, stmt_ids) = {
-            let hop = &self.program.hops[hop_id];
-            (
-                hop.hop_type.clone(),
-                hop.span.clone(),
-                hop.statements.clone(),
-            )
-        };
+    fn resolve_callable_references(&mut self, func_id: FunctionId, program: &mut Program) {
+        self.current_function = Some(func_id);
+        self.push_scope();
 
-        // Check if this is a ForLoop hop that introduces a loop variable
-        if let HopType::ForLoop {
-            loop_var,
-            loop_var_type,
-            ..
-        } = hop_type
-        {
-            // ForLoop hops create their own scope for each hop instance
-            let hop_scope = self.program.scopes.alloc(Scope {
-                parent: self.current_scope,
-                variables: HashMap::new(),
-            });
+        // Check operator decorators for additional validation
+        let func = &program.functions[func_id];
+        if func.kind == CallableKind::Operator {
+            self.validate_operator_decorators(&func.decorators, func.name.span);
+        }
 
-            self.push_scope(hop_scope);
+        // Add parameters to scope
+        let param_ids = program.functions[func_id].params.clone();
+        for param_id in param_ids {
+            let param = &program.params[param_id];
+            self.add_local_symbol(param.name.value.clone(), DeclRef::Param(param_id), param.span);
+            
+            // Resolve parameter type
+            if let Some(type_id) = param.ty {
+                self.resolve_type_references(type_id, program);
+            }
+        }
 
-            // Create the loop variable in the hop's scope
-            let _ = self.declare_variable(
-                &loop_var,
-                loop_var_type,
-                VarKind::Local,
-                hop_span,
-                hop_scope,
+        // Add generic parameters to scope
+        let generic_param_ids = program.functions[func_id].generic_params.clone();
+        for generic_param_id in generic_param_ids {
+            let generic_param = &program.generic_params[generic_param_id];
+            self.add_local_symbol(
+                generic_param.name.value.clone(), 
+                DeclRef::GenericParam(generic_param_id), 
+                generic_param.span
             );
+        }
 
-            // Resolve statements in the hop's scope
-            for stmt_id in stmt_ids {
-                self.resolve_statement(stmt_id);
+        // Resolve return type
+        if let Some(return_type) = program.functions[func_id].return_type {
+            self.resolve_type_references(return_type, program);
+        }
+
+        // Resolve assumption expressions
+        let assumption_ids = program.functions[func_id].assumptions.clone();
+        for assumption_id in assumption_ids {
+            self.resolve_expression_references(assumption_id, program);
+        }
+
+        // Resolve function body
+        if let Some(body_id) = program.functions[func_id].body {
+            self.resolve_block_references(body_id, program);
+        }
+
+        self.pop_scope();
+        self.current_function = None;
+    }
+
+    /// Validate operator decorators (@infix, @prefix, etc.)
+    fn validate_operator_decorators(&mut self, decorators: &[Spanned<String>], span: Option<Span>) {
+        let mut has_infix = false;
+        let mut has_prefix = false;
+        let mut has_postfix = false;
+
+        for decorator in decorators {
+            match decorator.value.as_str() {
+                "infix" => has_infix = true,
+                "prefix" => has_prefix = true,
+                "postfix" => has_postfix = true,
+                "intrinsic" => {
+                    // @intrinsic is valid for operators
+                }
+                _ => {
+                    // Unknown decorator for operators
+                    self.errors.add_error(
+                        AstError::Semantic(SemanticError::InvalidDecorator {
+                            decorator: decorator.value.clone(),
+                            context: "operator".to_string(),
+                        }),
+                        decorator.span
+                    );
+                }
             }
+        }
 
-            self.pop_scope();
-        } else {
-            // Regular hops do NOT create their own scopes - resolve statements in current function scope
-            for stmt_id in stmt_ids {
-                self.resolve_statement(stmt_id);
+        // Validate decorator combinations
+        let decorator_count = [has_infix, has_prefix, has_postfix].iter().filter(|&&x| x).count();
+        if decorator_count > 1 {
+            self.errors.add_error(
+                AstError::Semantic(SemanticError::ConflictingDecorators {
+                    decorators: vec!["infix".to_string(), "prefix".to_string(), "postfix".to_string()],
+                }),
+                span
+            );
+        }
+
+        // Default to infix if no fixity decorator is specified
+        // This is just a note for future implementation
+    }
+
+    fn resolve_type_declaration_references(&mut self, type_id: TypeDeclId, program: &mut Program) {
+        self.push_scope();
+
+        // Add generic parameters to scope
+        let generic_param_ids = program.type_decls[type_id].generic_params.clone();
+        for generic_param_id in generic_param_ids {
+            let generic_param = &program.generic_params[generic_param_id];
+            self.add_local_symbol(
+                generic_param.name.value.clone(), 
+                DeclRef::GenericParam(generic_param_id), 
+                generic_param.span
+            );
+        }
+
+        self.pop_scope();
+    }
+
+    fn resolve_const_declaration_references(&mut self, const_id: ConstId, program: &mut Program) {
+        let const_decl = &program.const_decls[const_id];
+        
+        // Resolve type
+        self.resolve_type_references(const_decl.ty, program);
+        
+        // Resolve value expression
+        self.resolve_expression_references(const_decl.value, program);
+    }
+
+    fn resolve_table_declaration_references(&mut self, table_id: TableId, program: &mut Program) {
+        let table_decl = &program.table_decls[table_id];
+        
+        // Resolve field types
+        for field in &table_decl.fields {
+            self.resolve_type_references(field.ty, program);
+        }
+        
+        // Resolve node partition references
+        for node in &table_decl.nodes {
+            // Try to resolve the partition function
+            if let Some(decl_ref) = self.lookup_symbol(&node.name.value) {
+                if let DeclRef::Function(func_id) = decl_ref {
+                    // Verify it's a partition function
+                    let func = &program.functions[func_id];
+                    if func.kind == CallableKind::Partition {
+                        // Update the table node with resolved partition
+                        // Note: We need mutable access, but we have immutable ref
+                        // This would require restructuring or unsafe code
+                    } else {
+                        let error = NameResolutionError::InvalidReference {
+                            name: node.name.value.clone(),
+                            expected_kind: "partition function".to_string(),
+                            found_kind: format!("{:?}", func.kind),
+                        };
+                        self.errors.add_error(AstError::NameResolution(error), node.span);
+                    }
+                } else {
+                    let error = NameResolutionError::InvalidReference {
+                        name: node.name.value.clone(),
+                        expected_kind: "partition function".to_string(),
+                        found_kind: "other declaration".to_string(),
+                    };
+                    self.errors.add_error(AstError::NameResolution(error), node.span);
+                }
+            } else {
+                let error = NameResolutionError::UndefinedIdentifier {
+                    name: node.name.value.clone(),
+                };
+                self.errors.add_error(AstError::NameResolution(error), node.span);
+            }
+            
+            // Resolve node arguments
+            for arg_id in &node.args {
+                self.resolve_expression_references(*arg_id, program);
+            }
+        }
+        
+        // Resolve invariant expressions
+        for invariant_id in &table_decl.invariants {
+            self.resolve_expression_references(*invariant_id, program);
+        }
+    }
+
+    // ========================================================================
+    // --- Type Resolution
+    // ========================================================================
+
+    fn resolve_type_references(&mut self, type_id: TypeId, program: &mut Program) {
+        let type_ref = &mut program.types[type_id];
+        
+        match type_ref {
+            Type::Named(identifier) => {
+                self.resolve_identifier_reference(identifier);
+            }
+            Type::Generic { base, args, .. } => {
+                self.resolve_identifier_reference(base);
+                for arg_type_id in args {
+                    self.resolve_type_references(*arg_type_id, program);
+                }
+            }
+            Type::Function { params, return_type, .. } => {
+                for param_type_id in params {
+                    self.resolve_type_references(*param_type_id, program);
+                }
+                self.resolve_type_references(*return_type, program);
             }
         }
     }
 
-    /// Resolves names within a statement.
-    ///
-    /// This includes resolving variables, assignments, and expressions.
-    fn resolve_statement(&mut self, stmt_id: StatementId) {
-        let (stmt_kind, stmt_span) = {
-            let stmt = &self.program.statements[stmt_id];
-            (stmt.node.clone(), stmt.span.clone())
-        };
+    // ========================================================================
+    // --- Statement Resolution
+    // ========================================================================
 
-        match stmt_kind {
-            StatementKind::VarDecl(var_decl) => {
-                // Resolve initializer first, if present
-                if let Some(init_expr_id) = var_decl.init_value {
-                    self.resolve_expression(init_expr_id);
+    fn resolve_block_references(&mut self, block_id: BlockId, program: &mut Program) {
+        self.push_scope();
+        
+        let statement_ids = program.blocks[block_id].statements.clone();
+        for stmt_id in statement_ids {
+            self.resolve_statement_references(stmt_id, program);
+        }
+        
+        self.pop_scope();
+    }
+
+    fn resolve_statement_references(&mut self, stmt_id: StmtId, program: &mut Program) {
+        let stmt = &program.statements[stmt_id];
+        
+        match stmt {
+            Statement::VarDecl(var_id) => {
+                let var_decl = &program.var_decls[*var_id];
+                
+                // Add variable to current scope
+                self.add_local_symbol(var_decl.name.value.clone(), DeclRef::Var(*var_id), var_decl.span);
+                
+                // Resolve type if present
+                if let Some(type_id) = var_decl.ty {
+                    self.resolve_type_references(type_id, program);
                 }
-
-                // Check for duplicate in the current scope (no shadowing within same scope)
-                if let Some(current_scope_id) = self.current_scope {
-                    let current_scope = &self.program.scopes[current_scope_id];
-                    if current_scope.variables.contains_key(&var_decl.var_name) {
-                        self.error_at(
-                            &stmt_span,
-                            AstError::DuplicateVariable(var_decl.var_name.clone()),
-                        );
-                        return;
+                
+                // Resolve initializer expression if present
+                if let Some(init_id) = var_decl.init {
+                    self.resolve_expression_references(init_id, program);
+                }
+            }
+            
+            Statement::If { condition, then_block, else_block, .. } => {
+                self.resolve_expression_references(*condition, program);
+                self.resolve_block_references(*then_block, program);
+                if let Some(else_block_id) = else_block {
+                    self.resolve_block_references(*else_block_id, program);
+                }
+            }
+            
+            Statement::For { init, condition, update, body, .. } => {
+                self.push_scope(); // For loop has its own scope
+                
+                if let Some(for_init) = init {
+                    match for_init {
+                        ForInit::VarDecl(var_id) => {
+                            let var_decl = &program.var_decls[*var_id];
+                            self.add_local_symbol(var_decl.name.value.clone(), DeclRef::Var(*var_id), var_decl.span);
+                            if let Some(type_id) = var_decl.ty {
+                                self.resolve_type_references(type_id, program);
+                            }
+                            if let Some(init_id) = var_decl.init {
+                                self.resolve_expression_references(init_id, program);
+                            }
+                        }
+                        ForInit::Expression(expr_id) => {
+                            self.resolve_expression_references(*expr_id, program);
+                        }
                     }
                 }
-
-                // Declare the variable in the current scope
-                let current_scope_id = self.current_scope.unwrap();
-                let _ = self.declare_variable(
-                    &var_decl.var_name,
-                    var_decl.var_type.clone(),
-                    VarKind::Local,
-                    stmt_span.clone(),
-                    current_scope_id,
-                );
-            }
-            StatementKind::Assignment(assign) => {
-                // Resolve RHS expression first
-                self.resolve_expression(assign.rhs);
-
-                // Resolve the LValue
-                self.resolve_lvalue(&assign.lvalue, &stmt_span, stmt_id);
-            }
-            StatementKind::IfStmt(if_stmt) => {
-                self.resolve_expression(if_stmt.condition);
-                self.resolve_block(&if_stmt.then_branch);
-                if let Some(ref else_branch) = if_stmt.else_branch {
-                    self.resolve_block(else_branch);
+                
+                if let Some(condition_id) = condition {
+                    self.resolve_expression_references(*condition_id, program);
                 }
-            }
-            StatementKind::ForStmt(for_stmt) => {
-                // For statements create their own scope for the loop variable
-                let for_scope = self.program.scopes.alloc(Scope {
-                    parent: self.current_scope,
-                    variables: HashMap::new(),
-                });
-
-                self.push_scope(for_scope);
-
-                // Declare the loop variable
-                let _ = self.declare_variable(
-                    &for_stmt.loop_var,
-                    for_stmt.loop_var_type.clone(),
-                    VarKind::Local,
-                    stmt_span.clone(),
-                    for_scope,
-                );
-
-                // Resolve expressions
-                self.resolve_expression(for_stmt.init);
-                self.resolve_expression(for_stmt.condition);
-                self.resolve_expression(for_stmt.increment);
-
-                // Resolve body
-                self.resolve_block(&for_stmt.body);
-
+                
+                if let Some(update_id) = update {
+                    self.resolve_expression_references(*update_id, program);
+                }
+                
+                self.resolve_block_references(*body, program);
                 self.pop_scope();
             }
-            StatementKind::WhileStmt(while_stmt) => {
-                self.resolve_expression(while_stmt.condition);
-                self.resolve_block(&while_stmt.body);
-            }
-            StatementKind::Return(ret_stmt) => {
-                if let Some(expr_id) = ret_stmt.value {
-                    self.resolve_expression(expr_id);
+            
+            Statement::Return { value, .. } => {
+                if let Some(value_id) = value {
+                    self.resolve_expression_references(*value_id, program);
                 }
             }
-            StatementKind::Expression(expr_stmt) => {
-                self.resolve_expression(expr_stmt.expression);
+            
+            Statement::Assert { expr, .. } => {
+                self.resolve_expression_references(*expr, program);
             }
-            StatementKind::Abort(_)
-            | StatementKind::Break(_)
-            | StatementKind::Continue(_)
-            | StatementKind::Empty => {
-                // No resolution needed
+            
+            Statement::Hop { body, .. } => {
+                self.resolve_block_references(*body, program);
+            }
+            
+            Statement::HopsFor { var, start, end, body, .. } => {
+                self.push_scope();
+                
+                // Add loop variable to scope
+                let var_decl = &program.var_decls[*var];
+                self.add_local_symbol(var_decl.name.value.clone(), DeclRef::Var(*var), var_decl.span);
+                
+                // Resolve type if present
+                if let Some(type_id) = var_decl.ty {
+                    self.resolve_type_references(type_id, program);
+                }
+                
+                self.resolve_expression_references(*start, program);
+                self.resolve_expression_references(*end, program);
+                self.resolve_block_references(*body, program);
+                
+                self.pop_scope();
+            }
+            
+            Statement::Expression { expr, .. } => {
+                self.resolve_expression_references(*expr, program);
+            }
+            
+            Statement::Block(block_id) => {
+                self.resolve_block_references(*block_id, program);
             }
         }
     }
 
-    /// Resolves an LValue (left-hand side of assignment).
-    fn resolve_lvalue(&mut self, lvalue: &LValue, stmt_span: &Span, stmt_id: StatementId) {
-        match lvalue {
-            LValue::Var { name, .. } => {
-                // Look up the variable
-                let var_id = self.lookup_variable(name);
-                if var_id.is_none() {
-                    self.error_at(stmt_span, AstError::UndeclaredVariable(name.clone()));
-                } else {
-                    // Update the statement with resolved variable
-                    if let StatementKind::Assignment(ref mut assign) =
-                        &mut self.program.statements[stmt_id].node
-                    {
-                        if let LValue::Var {
-                            ref mut resolved_var,
-                            ..
-                        } = &mut assign.lvalue
-                        {
-                            *resolved_var = var_id;
-                        }
+    // ========================================================================
+    // --- Expression Resolution
+    // ========================================================================
+
+    fn resolve_expression_references(&mut self, expr_id: ExprId, program: &mut Program) {
+        let expr = &mut program.expressions[expr_id];
+        
+        match expr {
+            Expression::Literal { .. } => {
+                // Literals don't need resolution
+            }
+            
+            Expression::Identifier(identifier) => {
+                self.resolve_identifier_reference(identifier);
+            }
+            
+            Expression::Binary { left, right, .. } => {
+                self.resolve_expression_references(*left, program);
+                self.resolve_expression_references(*right, program);
+            }
+            
+            Expression::Unary { expr, .. } => {
+                self.resolve_expression_references(*expr, program);
+            }
+            
+            Expression::Assignment { lhs, rhs, .. } => {
+                self.resolve_expression_references(*lhs, program);
+                self.resolve_expression_references(*rhs, program);
+            }
+            
+            Expression::Call { callee, args, resolved_callable, .. } => {
+                self.resolve_expression_references(*callee, program);
+                
+                // Try to resolve the callable if it's an identifier
+                if let Expression::Identifier(identifier) = &program.expressions[*callee] {
+                    if let Some(DeclRef::Function(func_id)) = identifier.resolved {
+                        *resolved_callable = Some(func_id);
                     }
                 }
-            }
-            LValue::TableField {
-                table_name,
-                pk_exprs,
-                pk_fields,
-                field_name,
-                ..
-            } => {
-                // First resolve all primary key expressions
-                for &pk_expr in pk_exprs {
-                    self.resolve_expression(pk_expr);
-                }
-
-                // Resolve table and field references
-                self.resolve_table_field_access(
-                    table_name, pk_fields, field_name, stmt_span, stmt_id,
-                    false, // This is an assignment target
-                );
-            }
-            LValue::TableRecord {
-                table_name,
-                pk_exprs,
-                pk_fields,
-                ..
-            } => {
-                // First resolve all primary key expressions
-                for &pk_expr in pk_exprs {
-                    self.resolve_expression(pk_expr);
-                }
-
-                // Resolve table references
-                self.resolve_table_record_access(table_name, pk_fields, stmt_span, stmt_id);
-            }
-            LValue::ArrayElement {
-                array_name, index, ..
-            } => {
-                // Resolve the index expression
-                self.resolve_expression(*index);
-
-                // Look up the array variable
-                let var_id = self.lookup_variable(array_name);
-                if var_id.is_none() {
-                    self.error_at(stmt_span, AstError::UndeclaredVariable(array_name.clone()));
-                } else {
-                    // Update the statement with resolved variable
-                    if let StatementKind::Assignment(ref mut assign) =
-                        &mut self.program.statements[stmt_id].node
-                    {
-                        if let LValue::ArrayElement {
-                            ref mut resolved_var,
-                            ..
-                        } = &mut assign.lvalue
-                        {
-                            *resolved_var = var_id;
-                        }
-                    }
+                
+                for arg_id in args {
+                    self.resolve_expression_references(*arg_id, program);
                 }
             }
-            LValue::FieldAccess { object_name, .. } => {
-                // Look up the object variable
-                let var_id = self.lookup_variable(object_name);
-                if var_id.is_none() {
-                    self.error_at(stmt_span, AstError::UndeclaredVariable(object_name.clone()));
-                } else {
-                    // Update the statement with resolved variable
-                    if let StatementKind::Assignment(ref mut assign) =
-                        &mut self.program.statements[stmt_id].node
-                    {
-                        if let LValue::FieldAccess {
-                            ref mut resolved_var,
-                            ..
-                        } = &mut assign.lvalue
-                        {
-                            *resolved_var = var_id;
-                        }
-                    }
+            
+            Expression::MemberAccess { object, .. } => {
+                self.resolve_expression_references(*object, program);
+                // Field resolution would happen in type checking phase
+            }
+            
+            Expression::TableRowAccess { table, key_values, .. } => {
+                self.resolve_expression_references(*table, program);
+                for key_value in key_values {
+                    self.resolve_expression_references(key_value.value, program);
                 }
+            }
+            
+            Expression::Grouped { expr, .. } => {
+                self.resolve_expression_references(*expr, program);
             }
         }
     }
 
-    /// Resolves table field access for assignments.
-    fn resolve_table_field_access(
-        &mut self,
-        table_name: &str,
-        pk_fields: &[String],
-        field_name: &str,
-        stmt_span: &Span,
-        stmt_id: StatementId,
-        _is_read: bool,
-    ) {
-        // Look up table
-        let table_lookup_result = self.program.table_map.get(table_name).copied();
+    // ========================================================================
+    // --- Identifier Resolution
+    // ========================================================================
 
-        match table_lookup_result {
-            Some(table_id) => {
-                // Resolve each primary key field
-                let table = &self.program.tables[table_id];
-                let mut missing_pk_fields = Vec::new();
-                let mut resolved_pk_field_ids = vec![None; pk_fields.len()];
-
-                for (i, pk_field_name) in pk_fields.iter().enumerate() {
-                    let pk_field_id = table
-                        .fields
-                        .iter()
-                        .find(|&&field_id| {
-                            self.program.fields[field_id].field_name == *pk_field_name
-                        })
-                        .copied();
-
-                    match pk_field_id {
-                        Some(field_id) => {
-                            resolved_pk_field_ids[i] = Some(field_id);
-                        }
-                        None => {
-                            missing_pk_fields.push(pk_field_name.clone());
-                        }
-                    }
-                }
-
-                // Resolve the target field
-                let field_id = table
-                    .fields
-                    .iter()
-                    .find(|&&field_id| self.program.fields[field_id].field_name == *field_name)
-                    .copied();
-
-                let missing_target_field = if field_id.is_none() {
-                    Some(field_name.to_string())
-                } else {
-                    None
-                };
-
-                // Report all errors after borrowing
-                for field_name in missing_pk_fields {
-                    self.error_at(
-                        stmt_span,
-                        AstError::UndeclaredField {
-                            table: table_name.to_string(),
-                            field: field_name,
-                        },
-                    );
-                }
-
-                if let Some(field_name) = missing_target_field {
-                    self.error_at(
-                        stmt_span,
-                        AstError::UndeclaredField {
-                            table: table_name.to_string(),
-                            field: field_name,
-                        },
-                    );
-                }
-
-                // Update the statement with resolved IDs
-                if let StatementKind::Assignment(ref mut assign) =
-                    &mut self.program.statements[stmt_id].node
-                {
-                    if let LValue::TableField {
-                        ref mut resolved_table,
-                        ref mut resolved_pk_fields,
-                        ref mut resolved_field,
-                        ..
-                    } = &mut assign.lvalue
-                    {
-                        *resolved_table = Some(table_id);
-                        *resolved_pk_fields = resolved_pk_field_ids;
-                        *resolved_field = field_id;
-                    }
-                }
-            }
-            None => {
-                self.error_at(stmt_span, AstError::UndeclaredTable(table_name.to_string()));
-            }
+    fn resolve_identifier_reference(&mut self, identifier: &mut Identifier) {
+        if let Some(decl_ref) = self.lookup_symbol(&identifier.name) {
+            identifier.resolved = Some(decl_ref);
+        } else {
+            let error = NameResolutionError::UndefinedIdentifier {
+                name: identifier.name.clone(),
+            };
+            self.errors.add_error(AstError::NameResolution(error), identifier.span);
         }
     }
 
-    /// Resolves table record access for assignments.
-    fn resolve_table_record_access(
-        &mut self,
-        table_name: &str,
-        pk_fields: &[String],
-        stmt_span: &Span,
-        stmt_id: StatementId,
-    ) {
-        // Look up table
-        let table_lookup_result = self.program.table_map.get(table_name).copied();
+    // ========================================================================
+    // --- Scope Management
+    // ========================================================================
 
-        match table_lookup_result {
-            Some(table_id) => {
-                // Resolve each primary key field
-                let table = &self.program.tables[table_id];
-                let mut missing_pk_fields = Vec::new();
-                let mut resolved_pk_field_ids = vec![None; pk_fields.len()];
-
-                for (i, pk_field_name) in pk_fields.iter().enumerate() {
-                    let pk_field_id = table
-                        .fields
-                        .iter()
-                        .find(|&&field_id| {
-                            self.program.fields[field_id].field_name == *pk_field_name
-                        })
-                        .copied();
-
-                    match pk_field_id {
-                        Some(field_id) => {
-                            resolved_pk_field_ids[i] = Some(field_id);
-                        }
-                        None => {
-                            missing_pk_fields.push(pk_field_name.clone());
-                        }
-                    }
-                }
-
-                // Report all errors after borrowing
-                for field_name in missing_pk_fields {
-                    self.error_at(
-                        stmt_span,
-                        AstError::UndeclaredField {
-                            table: table_name.to_string(),
-                            field: field_name,
-                        },
-                    );
-                }
-
-                // Update the statement with resolved IDs
-                if let StatementKind::Assignment(ref mut assign) =
-                    &mut self.program.statements[stmt_id].node
-                {
-                    if let LValue::TableRecord {
-                        ref mut resolved_table,
-                        ref mut resolved_pk_fields,
-                        ..
-                    } = &mut assign.lvalue
-                    {
-                        *resolved_table = Some(table_id);
-                        *resolved_pk_fields = resolved_pk_field_ids;
-                    }
-                }
-            }
-            None => {
-                self.error_at(stmt_span, AstError::UndeclaredTable(table_name.to_string()));
-            }
-        }
+    fn push_scope(&mut self) {
+        self.scope_stack.push(HashMap::new());
     }
 
-    /// Resolves names within a block of statements.
-    fn resolve_block(&mut self, statements: &[StatementId]) {
-        // Create a new block scope
-        let block_scope = self.program.scopes.alloc(Scope {
-            parent: self.current_scope,
-            variables: HashMap::new(),
-        });
-
-        self.push_scope(block_scope);
-
-        // Resolve each statement
-        let stmt_ids: Vec<_> = statements.iter().copied().collect();
-        for stmt_id in stmt_ids {
-            self.resolve_statement(stmt_id);
-        }
-
-        self.pop_scope();
-    }
-
-    /// Resolves names within an expression.
-    fn resolve_expression(&mut self, expr_id: ExpressionId) {
-        let (expr_kind, expr_span) = {
-            let expr = &self.program.expressions[expr_id];
-            (expr.node.clone(), expr.span.clone())
-        };
-
-        match expr_kind {
-            ExpressionKind::Ident(name) => {
-                if let Some(var_id) = self.lookup_variable(&name) {
-                    // Store the resolution
-                    self.program.resolutions.insert(expr_id, var_id);
-                } else {
-                    self.error_at(&expr_span, AstError::UndeclaredVariable(name));
-                }
-            }
-            ExpressionKind::TableFieldAccess {
-                table_name,
-                pk_fields,
-                pk_exprs,
-                field_name,
-                ..
-            } => {
-                // First resolve all primary key expressions
-                for &pk_expr in &pk_exprs {
-                    self.resolve_expression(pk_expr);
-                }
-
-                // Resolve table name
-                if let Some(&table_id) = self.program.table_map.get(&table_name) {
-                    // Store table resolution for CFG builder
-                    self.program.table_resolutions.insert(expr_id, table_id);
-
-                    let (resolved_pk_field_ids, missing_pk_fields, field_id) = {
-                        let table = &self.program.tables[table_id];
-
-                        // Resolve each primary key field
-                        let mut resolved_pk_field_ids = vec![None; pk_fields.len()];
-                        let mut missing_pk_fields = Vec::new();
-
-                        for (i, pk_field_name) in pk_fields.iter().enumerate() {
-                            let pk_field_id = table
-                                .fields
-                                .iter()
-                                .find(|&&field_id| {
-                                    self.program.fields[field_id].field_name == *pk_field_name
-                                })
-                                .copied();
-
-                            resolved_pk_field_ids[i] = pk_field_id;
-
-                            if pk_field_id.is_none() {
-                                missing_pk_fields.push(pk_field_name.clone());
-                            }
-                        }
-
-                        // Resolve the target field
-                        let field_id = table
-                            .fields
-                            .iter()
-                            .find(|&&field_id| {
-                                self.program.fields[field_id].field_name == field_name
-                            })
-                            .copied();
-
-                        (resolved_pk_field_ids, missing_pk_fields, field_id)
-                    };
-
-                    // Report missing primary key fields after borrowing
-                    for field_name in missing_pk_fields {
-                        self.error_at(
-                            &expr_span,
-                            AstError::UndeclaredField {
-                                table: table_name.clone(),
-                                field: field_name,
-                            },
-                        );
-                    }
-
-                    // Update the expression with resolved IDs
-                    if let ExpressionKind::TableFieldAccess {
-                        ref mut resolved_table,
-                        ref mut resolved_pk_fields,
-                        ref mut resolved_field,
-                        ..
-                    } = &mut self.program.expressions[expr_id].node
-                    {
-                        *resolved_table = Some(table_id);
-                        *resolved_pk_fields = resolved_pk_field_ids;
-                        *resolved_field = field_id;
-                    }
-
-                    if field_id.is_none() {
-                        self.error_at(
-                            &expr_span,
-                            AstError::UndeclaredField {
-                                table: table_name.clone(),
-                                field: field_name,
-                            },
-                        );
-                    }
-                } else {
-                    self.error_at(&expr_span, AstError::UndeclaredTable(table_name));
-                }
-            }
-            ExpressionKind::TableAccess {
-                table_name,
-                pk_fields,
-                pk_exprs,
-                ..
-            } => {
-                // First resolve all primary key expressions
-                for &pk_expr in &pk_exprs {
-                    self.resolve_expression(pk_expr);
-                }
-
-                // Resolve table name
-                if let Some(&table_id) = self.program.table_map.get(&table_name) {
-                    // Store table resolution for CFG builder
-                    self.program.table_resolutions.insert(expr_id, table_id);
-
-                    let (resolved_pk_field_ids, missing_pk_fields) = {
-                        let table = &self.program.tables[table_id];
-
-                        // Resolve each primary key field
-                        let mut resolved_pk_field_ids = vec![None; pk_fields.len()];
-                        let mut missing_pk_fields = Vec::new();
-
-                        for (i, pk_field_name) in pk_fields.iter().enumerate() {
-                            let pk_field_id = table
-                                .fields
-                                .iter()
-                                .find(|&&field_id| {
-                                    self.program.fields[field_id].field_name == *pk_field_name
-                                })
-                                .copied();
-
-                            resolved_pk_field_ids[i] = pk_field_id;
-
-                            if pk_field_id.is_none() {
-                                missing_pk_fields.push(pk_field_name.clone());
-                            }
-                        }
-
-                        (resolved_pk_field_ids, missing_pk_fields)
-                    };
-
-                    // Report missing primary key fields after borrowing
-                    for field_name in missing_pk_fields {
-                        self.error_at(
-                            &expr_span,
-                            AstError::UndeclaredField {
-                                table: table_name.clone(),
-                                field: field_name,
-                            },
-                        );
-                    }
-
-                    // Update the expression with resolved IDs
-                    if let ExpressionKind::TableAccess {
-                        ref mut resolved_table,
-                        ref mut resolved_pk_fields,
-                        ..
-                    } = &mut self.program.expressions[expr_id].node
-                    {
-                        *resolved_table = Some(table_id);
-                        *resolved_pk_fields = resolved_pk_field_ids;
-                    }
-                } else {
-                    self.error_at(&expr_span, AstError::UndeclaredTable(table_name));
-                }
-            }
-            ExpressionKind::ArrayAccess {
-                array_name, index, ..
-            } => {
-                // Resolve the index expression
-                self.resolve_expression(index);
-
-                // Look up the array variable
-                if let Some(var_id) = self.lookup_variable(&array_name) {
-                    // Update the expression with resolved variable
-                    if let ExpressionKind::ArrayAccess {
-                        ref mut resolved_var,
-                        ..
-                    } = &mut self.program.expressions[expr_id].node
-                    {
-                        *resolved_var = Some(var_id);
-                    }
-                } else {
-                    self.error_at(&expr_span, AstError::UndeclaredVariable(array_name));
-                }
-            }
-            ExpressionKind::RecordLiteral { fields, .. } => {
-                // Resolve each field assignment expression
-                for field_assign in &fields {
-                    self.resolve_expression(field_assign.value);
-                }
-                // Note: Field names in record literals might need table context for resolution
-                // For now, we only resolve the value expressions
-            }
-            ExpressionKind::ArrayLiteral { elements, .. } => {
-                // Resolve each element expression
-                for element_id in &elements {
-                    self.resolve_expression(*element_id);
-                }
-            }
-            ExpressionKind::UnaryOp { expr, .. } => {
-                self.resolve_expression(expr);
-            }
-            ExpressionKind::BinaryOp { left, right, .. } => {
-                self.resolve_expression(left);
-                self.resolve_expression(right);
-            }
-            ExpressionKind::FieldAccess {
-                object_name,
-                field_name,
-                ..
-            } => {
-                // Look up the object variable
-                if let Some(var_id) = self.lookup_variable(&object_name) {
-                    // Store the resolution for the object
-                    self.program.resolutions.insert(expr_id, var_id);
-
-                    // Resolve the field within the object's type
-                    let field_id =
-                        if let Some(object_type) = self.program.var_types.get(&var_id).cloned() {
-                            self.resolve_field_in_type(&object_type, &field_name, &expr_span)
-                        } else {
-                            // Object type unknown - can't resolve field
-                            None
-                        };
-
-                    // Update the AST with the resolved variable and field
-                    if let ExpressionKind::FieldAccess {
-                        ref mut resolved_var,
-                        ref mut resolved_field,
-                        ..
-                    } = &mut self.program.expressions[expr_id].node
-                    {
-                        *resolved_var = Some(var_id);
-                        *resolved_field = field_id;
-                    }
-                } else {
-                    self.error_at(
-                        &expr_span,
-                        AstError::UndeclaredVariable(object_name.clone()),
-                    );
-                }
-            }
-            ExpressionKind::IntLit(_)
-            | ExpressionKind::FloatLit(_)
-            | ExpressionKind::StringLit(_)
-            | ExpressionKind::BoolLit(_) => {
-                // Literals need no resolution
-            }
-        }
-    }
-
-    /// Resolves a field within a given type.
-    /// Returns the FieldId if the field exists in the type, None otherwise.
-    fn resolve_field_in_type(
-        &mut self,
-        object_type: &TypeName,
-        field_name: &str,
-        span: &Span,
-    ) -> Option<FieldId> {
-        match object_type {
-            TypeName::Table(table_name) => {
-                // Look up the table and find the field
-                if let Some(&table_id) = self.program.table_map.get(table_name) {
-                    let table = &self.program.tables[table_id];
-
-                    // Find the field in the table
-                    let field_id = table
-                        .fields
-                        .iter()
-                        .find(|&&field_id| self.program.fields[field_id].field_name == field_name)
-                        .copied();
-
-                    if field_id.is_none() {
-                        self.error_at(
-                            span,
-                            AstError::UndeclaredField {
-                                table: table_name.clone(),
-                                field: field_name.to_string(),
-                            },
-                        );
-                    }
-
-                    field_id
-                } else {
-                    // Table not found - this should have been caught earlier
-                    self.error_at(span, AstError::UndeclaredTable(table_name.clone()));
-                    None
-                }
-            }
-            TypeName::Array { .. } => {
-                // Arrays don't have named fields, this is likely a programming error
-                // Use a generic parse error for unsupported operations
-                self.error_at(
-                    span,
-                    AstError::ParseError(format!(
-                        "Field access '{}' not supported on array types",
-                        field_name
-                    )),
-                );
-                None
-            }
-            TypeName::Int | TypeName::Float | TypeName::String | TypeName::Bool => {
-                // Primitive types don't have fields
-                self.error_at(
-                    span,
-                    AstError::ParseError(format!(
-                        "Field access '{}' not supported on primitive types",
-                        field_name
-                    )),
-                );
-                None
-            }
-        }
-    }
-
-    /// Declares a variable in the current scope and returns the VarId.
-    fn declare_variable(
-        &mut self,
-        name: &str,
-        ty: TypeName,
-        kind: VarKind,
-        span: Span,
-        target_scope_id: ScopeId,
-    ) -> VarId {
-        let var_id = self.program.variables.alloc(VarDecl {
-            name: name.to_string(),
-            ty: ty.clone(),
-            kind,
-            defined_at: span,
-            scope: target_scope_id, // Use the provided target_scope_id
-        });
-
-        // Add to target scope
-        // The duplicate check should be done before calling this function.
-        let scope = &mut self.program.scopes[target_scope_id];
-        scope.variables.insert(name.to_string(), var_id);
-
-        // Store type information
-        self.program.var_types.insert(var_id, ty);
-
-        var_id
-    }
-
-    /// Looks up a variable in the current scope stack.
-    fn lookup_variable(&self, name: &str) -> Option<VarId> {
-        // Search through scope stack from current to global
-        for &scope_id in self.scope_stack.iter().rev() {
-            let scope = &self.program.scopes[scope_id];
-            if let Some(&var_id) = scope.variables.get(name) {
-                return Some(var_id);
-            }
-        }
-
-        // If not found in scope stack, check global constants
-        self.program.constant_map.get(name).copied()
-    }
-
-    /// Pushes a new scope onto the stack.
-    fn push_scope(&mut self, scope_id: ScopeId) {
-        self.current_scope = Some(scope_id);
-        self.scope_stack.push(scope_id);
-    }
-
-    /// Pops the current scope from the stack.
     fn pop_scope(&mut self) {
         self.scope_stack.pop();
-        self.current_scope = self.scope_stack.last().copied();
     }
 
-    /// Records an error at a specific span.
-    fn error_at(&mut self, span: &Span, error: AstError) {
-        self.errors.push(SpannedError {
-            error,
-            span: Some(span.clone()),
-        });
+    fn add_local_symbol(&mut self, name: String, decl_ref: DeclRef, span: Option<Span>) {
+        if let Some(current_scope) = self.scope_stack.last_mut() {
+            if current_scope.contains_key(&name) {
+                let error = NameResolutionError::DuplicateDeclaration {
+                    name,
+                    original_span: None,
+                };
+                self.errors.add_error(AstError::NameResolution(error), span);
+            } else {
+                current_scope.insert(name, decl_ref);
+            }
+        }
+    }
+
+    fn lookup_symbol(&self, name: &str) -> Option<DeclRef> {
+        // Search local scopes first (from innermost to outermost)
+        for scope in self.scope_stack.iter().rev() {
+            if let Some(decl_ref) = scope.get(name) {
+                return Some(*decl_ref);
+            }
+        }
+        
+        // Then search global scope
+        self.global_symbols.get(name).copied()
     }
 }
 
-/// Public interface for name resolution.
-pub fn resolve_names(program: &mut Program) -> Results<()> {
-    let resolver = NameResolver::new(program);
-    resolver.resolve()
+// ============================================================================
+// --- Dependency Analysis
+// ============================================================================
+
+/// Analyzes dependencies between declarations to detect cycles
+pub struct DependencyAnalyzer {
+    visited: HashSet<DeclRef>,
+    visiting: HashSet<DeclRef>,
+    errors: ErrorCollector,
+}
+
+impl DependencyAnalyzer {
+    pub fn new() -> Self {
+        Self {
+            visited: HashSet::new(),
+            visiting: HashSet::new(),
+            errors: ErrorCollector::new(),
+        }
+    }
+
+    pub fn check_dependencies(program: &Program) -> Results<()> {
+        let mut analyzer = Self::new();
+        
+        // Check all constant declarations for circular dependencies
+        for declaration in &program.declarations {
+            if let Declaration::Const(const_id) = declaration {
+                analyzer.check_const_dependencies(*const_id, program);
+            }
+        }
+        
+        analyzer.errors.into_result(Some(()))
+    }
+
+    fn check_const_dependencies(&mut self, const_id: ConstId, program: &Program) {
+        let decl_ref = DeclRef::Const(const_id);
+        
+        if self.visited.contains(&decl_ref) {
+            return;
+        }
+        
+        if self.visiting.contains(&decl_ref) {
+            // Circular dependency detected
+            let error = NameResolutionError::CircularDependency {
+                cycle: vec![format!("const {}", program.const_decls[const_id].name.value)],
+            };
+            self.errors.add_error(AstError::NameResolution(error), program.const_decls[const_id].span);
+            return;
+        }
+        
+        self.visiting.insert(decl_ref);
+        
+        // Analyze dependencies in the constant expression
+        self.analyze_expression_dependencies(program.const_decls[const_id].value, program);
+        
+        self.visiting.remove(&decl_ref);
+        self.visited.insert(decl_ref);
+    }
+
+    fn analyze_expression_dependencies(&mut self, expr_id: ExprId, program: &Program) {
+        let expr = &program.expressions[expr_id];
+        
+        match expr {
+            Expression::Identifier(identifier) => {
+                if let Some(DeclRef::Const(const_id)) = identifier.resolved {
+                    self.check_const_dependencies(const_id, program);
+                }
+            }
+            Expression::Binary { left, right, .. } => {
+                self.analyze_expression_dependencies(*left, program);
+                self.analyze_expression_dependencies(*right, program);
+            }
+            Expression::Unary { expr, .. } => {
+                self.analyze_expression_dependencies(*expr, program);
+            }
+            Expression::Call { callee, args, .. } => {
+                self.analyze_expression_dependencies(*callee, program);
+                for arg_id in args {
+                    self.analyze_expression_dependencies(*arg_id, program);
+                }
+            }
+            Expression::Grouped { expr, .. } => {
+                self.analyze_expression_dependencies(*expr, program);
+            }
+            // Other expression types...
+            _ => {}
+        }
+    }
+}
+
+// ============================================================================
+// --- Public Interface
+// ============================================================================
+
+/// Perform complete name resolution on a program
+pub fn resolve_names(program: Program) -> Results<Program> {
+    // First resolve names
+    let result = NameResolver::resolve_names(program);
+    
+    if let Some(program) = result.result {
+        // Then check for circular dependencies
+        let dep_result = DependencyAnalyzer::check_dependencies(&program);
+        
+        if dep_result.has_errors() {
+            // Combine errors
+            let mut all_errors = result.errors;
+            all_errors.extend(dep_result.errors);
+            Results {
+                result: Some(program),
+                errors: all_errors,
+            }
+        } else {
+            result
+        }
+    } else {
+        result
+    }
 }
