@@ -1,0 +1,85 @@
+// prelude.transact - FMitF Language Built-in Types and Operators
+//
+// *** IMPORTANT: This file is for DOCUMENTATION ONLY ***
+// These declarations are automatically built into the language runtime.
+// This file shows what types, operators, and functions are predefined
+// and available in every FMitF program without explicit declaration.
+//
+// All declarations have the @intrinsic decorator meaning they are 
+// built into the language runtime and cannot be redefined.
+
+// ===========================================
+// Built-in Types
+// ===========================================
+
+@intrinsic type int;
+@intrinsic type bool;
+@intrinsic type string;
+@intrinsic type float;
+@intrinsic type void;
+
+// ===========================================
+// Arithmetic Operators
+// ===========================================
+
+@intrinsic @infix operator +(int, int) -> int;
+@intrinsic @infix operator -(int, int) -> int;
+@intrinsic @infix operator *(int, int) -> int;
+@intrinsic @infix operator /(int, int) -> int;
+@intrinsic @infix operator %(int, int) -> int;
+
+@intrinsic @infix operator +(float, float) -> float;
+@intrinsic @infix operator -(float, float) -> float;
+@intrinsic @infix operator *(float, float) -> float;
+@intrinsic @infix operator /(float, float) -> float;
+
+@intrinsic @prefix operator -(int) -> int;
+@intrinsic @prefix operator -(float) -> float;
+
+// ===========================================
+// Comparison Operators
+// ===========================================
+
+@intrinsic @infix operator ==(int, int) -> bool;
+@intrinsic @infix operator !=(int, int) -> bool;
+@intrinsic @infix operator <(int, int) -> bool;
+@intrinsic @infix operator <=(int, int) -> bool;
+@intrinsic @infix operator >(int, int) -> bool;
+@intrinsic @infix operator >=(int, int) -> bool;
+
+@intrinsic @infix operator ==(bool, bool) -> bool;
+@intrinsic @infix operator !=(bool, bool) -> bool;
+
+@intrinsic @infix operator ==(string, string) -> bool;
+@intrinsic @infix operator !=(string, string) -> bool;
+
+@intrinsic @infix operator ==(float, float) -> bool;
+@intrinsic @infix operator !=(float, float) -> bool;
+@intrinsic @infix operator <(float, float) -> bool;
+@intrinsic @infix operator <=(float, float) -> bool;
+@intrinsic @infix operator >(float, float) -> bool;
+@intrinsic @infix operator >=(float, float) -> bool;
+
+// ===========================================
+// Logical Operators
+// ===========================================
+
+@intrinsic @infix operator &&(bool, bool) -> bool;
+@intrinsic @infix operator ||(bool, bool) -> bool;
+@intrinsic @prefix operator !(bool) -> bool;
+
+// ===========================================
+// String Operators
+// ===========================================
+
+@intrinsic @infix operator +(string, string) -> string;
+
+// ===========================================
+// Built-in Functions
+// ===========================================
+
+@intrinsic function print(string) -> void;
+@intrinsic function len(string) -> int;
+@intrinsic function min(int, int) -> int;
+@intrinsic function max(int, int) -> int;
+@intrinsic function abs(int) -> int;

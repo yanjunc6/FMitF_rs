@@ -74,7 +74,7 @@ void beFriend(int uid1, int uid2, int time){
     }
 }
 
-void unFriend(int uid1, int uid2, int aid1, int aid2, int time){
+void unFriend(int uid1, int uid2, int aid1, int aid2, int time){ // uid1 != uid2
     UUID aid1 = genUUID();
     UUID aid2 = genUUID();
     hop {

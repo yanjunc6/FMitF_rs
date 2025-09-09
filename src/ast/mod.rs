@@ -14,7 +14,6 @@ use id_arena::{Arena, Id};
 // --- Source Location Tracking
 // ============================================================================
 
-
 /// Represents a location in the source code.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Span {
@@ -104,7 +103,7 @@ pub enum ResolvedType {
 pub struct Program {
     /// Top-level declarations in order of appearance.
     pub declarations: Vec<Declaration>,
-    
+
     // Declaration arenas
     pub functions: Arena<CallableDecl>,
     pub type_decls: Arena<TypeDecl>,
@@ -113,7 +112,7 @@ pub struct Program {
     pub var_decls: Arena<VarDecl>,
     pub params: Arena<Parameter>,
     pub generic_params: Arena<GenericParam>,
-    
+
     // Structure arenas
     pub types: Arena<Type>,
     pub statements: Arena<Statement>,
@@ -138,12 +137,12 @@ pub enum Declaration {
 pub struct CallableDecl {
     pub decorators: Vec<Spanned<String>>,
     pub kind: CallableKind,
-    pub name: Spanned<String>,  // For operators, this is the symbol
+    pub name: Spanned<String>, // For operators, this is the symbol
     pub generic_params: Vec<GenericParamId>,
     pub params: Vec<ParamId>,
     pub return_type: Option<TypeId>,
     pub assumptions: Vec<ExprId>,
-    pub body: Option<BlockId>,  // None for forward declarations
+    pub body: Option<BlockId>, // None for forward declarations
     pub span: Option<Span>,
 }
 
@@ -192,7 +191,7 @@ pub struct TableField {
 pub struct TableNode {
     pub name: Spanned<String>,
     pub args: Vec<ExprId>,
-    pub resolved_partition: Option<FunctionId>,  // Filled by name resolver
+    pub resolved_partition: Option<FunctionId>, // Filled by name resolver
     pub span: Option<Span>,
 }
 
@@ -218,14 +217,14 @@ pub struct Parameter {
 pub enum Type {
     /// Simple type name: `int`, `MyTable`, `T`
     Named(Identifier),
-    
+
     /// Generic instantiation: `List<int>`, `Map<K, V>`
     Generic {
         base: Identifier,
         args: Vec<TypeId>,
         span: Option<Span>,
     },
-    
+
     /// Function type: `(int, bool) -> string`
     Function {
         params: Vec<TypeId>,
@@ -247,14 +246,14 @@ pub struct Block {
 #[derive(Debug, Clone)]
 pub enum Statement {
     VarDecl(VarId),
-    
+
     If {
         condition: ExprId,
         then_block: BlockId,
         else_block: Option<BlockId>,
         span: Option<Span>,
     },
-    
+
     For {
         init: Option<ForInit>,
         condition: Option<ExprId>,
@@ -262,37 +261,37 @@ pub enum Statement {
         body: BlockId,
         span: Option<Span>,
     },
-    
+
     Return {
         value: Option<ExprId>,
         span: Option<Span>,
     },
-    
+
     Assert {
         expr: ExprId,
         span: Option<Span>,
     },
-    
+
     Hop {
         decorators: Vec<Spanned<String>>,
         body: BlockId,
         span: Option<Span>,
     },
-    
+
     HopsFor {
         decorators: Vec<Spanned<String>>,
-        var: VarId,  // Loop variable declaration
+        var: VarId, // Loop variable declaration
         start: ExprId,
         end: ExprId,
         body: BlockId,
         span: Option<Span>,
     },
-    
+
     Expression {
         expr: ExprId,
         span: Option<Span>,
     },
-    
+
     Block(BlockId),
 }
 
@@ -320,48 +319,48 @@ pub enum Expression {
         value: Literal,
         span: Option<Span>,
     },
-    
+
     Identifier(Identifier),
-    
+
     Binary {
         left: ExprId,
         op: Spanned<String>,
         right: ExprId,
         span: Option<Span>,
     },
-    
+
     Unary {
         op: Spanned<String>,
         expr: ExprId,
         span: Option<Span>,
     },
-    
+
     Assignment {
         lhs: ExprId,
         rhs: ExprId,
         span: Option<Span>,
     },
-    
+
     Call {
         callee: ExprId,
         args: Vec<ExprId>,
-        resolved_callable: Option<FunctionId>,  // Filled by name resolver
+        resolved_callable: Option<FunctionId>, // Filled by name resolver
         span: Option<Span>,
     },
-    
+
     MemberAccess {
         object: ExprId,
         member: Spanned<String>,
-        resolved_field: Option<TableField>,  // Filled by name resolver
+        resolved_field: Option<TableField>, // Filled by name resolver
         span: Option<Span>,
     },
-    
+
     TableRowAccess {
         table: ExprId,
         key_values: Vec<KeyValue>,
         span: Option<Span>,
     },
-    
+
     Grouped {
         expr: ExprId,
         span: Option<Span>,
@@ -375,13 +374,44 @@ pub enum Literal {
     String(String),
     Bool(bool),
     List(Vec<ExprId>),
-    RowLiteral(Vec<KeyValue>),  // Distinguished from list
+    RowLiteral(Vec<KeyValue>), // Distinguished from list
 }
 
 #[derive(Debug, Clone)]
 pub struct KeyValue {
     pub key: Spanned<String>,
     pub value: ExprId,
-    pub resolved_field: Option<TableField>,  // Filled by name resolver
+    pub resolved_field: Option<TableField>, // Filled by name resolver
     pub span: Option<Span>,
 }
+
+// ============================================================================
+// --- Module Declarations
+// ============================================================================
+
+pub mod ast_builder;
+pub mod errors;
+// pub mod name_resolver;
+// pub mod type_resolver;
+// pub mod semantics_analysis;
+// pub mod constant_checker;
+// pub mod ast_debug;
+
+// ============================================================================
+// --- Public Interface Re-exports
+// ============================================================================
+
+// Core parsing function
+pub use ast_builder::parse_and_analyze;
+
+// Error types
+pub use errors::{AstError, ErrorCollector, Results, SpannedError};
+
+// Analysis phases (disabled for now)
+// pub use name_resolver::resolve_names;
+// pub use type_resolver::resolve_types;
+// pub use semantics_analysis::analyze_semantics;
+// pub use constant_checker::{check_constants, evaluate_constant_expression, ConstantValue};
+
+// Debug utilities (disabled for now)
+// pub use ast_debug::{print_program, print_expression, print_statement, DebugConfig};
