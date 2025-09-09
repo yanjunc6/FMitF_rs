@@ -16,7 +16,6 @@
 @intrinsic type bool;
 @intrinsic type string;
 @intrinsic type float;
-@intrinsic type void;
 
 // ===========================================
 // Arithmetic Operators
@@ -78,8 +77,7 @@
 // Built-in Functions
 // ===========================================
 
-@intrinsic function print(string) -> void;
-@intrinsic function len(string) -> int;
-@intrinsic function min(int, int) -> int;
-@intrinsic function max(int, int) -> int;
-@intrinsic function abs(int) -> int;
+@intrinsic function map<T, U>(list: List<T>, func: (T) -> U) -> List<U>;
+@intrinsic function filter<T>(list: List<T>, predicate: (T) -> bool) -> List<T>;
+@intrinsic function reduce<T, U>(list: List<T>, func: (U, T) -> U, initial: U) -> U;
+@intrinsic function length<T>(list: List<T>) -> int;
