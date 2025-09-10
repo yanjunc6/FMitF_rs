@@ -16,6 +16,8 @@
 @intrinsic type bool;
 @intrinsic type string;
 @intrinsic type float;
+@intrinsic type UUID;
+@intrinsic type Table<T>; // A table Activity as var is of type Table<Activity>
 
 // ===========================================
 // Arithmetic Operators
@@ -85,3 +87,7 @@
 @intrinsic function get<T>(list: List<T>, idx: int) -> T;
 
 @intrinsic function str<T>(x: T) -> string;
+
+@intrinsic function genUUID() -> UUID;
+
+@intrinsic function scan<T>(table: Table<T>) -> List<T>;

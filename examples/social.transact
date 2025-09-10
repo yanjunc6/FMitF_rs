@@ -1,0 +1,175 @@
+// social.transact - Rewritten for new grammar
+
+
+// Partition function declaration
+function f(x: int);
+
+// ===========================================
+// Table Declarations
+// ===========================================
+
+table Graph {
+    primary UID1: int;
+    primary UID2: int;
+    node f(UID1);
+    Counter: int;
+}
+
+table Status {
+    primary SID: UUID;
+    primary UID: int;
+    node f(UID);
+    Status: string;
+}
+
+table Wall {
+    primary WID: UUID;
+    primary UID: int;
+    node f(UID);
+    Message: string;
+}
+
+table Activity {
+    primary AID: UUID;
+    primary UID: int;
+    node f(UID);
+    Type: int;
+    Log: string;
+    Time: int;
+}
+
+table User {
+    primary UID: int;
+    node f(UID);
+}
+
+// ===========================================
+// Transaction Functions
+// ===========================================
+
+transaction beFriend(uid1: int, uid2: int, time: int) {
+    var aid1: UUID = genUUID();
+    var aid2: UUID = genUUID();
+    
+    hop {
+        Graph[UID1: uid1, UID2: uid2].Counter = 1;
+    }
+    
+    hop {
+        Graph[UID1: uid2, UID2: uid1].Counter = 1;
+    }
+    
+    hop {
+        Activity[AID: aid1, UID: uid1] = {
+            Type: 1,
+            Log: str(uid1) + " befriend with " + str(uid2),
+            Time: time
+        };
+    }
+    
+    hop {
+        Activity[AID: aid2, UID: uid2] = {
+            Type: 1,
+            Log: str(uid2) + " befriend with " + str(uid1),
+            Time: time
+        };
+    }
+}
+
+transaction unFriend(uid1: int, uid2: int, time: int) {
+    var aid1: UUID = genUUID();
+    var aid2: UUID = genUUID();
+    
+    hop {
+        Graph[UID1: uid1, UID2: uid2].Counter = 0;
+    }
+    
+    hop {
+        Graph[UID1: uid2, UID2: uid1].Counter = 0;
+    }
+    
+    hop {
+        Activity[AID: aid1, UID: uid1] = {
+            Type: 2,
+            Log: str(uid1) + " unfriend with " + str(uid2),
+            Time: time
+        };
+    }
+    
+    hop {
+        Activity[AID: aid2, UID: uid2] = {
+            Type: 2,
+            Log: str(uid2) + " unfriend with " + str(uid1),
+            Time: time
+        };
+    }
+}
+
+// Using map/filter/reduce pattern for table scanning
+function readFriends(uid: int) -> List<int> {
+    hop {
+        // Using filter and map pattern
+        var uids: List<int> =
+        Graph
+        .scan()
+        .filter(
+            (g: Graph) -> bool { return g.UID1 == uid && g.Counter > 0; }
+        )
+        .map(
+            (g: Graph) -> int { return g.UID2; }
+        );
+        return uids;
+    }
+}
+
+function readActivities(uid: int) -> List<string> {
+    hop {
+        // Using filter and map pattern
+        var allActivities: List<Activity> = scan(Activity);
+        var userActivities: List<Activity> = filter(allActivities,
+            (a: Activity) -> bool { return a.UID == uid; }
+        );
+        var logs: List<string> = map(userActivities,
+            (a: Activity) -> string { return a.Log; }
+        );
+        return logs;
+    }
+}
+
+transaction postStatus(uid: int, status: string, time: int) {
+    var sid: UUID = genUUID();
+    var aid: UUID = genUUID();
+    
+    hop {
+        Status[SID: sid, UID: uid] = {
+            Status: status
+        };
+    }
+    
+    hop {
+        Activity[AID: aid, UID: uid] = {
+            Type: 3,
+            Log: str(uid) + " posted status: " + status,
+            Time: time
+        };
+    }
+}
+
+transaction postWall(uid: int, message: string, time: int) {
+    var wid: UUID = genUUID();
+    var aid: UUID = genUUID();
+    
+    hop {
+        Wall[WID: wid, UID: uid] = {
+            Message: message
+        };
+    }
+    
+    hop {
+        Activity[AID: aid, UID: uid] = {
+            Type: 4,
+            Log: str(uid) + " posted wall message: " + message,
+            Time: time
+        };
+    }
+}
