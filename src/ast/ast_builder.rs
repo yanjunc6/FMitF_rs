@@ -301,86 +301,119 @@ impl AstBuilder {
 
     fn build_table_field(&mut self, pair: Pair<Rule>) -> Result<TableElement, Vec<AstError>> {
         let span = self.pair_to_span(&pair);
-        let mut is_primary = false;
-        let mut is_node = false;
-        let mut is_invariant = false;
-        let mut name = None;
-        let mut ty = None;
-        let mut args = Vec::new();
-        let mut expr = None;
-
+        
         for inner in pair.into_inner() {
             match inner.as_rule() {
-                Rule::identifier => {
-                    let ident_str = inner.as_str();
-                    if ident_str == "primary" {
-                        is_primary = true;
-                    } else if ident_str == "node" {
-                        is_node = true;
-                    } else if ident_str == "invariant" {
-                        is_invariant = true;
-                    } else {
-                        name = Some(self.build_identifier(inner)?);
-                    }
+                Rule::field_declaration => {
+                    return self.build_field_declaration(inner);
                 }
-                Rule::r#type => {
-                    ty = Some(self.build_type(inner)?);
+                Rule::node_declaration => {
+                    return self.build_node_declaration(inner);
                 }
-                Rule::expression_list => {
-                    args = self.build_expression_list(inner)?;
-                }
-                Rule::expression => {
-                    if is_invariant {
-                        expr = Some(self.build_expression(inner)?);
-                    } else {
-                        args.push(self.build_expression(inner)?);
-                    }
+                Rule::invariant_declaration => {
+                    return self.build_invariant_declaration(inner);
                 }
                 _ => {}
             }
         }
+        
+        Err(vec![AstError {
+            kind: AstErrorKind::UnexpectedRule("Empty table field".to_string()),
+            span: Some(span),
+        }])
+    }
 
-        if is_invariant {
-            let expr = expr.ok_or_else(|| {
-                vec![AstError {
-                    kind: AstErrorKind::MissingField("invariant expression".to_string()),
-                    span: Some(span.clone()),
-                }]
-            })?;
-            Ok(TableElement::Invariant(expr))
-        } else if is_node {
-            let name = name.ok_or_else(|| {
-                vec![AstError {
-                    kind: AstErrorKind::MissingField("node name".to_string()),
-                    span: Some(span.clone()),
-                }]
-            })?;
-            Ok(TableElement::Node(TableNode {
-                name,
-                args,
-                resolved_partition: None,
-                span: Some(span),
-            }))
-        } else {
-            let name = name.ok_or_else(|| {
-                vec![AstError {
-                    kind: AstErrorKind::MissingField("field name".to_string()),
-                    span: Some(span.clone()),
-                }]
-            })?;
-            let ty = ty.ok_or_else(|| {
-                vec![AstError {
-                    kind: AstErrorKind::MissingField("field type".to_string()),
-                    span: Some(span.clone()),
-                }]
-            })?;
-            Ok(TableElement::Field(TableField {
-                is_primary,
-                name,
-                ty,
-                span: Some(span),
-            }))
+    fn build_field_declaration(&mut self, pair: Pair<Rule>) -> Result<TableElement, Vec<AstError>> {
+        let span = self.pair_to_span(&pair);
+        let mut is_primary = false;
+        let mut name = None;
+        let mut ty = None;
+        
+        for inner in pair.into_inner() {
+            match inner.as_rule() {
+                Rule::identifier => {
+                    name = Some(self.build_identifier(inner)?);
+                }
+                Rule::r#type => {
+                    ty = Some(self.build_type(inner)?);
+                }
+                _ => {
+                    // Check for "primary" literal
+                    if inner.as_str() == "primary" {
+                        is_primary = true;
+                    }
+                }
+            }
         }
+        
+        let name = name.ok_or_else(|| {
+            vec![AstError {
+                kind: AstErrorKind::MissingField("field name".to_string()),
+                span: Some(span.clone()),
+            }]
+        })?;
+        
+        let ty = ty.ok_or_else(|| {
+            vec![AstError {
+                kind: AstErrorKind::MissingField("field type".to_string()),
+                span: Some(span.clone()),
+            }]
+        })?;
+        
+        Ok(TableElement::Field(TableField {
+            is_primary,
+            name,
+            ty,
+            span: Some(span),
+        }))
+    }
+
+    fn build_node_declaration(&mut self, pair: Pair<Rule>) -> Result<TableElement, Vec<AstError>> {
+        let span = self.pair_to_span(&pair);
+        let mut name = None;
+        let mut args = Vec::new();
+        
+        for inner in pair.into_inner() {
+            match inner.as_rule() {
+                Rule::identifier => {
+                    name = Some(self.build_identifier(inner)?);
+                }
+                Rule::expression_list => {
+                    args = self.build_expression_list(inner)?;
+                }
+                _ => {}
+            }
+        }
+        
+        let name = name.ok_or_else(|| {
+            vec![AstError {
+                kind: AstErrorKind::MissingField("node name".to_string()),
+                span: Some(span.clone()),
+            }]
+        })?;
+        
+        Ok(TableElement::Node(TableNode {
+            name,
+            args,
+            resolved_partition: None,
+            span: Some(span),
+        }))
+    }
+
+    fn build_invariant_declaration(&mut self, pair: Pair<Rule>) -> Result<TableElement, Vec<AstError>> {
+        let span = self.pair_to_span(&pair);
+        
+        for inner in pair.into_inner() {
+            if inner.as_rule() == Rule::expression {
+                let expr = self.build_expression(inner)?;
+                return Ok(TableElement::Invariant(expr));
+            }
+        }
+        
+        Err(vec![AstError {
+            kind: AstErrorKind::MissingField("invariant expression".to_string()),
+            span: Some(span),
+        }])
     }
 
     fn build_decorator(&mut self, pair: Pair<Rule>) -> Result<Decorator, Vec<AstError>> {
@@ -983,30 +1016,35 @@ impl AstBuilder {
     fn build_assignment(&mut self, pair: Pair<Rule>) -> Result<ExprId, Vec<AstError>> {
         let span = self.pair_to_span(&pair);
         let inner_pairs: Vec<_> = pair.into_inner().collect();
-
-        if inner_pairs.len() == 1 {
-            // No assignment, just the expression
-            return self.build_level10_expr(inner_pairs.into_iter().next().unwrap());
+        
+        match inner_pairs.len() {
+            1 => {
+                // No assignment, just the expression
+                self.build_level10_expr(inner_pairs.into_iter().next().unwrap())
+            }
+            2 => {
+                // Assignment: level10_expr and ("=" ~ assignment) group
+                let lhs = self.build_level10_expr(inner_pairs[0].clone())?;
+                
+                // The second element should be the assignment part
+                let rhs = self.build_assignment(inner_pairs[1].clone())?; // Right-associative
+                
+                Ok(self.program.expressions.alloc(Expression::Assignment {
+                    lhs,
+                    rhs,
+                    span: Some(span),
+                }))
+            }
+            _ => {
+                Err(vec![AstError {
+                    kind: AstErrorKind::UnexpectedRule(format!(
+                        "Invalid assignment structure: expected 1 or 2 elements, got {}",
+                        inner_pairs.len()
+                    )),
+                    span: Some(span),
+                }])
+            }
         }
-
-        if inner_pairs.len() == 3 {
-            // Assignment: lhs = rhs
-            let lhs = self.build_level10_expr(inner_pairs[0].clone())?;
-            // Skip the "=" operator (inner_pairs[1])
-            let rhs = self.build_assignment(inner_pairs[2].clone())?; // Right-associative
-
-            return Ok(self.program.expressions.alloc(Expression::Assignment {
-                lhs,
-                rhs,
-                span: Some(span),
-            }));
-        }
-
-        // If we get here, there's a structural issue
-        Err(vec![AstError {
-            kind: AstErrorKind::UnexpectedRule("Invalid assignment structure".to_string()),
-            span: Some(span),
-        }])
     }
 
     fn build_level10_expr(&mut self, pair: Pair<Rule>) -> Result<ExprId, Vec<AstError>> {
@@ -1425,6 +1463,9 @@ impl AstBuilder {
                 Rule::literal => {
                     return self.build_literal(inner);
                 }
+                Rule::lambda_expression => {
+                    return self.build_lambda_expression(inner);
+                }
                 Rule::identifier => {
                     let identifier = self.build_identifier(inner)?;
                     return Ok(self
@@ -1504,6 +1545,49 @@ impl AstBuilder {
             kind: AstErrorKind::UnexpectedRule("Empty literal".to_string()),
             span: Some(span),
         }])
+    }
+
+    fn build_lambda_expression(&mut self, pair: Pair<Rule>) -> Result<ExprId, Vec<AstError>> {
+        let span = self.pair_to_span(&pair);
+        let mut params = Vec::new();
+        let mut return_type = None;
+        let mut body = None;
+
+        for inner in pair.into_inner() {
+            match inner.as_rule() {
+                Rule::parameter_list => {
+                    params = self.build_parameter_list(inner)?;
+                }
+                Rule::r#type => {
+                    return_type = Some(self.build_type(inner)?);
+                }
+                Rule::block => {
+                    body = Some(self.build_block(inner)?);
+                }
+                _ => {}
+            }
+        }
+
+        let return_type = return_type.ok_or_else(|| {
+            vec![AstError {
+                kind: AstErrorKind::MissingField("lambda return type".to_string()),
+                span: Some(span.clone()),
+            }]
+        })?;
+
+        let body = body.ok_or_else(|| {
+            vec![AstError {
+                kind: AstErrorKind::MissingField("lambda body".to_string()),
+                span: Some(span.clone()),
+            }]
+        })?;
+
+        Ok(self.program.expressions.alloc(Expression::Lambda {
+            params,
+            return_type,
+            body,
+            span: Some(span),
+        }))
     }
 
     fn build_expression_list(&mut self, pair: Pair<Rule>) -> Result<Vec<ExprId>, Vec<AstError>> {

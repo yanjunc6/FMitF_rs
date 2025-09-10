@@ -13,16 +13,16 @@ COMMENT    = _{ "//" ~ (!"\n" ~ ANY)* }
 
 // -- IMPLEMENTATION NOTE: All keywords are reserved and cannot be used as identifiers outside compiler.
 KEYWORD = @{
-    "assert" | "assume" | "const" | "else" | "false" | "for" | "function" |
-    "hop" | "hops" | "if" | "in" | "invariant" | "node" | "operator" |
-    "partition" | "primary" | "return" | "table" | "transaction" |
-    "true" | "type" | "var" | "void" | "to"
+    ("assert" | "assume" | "const" | "else" | "false" | "for" | "function" |
+     "hop" | "hops" | "if" | "in" | "invariant" | "node" | "operator" |
+     "partition" | "primary" | "return" | "table" | "transaction" |
+     "true" | "type" | "var" | "void" | "to") ~ !ASCII_ALPHANUMERIC
 }
 
 word = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
-// -- IMPLEMENTATION NOTE: Use tag to decide if it's a keyword or a word.
-identifier = { #keyword = KEYWORD | #word = word }
+// -- IMPLEMENTATION NOTE: Use word only, keywords are handled by specific literal tokens in grammar rules.
+identifier = { word }
 
 // -- IMPLEMENTATION NOTE: An operator symbol is one or more characters from the allowed set.
 //    This allows for multi-character custom operators like `++-` or `=>`.
@@ -32,7 +32,7 @@ operator_symbol = @{ operator_char+ }
 // ----------------------------------------------------------------------------
 // -- 2. Types
 // ----------------------------------------------------------------------------
-type = { function_type | generic_type | primitive_type }
+type = { generic_type | function_type | primitive_type }
 
 // -- A basic type name, which can be a built-in primitive or a user-defined type/table name.
 primitive_type = { identifier }
@@ -86,10 +86,14 @@ table_declaration = {
     "table" ~ identifier ~ "{" ~ table_field* ~ "}"
 }
 table_field = {
-    ( "primary"? ~ identifier ~ ":" ~ type ~ ";" )
-  | ( "node" ~ identifier ~ "(" ~ expression_list? ~ ")" ~ ";" )
-  | ( "invariant" ~ expression ~ ";" )
+    field_declaration
+  | node_declaration  
+  | invariant_declaration
 }
+
+field_declaration = { "primary"? ~ identifier ~ ":" ~ type ~ ";" }
+node_declaration = { "node" ~ identifier ~ "(" ~ expression_list? ~ ")" ~ ";" }
+invariant_declaration = { "invariant" ~ expression ~ ";" }
 
 // -- Helpers for declarations
 generic_param_list = { "<" ~ identifier ~ ("," ~ identifier)* ~ ">" }
@@ -197,6 +201,7 @@ table_row_access = { "[" ~ (key_value_pair ~ ("," ~ key_value_pair)*)? ~ "]" }
 // ----------------------------------------------------------------------------
 primary = {
     literal
+  | lambda_expression
   | identifier
   | "(" ~ expression ~ ")" // Grouped expression
 }
@@ -208,7 +213,10 @@ literal = {
   | row_literal
 }
 
-primitive_literal = _{ integer | float | string | bool }
+// -- Lambda expressions for functional programming
+lambda_expression = { "(" ~ parameter_list? ~ ")" ~ "->" ~ type ~ block }
+
+primitive_literal = _{ float | integer | string | bool }
 integer = @{ ASCII_DIGIT+ }
 float   = @{ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
 string  = @{ "\"" ~ ( !("\"" | "\\") ~ ANY | "\\" ~ ANY )* ~ "\"" }

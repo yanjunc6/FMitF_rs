@@ -142,6 +142,8 @@ table Stock {
     S_ORDER_CNT: int;
     S_REMOTE_CNT: int;
     S_DATA: string;
+
+    // invariant S_QUANTITY >= 0 && S_QUANTITY <= 100;
 }
 
 // ============================================================================
@@ -189,6 +191,8 @@ transaction newOrder(
         } else {
             s.S_QUANTITY = s.S_QUANTITY + 91 - qty;
         }
+
+        // assert s.S_QUANTITY >= 0;
 
         if sup_w_id != w_id {
             s.S_REMOTE_CNT = s.S_REMOTE_CNT + 1;

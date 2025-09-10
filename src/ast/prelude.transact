@@ -17,63 +17,64 @@
 @intrinsic type string;
 @intrinsic type float;
 @intrinsic type UUID;
+@intrinsic type List<T>;
 @intrinsic type Table<T>; // A table Activity as var is of type Table<Activity>
 
 // ===========================================
 // Arithmetic Operators
 // ===========================================
 
-@intrinsic @infix operator +(int, int) -> int;
-@intrinsic @infix operator -(int, int) -> int;
-@intrinsic @infix operator *(int, int) -> int;
-@intrinsic @infix operator /(int, int) -> int;
-@intrinsic @infix operator %(int, int) -> int;
+@intrinsic @infix operator +(a: int, b: int) -> int;
+@intrinsic @infix operator -(a: int, b: int) -> int;
+@intrinsic @infix operator *(a: int, b: int) -> int;
+@intrinsic @infix operator /(a: int, b: int) -> int;
+@intrinsic @infix operator %(a: int, b: int) -> int;
 
-@intrinsic @infix operator +(float, float) -> float;
-@intrinsic @infix operator -(float, float) -> float;
-@intrinsic @infix operator *(float, float) -> float;
-@intrinsic @infix operator /(float, float) -> float;
+@intrinsic @infix operator +(a: float, b: float) -> float;
+@intrinsic @infix operator -(a: float, b: float) -> float;
+@intrinsic @infix operator *(a: float, b: float) -> float;
+@intrinsic @infix operator /(a: float, b: float) -> float;
 
-@intrinsic @prefix operator -(int) -> int;
-@intrinsic @prefix operator -(float) -> float;
+@intrinsic @prefix operator -(a: int) -> int;
+@intrinsic @prefix operator -(a: float) -> float;
 
 // ===========================================
 // Comparison Operators
 // ===========================================
 
-@intrinsic @infix operator ==(int, int) -> bool;
-@intrinsic @infix operator !=(int, int) -> bool;
-@intrinsic @infix operator <(int, int) -> bool;
-@intrinsic @infix operator <=(int, int) -> bool;
-@intrinsic @infix operator >(int, int) -> bool;
-@intrinsic @infix operator >=(int, int) -> bool;
+@intrinsic @infix operator ==(a: int, b: int) -> bool;
+@intrinsic @infix operator !=(a: int, b: int) -> bool;
+@intrinsic @infix operator <(a: int, b: int) -> bool;
+@intrinsic @infix operator <=(a: int, b: int) -> bool;
+@intrinsic @infix operator >(a: int, b: int) -> bool;
+@intrinsic @infix operator >=(a: int, b: int) -> bool;
 
-@intrinsic @infix operator ==(bool, bool) -> bool;
-@intrinsic @infix operator !=(bool, bool) -> bool;
+@intrinsic @infix operator ==(a: bool, b: bool) -> bool;
+@intrinsic @infix operator !=(a: bool, b: bool) -> bool;
 
-@intrinsic @infix operator ==(string, string) -> bool;
-@intrinsic @infix operator !=(string, string) -> bool;
+@intrinsic @infix operator ==(a: string, b: string) -> bool;
+@intrinsic @infix operator !=(a: string, b: string) -> bool;
 
-@intrinsic @infix operator ==(float, float) -> bool;
-@intrinsic @infix operator !=(float, float) -> bool;
-@intrinsic @infix operator <(float, float) -> bool;
-@intrinsic @infix operator <=(float, float) -> bool;
-@intrinsic @infix operator >(float, float) -> bool;
-@intrinsic @infix operator >=(float, float) -> bool;
+@intrinsic @infix operator ==(a: float, b: float) -> bool;
+@intrinsic @infix operator !=(a: float, b: float) -> bool;
+@intrinsic @infix operator <(a: float, b: float) -> bool;
+@intrinsic @infix operator <=(a: float, b: float) -> bool;
+@intrinsic @infix operator >(a: float, b: float) -> bool;
+@intrinsic @infix operator >=(a: float, b: float) -> bool;
 
 // ===========================================
 // Logical Operators
 // ===========================================
 
-@intrinsic @infix operator &&(bool, bool) -> bool;
-@intrinsic @infix operator ||(bool, bool) -> bool;
-@intrinsic @prefix operator !(bool) -> bool;
+@intrinsic @infix operator &&(a: bool, b: bool) -> bool;
+@intrinsic @infix operator ||(a: bool, b: bool) -> bool;
+@intrinsic @prefix operator !(a: bool) -> bool;
 
 // ===========================================
 // String Operators
 // ===========================================
 
-@intrinsic @infix operator +(string, string) -> string;
+@intrinsic @infix operator +(a: string, b: string) -> string;
 
 // ===========================================
 // Built-in Functions

@@ -377,6 +377,13 @@ pub enum Expression {
         expr: ExprId,
         span: Option<Span>,
     },
+
+    Lambda {
+        params: Vec<ParamId>,
+        return_type: TypeId,
+        body: BlockId,
+        span: Option<Span>,
+    },
 }
 
 #[derive(Debug, Clone)]
