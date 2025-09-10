@@ -87,7 +87,7 @@ pub struct Spanned<T> {
 // ============================================================================
 
 /// The root AST node containing all declarations and arenas.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Program {
     /// Top-level declarations in order of appearance.
     pub declarations: Vec<Declaration>,
@@ -120,12 +120,26 @@ pub enum Declaration {
     Table(TableId),
 }
 
+// Represents a decorator
+#[derive(Debug, Clone)]
+pub struct Decorator {
+    pub name: Identifier,
+    pub span: Option<Span>,
+}
+
+// Represents the name of a callable, distinguishing between regular identifiers and operator symbols.
+#[derive(Debug, Clone)]
+pub enum CallableName {
+    Identifier(Identifier),
+    Operator(Spanned<String>),
+}
+
 /// Unified representation for functions, operators, partitions, and transactions.
 #[derive(Debug, Clone)]
 pub struct CallableDecl {
-    pub decorators: Vec<Spanned<String>>,
+    pub decorators: Vec<Decorator>,
     pub kind: CallableKind,
-    pub name: Spanned<String>, // For operators, this is the symbol
+    pub name: CallableName,
     pub generic_params: Vec<GenericParamId>,
     pub params: Vec<ParamId>,
     pub return_type: Option<TypeId>,
@@ -144,40 +158,46 @@ pub enum CallableKind {
 
 #[derive(Debug, Clone)]
 pub struct TypeDecl {
-    pub decorators: Vec<Spanned<String>>,
-    pub name: Spanned<String>,
+    pub decorators: Vec<Decorator>,
+    pub name: Identifier,
     pub generic_params: Vec<GenericParamId>,
     pub span: Option<Span>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ConstDecl {
-    pub name: Spanned<String>,
+    pub name: Identifier,
     pub ty: TypeId,
     pub value: ExprId,
     pub span: Option<Span>,
 }
 
 #[derive(Debug, Clone)]
+pub enum TableElement {
+    Field(TableField),
+    Node(TableNode),
+    Invariant(ExprId),
+}
+
+#[derive(Debug, Clone)]
 pub struct TableDecl {
-    pub name: Spanned<String>,
-    pub fields: Vec<TableField>,
-    pub nodes: Vec<TableNode>,
-    pub invariants: Vec<ExprId>,
+    pub name: Identifier,
+    // A single vector of `TableElement` preserves source order.
+    pub elements: Vec<TableElement>,
     pub span: Option<Span>,
 }
 
 #[derive(Debug, Clone)]
 pub struct TableField {
     pub is_primary: bool,
-    pub name: Spanned<String>,
+    pub name: Identifier,
     pub ty: TypeId,
     pub span: Option<Span>,
 }
 
 #[derive(Debug, Clone)]
 pub struct TableNode {
-    pub name: Spanned<String>,
+    pub name: Identifier,
     pub args: Vec<ExprId>,
     pub resolved_partition: Option<FunctionId>, // Filled by name resolver
     pub span: Option<Span>,
@@ -185,13 +205,13 @@ pub struct TableNode {
 
 #[derive(Debug, Clone)]
 pub struct GenericParam {
-    pub name: Spanned<String>,
+    pub name: Identifier,
     pub span: Option<Span>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Parameter {
-    pub name: Spanned<String>,
+    pub name: Identifier,
     pub ty: TypeId,
     pub span: Option<Span>,
 }
@@ -261,13 +281,13 @@ pub enum Statement {
     },
 
     Hop {
-        decorators: Vec<Spanned<String>>,
+        decorators: Vec<Decorator>,
         body: BlockId,
         span: Option<Span>,
     },
 
     HopsFor {
-        decorators: Vec<Spanned<String>>,
+        decorators: Vec<Decorator>,
         var: VarId, // Loop variable declaration
         start: ExprId,
         end: ExprId,
@@ -291,7 +311,8 @@ pub enum ForInit {
 
 #[derive(Debug, Clone)]
 pub struct VarDecl {
-    pub name: Spanned<String>,
+    // CHANGED: Use `Identifier` for the variable's name.
+    pub name: Identifier,
     pub ty: Option<TypeId>,
     pub init: Option<ExprId>,
     pub span: Option<Span>,
@@ -338,8 +359,10 @@ pub enum Expression {
 
     MemberAccess {
         object: ExprId,
-        member: Spanned<String>,
-        resolved_field: Option<TableField>, // Filled by name resolver
+        // CHANGED: Use `Identifier` for the member name, which matches the grammar.
+        member: Identifier,
+        // This is still useful for linking directly to a table field definition.
+        resolved_field: Option<TableField>,
         span: Option<Span>,
     },
 
@@ -367,11 +390,13 @@ pub enum Literal {
 
 #[derive(Debug, Clone)]
 pub struct KeyValue {
-    pub key: Spanned<String>,
+    // CHANGED: Use `Identifier` for the key, which aligns with the grammar.
+    pub key: Identifier,
     pub value: ExprId,
     pub resolved_field: Option<TableField>, // Filled by name resolver
     pub span: Option<Span>,
 }
+
 
 // ============================================================================
 // --- Main Parse Function
@@ -381,26 +406,26 @@ pub struct KeyValue {
 /// type checking, and semantic analysis
 pub fn parse_program(source: &str) -> Result<Program, Vec<errors::AstError>> {
     // Stage 1: Basic AST parsing with prelude
-    let mut program = match ast_builder::parse_source(source) {
+    let mut program = match ast_builder::parse_program(source) {
         Ok(program) => program,
-        Err(error) => return Err(vec![error]),
+        Err(error) => return Err(error),
     };
-    
+
     // Stage 2: Name resolution - use simple stub for now
     // if let Err(errors) = simple_name_resolution(&mut program) {
     //     return Err(errors);
     // }
-    
+
     // Stage 3: Type checking
-    if let Err(errors) = type_checker::check_types(&mut program) {
-        return Err(errors);
-    }
-    
-    // Stage 4: Semantic analysis
-    if let Err(errors) = semantic_analyzer::analyze_semantics(&program) {
-        return Err(errors);
-    }
-    
+    // if let Err(errors) = type_checker::check_types(&mut program) {
+    //     return Err(errors);
+    // }
+
+    // // Stage 4: Semantic analysis
+    // if let Err(errors) = semantic_analyzer::analyze_semantics(&program) {
+    //     return Err(errors);
+    // }
+
     Ok(program)
 }
 
@@ -410,8 +435,8 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<errors::AstError>> {
 
 pub mod ast_builder;
 pub mod errors;
-pub mod type_checker;
-pub mod semantic_analyzer;
+// pub mod type_checker;
+// pub mod semantic_analyzer;
 // Complex modules with legacy issues:
 // pub mod name_resolver;
 // pub mod constant_checker;

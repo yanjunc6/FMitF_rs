@@ -11,7 +11,7 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 COMMENT    = _{ "//" ~ (!"\n" ~ ANY)* }
 
-// -- IMPLEMENTATION NOTE: All keywords are reserved and cannot be used as identifiers.
+// -- IMPLEMENTATION NOTE: All keywords are reserved and cannot be used as identifiers outside compiler.
 KEYWORD = @{
     "assert" | "assume" | "const" | "else" | "false" | "for" | "function" |
     "hop" | "hops" | "if" | "in" | "invariant" | "node" | "operator" |
@@ -19,7 +19,10 @@ KEYWORD = @{
     "true" | "type" | "var" | "void" | "to"
 }
 
-identifier = @{ !KEYWORD ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+word = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+// -- IMPLEMENTATION NOTE: Use tag to decide if it's a keyword or a word.
+identifier = { #keyword = KEYWORD | #word = word }
 
 // -- IMPLEMENTATION NOTE: An operator symbol is one or more characters from the allowed set.
 //    This allows for multi-character custom operators like `++-` or `=>`.
