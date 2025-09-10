@@ -17,18 +17,18 @@ use crate::cli::compiler::Compiler;
 pub struct Args {
     /// Input .transact file
     pub input: PathBuf,
-    
+
     /// Output directory (optional)
-    pub output: Option<PathBuf>,
-    
+    pub output_dir: Option<PathBuf>,
+
     /// Number of transaction instances
     #[arg(long, default_value = "2")]
     pub instances: usize,
-    
+
     /// Skip optimization passes
     #[arg(long)]
     pub no_optimize: bool,
-    
+
     /// Disable colored output
     #[arg(long)]
     pub no_color: bool,
@@ -36,12 +36,9 @@ pub struct Args {
 
 impl Args {
     pub fn output_dir(&self) -> PathBuf {
-        self.output.clone().unwrap_or_else(|| {
-            let stem = self.input.file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("output");
-            PathBuf::from(format!("{}_output", stem))
-        })
+        self.output_dir
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("tmp"))
     }
 }
 
@@ -51,11 +48,11 @@ impl Args {
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    
+
     // Create compiler and run pipeline
     let mut compiler = Compiler::new();
     let output_dir = args.output_dir();
-    
+
     compiler.run_pipeline(&args.input, &output_dir, args.instances)
 }
 
