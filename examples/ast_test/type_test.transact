@@ -1,0 +1,5 @@
+// Test with custom type
+type MyType;
+
+function test(x: MyType) {
+}
