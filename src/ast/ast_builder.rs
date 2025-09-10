@@ -40,7 +40,21 @@ impl AstBuilder {
         }
     }
 
-    pub fn parse(source: &str) -> Result<Program, Vec<AstError>> {
+    pub fn new_with_prelude() -> Result<Self, AstError> {
+        let program = Program::with_prelude()
+            .map_err(|e| AstError {
+                kind: AstErrorKind::ParseError(format!("Failed to load prelude: {}", e)),
+                span: None,
+            })?;
+        
+        Ok(AstBuilder {
+            program,
+            errors: Vec::new(),
+        })
+    }
+
+    /// Parse without loading prelude (used internally for parsing prelude.transact)
+    pub fn parse_raw(source: &str) -> Result<Program, Vec<AstError>> {
         let mut builder = AstBuilder::new();
 
         // Parse with Pest
@@ -55,6 +69,34 @@ impl AstBuilder {
         };
 
         // Build AST
+        for pair in pairs {
+            if pair.as_rule() == Rule::program {
+                builder.build_program(pair)?;
+            }
+        }
+
+        Ok(builder.program)
+    }
+
+    pub fn parse(source: &str) -> Result<Program, Vec<AstError>> {
+        // Start with program that has prelude loaded
+        let mut builder = match AstBuilder::new_with_prelude() {
+            Ok(builder) => builder,
+            Err(e) => return Err(vec![e]),
+        };
+
+        // Parse user code with Pest
+        let pairs = match TransactParser::parse(Rule::program, source) {
+            Ok(pairs) => pairs,
+            Err(e) => {
+                return Err(vec![AstError {
+                    kind: AstErrorKind::ParseError(e.to_string()),
+                    span: None,
+                }]);
+            }
+        };
+
+        // Build user AST into the program that already has prelude
         for pair in pairs {
             if pair.as_rule() == Rule::program {
                 builder.build_program(pair)?;

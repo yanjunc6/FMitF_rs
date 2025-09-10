@@ -1,3 +1,0 @@
-// Test with bool type
-function test(x: bool) {
-}
