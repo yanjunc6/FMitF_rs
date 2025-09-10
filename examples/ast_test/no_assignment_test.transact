@@ -1,7 +1,0 @@
-// Test without assignments
-function test() {
-    hop {
-        var x: int;
-        return x + 1;
-    }
-}

@@ -1,6 +1,0 @@
-// Simple test for generic type parsing
-function test(x: int) -> List<int> {
-    hop {
-        return x;
-    }
-}

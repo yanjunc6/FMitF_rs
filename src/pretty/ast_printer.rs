@@ -319,23 +319,18 @@ impl<'a> AstPrintVisitor<'a> {
 
     fn visit_statement(&mut self, stmt_id: StmtId) -> std::io::Result<()> {
         if let Some(statement) = self.program.statements.get(stmt_id) {
-            self.write_indent()?;
             match statement {
                 Statement::VarDecl(var_id) => {
-                    writeln!(self.writer, "├─ VarDecl")?;
                     if let Some(var) = self.program.var_decls.get(*var_id) {
-                        self.increase_indent();
                         self.write_indent()?;
-                        writeln!(self.writer, "├─ name: {}", self.format_identifier(&var.name))?;
+                        write!(self.writer, "var {}", self.format_identifier(&var.name))?;
                         if let Some(ty) = var.ty {
-                            self.write_indent()?;
-                            writeln!(self.writer, "├─ type: {}", self.format_type_id(ty))?;
+                            write!(self.writer, ": {}", self.format_type_id(ty))?;
                         }
                         if let Some(init) = var.init {
-                            self.write_indent()?;
-                            writeln!(self.writer, "└─ init: {}", self.format_expression_id(init))?;
+                            write!(self.writer, " = {}", self.format_expression_id(init))?;
                         }
-                        self.decrease_indent();
+                        writeln!(self.writer, ";")?;
                     }
                 }
                 Statement::If {
@@ -344,23 +339,24 @@ impl<'a> AstPrintVisitor<'a> {
                     else_block,
                     ..
                 } => {
-                    writeln!(self.writer, "├─ IfStatement")?;
-                    self.increase_indent();
                     self.write_indent()?;
-                    writeln!(self.writer, "├─ condition: {}", self.format_expression_id(*condition))?;
-                    self.write_indent()?;
-                    writeln!(self.writer, "├─ then_block:")?;
+                    writeln!(
+                        self.writer,
+                        "if ({}) {{",
+                        self.format_expression_id(*condition)
+                    )?;
                     self.increase_indent();
                     self.visit_block(*then_block)?;
                     self.decrease_indent();
                     if let Some(else_block_id) = else_block {
                         self.write_indent()?;
-                        writeln!(self.writer, "└─ else_block:")?;
+                        writeln!(self.writer, "}} else {{")?;
                         self.increase_indent();
                         self.visit_block(*else_block_id)?;
                         self.decrease_indent();
                     }
-                    self.decrease_indent();
+                    self.write_indent()?;
+                    writeln!(self.writer, "}}")?;
                 }
                 Statement::For {
                     init,
@@ -369,80 +365,74 @@ impl<'a> AstPrintVisitor<'a> {
                     body,
                     ..
                 } => {
-                    writeln!(self.writer, "├─ ForStatement")?;
-                    self.increase_indent();
+                    self.write_indent()?;
+                    write!(self.writer, "for (")?;
                     if let Some(init) = init {
-                        self.write_indent()?;
-                        writeln!(self.writer, "├─ init:")?;
-                        self.increase_indent();
                         match init {
                             ForInit::VarDecl(var_id) => {
                                 if let Some(var) = self.program.var_decls.get(*var_id) {
-                                    self.write_indent()?;
-                                    writeln!(self.writer, "├─ VarDecl: {}", self.format_identifier(&var.name))?;
+                                    write!(
+                                        self.writer,
+                                        "var {}",
+                                        self.format_identifier(&var.name)
+                                    )?;
                                     if let Some(ty) = var.ty {
-                                        self.write_indent()?;
-                                        writeln!(self.writer, "├─ type: {}", self.format_type_id(ty))?;
+                                        write!(self.writer, ": {}", self.format_type_id(ty))?;
                                     }
                                     if let Some(init_expr) = var.init {
-                                        self.write_indent()?;
-                                        writeln!(self.writer, "└─ init: {}", self.format_expression_id(init_expr))?;
+                                        write!(
+                                            self.writer,
+                                            " = {}",
+                                            self.format_expression_id(init_expr)
+                                        )?;
                                     }
                                 }
                             }
                             ForInit::Expression(expr_id) => {
-                                self.write_indent()?;
-                                writeln!(self.writer, "└─ Expression: {}", self.format_expression_id(*expr_id))?;
+                                write!(self.writer, "{}", self.format_expression_id(*expr_id))?;
                             }
                         }
-                        self.decrease_indent();
                     }
+                    write!(self.writer, "; ")?;
                     if let Some(cond) = condition {
-                        self.write_indent()?;
-                        writeln!(self.writer, "├─ condition: {}", self.format_expression_id(*cond))?;
+                        write!(self.writer, "{}", self.format_expression_id(*cond))?;
                     }
+                    write!(self.writer, "; ")?;
                     if let Some(upd) = update {
-                        self.write_indent()?;
-                        writeln!(self.writer, "├─ update: {}", self.format_expression_id(*upd))?;
+                        write!(self.writer, "{}", self.format_expression_id(*upd))?;
                     }
-                    self.write_indent()?;
-                    writeln!(self.writer, "└─ body:")?;
+                    writeln!(self.writer, ") {{")?;
                     self.increase_indent();
                     self.visit_block(*body)?;
                     self.decrease_indent();
-                    self.decrease_indent();
+                    self.write_indent()?;
+                    writeln!(self.writer, "}}")?;
                 }
                 Statement::Return { value, .. } => {
+                    self.write_indent()?;
                     if let Some(val) = value {
-                        writeln!(self.writer, "└─ Return: {}", self.format_expression_id(*val))?;
+                        writeln!(self.writer, "return {};", self.format_expression_id(*val))?;
                     } else {
-                        writeln!(self.writer, "└─ Return: void")?;
+                        writeln!(self.writer, "return;")?;
                     }
                 }
                 Statement::Assert { expr, .. } => {
-                    writeln!(self.writer, "└─ Assert: {}", self.format_expression_id(*expr))?;
+                    self.write_indent()?;
+                    writeln!(self.writer, "assert {};", self.format_expression_id(*expr))?;
                 }
                 Statement::Hop {
                     decorators, body, ..
                 } => {
-                    writeln!(self.writer, "├─ HopStatement")?;
-                    self.increase_indent();
-                    if !decorators.is_empty() {
-                        self.write_indent()?;
-                        writeln!(self.writer, "├─ decorators:")?;
-                        self.increase_indent();
-                        for decorator in decorators {
-                            self.write_indent()?;
-                            writeln!(self.writer, "├─ @{}", self.format_identifier(&decorator.name))?;
-                        }
-                        self.decrease_indent();
-                    }
                     self.write_indent()?;
-                    writeln!(self.writer, "└─ body:")?;
+                    for decorator in decorators {
+                        write!(self.writer, "@{} ", self.format_identifier(&decorator.name))?;
+                    }
+                    writeln!(self.writer, "hop {{")?;
                     self.increase_indent();
                     self.visit_block(*body)?;
                     self.decrease_indent();
-                    self.decrease_indent();
+                    self.write_indent()?;
+                    writeln!(self.writer, "}}")?;
                 }
                 Statement::HopsFor {
                     decorators,
@@ -452,41 +442,38 @@ impl<'a> AstPrintVisitor<'a> {
                     body,
                     ..
                 } => {
-                    writeln!(self.writer, "├─ HopsForStatement")?;
-                    self.increase_indent();
-                    if !decorators.is_empty() {
-                        self.write_indent()?;
-                        writeln!(self.writer, "├─ decorators:")?;
-                        self.increase_indent();
-                        for decorator in decorators {
-                            self.write_indent()?;
-                            writeln!(self.writer, "├─ @{}", self.format_identifier(&decorator.name))?;
-                        }
-                        self.decrease_indent();
+                    self.write_indent()?;
+                    for decorator in decorators {
+                        write!(self.writer, "@{} ", self.format_identifier(&decorator.name))?;
                     }
                     if let Some(var_decl) = self.program.var_decls.get(*var) {
-                        self.write_indent()?;
-                        writeln!(self.writer, "├─ variable: {}", self.format_identifier(&var_decl.name))?;
+                        write!(
+                            self.writer,
+                            "hops for {}",
+                            self.format_identifier(&var_decl.name)
+                        )?;
+                        if let Some(ty) = var_decl.ty {
+                            write!(self.writer, ": {}", self.format_type_id(ty))?;
+                        }
+                        writeln!(
+                            self.writer,
+                            " = ({}) to ({}) {{",
+                            self.format_expression_id(*start),
+                            self.format_expression_id(*end)
+                        )?;
                     }
-                    self.write_indent()?;
-                    writeln!(self.writer, "├─ start: {}", self.format_expression_id(*start))?;
-                    self.write_indent()?;
-                    writeln!(self.writer, "├─ end: {}", self.format_expression_id(*end))?;
-                    self.write_indent()?;
-                    writeln!(self.writer, "└─ body:")?;
                     self.increase_indent();
                     self.visit_block(*body)?;
                     self.decrease_indent();
-                    self.decrease_indent();
+                    self.write_indent()?;
+                    writeln!(self.writer, "}}")?;
                 }
                 Statement::Expression { expr, .. } => {
-                    writeln!(self.writer, "└─ ExpressionStatement: {}", self.format_expression_id(*expr))?;
+                    self.write_indent()?;
+                    writeln!(self.writer, "{};", self.format_expression_id(*expr))?;
                 }
                 Statement::Block(block_id) => {
-                    writeln!(self.writer, "├─ Block:")?;
-                    self.increase_indent();
                     self.visit_block(*block_id)?;
-                    self.decrease_indent();
                 }
             }
         }
@@ -586,15 +573,28 @@ impl<'a> AstPrintVisitor<'a> {
                 Expression::Binary {
                     left, op, right, ..
                 } => {
+                    let indent = *self.indent_level.borrow();
                     format!(
-                        "{} {} {}",
+                        "BinaryOp(\n{}  left: {},\n{}  op: {},\n{}  right: {}\n{})",
+                        "  ".repeat(indent + 1),
                         self.format_expression_id(*left),
+                        "  ".repeat(indent + 1),
                         op.value,
-                        self.format_expression_id(*right)
+                        "  ".repeat(indent + 1),
+                        self.format_expression_id(*right),
+                        "  ".repeat(indent)
                     )
                 }
                 Expression::Unary { op, expr, .. } => {
-                    format!("{}{}", op.value, self.format_expression_id(*expr))
+                    let indent = *self.indent_level.borrow();
+                    format!(
+                        "UnaryOp(\n{}  op: {},\n{}  expr: {}\n{})",
+                        "  ".repeat(indent + 1),
+                        op.value,
+                        "  ".repeat(indent + 1),
+                        self.format_expression_id(*expr),
+                        "  ".repeat(indent)
+                    )
                 }
                 Expression::Assignment { lhs, rhs, .. } => {
                     format!(

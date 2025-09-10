@@ -1,6 +1,6 @@
 use id_arena::Arena;
-
 use crate::ast::*;
+use crate::ast::ast_builder::AstBuilder;
 
 // ============================================================================
 // --- Default Program
@@ -8,7 +8,8 @@ use crate::ast::*;
 
 impl Default for Program {
     fn default() -> Self {
-        let mut program = Program {
+        // Create empty program
+        Program {
             declarations: Vec::new(),
             functions: Arena::new(),
             type_decls: Arena::new(),
@@ -21,641 +22,235 @@ impl Default for Program {
             statements: Arena::new(),
             expressions: Arena::new(),
             blocks: Arena::new(),
-        };
-
-        // Add built-in types to the program
-        let intrinsic_decorator = Decorator {
-            name: Identifier {
-                name: "intrinsic".to_string(),
-                span: None,
-                resolved: None,
-                resolved_type: None,
-            },
-            span: None,
-        };
-
-        // Add built-in types: int, bool, string, float
-        for type_name in &["int", "bool", "string", "float"] {
-            let type_id = program.type_decls.alloc(TypeDecl {
-                decorators: vec![intrinsic_decorator.clone()],
-                name: Identifier {
-                    name: type_name.to_string(),
-                    span: None,
-                    resolved: None,
-                    resolved_type: None,
-                },
-                generic_params: Vec::new(),
-                span: None,
-            });
-            program.declarations.push(Declaration::Type(type_id));
         }
-
-        // Add generic List<T> type
-        let list_generic_param_id = program.generic_params.alloc(GenericParam {
-            name: Identifier {
-                name: "T".to_string(),
-                span: None,
-                resolved: None,
-                resolved_type: None,
-            },
-            span: None,
-        });
-
-        let list_type_id = program.type_decls.alloc(TypeDecl {
-            decorators: vec![intrinsic_decorator.clone()],
-            name: Identifier {
-                name: "List".to_string(),
-                span: None,
-                resolved: None,
-                resolved_type: None,
-            },
-            generic_params: vec![list_generic_param_id],
-            span: None,
-        });
-        program.declarations.push(Declaration::Type(list_type_id));
-
-        // Add built-in arithmetic operators
-        let arithmetic_ops = vec![
-            ("+", vec!["int", "int"], "int"),
-            ("-", vec!["int", "int"], "int"),
-            ("*", vec!["int", "int"], "int"),
-            ("/", vec!["int", "int"], "int"),
-            ("%", vec!["int", "int"], "int"),
-            ("+", vec!["float", "float"], "float"),
-            ("-", vec!["float", "float"], "float"),
-            ("*", vec!["float", "float"], "float"),
-            ("/", vec!["float", "float"], "float"),
-        ];
-
-        for (op, params, ret) in arithmetic_ops {
-            add_builtin_operator(&mut program, op, params, ret);
-        }
-
-        // Add prefix operators
-        add_builtin_prefix_operator(&mut program, "-", "int", "int");
-        add_builtin_prefix_operator(&mut program, "-", "float", "float");
-        add_builtin_prefix_operator(&mut program, "!", "bool", "bool");
-
-        // Add comparison operators
-        let comparison_ops = vec![
-            ("==", vec!["int", "int"], "bool"),
-            ("!=", vec!["int", "int"], "bool"),
-            ("<", vec!["int", "int"], "bool"),
-            ("<=", vec!["int", "int"], "bool"),
-            (">", vec!["int", "int"], "bool"),
-            (">=", vec!["int", "int"], "bool"),
-            ("==", vec!["bool", "bool"], "bool"),
-            ("!=", vec!["bool", "bool"], "bool"),
-            ("==", vec!["string", "string"], "bool"),
-            ("!=", vec!["string", "string"], "bool"),
-            ("==", vec!["float", "float"], "bool"),
-            ("!=", vec!["float", "float"], "bool"),
-            ("<", vec!["float", "float"], "bool"),
-            ("<=", vec!["float", "float"], "bool"),
-            (">", vec!["float", "float"], "bool"),
-            (">=", vec!["float", "float"], "bool"),
-        ];
-
-        for (op, params, ret) in comparison_ops {
-            add_builtin_operator(&mut program, op, params, ret);
-        }
-
-        // Add logical operators
-        add_builtin_operator(&mut program, "&&", vec!["bool", "bool"], "bool");
-        add_builtin_operator(&mut program, "||", vec!["bool", "bool"], "bool");
-
-        // Add string concatenation
-        add_builtin_operator(&mut program, "+", vec!["string", "string"], "string");
-
-        // Add built-in functions
-        add_map_function(&mut program);
-        add_filter_function(&mut program);
-        add_reduce_function(&mut program);
-        add_length_function(&mut program);
-
-        program
     }
 }
 
-fn add_builtin_operator(
-    program: &mut Program,
-    op: &str,
-    param_types: Vec<&str>,
-    return_type: &str,
-) {
-    let mut params = Vec::new();
-    for (i, param_type) in param_types.iter().enumerate() {
-        let type_id = program.types.alloc(Type::Named(Identifier {
-            name: param_type.to_string(),
-            span: None,
-            resolved: None,
-            resolved_type: None,
-        }));
-
-        let param_id = program.params.alloc(Parameter {
-            name: Identifier {
-                name: format!("arg{}", i),
-                span: None,
-                resolved: None,
-                resolved_type: None,
-            },
-            ty: type_id,
-            span: None,
-        });
-        params.push(param_id);
+impl Program {
+    /// Create a new program with built-in prelude loaded
+    pub fn with_prelude() -> Result<Self, Box<dyn std::error::Error>> {
+        // Read the prelude.transact file
+        let prelude_content = include_str!("prelude.transact");
+        
+        // Parse the prelude directly into a fresh program
+        let mut program = AstBuilder::parse_raw(prelude_content)
+            .map_err(|errs| format!("Failed to parse prelude: {:?}", errs))?;
+        
+        // Clear spans from all prelude elements
+        clear_all_spans(&mut program);
+        
+        Ok(program)
     }
-
-    let return_type_id = program.types.alloc(Type::Named(Identifier {
-        name: return_type.to_string(),
-        span: None,
-        resolved: None,
-        resolved_type: None,
-    }));
-
-    let func_id = program.functions.alloc(CallableDecl {
-        decorators: vec![
-            Decorator {
-                name: Identifier {
-                    name: "intrinsic".to_string(),
-                    span: None,
-                    resolved: None,
-                    resolved_type: None,
-                },
-                span: None,
-            },
-            Decorator {
-                name: Identifier {
-                    name: "infix".to_string(),
-                    span: None,
-                    resolved: None,
-                    resolved_type: None,
-                },
-                span: None,
-            },
-        ],
-        kind: CallableKind::Operator,
-        name: CallableName::Operator(Spanned {
-            value: op.to_string(),
-            span: None,
-        }),
-        generic_params: Vec::new(),
-        params,
-        return_type: Some(return_type_id),
-        assumptions: Vec::new(),
-        body: None,
-        span: None,
-    });
-
-    program.declarations.push(Declaration::Callable(func_id));
 }
 
-fn add_builtin_prefix_operator(
-    program: &mut Program,
-    op: &str,
-    param_type: &str,
-    return_type: &str,
-) {
-    let type_id = program.types.alloc(Type::Named(Identifier {
-        name: param_type.to_string(),
-        span: None,
-        resolved: None,
-        resolved_type: None,
-    }));
-
-    let param_id = program.params.alloc(Parameter {
-        name: Identifier {
-            name: "arg".to_string(),
-            span: None,
-            resolved: None,
-            resolved_type: None,
-        },
-        ty: type_id,
-        span: None,
-    });
-
-    let return_type_id = program.types.alloc(Type::Named(Identifier {
-        name: return_type.to_string(),
-        span: None,
-        resolved: None,
-        resolved_type: None,
-    }));
-
-    let func_id = program.functions.alloc(CallableDecl {
-        decorators: vec![
-            Decorator {
-                name: Identifier {
-                    name: "intrinsic".to_string(),
-                    span: None,
-                    resolved: None,
-                    resolved_type: None,
-                },
-                span: None,
-            },
-            Decorator {
-                name: Identifier {
-                    name: "prefix".to_string(),
-                    span: None,
-                    resolved: None,
-                    resolved_type: None,
-                },
-                span: None,
-            },
-        ],
-        kind: CallableKind::Operator,
-        name: CallableName::Operator(Spanned {
-            value: op.to_string(),
-            span: None,
-        }),
-        generic_params: Vec::new(),
-        params: vec![param_id],
-        return_type: Some(return_type_id),
-        assumptions: Vec::new(),
-        body: None,
-        span: None,
-    });
-
-    program.declarations.push(Declaration::Callable(func_id));
-}
-
-// Helper function to create List<T> type
-fn create_list_type(program: &mut Program, element_type_name: &str) -> TypeId {
-    let element_type_id = program.types.alloc(Type::Named(Identifier {
-        name: element_type_name.to_string(),
-        span: None,
-        resolved: None,
-        resolved_type: None,
-    }));
-
-    program.types.alloc(Type::Generic {
-        base: Identifier {
-            name: "List".to_string(),
-            span: None,
-            resolved: None,
-            resolved_type: None,
-        },
-        args: vec![element_type_id],
-        span: None,
-    })
-}
-
-// Helper function to create function type (T) -> U
-fn create_function_type(
-    program: &mut Program,
-    param_types: Vec<&str>,
-    return_type: &str,
-) -> TypeId {
-    let mut param_type_ids = Vec::new();
-    for param_type in param_types {
-        let param_type_id = program.types.alloc(Type::Named(Identifier {
-            name: param_type.to_string(),
-            span: None,
-            resolved: None,
-            resolved_type: None,
-        }));
-        param_type_ids.push(param_type_id);
+fn clear_all_spans(program: &mut Program) {
+    // Clear spans from all declarations
+    for declaration in &program.declarations {
+        match declaration {
+            Declaration::Callable(func_id) => {
+                if let Some(func) = program.functions.get_mut(*func_id) {
+                    clear_callable_spans(func);
+                }
+            }
+            Declaration::Type(type_id) => {
+                if let Some(type_decl) = program.type_decls.get_mut(*type_id) {
+                    clear_type_decl_spans(type_decl);
+                }
+            }
+            Declaration::Const(const_id) => {
+                if let Some(const_decl) = program.const_decls.get_mut(*const_id) {
+                    clear_const_decl_spans(const_decl);
+                }
+            }
+            Declaration::Table(table_id) => {
+                if let Some(table_decl) = program.table_decls.get_mut(*table_id) {
+                    clear_table_decl_spans(table_decl);
+                }
+            }
+        }
     }
-
-    let return_type_id = program.types.alloc(Type::Named(Identifier {
-        name: return_type.to_string(),
-        span: None,
-        resolved: None,
-        resolved_type: None,
-    }));
-
-    program.types.alloc(Type::Function {
-        params: param_type_ids,
-        return_type: return_type_id,
-        span: None,
-    })
+    
+    // Clear spans from all other items in arenas
+    for (_, var_decl) in program.var_decls.iter_mut() {
+        clear_var_decl_spans(var_decl);
+    }
+    
+    for (_, param) in program.params.iter_mut() {
+        clear_param_spans(param);
+    }
+    
+    for (_, generic_param) in program.generic_params.iter_mut() {
+        clear_generic_param_spans(generic_param);
+    }
+    
+    for (_, type_) in program.types.iter_mut() {
+        clear_type_spans(type_);
+    }
+    
+    for (_, statement) in program.statements.iter_mut() {
+        clear_statement_spans(statement);
+    }
+    
+    for (_, expression) in program.expressions.iter_mut() {
+        clear_expression_spans(expression);
+    }
+    
+    for (_, block) in program.blocks.iter_mut() {
+        clear_block_spans(block);
+    }
 }
 
-// Add map<T, U>(list: List<T>, func: (T) -> U) -> List<U>
-fn add_map_function(program: &mut Program) {
-    // Create generic parameters T and U
-    let t_param = program.generic_params.alloc(GenericParam {
-        name: Identifier {
-            name: "T".to_string(),
-            span: None,
-            resolved: None,
-            resolved_type: None,
-        },
-        span: None,
-    });
-
-    let u_param = program.generic_params.alloc(GenericParam {
-        name: Identifier {
-            name: "U".to_string(),
-            span: None,
-            resolved: None,
-            resolved_type: None,
-        },
-        span: None,
-    });
-
-    // Create List<T> type
-    let list_t_type = create_list_type(program, "T");
-
-    // Create function type (T) -> U
-    let func_type = create_function_type(program, vec!["T"], "U");
-
-    // Create List<U> return type
-    let list_u_type = create_list_type(program, "U");
-
-    // Create parameters
-    let list_param = program.params.alloc(Parameter {
-        name: Identifier {
-            name: "list".to_string(),
-            span: None,
-            resolved: None,
-            resolved_type: None,
-        },
-        ty: list_t_type,
-        span: None,
-    });
-
-    let func_param = program.params.alloc(Parameter {
-        name: Identifier {
-            name: "func".to_string(),
-            span: None,
-            resolved: None,
-            resolved_type: None,
-        },
-        ty: func_type,
-        span: None,
-    });
-
-    // Create function declaration
-    let func_id = program.functions.alloc(CallableDecl {
-        decorators: vec![Decorator {
-            name: Identifier {
-                name: "intrinsic".to_string(),
-                span: None,
-                resolved: None,
-                resolved_type: None,
-            },
-            span: None,
-        }],
-        kind: CallableKind::Function,
-        name: CallableName::Identifier(Identifier {
-            name: "map".to_string(),
-            span: None,
-            resolved: None,
-            resolved_type: None,
-        }),
-        generic_params: vec![t_param, u_param],
-        params: vec![list_param, func_param],
-        return_type: Some(list_u_type),
-        assumptions: Vec::new(),
-        body: None,
-        span: None,
-    });
-
-    program.declarations.push(Declaration::Callable(func_id));
+fn clear_callable_spans(func: &mut CallableDecl) {
+    func.span = None;
+    for decorator in &mut func.decorators {
+        clear_decorator_spans(decorator);
+    }
+    clear_callable_name_spans(&mut func.name);
 }
 
-// Add filter<T>(list: List<T>, predicate: (T) -> bool) -> List<T>
-fn add_filter_function(program: &mut Program) {
-    // Create generic parameter T
-    let t_param = program.generic_params.alloc(GenericParam {
-        name: Identifier {
-            name: "T".to_string(),
-            span: None,
-            resolved: None,
-            resolved_type: None,
-        },
-        span: None,
-    });
-
-    // Create List<T> type
-    let list_t_type = create_list_type(program, "T");
-
-    // Create function type (T) -> bool
-    let predicate_type = create_function_type(program, vec!["T"], "bool");
-
-    // Create parameters
-    let list_param = program.params.alloc(Parameter {
-        name: Identifier {
-            name: "list".to_string(),
-            span: None,
-            resolved: None,
-            resolved_type: None,
-        },
-        ty: list_t_type,
-        span: None,
-    });
-
-    let predicate_param = program.params.alloc(Parameter {
-        name: Identifier {
-            name: "predicate".to_string(),
-            span: None,
-            resolved: None,
-            resolved_type: None,
-        },
-        ty: predicate_type,
-        span: None,
-    });
-
-    // Create return type List<T>
-    let return_type = create_list_type(program, "T");
-
-    // Create function declaration
-    let func_id = program.functions.alloc(CallableDecl {
-        decorators: vec![Decorator {
-            name: Identifier {
-                name: "intrinsic".to_string(),
-                span: None,
-                resolved: None,
-                resolved_type: None,
-            },
-            span: None,
-        }],
-        kind: CallableKind::Function,
-        name: CallableName::Identifier(Identifier {
-            name: "filter".to_string(),
-            span: None,
-            resolved: None,
-            resolved_type: None,
-        }),
-        generic_params: vec![t_param],
-        params: vec![list_param, predicate_param],
-        return_type: Some(return_type),
-        assumptions: Vec::new(),
-        body: None,
-        span: None,
-    });
-
-    program.declarations.push(Declaration::Callable(func_id));
+fn clear_type_decl_spans(type_decl: &mut TypeDecl) {
+    type_decl.span = None;
+    for decorator in &mut type_decl.decorators {
+        clear_decorator_spans(decorator);
+    }
+    clear_identifier_spans(&mut type_decl.name);
 }
 
-// Add reduce<T, U>(list: List<T>, func: (U, T) -> U, initial: U) -> U
-fn add_reduce_function(program: &mut Program) {
-    // Create generic parameters T and U
-    let t_param = program.generic_params.alloc(GenericParam {
-        name: Identifier {
-            name: "T".to_string(),
-            span: None,
-            resolved: None,
-            resolved_type: None,
-        },
-        span: None,
-    });
-
-    let u_param = program.generic_params.alloc(GenericParam {
-        name: Identifier {
-            name: "U".to_string(),
-            span: None,
-            resolved: None,
-            resolved_type: None,
-        },
-        span: None,
-    });
-
-    // Create List<T> type
-    let list_t_type = create_list_type(program, "T");
-
-    // Create function type (U, T) -> U
-    let func_type = create_function_type(program, vec!["U", "T"], "U");
-
-    // Create U type
-    let u_type = program.types.alloc(Type::Named(Identifier {
-        name: "U".to_string(),
-        span: None,
-        resolved: None,
-        resolved_type: None,
-    }));
-
-    // Create parameters
-    let list_param = program.params.alloc(Parameter {
-        name: Identifier {
-            name: "list".to_string(),
-            span: None,
-            resolved: None,
-            resolved_type: None,
-        },
-        ty: list_t_type,
-        span: None,
-    });
-
-    let func_param = program.params.alloc(Parameter {
-        name: Identifier {
-            name: "func".to_string(),
-            span: None,
-            resolved: None,
-            resolved_type: None,
-        },
-        ty: func_type,
-        span: None,
-    });
-
-    let initial_param = program.params.alloc(Parameter {
-        name: Identifier {
-            name: "initial".to_string(),
-            span: None,
-            resolved: None,
-            resolved_type: None,
-        },
-        ty: u_type,
-        span: None,
-    });
-
-    // Create return type U
-    let return_type = program.types.alloc(Type::Named(Identifier {
-        name: "U".to_string(),
-        span: None,
-        resolved: None,
-        resolved_type: None,
-    }));
-
-    // Create function declaration
-    let func_id = program.functions.alloc(CallableDecl {
-        decorators: vec![Decorator {
-            name: Identifier {
-                name: "intrinsic".to_string(),
-                span: None,
-                resolved: None,
-                resolved_type: None,
-            },
-            span: None,
-        }],
-        kind: CallableKind::Function,
-        name: CallableName::Identifier(Identifier {
-            name: "reduce".to_string(),
-            span: None,
-            resolved: None,
-            resolved_type: None,
-        }),
-        generic_params: vec![t_param, u_param],
-        params: vec![list_param, func_param, initial_param],
-        return_type: Some(return_type),
-        assumptions: Vec::new(),
-        body: None,
-        span: None,
-    });
-
-    program.declarations.push(Declaration::Callable(func_id));
+fn clear_const_decl_spans(const_decl: &mut ConstDecl) {
+    const_decl.span = None;
+    clear_identifier_spans(&mut const_decl.name);
 }
 
-// Add length<T>(list: List<T>) -> int
-fn add_length_function(program: &mut Program) {
-    // Create generic parameter T
-    let t_param = program.generic_params.alloc(GenericParam {
-        name: Identifier {
-            name: "T".to_string(),
-            span: None,
-            resolved: None,
-            resolved_type: None,
-        },
-        span: None,
-    });
+fn clear_table_decl_spans(table_decl: &mut TableDecl) {
+    table_decl.span = None;
+    clear_identifier_spans(&mut table_decl.name);
+}
 
-    // Create List<T> type
-    let list_t_type = create_list_type(program, "T");
+fn clear_var_decl_spans(var_decl: &mut VarDecl) {
+    var_decl.span = None;
+    clear_identifier_spans(&mut var_decl.name);
+}
 
-    // Create parameter
-    let list_param = program.params.alloc(Parameter {
-        name: Identifier {
-            name: "list".to_string(),
-            span: None,
-            resolved: None,
-            resolved_type: None,
-        },
-        ty: list_t_type,
-        span: None,
-    });
+fn clear_param_spans(param: &mut Parameter) {
+    param.span = None;
+    clear_identifier_spans(&mut param.name);
+}
 
-    // Create return type int
-    let return_type = program.types.alloc(Type::Named(Identifier {
-        name: "int".to_string(),
-        span: None,
-        resolved: None,
-        resolved_type: None,
-    }));
+fn clear_generic_param_spans(generic_param: &mut GenericParam) {
+    generic_param.span = None;
+    clear_identifier_spans(&mut generic_param.name);
+}
 
-    // Create function declaration
-    let func_id = program.functions.alloc(CallableDecl {
-        decorators: vec![Decorator {
-            name: Identifier {
-                name: "intrinsic".to_string(),
-                span: None,
-                resolved: None,
-                resolved_type: None,
-            },
-            span: None,
-        }],
-        kind: CallableKind::Function,
-        name: CallableName::Identifier(Identifier {
-            name: "length".to_string(),
-            span: None,
-            resolved: None,
-            resolved_type: None,
-        }),
-        generic_params: vec![t_param],
-        params: vec![list_param],
-        return_type: Some(return_type),
-        assumptions: Vec::new(),
-        body: None,
-        span: None,
-    });
+fn clear_type_spans(type_: &mut Type) {
+    match type_ {
+        Type::Named(id) => {
+            clear_identifier_spans(id);
+        }
+        Type::Generic { base, args: _, span } => {
+            *span = None;
+            clear_identifier_spans(base);
+            // Args will be handled recursively
+        }
+        Type::Function { params: _, return_type: _, span } => {
+            *span = None;
+            // Params and return type will be handled recursively
+        }
+    }
+}
 
-    program.declarations.push(Declaration::Callable(func_id));
+fn clear_statement_spans(statement: &mut Statement) {
+    match statement {
+        Statement::VarDecl(_) => {
+            // VarDecl spans handled separately
+        }
+        Statement::If { span, .. } => {
+            *span = None;
+        }
+        Statement::For { span, .. } => {
+            *span = None;
+        }
+        Statement::Return { span, .. } => {
+            *span = None;
+        }
+        Statement::Assert { span, .. } => {
+            *span = None;
+        }
+        Statement::Hop { decorators, span, .. } => {
+            *span = None;
+            for decorator in decorators {
+                clear_decorator_spans(decorator);
+            }
+        }
+        Statement::HopsFor { decorators, span, .. } => {
+            *span = None;
+            for decorator in decorators {
+                clear_decorator_spans(decorator);
+            }
+        }
+        Statement::Expression { span, .. } => {
+            *span = None;
+        }
+        Statement::Block(_) => {
+            // Block spans handled separately
+        }
+    }
+}
+
+fn clear_expression_spans(expression: &mut Expression) {
+    match expression {
+        Expression::Literal { span, .. } => {
+            *span = None;
+        }
+        Expression::Identifier(_) => {
+            // Identifier spans handled separately
+        }
+        Expression::Binary { span, .. } => {
+            *span = None;
+        }
+        Expression::Unary { span, .. } => {
+            *span = None;
+        }
+        Expression::Assignment { span, .. } => {
+            *span = None;
+        }
+        Expression::Call { span, .. } => {
+            *span = None;
+        }
+        Expression::MemberAccess { span, .. } => {
+            *span = None;
+        }
+        Expression::TableRowAccess { span, .. } => {
+            *span = None;
+        }
+        Expression::Lambda { span, .. } => {
+            *span = None;
+        }
+        Expression::Grouped { span, .. } => {
+            *span = None;
+        }
+    }
+}
+
+fn clear_block_spans(block: &mut Block) {
+    block.span = None;
+}
+
+fn clear_decorator_spans(decorator: &mut Decorator) {
+    decorator.span = None;
+    clear_identifier_spans(&mut decorator.name);
+}
+
+fn clear_identifier_spans(identifier: &mut Identifier) {
+    identifier.span = None;
+}
+
+fn clear_callable_name_spans(name: &mut CallableName) {
+    match name {
+        CallableName::Identifier(id) => {
+            clear_identifier_spans(id);
+        }
+        CallableName::Operator(op) => {
+            op.span = None;
+        }
+    }
 }

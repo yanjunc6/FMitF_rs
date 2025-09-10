@@ -1,0 +1,211 @@
+// Comprehensive AST Parser Test File
+// Testing operator precedence, associativity, and complex expressions
+
+// Basic arithmetic operators - precedence and associativity
+function test_arithmetic_precedence() {
+    // Test multiplication/division precedence over addition/subtraction
+    var result1: int = 2 + 3 * 4;        // Should be 2 + (3 * 4) = 14
+    var result2: int = 10 - 8 / 2;       // Should be 10 - (8 / 2) = 6
+    var result3: int = 3 * 4 + 5 * 6;    // Should be (3 * 4) + (5 * 6) = 42
+    
+    // Test left associativity of same precedence operators
+    var result4: int = 20 - 5 - 3;       // Should be (20 - 5) - 3 = 12
+    var result5: int = 24 / 4 / 2;       // Should be (24 / 4) / 2 = 3
+    var result6: int = 2 * 3 * 4;        // Should be (2 * 3) * 4 = 24
+    
+    // Complex mixed expressions
+    var result7: int = 1 + 2 * 3 - 4 / 2;     // Should be 1 + (2 * 3) - (4 / 2) = 5
+    var result8: int = 10 / 2 + 3 * 4 - 1;    // Should be (10 / 2) + (3 * 4) - 1 = 16
+}
+
+// Comparison operators - precedence and chaining
+function test_comparison_precedence() {
+    // Comparison operators should have lower precedence than arithmetic
+    var comp1: bool = 2 + 3 > 4;         // Should be (2 + 3) > 4 = true
+    var comp2: bool = 10 - 5 == 5;       // Should be (10 - 5) == 5 = true
+    var comp3: bool = 3 * 4 != 10;       // Should be (3 * 4) != 10 = true
+    var comp4: bool = 15 / 3 <= 5;       // Should be (15 / 3) <= 5 = true
+    var comp5: bool = 7 % 3 >= 1;        // Should be (7 % 3) >= 1 = true
+    
+    // Complex comparison chains
+    var comp6: bool = 1 + 2 < 3 * 2;     // Should be (1 + 2) < (3 * 2) = true
+    var comp7: bool = 10 / 2 == 15 / 3;  // Should be (10 / 2) == (15 / 3) = true
+}
+
+// Logical operators - precedence and short-circuiting
+function test_logical_precedence() {
+    // AND should have higher precedence than OR
+    var logic1: bool = true || false && false;   // Should be true || (false && false) = true
+    var logic2: bool = false && true || true;    // Should be (false && true) || true = true
+    
+    // NOT should have highest precedence
+    var logic3: bool = !false && true;           // Should be (!false) && true = true
+    var logic4: bool = !true || false;           // Should be (!true) || false = false
+    
+    // Complex logical expressions with comparisons
+    var logic5: bool = 5 > 3 && 2 < 4;          // Should be (5 > 3) && (2 < 4) = true
+    var logic6: bool = 1 == 1 || 2 != 2;        // Should be (1 == 1) || (2 != 2) = true
+    var logic7: bool = !false && 3 + 2 == 5;    // Should be (!false) && ((3 + 2) == 5) = true
+}
+
+// Unary operators and their precedence
+function test_unary_operators() {
+    // Unary minus
+    var unary1: int = -5 + 3;           // Should be (-5) + 3 = -2
+    var unary2: int = 10 - 7;           // Should be 10 - 7 = 3
+    var unary3: int = -2 * 3;           // Should be (-2) * 3 = -6
+    var unary4: int = 4 + -3;           // Should be 4 + (-3) = 1
+    
+    // Nested unary operators
+    var unary5: int = --5;              // Should be -(-5) = 5
+    var unary6: bool = !!true;          // Should be !(!true) = true
+    var unary7: bool = !false;          // Should be !false = true
+}
+
+// Parentheses override precedence
+function test_parentheses_precedence() {
+    // Parentheses should override natural precedence
+    var paren1: int = (2 + 3) * 4;      // Should be 5 * 4 = 20
+    var paren2: int = 2 * (3 + 4);      // Should be 2 * 7 = 14
+    var paren3: int = (10 - 2) / (3 + 1); // Should be 8 / 4 = 2
+    
+    // Nested parentheses
+    var paren4: int = ((2 + 3) * 4) - 1;     // Should be (5 * 4) - 1 = 19
+    var paren5: int = 2 * (3 + (4 * 5));     // Should be 2 * (3 + 20) = 46
+    var paren6: bool = (true || false) && (false || true); // Should be true && true = true
+}
+
+// Assignment operators and precedence
+function test_assignment_precedence() {
+    var x: int = 10;
+    var y: int = 5;
+    
+    // Assignment should have lowest precedence
+    x = y + 3;                   // Should assign (y + 3) to x
+    y = x * 2 - 1;              // Should assign (x * 2) - 1 to y
+}
+
+// Member access and table indexing precedence
+function test_access_precedence() {
+    // These would need table definitions, but testing parsing structure
+    var member1: int = obj.field + 5;           // Should be (obj.field) + 5
+    var member2: int = TestTable[id: 1].value * 3;  // Should be (TestTable[id: 1].value) * 3
+    var member3: int = obj.method() + 10;       // Should be (obj.method()) + 10
+    
+    // Chained access
+    var chain1: int = obj.field.subfield;       // Left-to-right: (obj.field).subfield
+    var chain2: int = obj.method().field;       // Left-to-right: (obj.method()).field
+}
+
+// Function calls and precedence
+function test_function_call_precedence() {
+    // Function calls should have high precedence
+    var call1: int = func() + 5;               // Should be (func()) + 5
+    var call2: int = 3 * func(2, 3);          // Should be 3 * (func(2, 3))
+    var call3: bool = !func_bool();           // Should be !(func_bool())
+    
+    // Function calls with complex arguments
+    var call4: int = func(2 + 3, 4 * 5);     // Arguments: (2 + 3), (4 * 5)
+    var call5: int = func(a > b, x && y);    // Arguments: (a > b), (x && y)
+}
+
+// Ternary operator precedence and associativity (NOT SUPPORTED - REMOVED)
+
+// Complex mixed expression testing
+function test_complex_expressions() {
+    // Very complex expression with multiple operator types  
+    var complex1: int = 2 + 3 * 4 > 10;
+    // Should parse as: (2 + (3 * 4)) > 10
+    
+    var complex2: bool = !false && 3 + 2 == 5 || 10 / 2 != 4;
+    // Should parse as: ((!false) && ((3 + 2) == 5)) || ((10 / 2) != 4)
+    
+    var complex3: int = 2 * 3 - 10;
+    // Should parse as: (2 * 3) - 10
+}
+
+// Edge cases and special constructs
+function test_edge_cases() {
+    // Empty expressions and defaults
+    var empty1: int;                    // No initializer
+    var empty2: int = func();          // Empty function call
+    
+    // Very long expressions to test parser limits
+    var long1: int = 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10 + 11 + 12 + 13 + 14 + 15;
+    var long2: bool = true && true && true && true && true && true && true && true;
+    
+    // Deeply nested parentheses
+    var nested: int = ((((((1 + 2) * 3) - 4) / 2) + 1) * 2);
+}
+
+// Testing with different literal types
+function test_literal_types() {
+    // Integer literals
+    var int_dec: int = 123;
+    
+    // Float literals
+    var float1: float = 3.14;
+    var float2: float = 0.5;             // Leading zero
+    var float3: float = 5.0;             // Trailing zero
+    
+    // String literals
+    var str1: string = "hello";
+    var str2: string = "hello world";
+    var str3: string = "";              // Empty string
+    
+    // Boolean literals
+    var bool1: bool = true;
+    var bool2: bool = false;
+}
+
+// Testing operator combinations that might cause ambiguity
+function test_operator_ambiguity() {
+    // Basic operators without increment/decrement
+    var amb1: int = a + b;
+    var amb2: int = a - b;
+    
+    // Comparison operator sequences
+    var amb5: bool = a <= b;              // Less than or equal
+    var amb6: bool = a >= b;              // Greater than or equal
+    var amb7: bool = a == b;              // Equality
+    var amb8: bool = a != b;              // Inequality
+    
+    // Logical operator sequences
+    var amb9: bool = a && b;              // Logical AND
+    var amb10: bool = a || b;             // Logical OR
+}
+
+// Test with tables and complex data structures
+table TestTable {
+    id: int;
+    node simple_partition(id);
+    value: int;
+    name: string;
+}
+
+partition simple_partition(x: int) -> int {
+    return x % 10;
+}
+
+function test_table_operations() {
+    // Table access with complex expressions
+    var val1: int = TestTable[id: 1 + 2].value;
+    var val2: int = TestTable[id: func(3 * 4)].value + 10;
+    
+    // Complex table assignments
+    TestTable[id: 5].value = 2 * 3 + 4;
+    TestTable[id: i].name = "test";
+}
+
+// Test lambda expressions (simplified)
+function test_lambda_expressions() {
+    // Simple lambda
+    var simple_lambda = (x: int) -> int {
+        return x * 2;
+    };
+    
+    // Lambda with complex body  
+    var complex_lambda = (a: int, b: int) -> int {
+        return a + b;
+    };
+}

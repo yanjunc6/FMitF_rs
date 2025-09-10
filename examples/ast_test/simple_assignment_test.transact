@@ -1,7 +1,0 @@
-// Simple assignment test
-function test() {
-    hop {
-        var x: int = 5;
-        x = 10;
-    }
-}

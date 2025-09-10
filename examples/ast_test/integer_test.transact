@@ -1,3 +1,0 @@
-// Test with Integer type
-function test(x: Integer) {
-}
