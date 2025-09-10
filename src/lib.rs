@@ -6,6 +6,6 @@ pub mod pretty;
 pub mod util;
 
 // Re-export main functionality
-pub use ast::{Program, parse_program};
+pub use ast::{parse_program, Program};
 pub use ast::{AstError, AstErrorKind};
-pub use util::{Span, CompilerError, DiagnosticReporter};
+pub use util::{CompilerError, DiagnosticReporter, Span};

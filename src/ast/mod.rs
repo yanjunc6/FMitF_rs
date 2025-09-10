@@ -8,8 +8,8 @@
 //! - Name resolution: fills in `resolved` fields to link uses to declarations
 //! - Type resolution: fills in `resolved_type` fields with concrete types
 
+use crate::util::Span;
 use id_arena::{Arena, Id};
-use crate::util::{Span};
 
 // ============================================================================
 // --- Arena-based Node IDs
@@ -63,6 +63,7 @@ pub enum ResolvedType {
     /// A resolved type, like `int`, `string`, or a user-defined struct.
     Type(TypeDeclId),
     Table(TableId),
+    TypeVar(GenericParamId),
     Generic {
         base: TypeDeclId,
         args: Vec<ResolvedType>,
@@ -397,7 +398,6 @@ pub struct KeyValue {
     pub span: Option<Span>,
 }
 
-
 // ============================================================================
 // --- Main Parse Function
 // ============================================================================
@@ -406,7 +406,7 @@ pub struct KeyValue {
 /// type checking, and semantic analysis
 pub fn parse_program(source: &str) -> Result<Program, Vec<errors::AstError>> {
     // Stage 1: Basic AST parsing with prelude
-    let mut program = match ast_builder::parse_program(source) {
+    let program = match ast_builder::parse_program(source) {
         Ok(program) => program,
         Err(error) => return Err(error),
     };
@@ -435,6 +435,7 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<errors::AstError>> {
 
 pub mod ast_builder;
 pub mod errors;
+pub mod prelude;
 // pub mod type_checker;
 // pub mod semantic_analyzer;
 // Complex modules with legacy issues:

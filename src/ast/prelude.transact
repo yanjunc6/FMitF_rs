@@ -80,4 +80,8 @@
 @intrinsic function map<T, U>(list: List<T>, func: (T) -> U) -> List<U>;
 @intrinsic function filter<T>(list: List<T>, predicate: (T) -> bool) -> List<T>;
 @intrinsic function reduce<T, U>(list: List<T>, func: (U, T) -> U, initial: U) -> U;
+
 @intrinsic function length<T>(list: List<T>) -> int;
+@intrinsic function get<T>(list: List<T>, idx: int) -> T;
+
+@intrinsic function str<T>(x: T) -> string;

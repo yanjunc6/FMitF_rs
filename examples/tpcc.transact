@@ -1,0 +1,295 @@
+// ============================================================================
+// Partitions
+// ============================================================================
+
+partition f(x: int) -> int {
+    return 10 * x;
+}
+
+partition g(x: int, y: int) -> int {
+    return 10 * x + y;
+}
+
+// Implementation of partition is optional. It is 10 * x + (y % 10).
+partition h(x: int, y: int) -> int;
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+table Warehouse {
+    primary W_ID: int;
+    node f(W_ID);
+
+    W_NAME: string;
+    W_STREET_1: string;
+    W_STREET_2: string;
+    W_CITY: string;
+    W_STATE: string;
+    W_ZIP: string;
+    W_TAX: float;
+    W_YTD: float;
+}
+
+table District {
+    primary D_W_ID: int;
+    primary D_ID: int;
+    node g(D_W_ID, D_ID);
+
+    D_NAME: string;
+    D_STREET_1: string;
+    D_STREET_2: string;
+    D_CITY: string;
+    D_STATE: string;
+    D_ZIP: string;
+    D_TAX: float;
+    D_YTD: float;
+    D_NEXT_O_ID: int;
+    D_NEXT_NO_ID: int;
+}
+
+table Customer {
+    primary C_W_ID: int;
+    primary C_D_ID: int;
+    primary C_ID: int;
+    node g(C_W_ID, C_D_ID);
+
+    C_FIRST: string;
+    C_MIDDLE: string;
+    C_LAST: string;
+    C_STREET_1: string;
+    C_STREET_2: string;
+    C_CITY: string;
+    C_STATE: string;
+    C_ZIP: string;
+    C_PHONE: string;
+    C_SINCE: int;
+    C_CREDIT: string;
+    C_CREDIT_LIMIT: float;
+    C_DISCOUNT: float;
+    C_BALANCE: float;
+    C_YTD_PAYMENT: float;
+    C_PAYMENT_CNT: float;
+    C_DELIVERY_CNT: float;
+    C_DATA: string;
+}
+
+// Never used in here, but included for completeness
+// table History {
+//     H_C_W_ID: int;
+//     H_C_D_ID: int;
+//     H_C_ID: int;
+//     H_D_ID: int;
+//     H_W_ID: int;
+//     H_DATE: int;
+//     H_AMOUNT: int;
+//     H_DATA: int;
+// }
+
+table New_Order {
+    primary NO_W_ID: int;
+    primary NO_D_ID: int;
+    primary NO_O_ID: int;
+    node g(NO_W_ID, NO_D_ID);
+}
+
+table Order {
+    primary O_W_ID: int;
+    primary O_D_ID: int;
+    primary O_ID: int;
+    node g(O_W_ID, O_D_ID);
+
+    O_C_ID: int;
+    O_ENTRY_DATE: int;
+    O_CARRIER_ID: int;
+    O_OL_CNT: int;
+    O_ALL_LOCAL: int;
+}
+
+table Order_Line {
+    primary OL_W_ID: int;
+    primary OL_D_ID: int;
+    primary OL_O_ID: int;
+    primary OL_NUMBER: int;
+    node g(OL_W_ID, OL_D_ID);
+
+    OL_I_ID: int;
+    OL_SUPPLY_W_ID: int;
+    OL_DELIVERY_DATE: int;
+    OL_QUANTITY: int;
+    OL_AMOUNT: int;
+    OL_DIST_INTO: string;
+}
+
+table Item {
+    primary I_ID: int;
+    primary W_ID: int;
+    node h(W_ID, I_ID);
+
+    I_IM_ID: int;
+    I_NAME: string;
+    I_PRICE: float;
+    I_DATA: string;
+}
+
+table Stock {
+    primary S_W_ID: int;
+    primary S_I_ID: int;
+    node h(S_W_ID, S_I_ID);
+
+    S_QUANTITY: int;
+    S_YTD: float;
+    S_ORDER_CNT: int;
+    S_REMOTE_CNT: int;
+    S_DATA: string;
+}
+
+// ============================================================================
+// Constants and Helper Declarations
+// ============================================================================
+
+const O_OL_CNT: int = 10;
+
+// ============================================================================
+// Transactions
+// ============================================================================
+
+// New-Order
+transaction newOrder(
+    w_id: int,
+    d_id: int,
+    c_id: int,
+    o_all_local: int,
+    date: int,
+    itemIDs: List<int>,
+    supplierWarehouseIDs: List<int>,
+    orderQuantities: List<int>
+) 
+    assume length(itemIDs) == O_OL_CNT;
+    assume length(supplierWarehouseIDs) == O_OL_CNT;
+    assume length(orderQuantities) == O_OL_CNT;
+{
+    // Get warehouse tax (and any other per-warehouse data)
+    hop {
+        var w_tax: float = Warehouse[W_ID: w_id].W_TAX;
+        // Note: retained for parity with original; not used later in this snippet.
+    }
+
+    // Read item and update stock across partitions
+    hops for ol_number: int = 0 to O_OL_CNT {
+        var i_id: int = itemIDs.get(ol_number);
+        var sup_w_id: int = supplierWarehouseIDs.get(ol_number);
+        var qty: int = orderQuantities.get(ol_number);
+
+        // Read and update stock
+        var s: Stock = Stock[S_W_ID: sup_w_id, S_I_ID: i_id];
+
+        if s.S_QUANTITY - qty >= 10 {
+            s.S_QUANTITY = s.S_QUANTITY - qty;
+        } else {
+            s.S_QUANTITY = s.S_QUANTITY + 91 - qty;
+        }
+
+        if sup_w_id != w_id {
+            s.S_REMOTE_CNT = s.S_REMOTE_CNT + 1;
+        }
+
+        s.S_ORDER_CNT = s.S_ORDER_CNT + 1;
+        s.S_YTD = s.S_YTD + qty;
+
+        Stock[S_W_ID: sup_w_id, S_I_ID: i_id] = s;
+    }
+
+    // Update district, create order and order lines
+    hop {
+        // Read district and increment next order id
+        var d_next_oid: int = District[D_W_ID: w_id, D_ID: d_id].D_NEXT_O_ID;
+        var d_tax: float = District[D_W_ID: w_id, D_ID: d_id].D_TAX;
+        District[D_W_ID: w_id, D_ID: d_id].D_NEXT_O_ID = d_next_oid + 1;
+
+        // Insert Order
+        Order[O_W_ID: w_id, O_D_ID: d_id, O_ID: d_next_oid] = {
+            O_C_ID: c_id,
+            O_ENTRY_DATE: date,
+            O_OL_CNT: O_OL_CNT,
+            O_ALL_LOCAL: o_all_local
+        };
+
+        // Insert NewOrder
+        New_Order[NO_W_ID: w_id, NO_D_ID: d_id, NO_O_ID: d_next_oid] = {};
+
+        // Insert order lines
+        for (var ol_number: int = 0; ol_number < O_OL_CNT; ol_number = ol_number + 1) {
+            var i_id: int = itemIDs.get(ol_number);
+            var sup_w_id: int = supplierWarehouseIDs.get(ol_number);
+            var qty: int = orderQuantities.get(ol_number);
+
+            // Re-read item price here (instead of storing itemPrices from prior hops)
+            var price: float = Item[I_ID: i_id, W_ID: sup_w_id].I_PRICE;
+
+            Order_Line[OL_W_ID: w_id, OL_D_ID: d_id, OL_O_ID: d_next_oid, OL_NUMBER: ol_number] = {
+                OL_I_ID: i_id,
+                OL_SUPPLY_W_ID: sup_w_id,
+                OL_QUANTITY: qty,
+                OL_AMOUNT: price * qty
+            };
+        }
+    }
+}
+
+// Delivery
+transaction Delivery(w_id: int, o_carrier_id: int, date: int) {
+    hops for d_id: int = 0 to 10 {
+        // Get new order id and increment by 1
+        var no_o_id: int = District[D_W_ID: w_id, D_ID: d_id].D_NEXT_NO_ID;
+        District[D_W_ID: w_id, D_ID: d_id].D_NEXT_NO_ID = no_o_id + 1;
+
+        // Read Order table, update carrier id
+        var c_id: int = Order[O_W_ID: w_id, O_D_ID: d_id, O_ID: no_o_id].O_C_ID;
+        var ol_cnt: int = Order[O_W_ID: w_id, O_D_ID: d_id, O_ID: no_o_id].O_OL_CNT;
+        Order[O_W_ID: w_id, O_D_ID: d_id, O_ID: no_o_id].O_CARRIER_ID = o_carrier_id;
+
+        // Read Order Lines to get total order price, and update delivery date
+        var ol_total: float = 0.0;
+        for (var ol_number: int = 0; ol_number < ol_cnt; ol_number = ol_number + 1) {
+            Order_Line[OL_W_ID: w_id, OL_D_ID: d_id, OL_O_ID: no_o_id, OL_NUMBER: ol_number].OL_DELIVERY_DATE = date;
+            ol_total = ol_total + Order_Line[OL_W_ID: w_id, OL_D_ID: d_id, OL_O_ID: no_o_id, OL_NUMBER: ol_number].OL_AMOUNT;
+        }
+
+        // Update Customer
+        Customer[C_W_ID: w_id, C_D_ID: d_id, C_ID: c_id].C_BALANCE =
+            Customer[C_W_ID: w_id, C_D_ID: d_id, C_ID: c_id].C_BALANCE + ol_total;
+
+        Customer[C_W_ID: w_id, C_D_ID: d_id, C_ID: c_id].C_DELIVERY_CNT =
+            Customer[C_W_ID: w_id, C_D_ID: d_id, C_ID: c_id].C_DELIVERY_CNT + 1.0;
+    }
+}
+
+// Payment
+transaction Payment(w_id: int, d_id: int, c_w_id: int, c_d_id: int, c_id: int, amount: float) {
+    // Add payment amount to supply warehouse
+    hop {
+        Warehouse[W_ID: w_id].W_YTD = Warehouse[W_ID: w_id].W_YTD + amount;
+    }
+
+    // Add payment amount to supply district
+    hop {
+        District[D_W_ID: w_id, D_ID: d_id].D_YTD = District[D_W_ID: w_id, D_ID: d_id].D_YTD + amount;
+    }
+
+    // Update customer
+    hop {
+        var c: Customer = Customer[C_W_ID: c_w_id, C_D_ID: c_d_id, C_ID: c_id];
+        c.C_BALANCE = c.C_BALANCE - amount;
+        c.C_YTD_PAYMENT = c.C_YTD_PAYMENT + amount;
+        c.C_PAYMENT_CNT = c.C_PAYMENT_CNT + 1.0;
+
+        if c.C_CREDIT == "BC" {
+            // Replace legacy "~" concatenation with string "+" and explicit str() conversion
+            c.C_DATA = str(c.C_ID) + " " + str(c.C_D_ID) + " " + str(c.C_W_ID) + " " + str(d_id) + " " + str(w_id)
+                + " " + str(amount) + " | " + c.C_DATA;
+        }
+
+        Customer[C_W_ID: c_w_id, C_D_ID: c_d_id, C_ID: c_id] = c;
+    }
+}

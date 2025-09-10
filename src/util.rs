@@ -1,5 +1,5 @@
 //! Core utilities for error reporting and diagnostics
-//! 
+//!
 //! This module provides a unified error system for consistent,
 //! beautiful error reporting across all compiler stages.
 
@@ -22,7 +22,12 @@ pub struct Span {
 
 impl Span {
     pub fn new(start: usize, end: usize, line: usize, column: usize) -> Self {
-        Self { start, end, line, column }
+        Self {
+            start,
+            end,
+            line,
+            column,
+        }
     }
 
     pub fn range(&self) -> std::ops::Range<usize> {
@@ -67,18 +72,26 @@ impl Severity {
 pub trait CompilerError: fmt::Display + fmt::Debug + Send + Sync {
     /// Error code for categorization
     fn code(&self) -> &'static str;
-    
+
     /// Severity level
-    fn severity(&self) -> Severity { Severity::Error }
-    
+    fn severity(&self) -> Severity {
+        Severity::Error
+    }
+
     /// Optional help message
-    fn help(&self) -> Option<&str> { None }
-    
+    fn help(&self) -> Option<&str> {
+        None
+    }
+
     /// Source location span
-    fn span(&self) -> Option<Span> { None }
-    
+    fn span(&self) -> Option<Span> {
+        None
+    }
+
     /// Set the span for this error
-    fn with_span(self, span: Span) -> Self where Self: Sized;
+    fn with_span(self, span: Span) -> Self
+    where
+        Self: Sized;
 }
 
 // ============================================================================
@@ -99,7 +112,8 @@ impl DiagnosticReporter {
 
     /// Add source file for error reporting
     pub fn add_source(&mut self, filename: &str, content: &str) {
-        self.sources.insert(filename.to_string(), content.to_string());
+        self.sources
+            .insert(filename.to_string(), content.to_string());
     }
 
     /// Report a single error
@@ -115,7 +129,7 @@ impl DiagnosticReporter {
             report = report.with_label(
                 Label::new((filename, span.range()))
                     .with_message(error.code())
-                    .with_color(severity.color())
+                    .with_color(severity.color()),
             );
         }
 

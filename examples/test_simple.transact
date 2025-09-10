@@ -1,9 +1,0 @@
-// Simple test file
-table SimpleTable {
-    primary int id;
-    int data;
-}
-
-function testFunc() {
-    return 42;
-}
