@@ -2,6 +2,7 @@
 
 pub mod ast;
 pub mod cli;
+// pub mod frontend;  // Disabled due to parsing dependencies
 pub mod pretty;
 pub mod util;
 
