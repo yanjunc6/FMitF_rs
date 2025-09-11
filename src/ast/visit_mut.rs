@@ -5,11 +5,6 @@
 
 use super::*;
 
-// Note: `prog` is not marked as mutable in the trait methods because `&Program`
-// can give mutable access to the arenas via interior mutability (`RefCell`).
-// If your arenas are not wrapped in `RefCell`, you would pass `&mut Program`.
-// For simplicity, we assume you can get mutable access from `&Program`.
-
 #[allow(unused_variables)]
 pub trait VisitorMut: Sized {
     fn visit_program(&mut self, prog: &mut Program) {

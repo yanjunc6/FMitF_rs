@@ -2,8 +2,8 @@
 //!
 //! This module contains the main compilation orchestration logic.
 
-use crate::ast::{self, Program};
-use crate::pretty::{AstPrinter, PrettyPrinter};
+use crate::ast::Program;
+use crate::pretty::{PrettyPrinter, AstPrinter};  // Use VisitorAstPrinter instead
 use crate::util::DiagnosticReporter;
 use std::fs;
 use std::path::PathBuf;
@@ -42,7 +42,7 @@ impl Compiler {
         self.add_source(&filename, &input_content);
 
         // Parse the program
-        match ast::parse_and_analyze_program(&input_content) {
+        match ast_old::parse_and_analyze_program(&input_content) {
             Ok(program) => {
                 println!("✅ Parse stage successful!");
                 println!("Program has {} functions", program.functions.len());
@@ -105,10 +105,10 @@ impl Compiler {
         // Create output directory if it doesn't exist
         fs::create_dir_all(output_dir)?;
 
-        // Write AST pretty print
+        // Write AST pretty print using visitor pattern
         let ast_file = output_dir.join("ast_pretty.txt");
-        let printer = AstPrinter::new();
-        let ast_content = printer.print_to_string(program)?;
+        use crate::pretty::print_program_visitor;
+        let ast_content = print_program_visitor(program);
         fs::write(&ast_file, ast_content)?;
 
         println!("📄 AST written to: {}", ast_file.display());

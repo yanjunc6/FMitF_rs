@@ -1,12 +1,14 @@
 use std::io::Write;
 
+// mod ast_printer;  // Temporarily disabled - needs update for new AST
 mod ast_printer;
 // mod cfg_printer;
 // mod combined_dot_printer;
 // mod dot_printer;
 // mod sc_graph_printer;
 
-pub use ast_printer::{print_program, AstPrinter};
+// pub use ast_printer::{print_program, AstPrinter};  // Temporarily disabled
+pub use ast_printer::{print_program_visitor, print_program_visitor_custom, AstPrinter};
 // pub use cfg_printer::CfgPrinter;
 // pub use combined_dot_printer::CombinedDotPrinter;
 // pub use dot_printer::DotPrinter;
