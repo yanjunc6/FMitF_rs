@@ -1,718 +1,561 @@
-//! AST Pretty Printer
+//! AST Pretty Printer using the Visitor pattern
+//!
+//! This module demonstrates how to use the visitor pattern to traverse and print the AST.
+//! It uses the new visitor traits from ast::visit to implement a clean, extensible printer.
 
-use super::PrettyPrinter;
+use crate::ast::visit::{Visitor, walk_program};
 use crate::ast::*;
-use std::cell::RefCell;
 use std::io::Write;
 
-// ============== ID DISPLAY CONTROL CONSTANTS ===================
-// Controls whether IDs are shown after names
-const SHOW_IDS: bool = true;
-// ===============================================================
-
-/// Pretty printer for AST structures using visitor pattern.
-/// Provides human-readable output of the abstract syntax tree.
-pub struct AstPrinter;
-
-impl AstPrinter {
-    /// Creates a new AST printer.
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-/// AST printer that uses the visitor pattern to traverse and print the AST
-pub struct AstPrintVisitor<'a> {
-    writer: &'a mut dyn std::io::Write,
-    program: &'a Program,
-    indent_level: RefCell<usize>,
+/// A pretty printer that uses the visitor pattern to traverse the AST
+pub struct AstPrinter<W: Write> {
+    writer: W,
+    indent_level: usize,
     indent_size: usize,
+    show_ids: bool,
 }
 
-impl<'a> AstPrintVisitor<'a> {
-    fn new(writer: &'a mut dyn Write, program: &'a Program) -> Self {
+impl<W: Write> AstPrinter<W> {
+    /// Creates a new visitor-based AST printer
+    pub fn new(writer: W) -> Self {
         Self {
             writer,
-            program,
-            indent_level: RefCell::new(0),
+            indent_level: 0,
             indent_size: 2,
+            show_ids: true,
         }
     }
 
+    /// Creates a new visitor-based AST printer with custom settings
+    pub fn with_settings(writer: W, indent_size: usize, show_ids: bool) -> Self {
+        Self {
+            writer,
+            indent_level: 0,
+            indent_size,
+            show_ids,
+        }
+    }
+
+    /// Print a program using the visitor pattern
+    pub fn print_program(mut self, program: &Program) -> Result<W, std::io::Error> {
+        self.visit_program(program);
+        Ok(self.writer)
+    }
+
     fn write_indent(&mut self) -> std::io::Result<()> {
-        let level = *self.indent_level.borrow();
-        for _ in 0..(level * self.indent_size) {
+        for _ in 0..(self.indent_level * self.indent_size) {
             write!(self.writer, " ")?;
         }
         Ok(())
     }
 
-    fn increase_indent(&self) {
-        *self.indent_level.borrow_mut() += 1;
+    fn increase_indent(&mut self) {
+        self.indent_level += 1;
     }
 
-    fn decrease_indent(&self) {
-        let mut level = self.indent_level.borrow_mut();
-        if *level > 0 {
-            *level -= 1;
+    fn decrease_indent(&mut self) {
+        if self.indent_level > 0 {
+            self.indent_level -= 1;
         }
     }
 
-    fn visit_program(&mut self) -> std::io::Result<()> {
-        writeln!(self.writer, "AST Program:")?;
-        writeln!(self.writer)?;
+    fn format_identifier(&self, identifier: &Identifier) -> String {
+        identifier.name.clone()
+    }
 
-        self.write_indent()?;
+    fn format_identifier_with_id<T>(&self, identifier: &Identifier, id: T) -> String 
+    where 
+        T: std::fmt::Display 
+    {
+        if self.show_ids {
+            format!("{} ({})", identifier.name, id)
+        } else {
+            identifier.name.clone()
+        }
+    }
+
+    fn write_decorators(&mut self, decorators: &[Decorator]) -> std::io::Result<()> {
+        for decorator in decorators {
+            write!(self.writer, "@{} ", self.format_identifier(&decorator.name))?;
+        }
+        Ok(())
+    }
+}
+
+impl<'ast, W: Write> Visitor<'ast> for AstPrinter<W> {
+    fn visit_program(&mut self, prog: &'ast Program) {
+        writeln!(self.writer, "AST Program (Visitor Pattern):").unwrap();
+        writeln!(self.writer).unwrap();
+        
+        self.write_indent().unwrap();
         writeln!(
             self.writer,
             "Declarations: {} total",
-            self.program.declarations.len()
-        )?;
-        writeln!(self.writer)?;
+            prog.declarations.len()
+        ).unwrap();
+        writeln!(self.writer).unwrap();
 
-        for (i, declaration) in self.program.declarations.iter().enumerate() {
-            self.write_indent()?;
-            writeln!(self.writer, "Declaration {}:", i + 1)?;
-            self.increase_indent();
-            self.visit_declaration(declaration)?;
-            self.decrease_indent();
-            writeln!(self.writer)?;
-        }
-
-        Ok(())
+        // Use the default walker to traverse items
+        walk_program(self, prog);
     }
 
-    fn visit_declaration(&mut self, declaration: &Declaration) -> std::io::Result<()> {
-        match declaration {
-            Declaration::Callable(function_id) => {
-                self.visit_callable_decl(*function_id)?;
+    fn visit_item(&mut self, prog: &'ast Program, item: &'ast Item) {
+        self.write_indent().unwrap();
+        match item {
+            Item::Callable(_id) => {
+                writeln!(self.writer, "Function Declaration:").unwrap();
             }
-            Declaration::Type(type_id) => {
-                self.visit_type_decl(*type_id)?;
+            Item::Type(_id) => {
+                writeln!(self.writer, "Type Declaration:").unwrap();
             }
-            Declaration::Const(const_id) => {
-                self.visit_const_decl(*const_id)?;
+            Item::Const(_id) => {
+                writeln!(self.writer, "Const Declaration:").unwrap();
             }
-            Declaration::Table(table_id) => {
-                self.visit_table_decl(*table_id)?;
+            Item::Table(_id) => {
+                writeln!(self.writer, "Table Declaration:").unwrap();
             }
         }
-        Ok(())
+        
+        self.increase_indent();
+        // Let the default walker handle the specific item type
+        crate::ast::visit::walk_item(self, prog, item);
+        self.decrease_indent();
+        writeln!(self.writer).unwrap();
     }
 
-    fn visit_callable_decl(&mut self, function_id: FunctionId) -> std::io::Result<()> {
-        if let Some(function) = self.program.functions.get(function_id) {
-            self.write_indent()?;
+    fn visit_callable_decl(&mut self, prog: &'ast Program, id: FunctionId, decl: &'ast CallableDecl) {
+        self.write_indent().unwrap();
 
-            // Print decorators
-            if !function.decorators.is_empty() {
-                for decorator in &function.decorators {
-                    write!(self.writer, "@{} ", self.format_identifier(&decorator.name))?;
-                }
-            }
+        // Print decorators
+        self.write_decorators(&decl.decorators).unwrap();
 
-            // Print callable kind and name
-            match function.kind {
-                CallableKind::Function => write!(self.writer, "function ")?,
-                CallableKind::Operator => write!(self.writer, "operator ")?,
-                CallableKind::Partition => write!(self.writer, "partition ")?,
-                CallableKind::Transaction => write!(self.writer, "transaction ")?,
-            }
+        // Print callable kind and name
+        match decl.kind {
+            CallableKind::Function => write!(self.writer, "function ").unwrap(),
+            CallableKind::Operator => write!(self.writer, "operator ").unwrap(),
+            CallableKind::Partition => write!(self.writer, "partition ").unwrap(),
+            CallableKind::Transaction => write!(self.writer, "transaction ").unwrap(),
+        }
 
-            match &function.name {
-                CallableName::Identifier(id) => {
-                    write!(
-                        self.writer,
-                        "{}",
-                        self.format_identifier_with_id(id, function_id)
-                    )?;
-                }
-                CallableName::Operator(op) => {
-                    write!(self.writer, "{}", op.value)?;
-                    if SHOW_IDS {
-                        write!(self.writer, " ({})", function_id.index())?;
-                    }
-                }
-            }
+        write!(
+            self.writer,
+            "{}",
+            self.format_identifier_with_id(&decl.name, id.index())
+        ).unwrap();
 
-            // Print generic parameters
-            if !function.generic_params.is_empty() {
-                write!(self.writer, "<")?;
-                for (i, &param_id) in function.generic_params.iter().enumerate() {
-                    if i > 0 {
-                        write!(self.writer, ", ")?;
-                    }
-                    if let Some(param) = self.program.generic_params.get(param_id) {
-                        write!(self.writer, "{}", self.format_identifier(&param.name))?;
-                    }
-                }
-                write!(self.writer, ">")?;
-            }
-
-            // Print parameters
-            write!(self.writer, "(")?;
-            for (i, &param_id) in function.params.iter().enumerate() {
+        // Print generic parameters
+        if !decl.generic_params.is_empty() {
+            write!(self.writer, "<").unwrap();
+            for (i, &param_id) in decl.generic_params.iter().enumerate() {
                 if i > 0 {
-                    write!(self.writer, ", ")?;
+                    write!(self.writer, ", ").unwrap();
                 }
-                if let Some(param) = self.program.params.get(param_id) {
-                    write!(
-                        self.writer,
-                        "{}: {}",
-                        self.format_identifier(&param.name),
-                        self.format_type_id(param.ty)
-                    )?;
-                }
+                let param = &prog.generic_params[param_id];
+                write!(self.writer, "{}", self.format_identifier(&param.name)).unwrap();
             }
-            write!(self.writer, ")")?;
-
-            // Print return type
-            if let Some(return_type) = function.return_type {
-                write!(self.writer, " -> {}", self.format_type_id(return_type))?;
-            }
-
-            writeln!(self.writer)?;
-
-            // Print assumptions
-            if !function.assumptions.is_empty() {
-                self.increase_indent();
-                for &assumption_id in &function.assumptions {
-                    self.write_indent()?;
-                    writeln!(
-                        self.writer,
-                        "assume {};",
-                        self.format_expression_id(assumption_id)
-                    )?;
-                }
-                self.decrease_indent();
-            }
-
-            // Print body
-            if let Some(body_id) = function.body {
-                self.increase_indent();
-                self.visit_block(body_id)?;
-                self.decrease_indent();
-            } else {
-                self.write_indent()?;
-                writeln!(self.writer, "// Forward declaration")?;
-            }
+            write!(self.writer, ">").unwrap();
         }
-        Ok(())
-    }
 
-    fn visit_type_decl(&mut self, type_id: TypeDeclId) -> std::io::Result<()> {
-        if let Some(type_decl) = self.program.type_decls.get(type_id) {
-            self.write_indent()?;
-
-            // Print decorators
-            for decorator in &type_decl.decorators {
-                write!(self.writer, "@{} ", self.format_identifier(&decorator.name))?;
+        // Print parameters
+        write!(self.writer, "(").unwrap();
+        for (i, &param_id) in decl.params.iter().enumerate() {
+            if i > 0 {
+                write!(self.writer, ", ").unwrap();
             }
-
+            let param = &prog.params[param_id];
             write!(
                 self.writer,
-                "type {}",
-                self.format_identifier(&type_decl.name)
-            )?;
-            if SHOW_IDS {
-                write!(self.writer, " ({})", type_id.index())?;
-            }
-
-            // Print generic parameters
-            if !type_decl.generic_params.is_empty() {
-                write!(self.writer, "<")?;
-                for (i, &param_id) in type_decl.generic_params.iter().enumerate() {
-                    if i > 0 {
-                        write!(self.writer, ", ")?;
-                    }
-                    if let Some(param) = self.program.generic_params.get(param_id) {
-                        write!(self.writer, "{}", self.format_identifier(&param.name))?;
-                    }
-                }
-                write!(self.writer, ">")?;
-            }
-
-            writeln!(self.writer, ";")?;
+                "{}: {}",
+                self.format_identifier(&param.name),
+                self.format_type_id(prog, param.ty)
+            ).unwrap();
         }
-        Ok(())
-    }
+        write!(self.writer, ")").unwrap();
 
-    fn visit_const_decl(&mut self, const_id: ConstId) -> std::io::Result<()> {
-        if let Some(const_decl) = self.program.const_decls.get(const_id) {
-            self.write_indent()?;
-            write!(
-                self.writer,
-                "const {}: {} = {};",
-                self.format_identifier(&const_decl.name),
-                self.format_type_id(const_decl.ty),
-                self.format_expression_id(const_decl.value)
-            )?;
-            if SHOW_IDS {
-                write!(self.writer, " // ({})", const_id.index())?;
-            }
-            writeln!(self.writer)?;
+        // Print return type
+        if let Some(return_type) = decl.return_type {
+            write!(self.writer, " -> {}", self.format_type_id(prog, return_type)).unwrap();
         }
-        Ok(())
-    }
 
-    fn visit_table_decl(&mut self, table_id: TableId) -> std::io::Result<()> {
-        if let Some(table) = self.program.table_decls.get(table_id) {
-            self.write_indent()?;
-            write!(self.writer, "table {}", self.format_identifier(&table.name))?;
-            if SHOW_IDS {
-                write!(self.writer, " ({})", table_id.index())?;
-            }
-            writeln!(self.writer, " {{")?;
+        writeln!(self.writer).unwrap();
 
+        // Print assumptions
+        if !decl.assumptions.is_empty() {
             self.increase_indent();
-            for element in &table.elements {
-                match element {
-                    TableElement::Field(field) => {
-                        self.write_indent()?;
-                        if field.is_primary {
-                            write!(self.writer, "primary ")?;
-                        }
-                        writeln!(
-                            self.writer,
-                            "{}: {};",
-                            self.format_identifier(&field.name),
-                            self.format_type_id(field.ty)
-                        )?;
-                    }
-                    TableElement::Node(node) => {
-                        self.write_indent()?;
-                        write!(self.writer, "node {}(", self.format_identifier(&node.name))?;
-                        for (i, &arg_id) in node.args.iter().enumerate() {
-                            if i > 0 {
-                                write!(self.writer, ", ")?;
-                            }
-                            write!(self.writer, "{}", self.format_expression_id(arg_id))?;
-                        }
-                        writeln!(self.writer, ");")?;
-                    }
-                    TableElement::Invariant(expr_id) => {
-                        self.write_indent()?;
-                        writeln!(
-                            self.writer,
-                            "invariant {};",
-                            self.format_expression_id(*expr_id)
-                        )?;
-                    }
-                }
+            for &assumption_id in &decl.assumptions {
+                self.write_indent().unwrap();
+                writeln!(
+                    self.writer,
+                    "assume {};",
+                    self.format_expression_id(prog, assumption_id)
+                ).unwrap();
             }
             self.decrease_indent();
-
-            self.write_indent()?;
-            writeln!(self.writer, "}}")?;
         }
-        Ok(())
+
+        // Let the default walker handle the body and other parts
+        crate::ast::visit::walk_callable_decl(self, prog, id, decl);
     }
 
-    fn visit_block(&mut self, block_id: BlockId) -> std::io::Result<()> {
-        if let Some(block) = self.program.blocks.get(block_id) {
-            for stmt_id in &block.statements {
-                self.visit_statement(*stmt_id)?;
-            }
-        }
-        Ok(())
-    }
+    fn visit_type_decl(&mut self, prog: &'ast Program, id: TypeDeclId, decl: &'ast TypeDecl) {
+        self.write_indent().unwrap();
 
-    fn visit_statement(&mut self, stmt_id: StmtId) -> std::io::Result<()> {
-        if let Some(statement) = self.program.statements.get(stmt_id) {
-            match statement {
-                Statement::VarDecl(var_id) => {
-                    if let Some(var) = self.program.var_decls.get(*var_id) {
-                        self.write_indent()?;
-                        write!(self.writer, "var {}", self.format_identifier(&var.name))?;
-                        if let Some(ty) = var.ty {
-                            write!(self.writer, ": {}", self.format_type_id(ty))?;
-                        }
-                        if let Some(init) = var.init {
-                            write!(self.writer, " = {}", self.format_expression_id(init))?;
-                        }
-                        writeln!(self.writer, ";")?;
-                    }
+        // Print decorators
+        self.write_decorators(&decl.decorators).unwrap();
+
+        write!(
+            self.writer,
+            "type {}",
+            self.format_identifier(&decl.name)
+        ).unwrap();
+        
+        if self.show_ids {
+            write!(self.writer, " ({})", id.index()).unwrap();
+        }
+
+        // Print generic parameters
+        if !decl.generic_params.is_empty() {
+            write!(self.writer, "<").unwrap();
+            for (i, &param_id) in decl.generic_params.iter().enumerate() {
+                if i > 0 {
+                    write!(self.writer, ", ").unwrap();
                 }
-                Statement::If {
-                    condition,
-                    then_block,
-                    else_block,
-                    ..
-                } => {
-                    self.write_indent()?;
+                let param = &prog.generic_params[param_id];
+                write!(self.writer, "{}", self.format_identifier(&param.name)).unwrap();
+            }
+            write!(self.writer, ">").unwrap();
+        }
+
+        writeln!(self.writer, ";").unwrap();
+    }
+
+    fn visit_const_decl(&mut self, prog: &'ast Program, id: ConstId, decl: &'ast ConstDecl) {
+        self.write_indent().unwrap();
+        write!(
+            self.writer,
+            "const {}: {} = {};",
+            self.format_identifier(&decl.name),
+            self.format_type_id(prog, decl.ty),
+            self.format_expression_id(prog, decl.value)
+        ).unwrap();
+        
+        if self.show_ids {
+            write!(self.writer, " // ({})", id.index()).unwrap();
+        }
+        writeln!(self.writer).unwrap();
+    }
+
+    fn visit_table_decl(&mut self, prog: &'ast Program, id: TableId, decl: &'ast TableDecl) {
+        self.write_indent().unwrap();
+        write!(self.writer, "table {}", self.format_identifier(&decl.name)).unwrap();
+        
+        if self.show_ids {
+            write!(self.writer, " ({})", id.index()).unwrap();
+        }
+        writeln!(self.writer, " {{").unwrap();
+
+        self.increase_indent();
+        for element in &decl.elements {
+            match element {
+                TableElement::Field(field) => {
+                    self.write_indent().unwrap();
+                    if field.is_primary {
+                        write!(self.writer, "primary ").unwrap();
+                    }
                     writeln!(
                         self.writer,
-                        "if ({}) {{",
-                        self.format_expression_id(*condition)
-                    )?;
-                    self.increase_indent();
-                    self.visit_block(*then_block)?;
-                    self.decrease_indent();
-                    if let Some(else_block_id) = else_block {
-                        self.write_indent()?;
-                        writeln!(self.writer, "}} else {{")?;
-                        self.increase_indent();
-                        self.visit_block(*else_block_id)?;
-                        self.decrease_indent();
-                    }
-                    self.write_indent()?;
-                    writeln!(self.writer, "}}")?;
+                        "{}: {};",
+                        self.format_identifier(&field.name),
+                        self.format_type_id(prog, field.ty)
+                    ).unwrap();
                 }
-                Statement::For {
-                    init,
-                    condition,
-                    update,
-                    body,
-                    ..
-                } => {
-                    self.write_indent()?;
-                    write!(self.writer, "for (")?;
-                    if let Some(init) = init {
-                        match init {
-                            ForInit::VarDecl(var_id) => {
-                                if let Some(var) = self.program.var_decls.get(*var_id) {
-                                    write!(
-                                        self.writer,
-                                        "var {}",
-                                        self.format_identifier(&var.name)
-                                    )?;
-                                    if let Some(ty) = var.ty {
-                                        write!(self.writer, ": {}", self.format_type_id(ty))?;
-                                    }
-                                    if let Some(init_expr) = var.init {
-                                        write!(
-                                            self.writer,
-                                            " = {}",
-                                            self.format_expression_id(init_expr)
-                                        )?;
-                                    }
-                                }
-                            }
-                            ForInit::Expression(expr_id) => {
-                                write!(self.writer, "{}", self.format_expression_id(*expr_id))?;
-                            }
+                TableElement::Node(node) => {
+                    self.write_indent().unwrap();
+                    write!(self.writer, "node {}(", self.format_identifier(&node.name)).unwrap();
+                    for (i, &arg_id) in node.args.iter().enumerate() {
+                        if i > 0 {
+                            write!(self.writer, ", ").unwrap();
                         }
+                        write!(self.writer, "{}", self.format_expression_id(prog, arg_id)).unwrap();
                     }
-                    write!(self.writer, "; ")?;
-                    if let Some(cond) = condition {
-                        write!(self.writer, "{}", self.format_expression_id(*cond))?;
-                    }
-                    write!(self.writer, "; ")?;
-                    if let Some(upd) = update {
-                        write!(self.writer, "{}", self.format_expression_id(*upd))?;
-                    }
-                    writeln!(self.writer, ") {{")?;
-                    self.increase_indent();
-                    self.visit_block(*body)?;
-                    self.decrease_indent();
-                    self.write_indent()?;
-                    writeln!(self.writer, "}}")?;
+                    writeln!(self.writer, ");").unwrap();
                 }
-                Statement::Return { value, .. } => {
-                    self.write_indent()?;
-                    if let Some(val) = value {
-                        writeln!(self.writer, "return {};", self.format_expression_id(*val))?;
-                    } else {
-                        writeln!(self.writer, "return;")?;
-                    }
-                }
-                Statement::Assert { expr, .. } => {
-                    self.write_indent()?;
-                    writeln!(self.writer, "assert {};", self.format_expression_id(*expr))?;
-                }
-                Statement::Hop {
-                    decorators, body, ..
-                } => {
-                    self.write_indent()?;
-                    for decorator in decorators {
-                        write!(self.writer, "@{} ", self.format_identifier(&decorator.name))?;
-                    }
-                    writeln!(self.writer, "hop {{")?;
-                    self.increase_indent();
-                    self.visit_block(*body)?;
-                    self.decrease_indent();
-                    self.write_indent()?;
-                    writeln!(self.writer, "}}")?;
-                }
-                Statement::HopsFor {
-                    decorators,
-                    var,
-                    start,
-                    end,
-                    body,
-                    ..
-                } => {
-                    self.write_indent()?;
-                    for decorator in decorators {
-                        write!(self.writer, "@{} ", self.format_identifier(&decorator.name))?;
-                    }
-                    if let Some(var_decl) = self.program.var_decls.get(*var) {
-                        write!(
-                            self.writer,
-                            "hops for {}",
-                            self.format_identifier(&var_decl.name)
-                        )?;
-                        if let Some(ty) = var_decl.ty {
-                            write!(self.writer, ": {}", self.format_type_id(ty))?;
-                        }
-                        writeln!(
-                            self.writer,
-                            " = ({}) to ({}) {{",
-                            self.format_expression_id(*start),
-                            self.format_expression_id(*end)
-                        )?;
-                    }
-                    self.increase_indent();
-                    self.visit_block(*body)?;
-                    self.decrease_indent();
-                    self.write_indent()?;
-                    writeln!(self.writer, "}}")?;
-                }
-                Statement::Expression { expr, .. } => {
-                    self.write_indent()?;
-                    writeln!(self.writer, "{};", self.format_expression_id(*expr))?;
-                }
-                Statement::Block(block_id) => {
-                    self.visit_block(*block_id)?;
+                TableElement::Invariant(expr_id) => {
+                    self.write_indent().unwrap();
+                    writeln!(
+                        self.writer,
+                        "invariant {};",
+                        self.format_expression_id(prog, *expr_id)
+                    ).unwrap();
                 }
             }
         }
-        Ok(())
+        self.decrease_indent();
+
+        self.write_indent().unwrap();
+        writeln!(self.writer, "}}").unwrap();
     }
 
-    fn format_type_id(&self, type_id: TypeId) -> String {
-        if let Some(ty) = self.program.types.get(type_id) {
-            match ty {
-                Type::Named {
-                    name: identifier, ..
-                } => {
-                    if SHOW_IDS {
-                        format!(
-                            "{} ({})",
-                            self.format_identifier(identifier),
-                            type_id.index()
-                        )
-                    } else {
-                        self.format_identifier(identifier)
-                    }
+    fn visit_var_decl(&mut self, prog: &'ast Program, _id: VarId, decl: &'ast VarDecl) {
+        self.write_indent().unwrap();
+        write!(self.writer, "var {}", self.format_identifier(&decl.name)).unwrap();
+        
+        if let Some(ty) = decl.ty {
+            write!(self.writer, ": {}", self.format_type_id(prog, ty)).unwrap();
+        }
+        
+        if let Some(init) = decl.init {
+            write!(self.writer, " = {}", self.format_expression_id(prog, init)).unwrap();
+        }
+        
+        writeln!(self.writer, ";").unwrap();
+    }
+
+    fn visit_stmt(&mut self, prog: &'ast Program, id: StmtId) {
+        let statement = &prog.statements[id];
+        match statement {
+            Statement::VarDecl(_) => {
+                // Let the default walker handle this
+                crate::ast::visit::walk_stmt(self, prog, id);
+            }
+            Statement::If { condition, then_block, else_block, .. } => {
+                self.write_indent().unwrap();
+                writeln!(
+                    self.writer,
+                    "if ({}) {{",
+                    self.format_expression_id(prog, *condition)
+                ).unwrap();
+                self.increase_indent();
+                self.visit_block(prog, *then_block);
+                self.decrease_indent();
+                
+                if let Some(else_block_id) = else_block {
+                    self.write_indent().unwrap();
+                    writeln!(self.writer, "}} else {{").unwrap();
+                    self.increase_indent();
+                    self.visit_block(prog, *else_block_id);
+                    self.decrease_indent();
                 }
-                Type::Generic { base, args, .. } => {
-                    let arg_strs: Vec<String> =
-                        args.iter().map(|&id| self.format_type_id(id)).collect();
-                    if SHOW_IDS {
-                        format!(
-                            "{}<{}> ({})",
-                            self.format_identifier(base),
-                            arg_strs.join(", "),
-                            type_id.index()
-                        )
-                    } else {
-                        format!("{}<{}>", self.format_identifier(base), arg_strs.join(", "))
-                    }
-                }
-                Type::Function {
-                    params,
-                    return_type,
-                    ..
-                } => {
-                    let param_strs: Vec<String> =
-                        params.iter().map(|&id| self.format_type_id(id)).collect();
-                    if SHOW_IDS {
-                        format!(
-                            "({}) -> {} ({})",
-                            param_strs.join(", "),
-                            self.format_type_id(*return_type),
-                            type_id.index()
-                        )
-                    } else {
-                        format!(
-                            "({}) -> {}",
-                            param_strs.join(", "),
-                            self.format_type_id(*return_type)
-                        )
-                    }
+                
+                self.write_indent().unwrap();
+                writeln!(self.writer, "}}").unwrap();
+            }
+            Statement::Return { value, .. } => {
+                self.write_indent().unwrap();
+                if let Some(val) = value {
+                    writeln!(self.writer, "return {};", self.format_expression_id(prog, *val)).unwrap();
+                } else {
+                    writeln!(self.writer, "return;").unwrap();
                 }
             }
-        } else {
-            if SHOW_IDS {
-                format!("<unknown_type> ({})", type_id.index())
-            } else {
-                "<unknown_type>".to_string()
+            Statement::Assert { expr, .. } => {
+                self.write_indent().unwrap();
+                writeln!(self.writer, "assert {};", self.format_expression_id(prog, *expr)).unwrap();
+            }
+            Statement::Hop { decorators, body, .. } => {
+                self.write_indent().unwrap();
+                self.write_decorators(decorators).unwrap();
+                writeln!(self.writer, "hop {{").unwrap();
+                self.increase_indent();
+                self.visit_block(prog, *body);
+                self.decrease_indent();
+                self.write_indent().unwrap();
+                writeln!(self.writer, "}}").unwrap();
+            }
+            Statement::Expression { expr, .. } => {
+                self.write_indent().unwrap();
+                writeln!(self.writer, "{};", self.format_expression_id(prog, *expr)).unwrap();
+            }
+            _ => {
+                // For other statement types, use the default walker
+                crate::ast::visit::walk_stmt(self, prog, id);
             }
         }
     }
 
-    fn format_expression_id(&self, expr_id: ExprId) -> String {
-        if let Some(expr) = self.program.expressions.get(expr_id) {
-            match expr {
-                Expression::Literal { value, .. } => match value {
-                    Literal::Integer(i) => i.clone(),
-                    Literal::Float(f) => f.clone(),
-                    Literal::String(s) => format!("\"{}\"", s),
-                    Literal::Bool(b) => b.to_string(),
-                    Literal::List(exprs) => {
-                        let elements: Vec<String> = exprs
-                            .iter()
-                            .map(|&id| self.format_expression_id(id))
-                            .collect();
-                        format!("[{}]", elements.join(", "))
-                    }
-                    Literal::RowLiteral(key_values) => {
-                        let pairs: Vec<String> = key_values
-                            .iter()
-                            .map(|kv| {
-                                format!(
-                                    "{}: {}",
-                                    self.format_identifier(&kv.key),
-                                    self.format_expression_id(kv.value)
-                                )
-                            })
-                            .collect();
-                        format!("{{{}}}", pairs.join(", "))
-                    }
-                },
-                Expression::Identifier { name: id, .. } => self.format_identifier(id),
-                Expression::Binary {
-                    left, op, right, ..
-                } => {
-                    let indent = *self.indent_level.borrow();
+    fn visit_block(&mut self, prog: &'ast Program, id: BlockId) {
+        // Use the default walker for blocks
+        crate::ast::visit::walk_block(self, prog, id);
+    }
+}
+
+impl<W: Write> AstPrinter<W> {
+    fn format_type_id(&self, prog: &Program, type_id: AstTypeId) -> String {
+        let ast_type = &prog.types[type_id];
+        match ast_type {
+            AstType::Named { name, .. } => {
+                if self.show_ids {
+                    format!("{} ({})", self.format_identifier(name), type_id.index())
+                } else {
+                    self.format_identifier(name)
+                }
+            }
+            AstType::Generic { base, args, .. } => {
+                let arg_strs: Vec<String> = args
+                    .iter()
+                    .map(|&id| self.format_type_id(prog, id))
+                    .collect();
+                if self.show_ids {
                     format!(
-                        "BinaryOp(\n{}  left: {},\n{}  op: {},\n{}  right: {}\n{})",
-                        "  ".repeat(indent + 1),
-                        self.format_expression_id(*left),
-                        "  ".repeat(indent + 1),
-                        op.value,
-                        "  ".repeat(indent + 1),
-                        self.format_expression_id(*right),
-                        "  ".repeat(indent)
+                        "{}<{}> ({})",
+                        self.format_identifier(base),
+                        arg_strs.join(", "),
+                        type_id.index()
+                    )
+                } else {
+                    format!("{}<{}>", self.format_identifier(base), arg_strs.join(", "))
+                }
+            }
+            AstType::Function { params, return_type, .. } => {
+                let param_strs: Vec<String> = params
+                    .iter()
+                    .map(|&id| self.format_type_id(prog, id))
+                    .collect();
+                if self.show_ids {
+                    format!(
+                        "({}) -> {} ({})",
+                        param_strs.join(", "),
+                        self.format_type_id(prog, *return_type),
+                        type_id.index()
+                    )
+                } else {
+                    format!(
+                        "({}) -> {}",
+                        param_strs.join(", "),
+                        self.format_type_id(prog, *return_type)
                     )
                 }
-                Expression::Unary { op, expr, .. } => {
-                    let indent = *self.indent_level.borrow();
-                    format!(
-                        "UnaryOp(\n{}  op: {},\n{}  expr: {}\n{})",
-                        "  ".repeat(indent + 1),
-                        op.value,
-                        "  ".repeat(indent + 1),
-                        self.format_expression_id(*expr),
-                        "  ".repeat(indent)
-                    )
-                }
-                Expression::Assignment { lhs, rhs, .. } => {
-                    format!(
-                        "{} = {}",
-                        self.format_expression_id(*lhs),
-                        self.format_expression_id(*rhs)
-                    )
-                }
-                Expression::Call { callee, args, .. } => {
-                    let arg_strs: Vec<String> = args
+            }
+        }
+    }
+
+    fn format_expression_id(&self, prog: &Program, expr_id: ExprId) -> String {
+        let expr = &prog.expressions[expr_id];
+        match expr {
+            Expression::Literal { value, .. } => match value {
+                Literal::Integer(i) => i.clone(),
+                Literal::Float(f) => f.clone(),
+                Literal::String(s) => format!("\"{}\"", s),
+                Literal::Bool(b) => b.to_string(),
+                Literal::List(exprs) => {
+                    let elements: Vec<String> = exprs
                         .iter()
-                        .map(|&id| self.format_expression_id(id))
+                        .map(|&id| self.format_expression_id(prog, id))
                         .collect();
-                    format!(
-                        "{}({})",
-                        self.format_expression_id(*callee),
-                        arg_strs.join(", ")
-                    )
+                    format!("[{}]", elements.join(", "))
                 }
-                Expression::MemberAccess { object, member, .. } => {
-                    format!(
-                        "{}.{}",
-                        self.format_expression_id(*object),
-                        self.format_identifier(member)
-                    )
-                }
-                Expression::TableRowAccess {
-                    table, key_values, ..
-                } => {
+                Literal::RowLiteral(key_values) => {
                     let pairs: Vec<String> = key_values
                         .iter()
                         .map(|kv| {
                             format!(
                                 "{}: {}",
                                 self.format_identifier(&kv.key),
-                                self.format_expression_id(kv.value)
+                                self.format_expression_id(prog, kv.value)
                             )
                         })
                         .collect();
-                    format!(
-                        "{}[{}]",
-                        self.format_expression_id(*table),
-                        pairs.join(", ")
-                    )
+                    format!("{{{}}}", pairs.join(", "))
                 }
-                Expression::Grouped { expr, .. } => {
-                    format!("({})", self.format_expression_id(*expr))
-                }
-                Expression::Lambda {
-                    params,
-                    return_type,
-                    ..
-                } => {
-                    let param_strs: Vec<String> = params
-                        .iter()
-                        .map(|&param_id| {
-                            if let Some(param) = self.program.params.get(param_id) {
-                                format!(
-                                    "{}: {}",
-                                    self.format_identifier(&param.name),
-                                    self.format_type_id(param.ty)
-                                )
-                            } else {
-                                format!("<unknown_param_{}>", param_id.index())
-                            }
-                        })
-                        .collect();
-
-                    format!(
-                        "({}) -> {} {{ ... }}",
-                        param_strs.join(", "),
-                        self.format_type_id(*return_type)
-                    )
-                }
+            },
+            Expression::Identifier { name, .. } => self.format_identifier(name),
+            Expression::Binary { left, op, right, .. } => {
+                format!(
+                    "({} {} {})",
+                    self.format_expression_id(prog, *left),
+                    op.value,
+                    self.format_expression_id(prog, *right)
+                )
             }
-        } else {
-            if SHOW_IDS {
-                format!("<unknown_expr> ({})", expr_id.index())
-            } else {
-                "<unknown_expr>".to_string()
+            Expression::Unary { op, expr, .. } => {
+                format!("({}{})", op.value, self.format_expression_id(prog, *expr))
+            }
+            Expression::Assignment { lhs, rhs, .. } => {
+                format!(
+                    "{} = {}",
+                    self.format_expression_id(prog, *lhs),
+                    self.format_expression_id(prog, *rhs)
+                )
+            }
+            Expression::Call { callee, args, .. } => {
+                let arg_strs: Vec<String> = args
+                    .iter()
+                    .map(|&id| self.format_expression_id(prog, id))
+                    .collect();
+                format!(
+                    "{}({})",
+                    self.format_expression_id(prog, *callee),
+                    arg_strs.join(", ")
+                )
+            }
+            Expression::MemberAccess { object, member, .. } => {
+                format!(
+                    "{}.{}",
+                    self.format_expression_id(prog, *object),
+                    self.format_identifier(member)
+                )
+            }
+            Expression::TableRowAccess { table, key_values, .. } => {
+                let pairs: Vec<String> = key_values
+                    .iter()
+                    .map(|kv| {
+                        format!(
+                            "{}: {}",
+                            self.format_identifier(&kv.key),
+                            self.format_expression_id(prog, kv.value)
+                        )
+                    })
+                    .collect();
+                format!(
+                    "{}[{}]",
+                    self.format_expression_id(prog, *table),
+                    pairs.join(", ")
+                )
+            }
+            Expression::Grouped { expr, .. } => {
+                format!("({})", self.format_expression_id(prog, *expr))
+            }
+            Expression::Lambda { params, return_type, .. } => {
+                let param_strs: Vec<String> = params
+                    .iter()
+                    .map(|&param_id| {
+                        let param = &prog.params[param_id];
+                        format!(
+                            "{}: {}",
+                            self.format_identifier(&param.name),
+                            self.format_type_id(prog, param.ty)
+                        )
+                    })
+                    .collect();
+
+                format!(
+                    "({}) -> {} {{ ... }}",
+                    param_strs.join(", "),
+                    self.format_type_id(prog, *return_type)
+                )
             }
         }
     }
+}
 
-    fn format_identifier(&self, identifier: &Identifier) -> String {
-        // For now, just show the name
-        // Resolution info is stored at specific AST nodes, not in the identifier
-        identifier.name.clone()
-    }
-
-    fn format_identifier_with_id(&self, identifier: &Identifier, id: FunctionId) -> String {
-        if SHOW_IDS {
-            format!("{} ({})", identifier.name, id.index())
-        } else {
-            identifier.name.clone()
-        }
+/// Convenience function to pretty-print a program using the visitor pattern
+pub fn print_program_visitor(program: &Program) -> String {
+    let mut buffer = Vec::new();
+    let printer = AstPrinter::new(&mut buffer);
+    
+    match printer.print_program(program) {
+        Ok(_) => String::from_utf8(buffer).unwrap_or_else(|_| "Error: Invalid UTF-8".to_string()),
+        Err(e) => format!("Error printing program: {}", e),
     }
 }
 
-impl PrettyPrinter<Program> for AstPrinter {
-    fn print(&self, program: &Program, writer: &mut dyn Write) -> std::io::Result<()> {
-        let mut visitor = AstPrintVisitor::new(writer, program);
-        visitor.visit_program()
+/// Convenience function to pretty-print a program using the visitor pattern with custom settings
+pub fn print_program_visitor_custom(program: &Program, indent_size: usize, show_ids: bool) -> String {
+    let mut buffer = Vec::new();
+    let printer = AstPrinter::with_settings(&mut buffer, indent_size, show_ids);
+    
+    match printer.print_program(program) {
+        Ok(_) => String::from_utf8(buffer).unwrap_or_else(|_| "Error: Invalid UTF-8".to_string()),
+        Err(e) => format!("Error printing program: {}", e),
     }
-}
-
-impl Default for AstPrinter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Convenience function to pretty-print a program
-pub fn print_program(program: &Program) -> String {
-    let printer = AstPrinter::new();
-    printer
-        .print_to_string(program)
-        .unwrap_or_else(|e| format!("Error printing program: {}", e))
 }

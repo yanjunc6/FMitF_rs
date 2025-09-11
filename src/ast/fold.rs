@@ -12,56 +12,56 @@ use super::*;
 #[allow(unused_variables)]
 pub trait Fold: Sized {
     fn fold_program(&mut self, prog: Program) -> Program {
-        fold_program(self, prog)
+        foldwalk_program(self, prog)
     }
 
     // Items
     fn fold_item(&mut self, item: Item) -> Item {
-        fold_item(self, item)
+        foldwalk_item(self, item)
     }
     fn fold_callable_decl(&mut self, prog: &Program, id: FunctionId, decl: CallableDecl) -> CallableDecl {
-        fold_callable_decl(self, prog, id, decl)
+        foldwalk_callable_decl(self, prog, id, decl)
     }
     fn fold_type_decl(&mut self, prog: &Program, id: TypeDeclId, decl: TypeDecl) -> TypeDecl {
         decl
     }
     fn fold_const_decl(&mut self, prog: &Program, id: ConstId, decl: ConstDecl) -> ConstDecl {
-        fold_const_decl(self, prog, id, decl)
+        foldwalk_const_decl(self, prog, id, decl)
     }
     fn fold_table_decl(&mut self, prog: &Program, id: TableId, decl: TableDecl) -> TableDecl {
-        fold_table_decl(self, prog, id, decl)
+        foldwalk_table_decl(self, prog, id, decl)
     }
     fn fold_var_decl(&mut self, prog: &Program, id: VarId, decl: VarDecl) -> VarDecl {
-        fold_var_decl(self, prog, id, decl)
+        foldwalk_var_decl(self, prog, id, decl)
     }
     fn fold_param(&mut self, prog: &Program, id: ParamId, param: Parameter) -> Parameter {
-        fold_param(self, prog, id, param)
+        foldwalk_param(self, prog, id, param)
     }
     fn fold_generic_param(&mut self, prog: &Program, id: GenericParamId, param: GenericParam) -> GenericParam {
-        fold_generic_param(self, prog, id, param)
+        param
     }
 
     // Statements
     fn fold_stmt(&mut self, prog: &Program, id: StmtId, stmt: Statement) -> Statement {
-        fold_stmt(self, prog, id, stmt)
+        foldwalk_stmt(self, prog, id, stmt)
     }
     fn fold_block(&mut self, prog: &Program, id: BlockId, block: Block) -> Block {
-        fold_block(self, prog, id, block)
+        foldwalk_block(self, prog, id, block)
     }
 
     // Expressions
     fn fold_expr(&mut self, prog: &Program, id: ExprId, expr: Expression) -> Expression {
-        fold_expr(self, prog, id, expr)
+        foldwalk_expr(self, prog, id, expr)
     }
 
     // Types
     fn fold_ast_type(&mut self, prog: &Program, id: AstTypeId, ast_type: AstType) -> AstType {
-        fold_ast_type(self, prog, id, ast_type)
+        foldwalk_ast_type(self, prog, id, ast_type)
     }
 }
 
 // Default fold implementations
-pub fn fold_program<F: Fold>(folder: &mut F, prog: Program) -> Program {
+pub fn foldwalk_program<F: Fold>(folder: &mut F, prog: Program) -> Program {
     // Note: In a real implementation, you would need to carefully handle the arenas
     // and potentially create new ones. This is a simplified version.
     for item in &prog.declarations.clone() {
@@ -70,11 +70,11 @@ pub fn fold_program<F: Fold>(folder: &mut F, prog: Program) -> Program {
     prog
 }
 
-pub fn fold_item<F: Fold>(_folder: &mut F, item: Item) -> Item {
+pub fn foldwalk_item<F: Fold>(_folder: &mut F, item: Item) -> Item {
     item // In a full implementation, you would transform the item based on its type
 }
 
-pub fn fold_callable_decl<F: Fold>(
+pub fn foldwalk_callable_decl<F: Fold>(
     folder: &mut F,
     prog: &Program,
     _id: FunctionId,
@@ -113,7 +113,7 @@ pub fn fold_callable_decl<F: Fold>(
     decl
 }
 
-pub fn fold_const_decl<F: Fold>(
+pub fn foldwalk_const_decl<F: Fold>(
     folder: &mut F,
     prog: &Program,
     _id: ConstId,
@@ -128,7 +128,7 @@ pub fn fold_const_decl<F: Fold>(
     decl
 }
 
-pub fn fold_table_decl<F: Fold>(
+pub fn foldwalk_table_decl<F: Fold>(
     folder: &mut F,
     prog: &Program,
     _id: TableId,
@@ -155,7 +155,7 @@ pub fn fold_table_decl<F: Fold>(
     decl
 }
 
-pub fn fold_var_decl<F: Fold>(
+pub fn foldwalk_var_decl<F: Fold>(
     folder: &mut F,
     prog: &Program,
     _id: VarId,
@@ -174,7 +174,7 @@ pub fn fold_var_decl<F: Fold>(
     decl
 }
 
-pub fn fold_param<F: Fold>(
+pub fn foldwalk_param<F: Fold>(
     folder: &mut F,
     prog: &Program,
     _id: ParamId,
@@ -185,7 +185,7 @@ pub fn fold_param<F: Fold>(
     param
 }
 
-pub fn fold_stmt<F: Fold>(
+pub fn foldwalk_stmt<F: Fold>(
     folder: &mut F,
     prog: &Program,
     _id: StmtId,
@@ -285,7 +285,7 @@ pub fn fold_stmt<F: Fold>(
     }
 }
 
-pub fn fold_block<F: Fold>(
+pub fn foldwalk_block<F: Fold>(
     folder: &mut F,
     prog: &Program,
     _id: BlockId,
@@ -298,7 +298,7 @@ pub fn fold_block<F: Fold>(
     block
 }
 
-pub fn fold_expr<F: Fold>(
+pub fn foldwalk_expr<F: Fold>(
     folder: &mut F,
     prog: &Program,
     _id: ExprId,
@@ -389,7 +389,7 @@ pub fn fold_expr<F: Fold>(
     }
 }
 
-pub fn fold_ast_type<F: Fold>(
+pub fn foldwalk_ast_type<F: Fold>(
     folder: &mut F,
     prog: &Program,
     _id: AstTypeId,
