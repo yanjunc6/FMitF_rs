@@ -411,24 +411,24 @@ pub struct KeyValue {
 
 /// Parse source code into AST with complete processing including name resolution,
 /// type checking, and semantic analysis
-pub fn parse_program(source: &str) -> Result<Program, Vec<errors::AstError>> {
+pub fn parse_and_analyze_program(source: &str) -> Result<Program, Vec<errors::AstError>> {
     // Stage 1: Basic AST parsing with prelude
-    let program = match ast_builder::parse_program(source) {
+    let mut program = match ast_builder::parse_program(source) {
         Ok(program) => program,
         Err(error) => return Err(error),
     };
 
-    // Stage 2: Name resolution - use simple stub for now
-    // if let Err(errors) = simple_name_resolution(&mut program) {
-    //     return Err(errors);
-    // }
+    // Stage 2: Name resolution
+    if let Err(errors) = name_resolver::resolve_names(&mut program) {
+        return Err(errors);
+    }
 
-    // Stage 3: Type checking
+    // Stage 3: Type checking (disabled for now)
     // if let Err(errors) = type_checker::check_types(&mut program) {
     //     return Err(errors);
     // }
 
-    // // Stage 4: Semantic analysis
+    // Stage 4: Semantic analysis (disabled for now)
     // if let Err(errors) = semantic_analyzer::analyze_semantics(&program) {
     //     return Err(errors);
     // }
@@ -443,10 +443,10 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<errors::AstError>> {
 pub mod ast_builder;
 pub mod errors;
 pub mod prelude;
+pub mod name_resolver;
 // pub mod type_checker;
 // pub mod semantic_analyzer;
 // Complex modules with legacy issues:
-// pub mod name_resolver;
 // pub mod constant_checker;
 // pub mod ast_debug;
 

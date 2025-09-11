@@ -42,7 +42,7 @@ impl Compiler {
         self.add_source(&filename, &input_content);
 
         // Parse the program
-        match ast::parse_program(&input_content) {
+        match ast::parse_and_analyze_program(&input_content) {
             Ok(program) => {
                 println!("✅ Parse stage successful!");
                 println!("Program has {} functions", program.functions.len());

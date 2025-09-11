@@ -25,9 +25,13 @@ pub enum AstErrorKind {
     UnexpectedRule(String), // For unexpected grammar rules
     MissingField(String),   // For missing required fields
 
-    // Semantic errors
+    // Name resolution errors
     UndefinedIdentifier { name: String },
     DuplicateDefinition { name: String },
+    InvalidScope { name: String, details: String },
+    ReturnOutsideFunction,
+
+    // Semantic errors
     TypeMismatch { expected: String, found: String },
     InvalidOperation { op: String, details: String },
     CircularDependency { names: Vec<String> },
@@ -47,6 +51,18 @@ impl AstError {
 
     pub fn undefined_identifier(name: String) -> Self {
         Self::new(AstErrorKind::UndefinedIdentifier { name })
+    }
+
+    pub fn duplicate_definition(name: String) -> Self {
+        Self::new(AstErrorKind::DuplicateDefinition { name })
+    }
+
+    pub fn invalid_scope(name: String, details: String) -> Self {
+        Self::new(AstErrorKind::InvalidScope { name, details })
+    }
+
+    pub fn return_outside_function() -> Self {
+        Self::new(AstErrorKind::ReturnOutsideFunction)
     }
 
     pub fn type_mismatch(expected: String, found: String) -> Self {
@@ -70,6 +86,12 @@ impl fmt::Display for AstError {
             }
             AstErrorKind::DuplicateDefinition { name } => {
                 write!(f, "Duplicate definition: {}", name)
+            }
+            AstErrorKind::InvalidScope { name, details } => {
+                write!(f, "Invalid scope for '{}': {}", name, details)
+            }
+            AstErrorKind::ReturnOutsideFunction => {
+                write!(f, "Return statement outside function")
             }
             AstErrorKind::TypeMismatch { expected, found } => {
                 write!(f, "Type mismatch: expected {}, found {}", expected, found)
@@ -98,10 +120,12 @@ impl CompilerError for AstError {
             AstErrorKind::MissingField(..) => "A006",
             AstErrorKind::UndefinedIdentifier { .. } => "A007",
             AstErrorKind::DuplicateDefinition { .. } => "A008",
-            AstErrorKind::TypeMismatch { .. } => "A009",
-            AstErrorKind::InvalidOperation { .. } => "A010",
-            AstErrorKind::CircularDependency { .. } => "A011",
-            AstErrorKind::InvalidInput { .. } => "A012",
+            AstErrorKind::InvalidScope { .. } => "A009",
+            AstErrorKind::ReturnOutsideFunction => "A010",
+            AstErrorKind::TypeMismatch { .. } => "A011",
+            AstErrorKind::InvalidOperation { .. } => "A012",
+            AstErrorKind::CircularDependency { .. } => "A013",
+            AstErrorKind::InvalidInput { .. } => "A014",
         }
     }
 
@@ -121,6 +145,12 @@ impl CompilerError for AstError {
             }
             AstErrorKind::DuplicateDefinition { .. } => {
                 Some("Use a different name or remove one of the definitions")
+            }
+            AstErrorKind::InvalidScope { .. } => {
+                Some("Check the scoping rules for this identifier")
+            }
+            AstErrorKind::ReturnOutsideFunction => {
+                Some("Return statements can only be used inside functions")
             }
             AstErrorKind::CircularDependency { .. } => {
                 Some("Break the circular dependency by restructuring your code")
