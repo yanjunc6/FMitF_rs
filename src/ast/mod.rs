@@ -1,76 +1,39 @@
 //! ast/mod.rs
 //!
-//! Abstract Syntax Tree (AST) for the distributed data processing DSL.
+//! The root of the Abstract Syntax Tree module.
 //!
-//! This module defines the data structures representing parsed code. It uses an
-//! arena-based approach where all nodes are stored in arenas and referenced by IDs.
-//! The AST is designed to be annotated in multiple passes:
-//! - Name resolution: fills in `resolved` fields to link uses to declarations
-//! - Type resolution: fills in `resolved_type` fields with concrete types
+//! This module organizes the AST into sub-modules for items, statements,
+//! expressions, and types. It also defines the top-level `Program` struct
+//! which contains the arenas for all AST nodes.
 
-use crate::util::Span;
-use id_arena::{Arena, Id};
+use id_arena::Arena;
 
-// ============================================================================
-// --- Arena-based Node IDs
-// ============================================================================
+// Re-export sub-modules for a clean public API
+pub mod common;
+pub mod expr;
+pub mod item;
+pub mod stmt;
+pub mod ty;
+pub mod visit;
+pub mod visit_mut;
+pub mod fold;
 
-// Declaration IDs
-pub type FunctionId = Id<CallableDecl>;
-pub type TypeDeclId = Id<TypeDecl>;
-pub type ConstId = Id<ConstDecl>;
-pub type TableId = Id<TableDecl>;
-pub type VarId = Id<VarDecl>;
-pub type ParamId = Id<Parameter>;
-pub type GenericParamId = Id<GenericParam>;
-
-// Structure IDs
-pub type TypeId = Id<Type>;
-pub type StmtId = Id<Statement>;
-pub type ExprId = Id<Expression>;
-pub type BlockId = Id<Block>;
-
-// ============================================================================
-// --- Identifiers and References
-// ============================================================================
-
-/// An identifier - just a name and location.
-/// Resolution information is stored at specific AST nodes where needed.
-#[derive(Debug, Clone)]
-pub struct Identifier {
-    pub name: String,
-    pub span: Option<Span>,
-}
-
-/// What an identifier can resolve to - used in Identifier expressions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum IdentifierResolution {
-    Function(FunctionId),
-    Type(TypeDeclId),
-    Table(TableId),
-    Const(ConstId),
-    Var(VarId),
-    Param(ParamId),
-    GenericParam(GenericParamId),
-}
-
-/// Wraps any value with its source location.
-#[derive(Debug, Clone)]
-pub struct Spanned<T> {
-    pub value: T,
-    /// The location of this value in the source code. `None` for built-ins or generated code.
-    pub span: Option<Span>,
-}
+// Publicly re-export all the important types from submodules
+pub use common::*;
+pub use expr::*;
+pub use item::*;
+pub use stmt::*;
+pub use ty::*;
 
 // ============================================================================
 // --- Program Root
 // ============================================================================
 
 /// The root AST node containing all declarations and arenas.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Program {
     /// Top-level declarations in order of appearance.
-    pub declarations: Vec<Declaration>,
+    pub declarations: Vec<Item>,
 
     // Declaration arenas
     pub functions: Arena<CallableDecl>,
@@ -82,378 +45,9 @@ pub struct Program {
     pub generic_params: Arena<GenericParam>,
 
     // Structure arenas
-    pub types: Arena<Type>,
+    pub types: Arena<AstType>,
     pub statements: Arena<Statement>,
     pub expressions: Arena<Expression>,
     pub blocks: Arena<Block>,
 }
 
-// ============================================================================
-// --- Top-Level Declarations
-// ============================================================================
-
-#[derive(Debug, Clone)]
-pub enum Declaration {
-    Callable(FunctionId),
-    Type(TypeDeclId),
-    Const(ConstId),
-    Table(TableId),
-}
-
-// Represents a decorator
-#[derive(Debug, Clone)]
-pub struct Decorator {
-    pub name: Identifier,
-    pub span: Option<Span>,
-}
-
-// Represents the name of a callable, distinguishing between regular identifiers and operator symbols.
-#[derive(Debug, Clone)]
-pub enum CallableName {
-    Identifier(Identifier),
-    Operator(Spanned<String>),
-}
-
-/// Unified representation for functions, operators, partitions, and transactions.
-#[derive(Debug, Clone)]
-pub struct CallableDecl {
-    pub decorators: Vec<Decorator>,
-    pub kind: CallableKind,
-    pub name: CallableName,
-    pub generic_params: Vec<GenericParamId>,
-    pub params: Vec<ParamId>,
-    pub return_type: Option<TypeId>,
-    pub assumptions: Vec<ExprId>,
-    pub body: Option<BlockId>, // None for forward declarations
-    pub span: Option<Span>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CallableKind {
-    Function,
-    Operator,
-    Partition,
-    Transaction,
-}
-
-#[derive(Debug, Clone)]
-pub struct TypeDecl {
-    pub decorators: Vec<Decorator>,
-    pub name: Identifier,
-    pub generic_params: Vec<GenericParamId>,
-    pub span: Option<Span>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ConstDecl {
-    pub name: Identifier,
-    pub ty: TypeId,
-    pub value: ExprId,
-    pub span: Option<Span>,
-}
-
-#[derive(Debug, Clone)]
-pub enum TableElement {
-    Field(TableField),
-    Node(TableNode),
-    Invariant(ExprId),
-}
-
-#[derive(Debug, Clone)]
-pub struct TableDecl {
-    pub name: Identifier,
-    // A single vector of `TableElement` preserves source order.
-    pub elements: Vec<TableElement>,
-    pub span: Option<Span>,
-}
-
-#[derive(Debug, Clone)]
-pub struct TableField {
-    pub is_primary: bool,
-    pub name: Identifier,
-    pub ty: TypeId,
-    pub span: Option<Span>,
-}
-
-#[derive(Debug, Clone)]
-pub struct TableNode {
-    pub name: Identifier,
-    pub args: Vec<ExprId>,
-    pub resolved_partition: Option<FunctionId>, // Filled by name resolver
-    pub span: Option<Span>,
-}
-
-#[derive(Debug, Clone)]
-pub struct GenericParam {
-    pub name: Identifier,
-    pub span: Option<Span>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Parameter {
-    pub name: Identifier,
-    pub ty: TypeId,
-    pub resolved_type: Option<TypeDeclId>, // Filled by type checker
-    pub span: Option<Span>,
-}
-
-// ============================================================================
-// --- Types
-// ============================================================================
-
-/// Syntactic representation of types from source code.
-#[derive(Debug, Clone)]
-pub enum Type {
-    /// Simple type name: `int`, `MyTable`, `T`
-    Named {
-        name: Identifier,
-        resolved_type: Option<TypeDeclId>, // Filled by name resolver
-    },
-
-    /// Generic instantiation: `List<int>`, `Map<K, V>`
-    Generic {
-        base: Identifier,
-        args: Vec<TypeId>,
-        resolved_base_type: Option<TypeDeclId>, // Filled by name resolver
-        span: Option<Span>,
-    },
-
-    /// Function type: `(int, bool) -> string`
-    Function {
-        params: Vec<TypeId>,
-        return_type: TypeId,
-        span: Option<Span>,
-    },
-}
-
-// ============================================================================
-// --- Statements
-// ============================================================================
-
-#[derive(Debug, Clone)]
-pub struct Block {
-    pub statements: Vec<StmtId>,
-    pub span: Option<Span>,
-}
-
-#[derive(Debug, Clone)]
-pub enum Statement {
-    VarDecl(VarId),
-
-    If {
-        condition: ExprId,
-        then_block: BlockId,
-        else_block: Option<BlockId>,
-        span: Option<Span>,
-    },
-
-    For {
-        init: Option<ForInit>,
-        condition: Option<ExprId>,
-        update: Option<ExprId>,
-        body: BlockId,
-        span: Option<Span>,
-    },
-
-    Return {
-        value: Option<ExprId>,
-        span: Option<Span>,
-    },
-
-    Assert {
-        expr: ExprId,
-        span: Option<Span>,
-    },
-
-    Hop {
-        decorators: Vec<Decorator>,
-        body: BlockId,
-        span: Option<Span>,
-    },
-
-    HopsFor {
-        decorators: Vec<Decorator>,
-        var: VarId, // Loop variable declaration
-        start: ExprId,
-        end: ExprId,
-        body: BlockId,
-        span: Option<Span>,
-    },
-
-    Expression {
-        expr: ExprId,
-        span: Option<Span>,
-    },
-
-    Block(BlockId),
-}
-
-#[derive(Debug, Clone)]
-pub enum ForInit {
-    VarDecl(VarId),
-    Expression(ExprId),
-}
-
-#[derive(Debug, Clone)]
-pub struct VarDecl {
-    pub name: Identifier,
-    pub ty: Option<TypeId>,
-    pub init: Option<ExprId>,
-    pub resolved_type: Option<TypeDeclId>, // Filled by type checker
-    pub span: Option<Span>,
-}
-
-// ============================================================================
-// --- Expressions
-// ============================================================================
-
-#[derive(Debug, Clone)]
-pub enum Expression {
-    Literal {
-        value: Literal,
-        span: Option<Span>,
-    },
-
-    Identifier {
-        name: Identifier,
-        resolved_declaration: Option<IdentifierResolution>, // Filled by name resolver
-        span: Option<Span>,
-    },
-
-    Binary {
-        left: ExprId,
-        op: Spanned<String>,
-        right: ExprId,
-        resolved_callable: Option<FunctionId>, // Filled by name resolver - operators are functions
-        span: Option<Span>,
-    },
-
-    Unary {
-        op: Spanned<String>,
-        expr: ExprId,
-        resolved_callable: Option<FunctionId>, // Filled by name resolver - operators are functions
-        span: Option<Span>,
-    },
-
-    Assignment {
-        lhs: ExprId,
-        rhs: ExprId,
-        span: Option<Span>,
-    },
-
-    Call {
-        callee: ExprId,
-        args: Vec<ExprId>,
-        resolved_callable: Option<FunctionId>, // Filled by name resolver
-        span: Option<Span>,
-    },
-
-    MemberAccess {
-        object: ExprId,
-        member: Identifier,
-        resolved_table: Option<TableId>, // Filled by name resolver - what table this field belongs to
-        resolved_field: Option<TableField>, // Filled by name resolver - field details
-        span: Option<Span>,
-    },
-
-    TableRowAccess {
-        table: ExprId,
-        key_values: Vec<KeyValue>,
-        resolved_table: Option<TableId>, // Filled by name resolver
-        span: Option<Span>,
-    },
-
-    Grouped {
-        expr: ExprId,
-        span: Option<Span>,
-    },
-
-    Lambda {
-        params: Vec<ParamId>,
-        return_type: TypeId,
-        body: BlockId,
-        span: Option<Span>,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub enum Literal {
-    Integer(String),
-    Float(String),
-    String(String),
-    Bool(bool),
-    List(Vec<ExprId>),
-    RowLiteral(Vec<KeyValue>), // Distinguished from list
-}
-
-#[derive(Debug, Clone)]
-pub struct KeyValue {
-    pub key: Identifier,
-    pub value: ExprId,
-    pub resolved_table: Option<TableId>, // Filled by name resolver - what table this key belongs to
-    pub resolved_field: Option<TableField>, // Filled by name resolver - field details
-    pub span: Option<Span>,
-}
-
-// ============================================================================
-// --- Main Parse Function
-// ============================================================================
-
-/// Parse source code into AST with complete processing including name resolution,
-/// type checking, and semantic analysis
-pub fn parse_and_analyze_program(source: &str) -> Result<Program, Vec<errors::AstError>> {
-    // Stage 1: Basic AST parsing with prelude
-    let mut program = match ast_builder::parse_program(source) {
-        Ok(program) => program,
-        Err(error) => return Err(error),
-    };
-
-    // Stage 2: Name resolution
-    if let Err(errors) = name_resolver::resolve_names(&mut program) {
-        return Err(errors);
-    }
-
-    // Stage 3: Type checking (disabled for now)
-    // if let Err(errors) = type_checker::check_types(&mut program) {
-    //     return Err(errors);
-    // }
-
-    // Stage 4: Semantic analysis (disabled for now)
-    // if let Err(errors) = semantic_analyzer::analyze_semantics(&program) {
-    //     return Err(errors);
-    // }
-
-    Ok(program)
-}
-
-// ============================================================================
-// --- Module Declarations
-// ============================================================================
-
-pub mod ast_builder;
-pub mod errors;
-pub mod name_resolver;
-pub mod prelude;
-// pub mod type_checker;
-// pub mod semantic_analyzer;
-// Complex modules with legacy issues:
-// pub mod constant_checker;
-// pub mod ast_debug;
-
-// ============================================================================
-// --- Public Interface Re-exports
-// ============================================================================
-
-// Core types - using unified error system
-pub use errors::{AstError, AstErrorKind};
-
-// AST builder functions
-
-// Analysis phases (disabled for now)
-// pub use name_resolver::resolve_names;
-// pub use type_resolver::resolve_types;
-// pub use semantics_analysis::analyze_semantics;
-// pub use constant_checker::{check_constants, evaluate_constant_expression, ConstantValue};
-
-// Debug utilities (disabled for now)
-// pub use ast_debug::{print_program, print_expression, print_statement, DebugConfig};
