@@ -16,17 +16,15 @@ use std::fmt;
 pub struct Span {
     pub start: usize,
     pub end: usize,
-    pub line: usize,
-    pub column: usize,
+    pub file_name: &'static str,
 }
 
 impl Span {
-    pub fn new(start: usize, end: usize, line: usize, column: usize) -> Self {
+    pub fn new(start: usize, end: usize, file_name: &'static str) -> Self {
         Self {
             start,
             end,
-            line,
-            column,
+            file_name,
         }
     }
 
