@@ -1,0 +1,195 @@
+// Comprehensive Name Resolution Test
+// Tests all aspects of name resolution including scoping, operators, overloading, and AST population
+
+// === BASIC FUNCTIONS ===
+function simple_add(x: int, y: int) -> int {
+    return x + y;
+}
+
+function call_test() -> int {
+    var result: int = simple_add(5, 10);  // Test function call resolution
+    return result;
+}
+
+// === CUSTOM OPERATORS ===
+operator @$&(x: int, y: int) -> int {
+    return x + y;
+}
+
+operator +++%(a: int, b: int) -> int {
+    return a * b;
+}
+
+operator !~(value: int) -> int {
+    return -value;
+}
+
+function test_operators(a: int, b: int) -> int {
+    var result1: int = a @$& b;      // Custom binary operator
+    var result2: int = a +++% b;     // Another custom binary operator  
+    var result3: int = !~result1;    // Custom unary prefix operator
+    return result2 + result3;        // Built-in operator
+}
+
+// === PARTITION FUNCTIONS ===
+partition hash_partition(id: int) -> int {
+    return id % 10;
+}
+
+partition simple_partition(x: int, y: int) -> int {
+    return x * 10 + y;
+}
+
+// === TABLES ===
+table TestTable {
+    id: int;
+    node hash_partition(id);         // Should resolve to hash_partition function
+    value: int;
+    name: string;
+}
+
+table ComplexTable {
+    x: int;
+    y: int;
+    node simple_partition(x, y);     // Should resolve partition function and field references
+    data: string;
+}
+
+// === CONSTANTS ===
+const MAX_VALUE: int = 100;
+const TABLE_SIZE: int = MAX_VALUE + 50;  // Reference to another constant
+
+// === SCOPING TESTS ===
+function scoping_test(param: int) -> int {
+    var outer: int = param + 1;
+    
+    if (outer > 0) {
+        var inner: int = outer * 2;  // inner should be in if scope only
+        assert inner > 0;
+    }
+    
+    for (var i: int = 0; i < 5; i = i + 1) {
+        var loop_var: int = i + outer;  // loop_var in for scope only
+        assert loop_var >= 0;
+    }
+    
+    return outer;  // outer still accessible
+}
+
+// === HOP SCOPING TESTS ===
+function hop_scoping_test(x: int) {
+    var global_var: int = x;
+    
+    hop {
+        // hop does NOT create new scope - global_var should be accessible
+        var hop_local: int = global_var + 1;
+        TestTable[id: x].value = hop_local;
+        
+        hop {
+            // Nested hop - still no new scope
+            var nested_hop_var: int = hop_local + global_var;
+            assert nested_hop_var > 0;
+        }
+    }
+    
+    hops for i: int = 0 to 5 {
+        // hops_for DOES create new scope with loop variable i
+        var hops_local: int = i + global_var;
+        TestTable[id: i].value = hops_local;
+        
+        hop {
+            // hop inside hops_for - i should still be accessible
+            var inner_hop: int = i * 2;
+            assert inner_hop >= 0;
+        }
+    }
+}
+
+// === LAMBDA EXPRESSIONS ===
+function lambda_test() -> int {
+    var add_lambda = (a: int, b: int) -> int {
+        return a + b;  // a and b should be in lambda scope
+    };
+    
+    var result: int = 10;
+    return result;
+}
+
+// === TABLE ACCESS ===
+function table_operations(x: int) {
+    // Table row access with field references
+    TestTable[id: x].value = x * 2;
+    TestTable[id: x].name = "test";
+    
+    // Complex table access
+    ComplexTable[x: x, y: x + 1].data = "complex";
+    
+    var retrieved: int = TestTable[id: x].value;  // Member access resolution
+}
+
+// === GENERIC FUNCTIONS ===
+function generic_test(value: int) -> int {
+    return value;  // Simple version without generics for now
+}
+
+// === TYPE REFERENCES ===
+function type_test() {
+    var table_ref: TestTable;      // Type reference to table
+    var simple_var: int = 42;      // Built-in type reference
+}
+
+// === NESTED FUNCTION CALLS ===
+function nested_calls() -> int {
+    return simple_add(test_operators(1, 2), call_test());  // Multiple nested calls
+}
+
+// === RETURN STATEMENT VALIDATION ===
+function return_test() -> int {
+    if (true) {
+        return 42;  // Valid return in function
+    }
+    return 0;
+}
+
+// === VARIABLE SHADOWING ===
+function shadowing_test(x: int) -> int {
+    var local: int = x;
+    
+    if (true) {
+        var local: int = 999;  // Shadows outer local - should be allowed
+        assert local == 999;
+    }
+    
+    return local;  // Should refer to outer local
+}
+
+// === COMPLEX EXPRESSIONS ===
+function complex_expressions(a: int, b: int) -> int {
+    // Complex expression with multiple operator calls
+    var complex: int = (a @$& b) +++% (!~a + simple_add(b, MAX_VALUE));
+    return complex;
+}
+
+// === MAIN TRANSACTION ===
+function main_transaction(user_id: int, amount: int) {
+    var computed: int = test_operators(user_id, amount);
+    var final_value: int = simple_add(computed, TABLE_SIZE);
+    
+    hop {
+        TestTable[id: user_id].value = final_value;
+        TestTable[id: user_id].name = "processed";
+        
+        var validation: int = TestTable[id: user_id].value;
+        assert validation == final_value;
+    }
+    
+    hops for i: int = 0 to 3 {
+        var batch_value: int = i @$& final_value;
+        ComplexTable[x: i, y: user_id].data = "batch";
+        
+        hop {
+            var inner_calc: int = batch_value +++% i;
+            assert inner_calc >= 0;
+        }
+    }
+}
