@@ -34,20 +34,17 @@ pub type BlockId = Id<Block>;
 // --- Identifiers and References
 // ============================================================================
 
-/// An identifier with resolution information.
+/// An identifier - just a name and location.
+/// Resolution information is stored at specific AST nodes where needed.
 #[derive(Debug, Clone)]
 pub struct Identifier {
     pub name: String,
     pub span: Option<Span>,
-    /// Resolved declaration this identifier refers to (filled by name resolver).
-    pub resolved: Option<DeclRef>,
-    /// Resolved type of this identifier (filled by type resolver).
-    pub resolved_type: Option<ResolvedType>,
 }
 
-/// Reference to any declaration that can be named.
+/// What an identifier can resolve to - used in Identifier expressions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DeclRef {
+pub enum IdentifierResolution {
     Function(FunctionId),
     Type(TypeDeclId),
     Table(TableId),
@@ -55,24 +52,6 @@ pub enum DeclRef {
     Var(VarId),
     Param(ParamId),
     GenericParam(GenericParamId),
-}
-
-/// Fully resolved type after type checking.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ResolvedType {
-    /// A resolved type, like `int`, `string`, or a user-defined struct.
-    Type(TypeDeclId),
-    Table(TableId),
-    TypeVar(GenericParamId),
-    Generic {
-        base: TypeDeclId,
-        args: Vec<ResolvedType>,
-    },
-    Function {
-        params: Vec<ResolvedType>,
-        return_type: Box<ResolvedType>,
-    },
-    Void,
 }
 
 /// Wraps any value with its source location.
@@ -214,6 +193,7 @@ pub struct GenericParam {
 pub struct Parameter {
     pub name: Identifier,
     pub ty: TypeId,
+    pub resolved_type: Option<TypeDeclId>, // Filled by type checker
     pub span: Option<Span>,
 }
 
@@ -225,12 +205,16 @@ pub struct Parameter {
 #[derive(Debug, Clone)]
 pub enum Type {
     /// Simple type name: `int`, `MyTable`, `T`
-    Named(Identifier),
+    Named {
+        name: Identifier,
+        resolved_type: Option<TypeDeclId>, // Filled by name resolver
+    },
 
     /// Generic instantiation: `List<int>`, `Map<K, V>`
     Generic {
         base: Identifier,
         args: Vec<TypeId>,
+        resolved_base_type: Option<TypeDeclId>, // Filled by name resolver
         span: Option<Span>,
     },
 
@@ -312,10 +296,10 @@ pub enum ForInit {
 
 #[derive(Debug, Clone)]
 pub struct VarDecl {
-    // CHANGED: Use `Identifier` for the variable's name.
     pub name: Identifier,
     pub ty: Option<TypeId>,
     pub init: Option<ExprId>,
+    pub resolved_type: Option<TypeDeclId>, // Filled by type checker
     pub span: Option<Span>,
 }
 
@@ -330,18 +314,24 @@ pub enum Expression {
         span: Option<Span>,
     },
 
-    Identifier(Identifier),
+    Identifier {
+        name: Identifier,
+        resolved_declaration: Option<IdentifierResolution>, // Filled by name resolver
+        span: Option<Span>,
+    },
 
     Binary {
         left: ExprId,
         op: Spanned<String>,
         right: ExprId,
+        resolved_callable: Option<FunctionId>, // Filled by name resolver - operators are functions
         span: Option<Span>,
     },
 
     Unary {
         op: Spanned<String>,
         expr: ExprId,
+        resolved_callable: Option<FunctionId>, // Filled by name resolver - operators are functions
         span: Option<Span>,
     },
 
@@ -360,16 +350,16 @@ pub enum Expression {
 
     MemberAccess {
         object: ExprId,
-        // CHANGED: Use `Identifier` for the member name, which matches the grammar.
         member: Identifier,
-        // This is still useful for linking directly to a table field definition.
-        resolved_field: Option<TableField>,
+        resolved_table: Option<TableId>, // Filled by name resolver - what table this field belongs to
+        resolved_field: Option<TableField>, // Filled by name resolver - field details
         span: Option<Span>,
     },
 
     TableRowAccess {
         table: ExprId,
         key_values: Vec<KeyValue>,
+        resolved_table: Option<TableId>, // Filled by name resolver
         span: Option<Span>,
     },
 
@@ -398,10 +388,10 @@ pub enum Literal {
 
 #[derive(Debug, Clone)]
 pub struct KeyValue {
-    // CHANGED: Use `Identifier` for the key, which aligns with the grammar.
     pub key: Identifier,
     pub value: ExprId,
-    pub resolved_field: Option<TableField>, // Filled by name resolver
+    pub resolved_table: Option<TableId>, // Filled by name resolver - what table this key belongs to
+    pub resolved_field: Option<TableField>, // Filled by name resolver - field details
     pub span: Option<Span>,
 }
 
@@ -442,8 +432,8 @@ pub fn parse_and_analyze_program(source: &str) -> Result<Program, Vec<errors::As
 
 pub mod ast_builder;
 pub mod errors;
-pub mod prelude;
 pub mod name_resolver;
+pub mod prelude;
 // pub mod type_checker;
 // pub mod semantic_analyzer;
 // Complex modules with legacy issues:

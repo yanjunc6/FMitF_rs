@@ -1,0 +1,10 @@
+// Test for undefined operator (should fail)
+function test_undefined() -> int {
+    var x: int = 5;
+    var y: int = 3;
+    
+    // This should cause an error - undefined operator
+    var result: int = x $$$ y;
+    
+    return result;
+}

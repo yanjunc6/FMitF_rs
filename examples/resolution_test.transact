@@ -1,0 +1,16 @@
+// Test to verify specific resolution fields are working
+function test_function() -> int {
+    var local_var: int = 42;
+    return local_var;
+}
+
+table TestTable {
+    id: int;
+    value: int;
+}
+
+function test_resolution() -> int {
+    var x: int = test_function();
+    TestTable[id: 1].value = x;
+    return TestTable[id: 1].value;
+}

@@ -1,0 +1,48 @@
+// Simple test for user-defined operators
+// Tests basic operator definition and resolution
+
+// === SIMPLE CUSTOM OPERATORS ===
+operator @$(x: int, y: int) -> int {
+    return x * 2 + y;
+}
+
+operator !&(value: int) -> int {
+    return value * 3;
+}
+
+operator +-+(a: int, b: int) -> int {
+    return a + b * 2;
+}
+
+// === TEST FUNCTIONS ===
+function test_basic_operators() -> int {
+    var x: int = 5;
+    var y: int = 3;
+    
+    // Test simple custom operators
+    var result1: int = x @$ y;        // Should be 5 * 2 + 3 = 13
+    var result2: int = !& result1;    // Should be 13 * 3 = 39
+    
+    return result2;
+}
+
+function test_complex_operators() -> int {
+    var a: int = 4;
+    var b: int = 2;
+    
+    // Test complex multi-character operators
+    var step1: int = a +-+ b;         // Should be 4 + 2 * 2 = 8
+    
+    return step1;
+}
+
+// === MAIN DEMONSTRATION ===
+function demonstrate_operators() {
+    var basic_result: int = test_basic_operators();
+    var complex_result: int = test_complex_operators();
+    
+    // Use results in an expression with custom operators
+    var final: int = basic_result @$ complex_result;
+    
+    assert final > 0;
+}
