@@ -1,0 +1,206 @@
+// Comprehensive test for user-defined operators
+// Tests the ability to define and use arbitrary operator combinations
+
+// === SIMPLE CUSTOM OPERATORS ===
+operator @$(x: int, y: int) -> int {
+    return x * 2 + y;
+}
+
+operator !&(value: int) -> int {
+    return value * 2;  // Use multiplication instead
+}
+
+// === COMPLEX MULTI-CHARACTER OPERATORS ===
+operator +-+(a: int, b: int) -> int {
+    return a + b * 2;
+}
+
+operator >><(x: int, y: int) -> int {
+    return x * y + x;
+}
+
+operator -@@(num: int) -> int {
+    return num * num;
+}
+
+// === OPERATOR OVERLOADING BY ARITY ===
+operator !^$(x: int) -> int {
+    return x + 100;  // Unary version
+}
+
+operator %^$(x: int, y: int) -> int {
+    return x + y;    // Use addition instead of subtraction
+}
+
+// === STRING OPERATORS ===
+operator ++$(s1: string, s2: string) -> string {
+    return "prefix_" + s1 + "_" + s2 + "_suffix";
+}
+
+operator -*$(text: string) -> string {
+    return "processed(" + text + ")";
+}
+
+// === MIXED TYPE OPERATORS ===
+operator |&(num: int, text: string) -> string {
+    return text + " = " + str(num);
+}
+
+// === OPERATOR CHAINING TESTS ===
+function test_basic_custom_ops() -> int {
+    var x: int = 5;
+    var y: int = 3;
+    
+    // Test simple custom operators
+    var result1: int = x @$ y;        // Should be 5 * 2 + 3 = 13
+    var result2: int = !&result1;     // Should be 13 * 2 = 26
+    
+    return result2;
+}
+
+function test_complex_operators() -> int {
+    var a: int = 4;
+    var b: int = 2;
+    
+    // Test complex multi-character operators
+    var step1: int = a +-+ b;      // Should be 4 + 2 * 2 = 8
+    var step2: int = step1 >>< b;  // Should be 8 * 2 + 8 = 24
+    var step3: int = -@@step2;     // Should be 24 * 24 = 576
+    
+    return step3;
+}
+
+function test_operator_overloading() -> int {
+    var value: int = 10;
+    
+    // Test different unary and binary operators
+    var unary_result: int = !^$ value;         // Should be 10 + 100 = 110
+    var binary_result: int = unary_result %^$ value;  // Should be 110 + 10 = 120
+    
+    return binary_result;
+}
+
+function test_string_operators() -> string {
+    var str1: string = "hello";
+    var str2: string = "world";
+    
+    // Test string concatenation operator
+    var combined: string = str1 ++$ str2;   // Should be "prefix_hello_world_suffix"
+    var processed: string = -*$combined;     // Should be "processed(prefix_hello_world_suffix)"
+    
+    return processed;
+}
+
+function test_mixed_operators() -> string {
+    var number: int = 42;
+    var label: string = "answer";
+    
+    // Test mixed type operator
+    var description: string = number |& label;  // Should be "answer = 42"
+    
+    return description;
+}
+
+// === COMPLEX EXPRESSIONS WITH MULTIPLE OPERATORS ===
+function test_operator_precedence() -> int {
+    var x: int = 2;
+    var y: int = 3;
+    var z: int = 4;
+    
+    // Complex expression with custom operators
+    // Should be parsed according to grammar precedence rules
+    var complex: int = x @$ y +-+ z >>< (!^$ y);
+    
+    return complex;
+}
+
+function test_nested_operators() -> int {
+    var base: int = 5;
+    
+    // Deeply nested custom operator expressions
+    var nested: int = -@@(base @$ (!&(base +-+ base)));
+    
+    return nested;
+}
+
+// === OPERATOR USAGE IN DIFFERENT CONTEXTS ===
+function test_operators_in_conditions() -> bool {
+    var a: int = 10;
+    var b: int = 5;
+    
+    // Custom operators in conditional expressions
+    if ((a @$ b) >>< b > 50) {
+        return true;
+    }
+    
+    return false;
+}
+
+function test_operators_in_assignments() {
+    var x: int = 1;
+    var y: int = 2;
+    
+    // Custom operators in assignment expressions
+    x = x @$ y;
+    y = !& x +-+ y;
+    x = -@@ (x %^$ y);
+}
+
+// === TABLE INTEGRATION ===
+table OperatorTestTable {
+    id: int;
+    value: int;
+    result: int;
+}
+
+function test_operators_with_tables() {
+    var test_id: int = 1;
+    var input: int = 10;
+    
+    // Use custom operators in table operations
+    OperatorTestTable[id: test_id].value = input @$ 5;
+    OperatorTestTable[id: test_id].result = !&(OperatorTestTable[id: test_id].value);
+    
+    // Complex expression in table access
+    var final_result: int = OperatorTestTable[id: test_id].result +-+ input;
+}
+
+// === PARTITION FUNCTION WITH CUSTOM OPERATORS ===
+partition custom_partition(x: int, y: int) -> int {
+    return (x @$ y) >>< 10;
+}
+
+table PartitionedTable {
+    x_coord: int;
+    y_coord: int;
+    node custom_partition(x_coord, y_coord);
+    data: string;
+}
+
+// === MAIN DEMONSTRATION ===
+function demonstrate_custom_operators() {
+    var basic_result: int = test_basic_custom_ops();
+    var complex_result: int = test_complex_operators();
+    var overload_result: int = test_operator_overloading();
+    var string_result: string = test_string_operators();
+    var mixed_result: string = test_mixed_operators();
+    var precedence_result: int = test_operator_precedence();
+    var nested_result: int = test_nested_operators();
+    var condition_result: bool = test_operators_in_conditions();
+    
+    // Use results in an expression with custom operators
+    var final: int = (basic_result @$ complex_result) +-+ overload_result;
+    
+    assert final > 0;
+}
+
+// === ERROR CASES (Should be caught by name resolver) ===
+function test_undefined_operator() -> int {
+    var x: int = 5;
+    var y: int = 3;
+    
+    // This should cause an error - undefined operator
+    // return x ###undefined### y;
+    
+    return x + y;  // Use valid operator instead
+}

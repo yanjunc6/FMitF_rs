@@ -41,12 +41,11 @@ impl AstBuilder {
     }
 
     pub fn new_with_prelude() -> Result<Self, AstError> {
-        let program = Program::with_prelude()
-            .map_err(|e| AstError {
-                kind: AstErrorKind::ParseError(format!("Failed to load prelude: {}", e)),
-                span: None,
-            })?;
-        
+        let program = Program::with_prelude().map_err(|e| AstError {
+            kind: AstErrorKind::ParseError(format!("Failed to load prelude: {}", e)),
+            span: None,
+        })?;
+
         Ok(AstBuilder {
             program,
             errors: Vec::new(),
@@ -343,7 +342,7 @@ impl AstBuilder {
 
     fn build_table_field(&mut self, pair: Pair<Rule>) -> Result<TableElement, Vec<AstError>> {
         let span = self.pair_to_span(&pair);
-        
+
         for inner in pair.into_inner() {
             match inner.as_rule() {
                 Rule::field_declaration => {
@@ -358,7 +357,7 @@ impl AstBuilder {
                 _ => {}
             }
         }
-        
+
         Err(vec![AstError {
             kind: AstErrorKind::UnexpectedRule("Empty table field".to_string()),
             span: Some(span),
@@ -370,7 +369,7 @@ impl AstBuilder {
         let mut is_primary = false;
         let mut name = None;
         let mut ty = None;
-        
+
         for inner in pair.into_inner() {
             match inner.as_rule() {
                 Rule::identifier => {
@@ -387,21 +386,21 @@ impl AstBuilder {
                 }
             }
         }
-        
+
         let name = name.ok_or_else(|| {
             vec![AstError {
                 kind: AstErrorKind::MissingField("field name".to_string()),
                 span: Some(span.clone()),
             }]
         })?;
-        
+
         let ty = ty.ok_or_else(|| {
             vec![AstError {
                 kind: AstErrorKind::MissingField("field type".to_string()),
                 span: Some(span.clone()),
             }]
         })?;
-        
+
         Ok(TableElement::Field(TableField {
             is_primary,
             name,
@@ -414,7 +413,7 @@ impl AstBuilder {
         let span = self.pair_to_span(&pair);
         let mut name = None;
         let mut args = Vec::new();
-        
+
         for inner in pair.into_inner() {
             match inner.as_rule() {
                 Rule::identifier => {
@@ -426,14 +425,14 @@ impl AstBuilder {
                 _ => {}
             }
         }
-        
+
         let name = name.ok_or_else(|| {
             vec![AstError {
                 kind: AstErrorKind::MissingField("node name".to_string()),
                 span: Some(span.clone()),
             }]
         })?;
-        
+
         Ok(TableElement::Node(TableNode {
             name,
             args,
@@ -442,16 +441,19 @@ impl AstBuilder {
         }))
     }
 
-    fn build_invariant_declaration(&mut self, pair: Pair<Rule>) -> Result<TableElement, Vec<AstError>> {
+    fn build_invariant_declaration(
+        &mut self,
+        pair: Pair<Rule>,
+    ) -> Result<TableElement, Vec<AstError>> {
         let span = self.pair_to_span(&pair);
-        
+
         for inner in pair.into_inner() {
             if inner.as_rule() == Rule::expression {
                 let expr = self.build_expression(inner)?;
                 return Ok(TableElement::Invariant(expr));
             }
         }
-        
+
         Err(vec![AstError {
             kind: AstErrorKind::MissingField("invariant expression".to_string()),
             span: Some(span),
@@ -483,8 +485,6 @@ impl AstBuilder {
         Ok(Identifier {
             name,
             span: Some(span),
-            resolved: None,
-            resolved_type: None,
         })
     }
 
@@ -553,6 +553,7 @@ impl AstBuilder {
         Ok(self.program.params.alloc(Parameter {
             name,
             ty,
+            resolved_type: None, // Filled by type checker
             span: Some(span),
         }))
     }
@@ -564,7 +565,10 @@ impl AstBuilder {
             match inner.as_rule() {
                 Rule::primitive_type => {
                     let ident = self.build_identifier(inner.into_inner().next().unwrap())?;
-                    return Ok(self.program.types.alloc(Type::Named(ident)));
+                    return Ok(self.program.types.alloc(Type::Named {
+                        name: ident,
+                        resolved_type: None, // Filled by name resolver
+                    }));
                 }
                 Rule::generic_type => {
                     return self.build_generic_type(inner);
@@ -607,6 +611,7 @@ impl AstBuilder {
         })?;
 
         Ok(self.program.types.alloc(Type::Generic {
+            resolved_base_type: None, // Filled by name resolver
             base,
             args,
             span: Some(span),
@@ -753,6 +758,7 @@ impl AstBuilder {
         })?;
 
         Ok(self.program.var_decls.alloc(VarDecl {
+            resolved_type: None, // Filled by type checker
             name,
             ty,
             init,
@@ -1008,6 +1014,7 @@ impl AstBuilder {
 
         // Create the loop variable declaration
         let var_decl = VarDecl {
+            resolved_type: None, // Filled by type checker
             name: var_name,
             ty: Some(var_type),
             init: None,
@@ -1058,7 +1065,7 @@ impl AstBuilder {
     fn build_assignment(&mut self, pair: Pair<Rule>) -> Result<ExprId, Vec<AstError>> {
         let span = self.pair_to_span(&pair);
         let inner_pairs: Vec<_> = pair.into_inner().collect();
-        
+
         match inner_pairs.len() {
             1 => {
                 // No assignment, just the expression
@@ -1067,25 +1074,23 @@ impl AstBuilder {
             2 => {
                 // Assignment: level10_expr and ("=" ~ assignment) group
                 let lhs = self.build_level10_expr(inner_pairs[0].clone())?;
-                
+
                 // The second element should be the assignment part
                 let rhs = self.build_assignment(inner_pairs[1].clone())?; // Right-associative
-                
+
                 Ok(self.program.expressions.alloc(Expression::Assignment {
                     lhs,
                     rhs,
                     span: Some(span),
                 }))
             }
-            _ => {
-                Err(vec![AstError {
-                    kind: AstErrorKind::UnexpectedRule(format!(
-                        "Invalid assignment structure: expected 1 or 2 elements, got {}",
-                        inner_pairs.len()
-                    )),
-                    span: Some(span),
-                }])
-            }
+            _ => Err(vec![AstError {
+                kind: AstErrorKind::UnexpectedRule(format!(
+                    "Invalid assignment structure: expected 1 or 2 elements, got {}",
+                    inner_pairs.len()
+                )),
+                span: Some(span),
+            }]),
         }
     }
 
@@ -1111,6 +1116,7 @@ impl AstBuilder {
             let right = self.build_level9_expr(inner_pairs[i + 1].clone())?;
 
             expr = self.program.expressions.alloc(Expression::Binary {
+                resolved_callable: None,
                 left: expr,
                 op,
                 right,
@@ -1142,6 +1148,7 @@ impl AstBuilder {
             let right = self.build_level9_expr(inner_pairs[2].clone())?;
 
             return Ok(self.program.expressions.alloc(Expression::Binary {
+                resolved_callable: None,
                 left,
                 op,
                 right,
@@ -1177,6 +1184,7 @@ impl AstBuilder {
             let right = self.build_level7_expr(inner_pairs[i + 1].clone())?;
 
             expr = self.program.expressions.alloc(Expression::Binary {
+                resolved_callable: None,
                 left: expr,
                 op,
                 right,
@@ -1208,6 +1216,7 @@ impl AstBuilder {
             let right = self.build_level7_expr(inner_pairs[2].clone())?;
 
             return Ok(self.program.expressions.alloc(Expression::Binary {
+                resolved_callable: None,
                 left,
                 op,
                 right,
@@ -1243,6 +1252,7 @@ impl AstBuilder {
             let right = self.build_level5_expr(inner_pairs[i + 1].clone())?;
 
             expr = self.program.expressions.alloc(Expression::Binary {
+                resolved_callable: None,
                 left: expr,
                 op,
                 right,
@@ -1274,6 +1284,7 @@ impl AstBuilder {
             let right = self.build_level5_expr(inner_pairs[2].clone())?;
 
             return Ok(self.program.expressions.alloc(Expression::Binary {
+                resolved_callable: None,
                 left,
                 op,
                 right,
@@ -1309,6 +1320,7 @@ impl AstBuilder {
             let right = self.build_level3_expr(inner_pairs[i + 1].clone())?;
 
             expr = self.program.expressions.alloc(Expression::Binary {
+                resolved_callable: None,
                 left: expr,
                 op,
                 right,
@@ -1343,6 +1355,7 @@ impl AstBuilder {
             let right = self.build_prefix(inner_pairs[i + 1].clone())?;
 
             expr = self.program.expressions.alloc(Expression::Binary {
+                resolved_callable: None,
                 left: expr,
                 op,
                 right,
@@ -1374,6 +1387,7 @@ impl AstBuilder {
             let expr = self.build_prefix(inner_pairs[1].clone())?; // Right-associative
 
             return Ok(self.program.expressions.alloc(Expression::Unary {
+                resolved_callable: None,
                 op,
                 expr,
                 span: Some(span),
@@ -1469,6 +1483,7 @@ impl AstBuilder {
         })?;
 
         Ok(self.program.expressions.alloc(Expression::MemberAccess {
+            resolved_table: None, // Filled by name resolver
             object,
             member,
             resolved_field: None,
@@ -1491,6 +1506,7 @@ impl AstBuilder {
         }
 
         Ok(self.program.expressions.alloc(Expression::TableRowAccess {
+            resolved_table: None, // Filled by name resolver
             table,
             key_values,
             span: Some(span),
@@ -1510,10 +1526,11 @@ impl AstBuilder {
                 }
                 Rule::identifier => {
                     let identifier = self.build_identifier(inner)?;
-                    return Ok(self
-                        .program
-                        .expressions
-                        .alloc(Expression::Identifier(identifier)));
+                    return Ok(self.program.expressions.alloc(Expression::Identifier {
+                        name: identifier,
+                        resolved_declaration: None, // Filled by name resolver
+                        span: Some(span),
+                    }));
                 }
                 Rule::expression => {
                     // Grouped expression
@@ -1676,6 +1693,7 @@ impl AstBuilder {
         })?;
 
         Ok(KeyValue {
+            resolved_table: None, // Filled by name resolver
             key,
             value,
             resolved_field: None,

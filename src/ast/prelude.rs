@@ -1,6 +1,6 @@
-use id_arena::Arena;
-use crate::ast::*;
 use crate::ast::ast_builder::AstBuilder;
+use crate::ast::*;
+use id_arena::Arena;
 
 // ============================================================================
 // --- Default Program
@@ -31,14 +31,14 @@ impl Program {
     pub fn with_prelude() -> Result<Self, Box<dyn std::error::Error>> {
         // Read the prelude.transact file
         let prelude_content = include_str!("prelude.transact");
-        
+
         // Parse the prelude directly into a fresh program
         let mut program = AstBuilder::parse_raw(prelude_content)
             .map_err(|errs| format!("Failed to parse prelude: {:?}", errs))?;
-        
+
         // Clear spans from all prelude elements
         clear_all_spans(&mut program);
-        
+
         Ok(program)
     }
 }
@@ -69,32 +69,32 @@ fn clear_all_spans(program: &mut Program) {
             }
         }
     }
-    
+
     // Clear spans from all other items in arenas
     for (_, var_decl) in program.var_decls.iter_mut() {
         clear_var_decl_spans(var_decl);
     }
-    
+
     for (_, param) in program.params.iter_mut() {
         clear_param_spans(param);
     }
-    
+
     for (_, generic_param) in program.generic_params.iter_mut() {
         clear_generic_param_spans(generic_param);
     }
-    
+
     for (_, type_) in program.types.iter_mut() {
         clear_type_spans(type_);
     }
-    
+
     for (_, statement) in program.statements.iter_mut() {
         clear_statement_spans(statement);
     }
-    
+
     for (_, expression) in program.expressions.iter_mut() {
         clear_expression_spans(expression);
     }
-    
+
     for (_, block) in program.blocks.iter_mut() {
         clear_block_spans(block);
     }
@@ -143,15 +143,24 @@ fn clear_generic_param_spans(generic_param: &mut GenericParam) {
 
 fn clear_type_spans(type_: &mut Type) {
     match type_ {
-        Type::Named(id) => {
+        Type::Named { name: id, .. } => {
             clear_identifier_spans(id);
         }
-        Type::Generic { base, args: _, span } => {
+        Type::Generic {
+            base,
+            args: _,
+            span,
+            ..
+        } => {
             *span = None;
             clear_identifier_spans(base);
             // Args will be handled recursively
         }
-        Type::Function { params: _, return_type: _, span } => {
+        Type::Function {
+            params: _,
+            return_type: _,
+            span,
+        } => {
             *span = None;
             // Params and return type will be handled recursively
         }
@@ -175,13 +184,17 @@ fn clear_statement_spans(statement: &mut Statement) {
         Statement::Assert { span, .. } => {
             *span = None;
         }
-        Statement::Hop { decorators, span, .. } => {
+        Statement::Hop {
+            decorators, span, ..
+        } => {
             *span = None;
             for decorator in decorators {
                 clear_decorator_spans(decorator);
             }
         }
-        Statement::HopsFor { decorators, span, .. } => {
+        Statement::HopsFor {
+            decorators, span, ..
+        } => {
             *span = None;
             for decorator in decorators {
                 clear_decorator_spans(decorator);
@@ -201,7 +214,7 @@ fn clear_expression_spans(expression: &mut Expression) {
         Expression::Literal { span, .. } => {
             *span = None;
         }
-        Expression::Identifier(_) => {
+        Expression::Identifier { .. } => {
             // Identifier spans handled separately
         }
         Expression::Binary { span, .. } => {

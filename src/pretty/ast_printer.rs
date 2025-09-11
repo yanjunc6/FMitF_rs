@@ -483,7 +483,9 @@ impl<'a> AstPrintVisitor<'a> {
     fn format_type_id(&self, type_id: TypeId) -> String {
         if let Some(ty) = self.program.types.get(type_id) {
             match ty {
-                Type::Named(identifier) => {
+                Type::Named {
+                    name: identifier, ..
+                } => {
                     if SHOW_IDS {
                         format!(
                             "{} ({})",
@@ -569,7 +571,7 @@ impl<'a> AstPrintVisitor<'a> {
                         format!("{{{}}}", pairs.join(", "))
                     }
                 },
-                Expression::Identifier(id) => self.format_identifier(id),
+                Expression::Identifier { name: id, .. } => self.format_identifier(id),
                 Expression::Binary {
                     left, op, right, ..
                 } => {
@@ -643,18 +645,26 @@ impl<'a> AstPrintVisitor<'a> {
                 Expression::Grouped { expr, .. } => {
                     format!("({})", self.format_expression_id(*expr))
                 }
-                Expression::Lambda { params, return_type, .. } => {
+                Expression::Lambda {
+                    params,
+                    return_type,
+                    ..
+                } => {
                     let param_strs: Vec<String> = params
                         .iter()
                         .map(|&param_id| {
                             if let Some(param) = self.program.params.get(param_id) {
-                                format!("{}: {}", self.format_identifier(&param.name), self.format_type_id(param.ty))
+                                format!(
+                                    "{}: {}",
+                                    self.format_identifier(&param.name),
+                                    self.format_type_id(param.ty)
+                                )
                             } else {
                                 format!("<unknown_param_{}>", param_id.index())
                             }
                         })
                         .collect();
-                    
+
                     format!(
                         "({}) -> {} {{ ... }}",
                         param_strs.join(", "),
@@ -672,32 +682,9 @@ impl<'a> AstPrintVisitor<'a> {
     }
 
     fn format_identifier(&self, identifier: &Identifier) -> String {
-        let resolved_info = match &identifier.resolved {
-            Some(decl_ref) => match decl_ref {
-                DeclRef::Function(id) => format!("func#{}", id.index()),
-                DeclRef::Type(id) => format!("type#{}", id.index()),
-                DeclRef::Const(id) => format!("const#{}", id.index()),
-                DeclRef::Table(id) => format!("table#{}", id.index()),
-                DeclRef::Var(id) => format!("var#{}", id.index()),
-                DeclRef::Param(id) => format!("param#{}", id.index()),
-                DeclRef::GenericParam(id) => format!("generic#{}", id.index()),
-            },
-            None => "*".to_string(),
-        };
-
-        let type_info = match &identifier.resolved_type {
-            Some(resolved_type) => match resolved_type {
-                ResolvedType::Type(id) => format!(":type#{}", id.index()),
-                ResolvedType::Table(id) => format!(":table#{}", id.index()),
-                ResolvedType::TypeVar(id) => format!(":typevar#{}", id.index()),
-                ResolvedType::Generic { base, .. } => format!(":generic#{}", base.index()),
-                ResolvedType::Function { .. } => ":function".to_string(),
-                ResolvedType::Void => ":void".to_string(),
-            },
-            None => ":*".to_string(),
-        };
-
-        format!("{}[{}{}]", identifier.name, resolved_info, type_info)
+        // For now, just show the name
+        // Resolution info is stored at specific AST nodes, not in the identifier
+        identifier.name.clone()
     }
 
     fn format_identifier_with_id(&self, identifier: &Identifier, id: FunctionId) -> String {
