@@ -9,158 +9,216 @@
 use super::*;
 
 #[allow(unused_variables)]
-pub trait Visitor<'ast>: Sized {
-    fn visit_program(&mut self, prog: &'ast Program) {
-        walk_program(self, prog);
+pub trait Visitor<'ast, R: Default = (), E = ()>: Sized {
+    fn visit_program(&mut self, prog: &'ast Program) -> Result<R, E> {
+        walk_program(self, prog)
     }
 
     // Items
-    fn visit_item(&mut self, prog: &'ast Program, item: &'ast Item) {
-        walk_item(self, prog, item);
+    fn visit_item(&mut self, prog: &'ast Program, item: &'ast Item) -> Result<R, E> {
+        walk_item(self, prog, item)
     }
     fn visit_callable_decl(
         &mut self,
         prog: &'ast Program,
         id: FunctionId,
         decl: &'ast CallableDecl,
-    ) {
-        walk_callable_decl(self, prog, id, decl);
+    ) -> Result<R, E> {
+        walk_callable_decl(self, prog, id, decl)
     }
-    fn visit_type_decl(&mut self, prog: &'ast Program, id: TypeDeclId, decl: &'ast TypeDecl) {}
-    fn visit_const_decl(&mut self, prog: &'ast Program, id: ConstId, decl: &'ast ConstDecl) {
-        walk_const_decl(self, prog, id, decl);
+    fn visit_type_decl(
+        &mut self,
+        prog: &'ast Program,
+        id: TypeDeclId,
+        decl: &'ast TypeDecl,
+    ) -> Result<R, E> {
+        Ok(R::default())
     }
-    fn visit_table_decl(&mut self, prog: &'ast Program, id: TableId, decl: &'ast TableDecl) {
-        walk_table_decl(self, prog, id, decl);
+    fn visit_const_decl(
+        &mut self,
+        prog: &'ast Program,
+        id: ConstId,
+        decl: &'ast ConstDecl,
+    ) -> Result<R, E> {
+        walk_const_decl(self, prog, id, decl)
     }
-    fn visit_var_decl(&mut self, prog: &'ast Program, id: VarId, decl: &'ast VarDecl) {
-        walk_var_decl(self, prog, id, decl);
+    fn visit_table_decl(
+        &mut self,
+        prog: &'ast Program,
+        id: TableId,
+        decl: &'ast TableDecl,
+    ) -> Result<R, E> {
+        walk_table_decl(self, prog, id, decl)
     }
-    fn visit_param(&mut self, prog: &'ast Program, id: ParamId, param: &'ast Parameter) {
-        walk_param(self, prog, id, param);
+    fn visit_var_decl(
+        &mut self,
+        prog: &'ast Program,
+        id: VarId,
+        decl: &'ast VarDecl,
+    ) -> Result<R, E> {
+        walk_var_decl(self, prog, id, decl)
+    }
+    fn visit_param(
+        &mut self,
+        prog: &'ast Program,
+        id: ParamId,
+        param: &'ast Parameter,
+    ) -> Result<R, E> {
+        walk_param(self, prog, id, param)
     }
     fn visit_generic_param(
         &mut self,
         prog: &'ast Program,
         id: GenericParamId,
         param: &'ast GenericParam,
-    ) {
+    ) -> Result<R, E> {
+        Ok(R::default())
     }
 
     // Statements
-    fn visit_stmt(&mut self, prog: &'ast Program, id: StmtId) {
-        walk_stmt(self, prog, id);
+    fn visit_stmt(&mut self, prog: &'ast Program, id: StmtId) -> Result<R, E> {
+        walk_stmt(self, prog, id)
     }
-    fn visit_block(&mut self, prog: &'ast Program, id: BlockId) {
-        walk_block(self, prog, id);
+    fn visit_block(&mut self, prog: &'ast Program, id: BlockId) -> Result<R, E> {
+        walk_block(self, prog, id)
     }
 
     // Expressions
-    fn visit_expr(&mut self, prog: &'ast Program, id: ExprId) {
-        walk_expr(self, prog, id);
+    fn visit_expr(&mut self, prog: &'ast Program, id: ExprId) -> Result<R, E> {
+        walk_expr(self, prog, id)
     }
 
     // Types
-    fn visit_ast_type(&mut self, prog: &'ast Program, id: AstTypeId) {
-        walk_ast_type(self, prog, id);
+    fn visit_ast_type(&mut self, prog: &'ast Program, id: AstTypeId) -> Result<R, E> {
+        walk_ast_type(self, prog, id)
     }
 }
 
 // Default walkers
-pub fn walk_program<'ast, V: Visitor<'ast>>(visitor: &mut V, prog: &'ast Program) {
+pub fn walk_program<'ast, R: Default, E, V: Visitor<'ast, R, E>>(
+    visitor: &mut V,
+    prog: &'ast Program,
+) -> Result<R, E> {
     for item in &prog.declarations {
-        visitor.visit_item(prog, item);
+        let _ = visitor.visit_item(prog, item)?;
     }
+    Ok(R::default())
 }
 
-pub fn walk_item<'ast, V: Visitor<'ast>>(visitor: &mut V, prog: &'ast Program, item: &'ast Item) {
+pub fn walk_item<'ast, R: Default, E, V: Visitor<'ast, R, E>>(
+    visitor: &mut V,
+    prog: &'ast Program,
+    item: &'ast Item,
+) -> Result<R, E> {
     match item {
-        Item::Callable(id) => visitor.visit_callable_decl(prog, *id, &prog.functions[*id]),
-        Item::Type(id) => visitor.visit_type_decl(prog, *id, &prog.type_decls[*id]),
-        Item::Const(id) => visitor.visit_const_decl(prog, *id, &prog.const_decls[*id]),
-        Item::Table(id) => visitor.visit_table_decl(prog, *id, &prog.table_decls[*id]),
+        Item::Callable(id) => {
+            let _ = visitor.visit_callable_decl(prog, *id, &prog.functions[*id])?;
+        }
+        Item::Type(id) => {
+            let _ = visitor.visit_type_decl(prog, *id, &prog.type_decls[*id])?;
+        }
+        Item::Const(id) => {
+            let _ = visitor.visit_const_decl(prog, *id, &prog.const_decls[*id])?;
+        }
+        Item::Table(id) => {
+            let _ = visitor.visit_table_decl(prog, *id, &prog.table_decls[*id])?;
+        }
     }
+    Ok(R::default())
 }
 
-pub fn walk_callable_decl<'ast, V: Visitor<'ast>>(
+pub fn walk_callable_decl<'ast, R: Default, E, V: Visitor<'ast, R, E>>(
     visitor: &mut V,
     prog: &'ast Program,
     _id: FunctionId,
     decl: &'ast CallableDecl,
-) {
+) -> Result<R, E> {
     for param_id in &decl.generic_params {
-        visitor.visit_generic_param(prog, *param_id, &prog.generic_params[*param_id]);
+        let _ = visitor.visit_generic_param(prog, *param_id, &prog.generic_params[*param_id])?;
     }
     for param_id in &decl.params {
-        visitor.visit_param(prog, *param_id, &prog.params[*param_id]);
+        let _ = visitor.visit_param(prog, *param_id, &prog.params[*param_id])?;
     }
     if let Some(type_id) = decl.return_type {
-        visitor.visit_ast_type(prog, type_id);
+        let _ = visitor.visit_ast_type(prog, type_id)?;
     }
     for expr_id in &decl.assumptions {
-        visitor.visit_expr(prog, *expr_id);
+        let _ = visitor.visit_expr(prog, *expr_id)?;
     }
     if let Some(block_id) = decl.body {
-        visitor.visit_block(prog, block_id);
+        let _ = visitor.visit_block(prog, block_id)?;
     }
+    Ok(R::default())
 }
 
-pub fn walk_const_decl<'ast, V: Visitor<'ast>>(
+pub fn walk_const_decl<'ast, R: Default, E, V: Visitor<'ast, R, E>>(
     visitor: &mut V,
     prog: &'ast Program,
     _id: ConstId,
     decl: &'ast ConstDecl,
-) {
-    visitor.visit_ast_type(prog, decl.ty);
-    visitor.visit_expr(prog, decl.value);
+) -> Result<R, E> {
+    let _ = visitor.visit_ast_type(prog, decl.ty)?;
+    let _ = visitor.visit_expr(prog, decl.value)?;
+    Ok(R::default())
 }
 
-pub fn walk_table_decl<'ast, V: Visitor<'ast>>(
+pub fn walk_table_decl<'ast, R: Default, E, V: Visitor<'ast, R, E>>(
     visitor: &mut V,
     prog: &'ast Program,
     _id: TableId,
     decl: &'ast TableDecl,
-) {
+) -> Result<R, E> {
     for element in &decl.elements {
         match element {
-            TableElement::Field(field) => visitor.visit_ast_type(prog, field.ty),
+            TableElement::Field(field) => {
+                let _ = visitor.visit_ast_type(prog, field.ty)?;
+            }
             TableElement::Node(node) => {
                 for arg_id in &node.args {
-                    visitor.visit_expr(prog, *arg_id);
+                    let _ = visitor.visit_expr(prog, *arg_id)?;
                 }
             }
-            TableElement::Invariant(expr_id) => visitor.visit_expr(prog, *expr_id),
+            TableElement::Invariant(expr_id) => {
+                let _ = visitor.visit_expr(prog, *expr_id)?;
+            }
         }
     }
+    Ok(R::default())
 }
 
-pub fn walk_var_decl<'ast, V: Visitor<'ast>>(
+pub fn walk_var_decl<'ast, R: Default, E, V: Visitor<'ast, R, E>>(
     visitor: &mut V,
     prog: &'ast Program,
     _id: VarId,
     decl: &'ast VarDecl,
-) {
+) -> Result<R, E> {
     if let Some(type_id) = decl.ty {
-        visitor.visit_ast_type(prog, type_id);
+        let _ = visitor.visit_ast_type(prog, type_id)?;
     }
     if let Some(expr_id) = decl.init {
-        visitor.visit_expr(prog, expr_id);
+        let _ = visitor.visit_expr(prog, expr_id)?;
     }
+    Ok(R::default())
 }
 
-pub fn walk_param<'ast, V: Visitor<'ast>>(
+pub fn walk_param<'ast, R: Default, E, V: Visitor<'ast, R, E>>(
     visitor: &mut V,
     prog: &'ast Program,
     _id: ParamId,
     param: &'ast Parameter,
-) {
-    visitor.visit_ast_type(prog, param.ty);
+) -> Result<R, E> {
+    let _ = visitor.visit_ast_type(prog, param.ty)?;
+    Ok(R::default())
 }
 
-pub fn walk_stmt<'ast, V: Visitor<'ast>>(visitor: &mut V, prog: &'ast Program, id: StmtId) {
+pub fn walk_stmt<'ast, R: Default, E, V: Visitor<'ast, R, E>>(
+    visitor: &mut V,
+    prog: &'ast Program,
+    id: StmtId,
+) -> Result<R, E> {
     match &prog.statements[id] {
         Statement::VarDecl(var_id) => {
-            visitor.visit_var_decl(prog, *var_id, &prog.var_decls[*var_id])
+            let _ = visitor.visit_var_decl(prog, *var_id, &prog.var_decls[*var_id])?;
         }
         Statement::If {
             condition,
@@ -168,10 +226,10 @@ pub fn walk_stmt<'ast, V: Visitor<'ast>>(visitor: &mut V, prog: &'ast Program, i
             else_block,
             ..
         } => {
-            visitor.visit_expr(prog, *condition);
-            visitor.visit_block(prog, *then_block);
+            let _ = visitor.visit_expr(prog, *condition)?;
+            let _ = visitor.visit_block(prog, *then_block)?;
             if let Some(else_id) = else_block {
-                visitor.visit_block(prog, *else_id);
+                let _ = visitor.visit_block(prog, *else_id)?;
             }
         }
         Statement::For {
@@ -183,25 +241,33 @@ pub fn walk_stmt<'ast, V: Visitor<'ast>>(visitor: &mut V, prog: &'ast Program, i
         } => {
             if let Some(init) = init {
                 match init {
-                    ForInit::VarDecl(id) => visitor.visit_var_decl(prog, *id, &prog.var_decls[*id]),
-                    ForInit::Expression(id) => visitor.visit_expr(prog, *id),
+                    ForInit::VarDecl(id) => {
+                        let _ = visitor.visit_var_decl(prog, *id, &prog.var_decls[*id])?;
+                    }
+                    ForInit::Expression(id) => {
+                        let _ = visitor.visit_expr(prog, *id)?;
+                    }
                 }
             }
             if let Some(cond_id) = condition {
-                visitor.visit_expr(prog, *cond_id);
+                let _ = visitor.visit_expr(prog, *cond_id)?;
             }
             if let Some(update_id) = update {
-                visitor.visit_expr(prog, *update_id);
+                let _ = visitor.visit_expr(prog, *update_id)?;
             }
-            visitor.visit_block(prog, *body);
+            let _ = visitor.visit_block(prog, *body)?;
         }
         Statement::Return { value, .. } => {
             if let Some(expr_id) = value {
-                visitor.visit_expr(prog, *expr_id);
+                let _ = visitor.visit_expr(prog, *expr_id)?;
             }
         }
-        Statement::Assert { expr, .. } => visitor.visit_expr(prog, *expr),
-        Statement::Hop { body, .. } => visitor.visit_block(prog, *body),
+        Statement::Assert { expr, .. } => {
+            let _ = visitor.visit_expr(prog, *expr)?;
+        }
+        Statement::Hop { body, .. } => {
+            let _ = visitor.visit_block(prog, *body)?;
+        }
         Statement::HopsFor {
             var,
             start,
@@ -209,57 +275,77 @@ pub fn walk_stmt<'ast, V: Visitor<'ast>>(visitor: &mut V, prog: &'ast Program, i
             body,
             ..
         } => {
-            visitor.visit_var_decl(prog, *var, &prog.var_decls[*var]);
-            visitor.visit_expr(prog, *start);
-            visitor.visit_expr(prog, *end);
-            visitor.visit_block(prog, *body);
+            let _ = visitor.visit_var_decl(prog, *var, &prog.var_decls[*var])?;
+            let _ = visitor.visit_expr(prog, *start)?;
+            let _ = visitor.visit_expr(prog, *end)?;
+            let _ = visitor.visit_block(prog, *body)?;
         }
-        Statement::Expression { expr, .. } => visitor.visit_expr(prog, *expr),
-        Statement::Block(block_id) => visitor.visit_block(prog, *block_id),
+        Statement::Expression { expr, .. } => {
+            let _ = visitor.visit_expr(prog, *expr)?;
+        }
+        Statement::Block(block_id) => {
+            let _ = visitor.visit_block(prog, *block_id)?;
+        }
     }
+    Ok(R::default())
 }
 
-pub fn walk_block<'ast, V: Visitor<'ast>>(visitor: &mut V, prog: &'ast Program, id: BlockId) {
+pub fn walk_block<'ast, R: Default, E, V: Visitor<'ast, R, E>>(
+    visitor: &mut V,
+    prog: &'ast Program,
+    id: BlockId,
+) -> Result<R, E> {
     for stmt_id in &prog.blocks[id].statements {
-        visitor.visit_stmt(prog, *stmt_id);
+        let _ = visitor.visit_stmt(prog, *stmt_id)?;
     }
+    Ok(R::default())
 }
 
-pub fn walk_expr<'ast, V: Visitor<'ast>>(visitor: &mut V, prog: &'ast Program, id: ExprId) {
+pub fn walk_expr<'ast, R: Default, E, V: Visitor<'ast, R, E>>(
+    visitor: &mut V,
+    prog: &'ast Program,
+    id: ExprId,
+) -> Result<R, E> {
     match &prog.expressions[id] {
         Expression::Literal { value, .. } => {
             if let Literal::List(items) = value {
                 for item_id in items {
-                    visitor.visit_expr(prog, *item_id);
+                    let _ = visitor.visit_expr(prog, *item_id)?;
                 }
             }
         }
         Expression::Identifier { .. } => {}
         Expression::Binary { left, right, .. } => {
-            visitor.visit_expr(prog, *left);
-            visitor.visit_expr(prog, *right);
+            let _ = visitor.visit_expr(prog, *left)?;
+            let _ = visitor.visit_expr(prog, *right)?;
         }
-        Expression::Unary { expr, .. } => visitor.visit_expr(prog, *expr),
+        Expression::Unary { expr, .. } => {
+            let _ = visitor.visit_expr(prog, *expr)?;
+        }
         Expression::Assignment { lhs, rhs, .. } => {
-            visitor.visit_expr(prog, *lhs);
-            visitor.visit_expr(prog, *rhs);
+            let _ = visitor.visit_expr(prog, *lhs)?;
+            let _ = visitor.visit_expr(prog, *rhs)?;
         }
         Expression::Call { callee, args, .. } => {
-            visitor.visit_expr(prog, *callee);
+            let _ = visitor.visit_expr(prog, *callee)?;
             for arg_id in args {
-                visitor.visit_expr(prog, *arg_id);
+                let _ = visitor.visit_expr(prog, *arg_id)?;
             }
         }
-        Expression::MemberAccess { object, .. } => visitor.visit_expr(prog, *object),
+        Expression::MemberAccess { object, .. } => {
+            let _ = visitor.visit_expr(prog, *object)?;
+        }
         Expression::TableRowAccess {
             table, key_values, ..
         } => {
-            visitor.visit_expr(prog, *table);
+            let _ = visitor.visit_expr(prog, *table)?;
             for kv in key_values {
-                visitor.visit_expr(prog, kv.value);
+                let _ = visitor.visit_expr(prog, kv.value)?;
             }
         }
-        Expression::Grouped { expr, .. } => visitor.visit_expr(prog, *expr),
+        Expression::Grouped { expr, .. } => {
+            let _ = visitor.visit_expr(prog, *expr)?;
+        }
         Expression::Lambda {
             params,
             return_type,
@@ -267,20 +353,25 @@ pub fn walk_expr<'ast, V: Visitor<'ast>>(visitor: &mut V, prog: &'ast Program, i
             ..
         } => {
             for param_id in params {
-                visitor.visit_param(prog, *param_id, &prog.params[*param_id]);
+                let _ = visitor.visit_param(prog, *param_id, &prog.params[*param_id])?;
             }
-            visitor.visit_ast_type(prog, *return_type);
-            visitor.visit_block(prog, *body);
+            let _ = visitor.visit_ast_type(prog, *return_type)?;
+            let _ = visitor.visit_block(prog, *body)?;
         }
     }
+    Ok(R::default())
 }
 
-pub fn walk_ast_type<'ast, V: Visitor<'ast>>(visitor: &mut V, prog: &'ast Program, id: AstTypeId) {
+pub fn walk_ast_type<'ast, R: Default, E, V: Visitor<'ast, R, E>>(
+    visitor: &mut V,
+    prog: &'ast Program,
+    id: AstTypeId,
+) -> Result<R, E> {
     match &prog.types[id] {
         AstType::Named { .. } => {}
         AstType::Generic { args, .. } => {
             for arg_id in args {
-                visitor.visit_ast_type(prog, *arg_id);
+                let _ = visitor.visit_ast_type(prog, *arg_id)?;
             }
         }
         AstType::Function {
@@ -289,9 +380,10 @@ pub fn walk_ast_type<'ast, V: Visitor<'ast>>(visitor: &mut V, prog: &'ast Progra
             ..
         } => {
             for param_id in params {
-                visitor.visit_ast_type(prog, *param_id);
+                let _ = visitor.visit_ast_type(prog, *param_id)?;
             }
-            visitor.visit_ast_type(prog, *return_type);
+            let _ = visitor.visit_ast_type(prog, *return_type)?;
         }
     }
+    Ok(R::default())
 }
