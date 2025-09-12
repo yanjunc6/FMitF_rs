@@ -69,101 +69,52 @@ The entire AST is owned by the `Program` struct, which contains the arenas.
 ---
 
 ## 3. AST Traversal Patterns
+To analyze or transform the AST you can use one of three traversal/transform patterns implemented in the codebase. Each pattern separates the traversal (walking the structure) from the action logic.
 
-To analyze or transform the AST, you should use one of the three provided traversal traits. These patterns separate the traversal logic (walking the tree) from the action logic (what to do at each node).
+High-level mapping:
+- Read-only traversal: `src/ast/visit.rs` -> trait `Visitor<'ast, R: Default = (), E = ()>`
+- Mutable, in-place traversal: `src/ast/visit_mut.rs` -> trait `VisitorMut<'ast, R: Default = (), E = ()>`
+- Transform/fold traversal: `src/ast/fold.rs` -> trait `Fold`
 
-### 3.1. `visit::Visitor` (Read-only Inspection)
+### Visitor (read-only)
 
--   **Purpose:** To traverse the AST and gather information without modifying it.
--   **How it Works:**
-    -   You implement the `Visitor` trait.
-    -   Methods have the signature `fn visit_expr(&mut self, prog: &'ast Program, id: ExprId)`.
-    -   Methods return `()`.
-    -   You store any collected data within your visitor struct's state (e.g., a `Vec<Warning>`).
-    -   You only need to override the `visit_*` methods for the nodes you care about. The default `walk_*` functions handle recursive traversal automatically.
--   **Example Use Case:**
-    -   A linter that checks for style violations.
-    -   A symbol collector that gathers all declared variables in a scope.
+- Trait signature: `pub trait Visitor<'ast, R: Default = (), E = ()>: Sized`.
+- Methods take `&'ast Program` (borrowed) and node identifiers or references and return `Result<R, E>` where `R` is a return/accumulator type (defaults to `()`), and `E` is an error type.
+- Every `visit_*` method has a default implementation that calls a corresponding walker function (e.g. `visit_expr` -> `walk_expr`). These helper walkers perform the recursive traversal and call back into the visitor for children.
+- Walkers are named `walk_*` (for example: `walk_program`, `walk_item`, `walk_callable_decl`, `walk_stmt`, `walk_expr`, `walk_ast_type`). They traverse the arenas and call visitor methods for child nodes.
+- Use this when you only need to inspect the AST without mutating it (linters, collectors, analyses).
 
-```rust
-struct FunctionLinter {
-    errors: Vec<String>,
-}
+Example important signatures:
+- `fn visit_callable_decl(&mut self, prog: &'ast Program, id: FunctionId, decl: &'ast CallableDecl) -> Result<R, E>`
+- `fn visit_expr(&mut self, prog: &'ast Program, id: ExprId) -> Result<R, E>`
 
-impl<'ast> Visitor<'ast> for FunctionLinter {
-    // Only override the function visitor
-    fn visit_callable_decl(&mut self, _prog: &'ast Program, _id: FunctionId, decl: &'ast CallableDecl) {
-        if decl.name.to_string().chars().next().unwrap().is_uppercase() {
-            self.errors.push("Function names should start with a lowercase letter.".to_string());
-        }
-    }
-}
-```
+### VisitorMut (in-place mutation)
 
-### 3.2. `visit_mut::VisitorMut` (In-place Mutation)
+- Trait signature: `pub trait VisitorMut<'ast, R: Default = (), E = ()>: Sized`.
+- Methods take `&mut Program` and node identifiers and return `Result<R, E>`.
+- Default implementations call `walk_*_mut` helper functions (e.g. `walk_expr_mut`) that perform recursive traversal while allowing mutations.
+- The mutable walkers frequently clone IDs or clone node data (e.g. `let decl = prog.functions[id].clone()`) to avoid multiple simultaneous mutable borrows of the `Program` arenas. This is intentional to satisfy the borrow checker while still allowing in-place updates via the visitor methods.
+- Use this when you want to modify nodes in the existing arenas (name resolution, filling `resolved_*` fields, type inference that writes into nodes).
 
--   **Purpose:** To traverse the AST and modify nodes in-place.
--   **How it Works:**
-    -   You implement the `VisitorMut` trait.
-    -   Methods have the signature `fn visit_expr(&mut self, prog: &mut Program, id: ExprId)`. Notice `&mut Program`.
-    -   Methods return `()`. Modifications are done directly by mutating the node fetched from the arena.
-    -   Because you are modifying the arenas while iterating, the `walk_*_mut` functions often need to `clone()` node data to satisfy the borrow checker.
--   **Example Use Case:**
-    -   **Name Resolution:** Finding an `Identifier` expression and filling its `resolved_declaration` field.
-    -   **Type Checking:** Filling the `resolved_type` field on expressions and variable declarations.
+Example important signatures:
+- `fn visit_program(&mut self, prog: &mut Program) -> Result<R, E>`
+- `fn visit_expr(&mut self, prog: &mut Program, id: ExprId) -> Result<R, E>`
 
-```rust
-struct TypeResolver { /* ... */ }
+### Fold (transform / reconstruction)
 
-impl VisitorMut for TypeResolver {
-    fn visit_expr(&mut self, prog: &mut Program, id: ExprId) {
-        // Compute the type of the expression...
-        let computed_type = /* ... */;
+- Trait signature: `pub trait Fold: Sized`.
+- Fold methods take ownership of nodes (or the whole `Program`) and return transformed nodes. For example: `fn fold_program(&mut self, prog: Program) -> Program` and `fn fold_expr(&mut self, prog: &Program, id: ExprId, expr: Expression) -> Expression`.
+- Default fold implementations call `foldwalk_*` helper functions (note the helper name prefix is `foldwalk_`), e.g. `foldwalk_program`, `foldwalk_expr`, which traverse the program and invoke the folder on child nodes.
+- The `Fold` implementation in the repository is a simplified pattern that clones from the read-only `Program` (since arenas are owned elsewhere) and returns new or rebuilt nodes. In a full arena-aware implementation you would rebuild arenas; the current helpers clone children from `prog` and call `folder.fold_*` on them.
+- Use `Fold` when you want to produce a new AST (constant folding, desugaring, lowering).
 
-        // Mutate the node in the arena
-        let expr_node = &mut prog.expressions[id];
-        expr_node.resolved_type = Some(computed_type);
+Example important signatures:
+- `fn fold_expr(&mut self, prog: &Program, id: ExprId, expr: Expression) -> Expression`
+- `fn fold_program(&mut self, prog: Program) -> Program`
 
-        // Continue traversal
-        walk_expr_mut(self, prog, id);
-    }
-}
-```
+Notes and gotchas
+- Visitor/VisitorMut use a generic return type `R` (with `Default`) and an error type `E`, so visitors can accumulate results or return early with errors.
+- `VisitorMut` and `Fold` helpers clone node data to avoid borrowing issues; be mindful of the extra copies when writing performance-critical code.
+- The default walker names are: `walk_*` for read-only visitors, `walk_*_mut` for mutable visitors, and `foldwalk_*` for the folder helpers.
 
-### 3.3. `fold::Fold` (Transformation & Reconstruction)
-
--   **Purpose:** To traverse the AST and **transform** it by replacing nodes with new ones, effectively creating a new (or modified) tree. This is similar to the `syn::Fold` pattern.
--   **How it Works:**
-    -   You implement the `Fold` trait.
-    -   Methods have the signature `fn fold_expr(&mut self, expr: Expression) -> Expression`.
-    -   Each `fold_*` method takes ownership of a node and **returns a new, potentially different, node**.
-    -   The default `walk_and_fold_*` functions handle the recursion: they call `fold_*` on all children, then rebuild the parent node using the *new* children that were returned.
--   **Example Use Case:**
-    -   **Constant Folding:** Replacing an expression like `2 + 3` with the single literal `5`.
-    -   **Desugaring:** Replacing a `for` loop node with its equivalent `while` loop representation.
-    -   Lowering the AST to an Intermediate Representation (IR).
-
-```rust
-struct ConstantFolder { /* ... */ }
-
-impl Fold for ConstantFolder {
-    fn fold_expr(&mut self, expr: Expression) -> Expression {
-        // First, fold the children of the expression
-        let folded_expr = walk_and_fold_expr(self, expr);
-
-        // Now, apply the transformation to the current node
-        if let Expression::Binary { op, left, right, .. } = folded_expr {
-            if op.value == "+" {
-                // Try to evaluate `left + right`
-                if let (Expression::Literal(Literal::Integer(l)), Expression::Literal(Literal::Integer(r))) = (&left, &right) {
-                    // If successful, return a new Literal node instead of the Binary node
-                    let result = l + r;
-                    return Expression::Literal(Literal::Integer(result));
-                }
-            }
-        }
-        // Otherwise, return the (already folded) expression as is
-        folded_expr
-    }
-}
-```
+That covers the API shape and recommended usage for the three traversal patterns in the codebase.
