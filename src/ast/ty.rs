@@ -2,7 +2,7 @@
 //!
 //! Type-related AST nodes and resolved type representations.
 
-use super::common::{Identifier};
+use super::common::Identifier;
 use super::item::{TableId, TypeDeclId};
 use crate::util::Span;
 use id_arena::Id;

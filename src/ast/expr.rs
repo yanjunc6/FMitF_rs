@@ -3,7 +3,7 @@
 //! Expression AST nodes, representing constructs that evaluate to a value.
 
 use super::common::{Identifier, IdentifierResolution, Spanned};
-use super::item::{FunctionId, ParamId, TableId, TableField};
+use super::item::{FunctionId, ParamId, TableField, TableId};
 use super::stmt::BlockId;
 use super::ty::{AstTypeId, ResolvedType};
 use crate::util::Span;

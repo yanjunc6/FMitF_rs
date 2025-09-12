@@ -2,7 +2,7 @@
 //!
 //! Statement AST nodes, like `let`, `if`, `return`, etc.
 
-use super::common::{Decorator};
+use super::common::Decorator;
 use super::expr::ExprId;
 use super::item::VarId;
 use crate::util::Span;

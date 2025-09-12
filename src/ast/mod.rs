@@ -11,12 +11,12 @@ use id_arena::Arena;
 // Re-export sub-modules for a clean public API
 pub mod common;
 pub mod expr;
+pub mod fold;
 pub mod item;
 pub mod stmt;
 pub mod ty;
 pub mod visit;
 pub mod visit_mut;
-pub mod fold;
 
 // Publicly re-export all the important types from submodules
 pub use common::*;
@@ -50,4 +50,3 @@ pub struct Program {
     pub expressions: Arena<Expression>,
     pub blocks: Arena<Block>,
 }
-

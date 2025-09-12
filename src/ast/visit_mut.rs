@@ -73,7 +73,7 @@ pub fn walk_item_mut<V: VisitorMut>(visitor: &mut V, prog: &mut Program, item: I
 
 pub fn walk_callable_decl_mut<V: VisitorMut>(visitor: &mut V, prog: &mut Program, id: FunctionId) {
     let decl = prog.functions[id].clone(); // Clone to work around borrow checker
-    
+
     for param_id in &decl.generic_params {
         visitor.visit_generic_param(prog, *param_id);
     }
@@ -131,14 +131,25 @@ pub fn walk_stmt_mut<V: VisitorMut>(visitor: &mut V, prog: &mut Program, id: Stm
     let stmt = prog.statements[id].clone();
     match stmt {
         Statement::VarDecl(var_id) => visitor.visit_var_decl(prog, var_id),
-        Statement::If { condition, then_block, else_block, .. } => {
+        Statement::If {
+            condition,
+            then_block,
+            else_block,
+            ..
+        } => {
             visitor.visit_expr(prog, condition);
             visitor.visit_block(prog, then_block);
             if let Some(else_id) = else_block {
                 visitor.visit_block(prog, else_id);
             }
         }
-        Statement::For { init, condition, update, body, .. } => {
+        Statement::For {
+            init,
+            condition,
+            update,
+            body,
+            ..
+        } => {
             if let Some(init) = init {
                 match init {
                     ForInit::VarDecl(id) => visitor.visit_var_decl(prog, id),
@@ -160,7 +171,13 @@ pub fn walk_stmt_mut<V: VisitorMut>(visitor: &mut V, prog: &mut Program, id: Stm
         }
         Statement::Assert { expr, .. } => visitor.visit_expr(prog, expr),
         Statement::Hop { body, .. } => visitor.visit_block(prog, body),
-        Statement::HopsFor { var, start, end, body, .. } => {
+        Statement::HopsFor {
+            var,
+            start,
+            end,
+            body,
+            ..
+        } => {
             visitor.visit_var_decl(prog, var);
             visitor.visit_expr(prog, start);
             visitor.visit_expr(prog, end);
@@ -205,14 +222,21 @@ pub fn walk_expr_mut<V: VisitorMut>(visitor: &mut V, prog: &mut Program, id: Exp
             }
         }
         Expression::MemberAccess { object, .. } => visitor.visit_expr(prog, object),
-        Expression::TableRowAccess { table, key_values, .. } => {
+        Expression::TableRowAccess {
+            table, key_values, ..
+        } => {
             visitor.visit_expr(prog, table);
             for kv in key_values {
                 visitor.visit_expr(prog, kv.value);
             }
         }
         Expression::Grouped { expr, .. } => visitor.visit_expr(prog, expr),
-        Expression::Lambda { params, return_type, body, .. } => {
+        Expression::Lambda {
+            params,
+            return_type,
+            body,
+            ..
+        } => {
             for param_id in params {
                 visitor.visit_param(prog, param_id);
             }
@@ -231,7 +255,11 @@ pub fn walk_ast_type_mut<V: VisitorMut>(visitor: &mut V, prog: &mut Program, id:
                 visitor.visit_ast_type(prog, arg_id);
             }
         }
-        AstType::Function { params, return_type, .. } => {
+        AstType::Function {
+            params,
+            return_type,
+            ..
+        } => {
             for param_id in params {
                 visitor.visit_ast_type(prog, param_id);
             }

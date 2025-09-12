@@ -25,10 +25,10 @@
 //! - All statement types including control flow
 //! - Type annotations and generic parameters
 
-use std::io::{self, Write};
-use crate::ast::*;
-use crate::ast::visit::Visitor;
 use super::PrettyPrint;
+use crate::ast::visit::Visitor;
+use crate::ast::*;
+use std::io::{self, Write};
 
 /// A pretty printer that uses the visitor pattern to traverse and format AST nodes.
 pub struct AstPrinter<W: Write> {
@@ -91,7 +91,11 @@ impl<W: Write> AstPrinter<W> {
     }
 
     /// Prints a generic parameter list.
-    fn print_generic_params(&mut self, prog: &Program, params: &[GenericParamId]) -> io::Result<()> {
+    fn print_generic_params(
+        &mut self,
+        prog: &Program,
+        params: &[GenericParamId],
+    ) -> io::Result<()> {
         if !params.is_empty() {
             self.write_text("<")?;
             for (i, param_id) in params.iter().enumerate() {
@@ -139,7 +143,11 @@ impl<W: Write> AstPrinter<W> {
                 }
                 self.write_text(">")?;
             }
-            AstType::Function { params, return_type, .. } => {
+            AstType::Function {
+                params,
+                return_type,
+                ..
+            } => {
                 self.write_text("(")?;
                 for (i, param_id) in params.iter().enumerate() {
                     if i > 0 {
@@ -163,7 +171,9 @@ impl<W: Write> AstPrinter<W> {
             Expression::Identifier { name, .. } => {
                 self.write_text(&name.name)?;
             }
-            Expression::Binary { left, op, right, .. } => {
+            Expression::Binary {
+                left, op, right, ..
+            } => {
                 self.print_expr(prog, *left)?;
                 self.write_text(&format!(" {} ", op.value))?;
                 self.print_expr(prog, *right)?;
@@ -193,7 +203,9 @@ impl<W: Write> AstPrinter<W> {
                 self.write_text(".")?;
                 self.write_text(&member.name)?;
             }
-            Expression::TableRowAccess { table, key_values, .. } => {
+            Expression::TableRowAccess {
+                table, key_values, ..
+            } => {
                 self.print_expr(prog, *table)?;
                 self.write_text("[")?;
                 for (i, kv) in key_values.iter().enumerate() {
@@ -211,7 +223,12 @@ impl<W: Write> AstPrinter<W> {
                 self.print_expr(prog, *expr)?;
                 self.write_text(")")?;
             }
-            Expression::Lambda { params, return_type, body, .. } => {
+            Expression::Lambda {
+                params,
+                return_type,
+                body,
+                ..
+            } => {
                 self.write_text("|")?;
                 self.print_params(prog, params)?;
                 self.write_text("| -> ")?;
@@ -264,36 +281,47 @@ impl<W: Write> AstPrinter<W> {
                 self.write_indent()?;
                 self.write_text("let ")?;
                 self.write_text(&var_decl.name.name)?;
-                
+
                 if let Some(type_id) = var_decl.ty {
                     self.write_text(": ")?;
                     self.print_ast_type(prog, type_id)?;
                 }
-                
+
                 if let Some(init_id) = var_decl.init {
                     self.write_text(" = ")?;
                     self.print_expr(prog, init_id)?;
                 }
-                
+
                 writeln!(self.writer, ";")?;
             }
-            Statement::If { condition, then_block, else_block, .. } => {
+            Statement::If {
+                condition,
+                then_block,
+                else_block,
+                ..
+            } => {
                 self.write_indent()?;
                 self.write_text("if ")?;
                 self.print_expr(prog, *condition)?;
                 self.write_text(" ")?;
                 self.print_block(prog, *then_block)?;
-                
+
                 if let Some(else_id) = else_block {
                     self.write_text(" else ")?;
                     self.print_block(prog, *else_id)?;
                 }
                 writeln!(self.writer)?;
             }
-            Statement::For { init, condition, update, body, .. } => {
+            Statement::For {
+                init,
+                condition,
+                update,
+                body,
+                ..
+            } => {
                 self.write_indent()?;
                 self.write_text("for (")?;
-                
+
                 if let Some(init) = init {
                     match init {
                         ForInit::VarDecl(var_id) => {
@@ -314,19 +342,19 @@ impl<W: Write> AstPrinter<W> {
                         }
                     }
                 }
-                
+
                 self.write_text("; ")?;
-                
+
                 if let Some(cond_id) = condition {
                     self.print_expr(prog, *cond_id)?;
                 }
-                
+
                 self.write_text("; ")?;
-                
+
                 if let Some(update_id) = update {
                     self.print_expr(prog, *update_id)?;
                 }
-                
+
                 self.write_text(") ")?;
                 self.print_block(prog, *body)?;
                 writeln!(self.writer)?;
@@ -346,14 +374,23 @@ impl<W: Write> AstPrinter<W> {
                 self.print_expr(prog, *expr)?;
                 writeln!(self.writer, ";")?;
             }
-            Statement::Hop { decorators, body, .. } => {
+            Statement::Hop {
+                decorators, body, ..
+            } => {
                 self.print_decorators(decorators)?;
                 self.write_indent()?;
                 self.write_text("hop ")?;
                 self.print_block(prog, *body)?;
                 writeln!(self.writer)?;
             }
-            Statement::HopsFor { decorators, var, start, end, body, .. } => {
+            Statement::HopsFor {
+                decorators,
+                var,
+                start,
+                end,
+                body,
+                ..
+            } => {
                 self.print_decorators(decorators)?;
                 self.write_indent()?;
                 self.write_text("hops for ")?;
@@ -384,11 +421,11 @@ impl<W: Write> AstPrinter<W> {
         let block = &prog.blocks[block_id];
         writeln!(self.writer, "{{")?;
         self.indent();
-        
+
         for stmt_id in &block.statements {
             self.print_stmt(prog, *stmt_id)?;
         }
-        
+
         self.dedent();
         self.write_indent()?;
         self.write_text("}")?;
@@ -410,28 +447,33 @@ impl<'ast, W: Write> Visitor<'ast> for AstPrinter<W> {
         }
     }
 
-    fn visit_callable_decl(&mut self, prog: &'ast Program, _id: FunctionId, decl: &'ast CallableDecl) {
+    fn visit_callable_decl(
+        &mut self,
+        prog: &'ast Program,
+        _id: FunctionId,
+        decl: &'ast CallableDecl,
+    ) {
         let _ = self.print_decorators(&decl.decorators);
         let _ = self.write_indent();
-        
+
         let kind_str = match decl.kind {
             CallableKind::Function => "fn",
             CallableKind::Operator => "op",
             CallableKind::Partition => "partition",
             CallableKind::Transaction => "transaction",
         };
-        
+
         let _ = self.write_text(kind_str);
         let _ = self.write_text(" ");
         let _ = self.write_text(&decl.name.name);
         let _ = self.print_generic_params(prog, &decl.generic_params);
         let _ = self.print_params(prog, &decl.params);
-        
+
         if let Some(return_type) = decl.return_type {
             let _ = self.write_text(" -> ");
             let _ = self.print_ast_type(prog, return_type);
         }
-        
+
         if !decl.assumptions.is_empty() {
             let _ = writeln!(self.writer);
             let _ = self.write_indent();
@@ -443,14 +485,14 @@ impl<'ast, W: Write> Visitor<'ast> for AstPrinter<W> {
                 let _ = self.print_expr(prog, *assumption_id);
             }
         }
-        
+
         if let Some(body_id) = decl.body {
             let _ = self.write_text(" ");
             let _ = self.print_block(prog, body_id);
         } else {
             let _ = self.write_text(";");
         }
-        
+
         let _ = writeln!(self.writer);
     }
 
@@ -480,7 +522,7 @@ impl<'ast, W: Write> Visitor<'ast> for AstPrinter<W> {
         let _ = self.write_text(&decl.name.name);
         let _ = writeln!(self.writer, " {{");
         self.indent();
-        
+
         for element in &decl.elements {
             match element {
                 TableElement::Field(field) => {
@@ -514,7 +556,7 @@ impl<'ast, W: Write> Visitor<'ast> for AstPrinter<W> {
                 }
             }
         }
-        
+
         self.dedent();
         let _ = self.write_indent();
         let _ = writeln!(self.writer, "}}");
