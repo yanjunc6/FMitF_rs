@@ -7,12 +7,12 @@ pub use crate::util::CompilerError;
 
 /// Parse source code into AST with complete processing including name resolution,
 /// type checking, and semantic analysis
-pub fn parse_and_analyze_program(source: &str) -> Result<Program, Vec<CompilerError>> {
+pub fn parse_and_analyze_program(
+    source: &str,
+    filename: &'static str,
+) -> Result<Program, Vec<CompilerError>> {
     // Stage 1: Basic AST parsing with prelude
-    let mut program = match ast_builder::parse_program(source) {
-        Ok(program) => program,
-        Err(error) => return Err(vec![error]),
-    };
+    let program = ast_builder::parse_program(source, filename)?;
 
     // Stage 2: Name resolution
     // if let Err(errors) = name_resolver::resolve_names(&mut program) {
@@ -53,8 +53,6 @@ pub mod util;
 
 // Core types - using unified error system
 pub use errors::FrontEndErrorKind;
-
-use crate::cli::compiler::Compiler;
 
 // AST builder functions
 

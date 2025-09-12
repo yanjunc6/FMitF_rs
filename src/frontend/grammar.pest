@@ -32,7 +32,7 @@ operator_symbol = @{ operator_char+ }
 // ----------------------------------------------------------------------------
 // -- 2. Types
 // ----------------------------------------------------------------------------
-type = { generic_type | function_type | primitive_type }
+type_rule = { generic_type | function_type | primitive_type }
 
 // -- A basic type name, which can be a built-in primitive or a user-defined type/table name.
 primitive_type = { identifier }
@@ -41,9 +41,9 @@ primitive_type = { identifier }
 generic_type = { identifier ~ "<" ~ type_list ~ ">" }
 
 // -- A function type like `(int, string) -> bool`. This is right-associative.
-function_type = { "(" ~ type_list? ~ ")" ~ "->" ~ type }
+function_type = { "(" ~ type_list? ~ ")" ~ "->" ~ type_rule }
 
-type_list = { type ~ ("," ~ type)* }
+type_list = { type_rule ~ ("," ~ type_rule)* }
 
 // ----------------------------------------------------------------------------
 // -- 3. Top-Level Program Structure
@@ -73,14 +73,14 @@ callable_declaration = {
     ) ~
     generic_param_list? ~
     "(" ~ parameter_list? ~ ")" ~
-    ("->" ~ type)? ~
+    ("->" ~ type_rule)? ~
     assume_statement* ~
     (block | ";") // A body is a block `{}`, or `;` for a forward declaration.
 }
 
 type_declaration = { decorator* ~ "type" ~ identifier ~ generic_param_list? ~ ";" }
 
-const_declaration = { "const" ~ identifier ~ ":" ~ type ~ "=" ~ expression ~ ";" }
+const_declaration = { "const" ~ identifier ~ ":" ~ type_rule ~ "=" ~ expression ~ ";" }
 
 table_declaration = {
     "table" ~ identifier ~ "{" ~ table_field* ~ "}"
@@ -91,14 +91,14 @@ table_field = {
   | invariant_declaration
 }
 
-field_declaration = { "primary"? ~ identifier ~ ":" ~ type ~ ";" }
+field_declaration = { "primary"? ~ identifier ~ ":" ~ type_rule ~ ";" }
 node_declaration = { "node" ~ identifier ~ "(" ~ expression_list? ~ ")" ~ ";" }
 invariant_declaration = { "invariant" ~ expression ~ ";" }
 
 // -- Helpers for declarations
 generic_param_list = { "<" ~ identifier ~ ("," ~ identifier)* ~ ">" }
 parameter_list     = { parameter ~ ("," ~ parameter)* }
-parameter          = { identifier ~ ":" ~ type }
+parameter          = { identifier ~ ":" ~ type_rule }
 assume_statement   = { "assume" ~ expression ~ ";" }
 
 // ----------------------------------------------------------------------------
@@ -117,7 +117,7 @@ statement = _{
 }
 
 block = { "{" ~ statement* ~ "}" }
-var_declaration = { "var" ~ identifier ~ (":" ~ type)? ~ ("=" ~ expression)? ~ ";" }
+var_declaration = { "var" ~ identifier ~ (":" ~ type_rule)? ~ ("=" ~ expression)? ~ ";" }
 if_statement = { "if" ~ expression ~ block ~ ("else" ~ block)? }
 return_statement = { "return" ~ expression? ~ ";" }
 assert_statement = { "assert" ~ expression ~ ";" }
@@ -131,7 +131,7 @@ hop_block = { decorator* ~ "hop" ~ block }
 
 // -- IMPLEMENTATION NOTE: `hops for` has a distinct syntax from the regular `for` loop.
 //    It defines a new variable over an explicit `start` to `end` range.
-hops_for_loop = { decorator* ~ "hops" ~ "for" ~ identifier ~ ":" ~ type ~ "=" ~ expression ~ "to" ~ expression ~ block }
+hops_for_loop = { decorator* ~ "hops" ~ "for" ~ identifier ~ ":" ~ type_rule ~ "=" ~ expression ~ "to" ~ expression ~ block }
 
 
 // ----------------------------------------------------------------------------
@@ -214,7 +214,7 @@ literal = {
 }
 
 // -- Lambda expressions for functional programming
-lambda_expression = { "(" ~ parameter_list? ~ ")" ~ "->" ~ type ~ block }
+lambda_expression = { "(" ~ parameter_list? ~ ")" ~ "->" ~ type_rule ~ block }
 
 primitive_literal = _{ float | integer | string | bool }
 integer = @{ ASCII_DIGIT+ }
