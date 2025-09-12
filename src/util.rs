@@ -3,9 +3,10 @@
 //! This module provides a unified error system for consistent,
 //! beautiful error reporting across all compiler stages.
 
-use ariadne::{Color, Label, Report, ReportKind, Source};
+use ariadne::{Cache, Color, Label, Report, ReportKind, Source};
 use std::collections::HashMap;
-use std::fmt;
+use std::fmt::Debug;
+use std::{fmt, io};
 
 // ============================================================================
 // --- Unified Span Type
@@ -16,15 +17,15 @@ use std::fmt;
 pub struct Span {
     pub start: usize,
     pub end: usize,
-    pub file_name: &'static str,
+    pub filename: &'static str,
 }
 
 impl Span {
-    pub fn new(start: usize, end: usize, file_name: &'static str) -> Self {
+    pub fn new(start: usize, end: usize, filename: &'static str) -> Self {
         Self {
             start,
             end,
-            file_name,
+            filename,
         }
     }
 
@@ -82,78 +83,87 @@ pub trait CompilerError: fmt::Display + fmt::Debug + Send + Sync {
     }
 
     /// Source location span
-    fn span(&self) -> Option<Span> {
-        None
-    }
-
-    /// Set the span for this error
-    fn with_span(self, span: Span) -> Self
-    where
-        Self: Sized;
+    fn span(&self) -> Span;
 }
 
 // ============================================================================
 // --- Diagnostic Reporter
 // ============================================================================
 
-/// High-performance error reporter using ariadne
+/// High-performance error reporter using ariadne.
+///
+/// This struct holds all source files and acts as a cache for the reporting
+/// infrastructure, allowing for efficient reporting across multiple files.
 pub struct DiagnosticReporter {
-    sources: HashMap<String, String>,
+    sources: HashMap<String, Source<String>>, // Changed to String for both key and value
 }
 
 impl DiagnosticReporter {
+    /// Creates a new `DiagnosticReporter`.
     pub fn new() -> Self {
         Self {
             sources: HashMap::new(),
         }
     }
 
-    /// Add source file for error reporting
-    pub fn add_source(&mut self, filename: &str, content: &str) {
-        self.sources
-            .insert(filename.to_string(), content.to_string());
+    /// Adds a source file to the reporter's cache.
+    ///
+    /// The `filename` and `source_code` are now owned Strings to avoid lifetime issues.
+    pub fn add_source(&mut self, filename: impl Into<String>, source_code: impl Into<String>) {
+        let filename = filename.into();
+        let source_code = source_code.into();
+        self.sources.insert(filename, Source::from(source_code));
     }
 
-    /// Report a single error
-    pub fn report<E: CompilerError>(&self, error: &E, filename: &str) {
+    /// Reports a diagnostic (error, warning, or info) to `stderr`.
+    ///
+    /// This method takes any error that implements the `CompilerError` trait,
+    /// builds a report using `ariadne`, and prints it.
+    pub fn report<E: CompilerError>(&mut self, error: &E) -> io::Result<()> {
+        // Changed to &mut self
         let severity = error.severity();
-        let span_range = error.span().map(|s| s.range()).unwrap_or(0..0);
+        let message = error.to_string();
+        let code = error.code();
+        let span = error.span();
 
-        let mut report = Report::build(severity.report_kind(), (filename, span_range.clone()))
-            .with_code(error.code())
-            .with_message(error.to_string());
+        let mut report_builder =
+            Report::build(severity.report_kind(), (span.filename, span.range()))
+                .with_code(code)
+                .with_message(&message);
 
-        if let Some(span) = error.span() {
-            report = report.with_label(
-                Label::new((filename, span.range()))
-                    .with_message(error.code())
-                    .with_color(severity.color()),
-            );
-        }
+        // Add the primary label to the report if a span is available
+        report_builder = report_builder
+            .with_label(Label::new((span.filename, span.range())).with_color(severity.color()));
 
+        // Add a help message if the error provides one
         if let Some(help) = error.help() {
-            report = report.with_help(help);
+            report_builder = report_builder.with_help(help);
         }
 
-        let source = self
-            .sources
-            .get(filename)
-            .map(|s| Source::from(s.as_str()))
-            .unwrap_or_else(|| Source::from(""));
+        let report = report_builder.finish();
 
-        report.finish().eprint((filename, source)).ok();
-    }
-
-    /// Report multiple errors
-    pub fn report_all<E: CompilerError>(&self, errors: &[E], filename: &str) {
-        for error in errors {
-            self.report(error, filename);
-        }
+        // Print the report to stderr.
+        // We use the `Cache` implementation on `DiagnosticReporter` to provide
+        // the necessary source file content to `ariadne`.
+        report.eprint(self) // Now works with &mut self
     }
 }
 
-impl Default for DiagnosticReporter {
-    fn default() -> Self {
-        Self::new()
+/// Implementation of ariadne's `Cache` trait for our reporter.
+///
+/// This allows `ariadne` to fetch source file content by its filename,
+/// which is crucial for printing the code snippets in the error report.
+impl Cache<&str> for DiagnosticReporter {
+    // Changed from &'static str to &str
+    type Storage = String;
+
+    fn fetch(&mut self, id: &&str) -> Result<&Source<<Self as Cache<&str>>::Storage>, impl Debug> {
+        self.sources.get(*id).ok_or_else(|| {
+            Box::new(format!("Failed to fetch source: {}", id)) as Box<dyn fmt::Debug>
+        })
+    }
+
+    fn display<'a>(&self, id: &'a &str) -> Option<impl std::fmt::Display + 'a> {
+        Some(Box::new(*id))
     }
 }
