@@ -1,5 +1,4 @@
-use crate::ast_old::ast_builder::AstBuilder;
-use crate::ast_old::*;
+use crate::ast::Program;
 use id_arena::Arena;
 
 // ============================================================================

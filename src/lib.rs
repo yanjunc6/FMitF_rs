@@ -2,10 +2,10 @@
 
 pub mod ast;
 pub mod cli;
-// pub mod frontend;  // Disabled due to parsing dependencies
+pub mod frontend;
 pub mod pretty;
 pub mod util;
 
 // Re-export main functionality
 pub use ast::Program;
-pub use util::{CompilerError, DiagnosticReporter, Span};
+pub use util::{CompilerError, CompilerErrorKind, DiagnosticReporter, Span};
