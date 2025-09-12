@@ -21,6 +21,7 @@ target/
 #.idea/
 
 tmp/
+tmp*
 
 .github/
 .vscode/

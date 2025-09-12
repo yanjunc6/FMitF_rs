@@ -31,11 +31,3 @@ pub struct Decorator {
     pub name: Identifier,
     pub span: Option<Span>,
 }
-
-/// Wraps any value with its source location.
-#[derive(Debug, Clone)]
-pub struct Spanned<T> {
-    pub value: T,
-    /// The location of this value in the source code. `None` for built-ins or generated code.
-    pub span: Option<Span>,
-}

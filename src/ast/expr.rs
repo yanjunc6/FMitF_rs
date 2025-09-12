@@ -2,7 +2,7 @@
 //!
 //! Expression AST nodes, representing constructs that evaluate to a value.
 
-use super::common::{Identifier, IdentifierResolution, Spanned};
+use super::common::{Identifier, IdentifierResolution};
 use super::item::{FunctionId, ParamId, TableField, TableId};
 use super::stmt::BlockId;
 use super::ty::{AstTypeId, ResolvedType};
@@ -26,14 +26,14 @@ pub enum Expression {
     },
     Binary {
         left: ExprId,
-        op: Spanned<String>,
+        op: Identifier,
         right: ExprId,
         resolved_callable: Option<FunctionId>,
         resolved_type: Option<ResolvedType>,
         span: Option<Span>,
     },
     Unary {
-        op: Spanned<String>,
+        op: Identifier,
         expr: ExprId,
         resolved_callable: Option<FunctionId>,
         resolved_type: Option<ResolvedType>,

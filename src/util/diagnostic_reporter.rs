@@ -1,90 +1,8 @@
-//! Core utilities for error reporting and diagnostics
-//!
-//! This module provides a unified error system for consistent,
-//! beautiful error reporting across all compiler stages.
-
-use ariadne::{Cache, Color, Label, Report, ReportKind, Source};
+use crate::util::CompilerError;
+use ariadne::{Cache, Label, Report, Source};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::{fmt, io};
-
-// ============================================================================
-// --- Unified Span Type
-// ============================================================================
-
-/// Source location information - unified across all modules
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Span {
-    pub start: usize,
-    pub end: usize,
-    pub filename: &'static str,
-}
-
-impl Span {
-    pub fn new(start: usize, end: usize, filename: &'static str) -> Self {
-        Self {
-            start,
-            end,
-            filename,
-        }
-    }
-
-    pub fn range(&self) -> std::ops::Range<usize> {
-        self.start..self.end
-    }
-}
-
-// ============================================================================
-// --- Error Severity
-// ============================================================================
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Severity {
-    Error,
-    Warning,
-    Info,
-}
-
-impl Severity {
-    pub fn color(&self) -> Color {
-        match self {
-            Severity::Error => Color::Red,
-            Severity::Warning => Color::Yellow,
-            Severity::Info => Color::Blue,
-        }
-    }
-
-    pub fn report_kind(&self) -> ReportKind<'static> {
-        match self {
-            Severity::Error => ReportKind::Error,
-            Severity::Warning => ReportKind::Warning,
-            Severity::Info => ReportKind::Advice,
-        }
-    }
-}
-
-// ============================================================================
-// --- Unified Error Type
-// ============================================================================
-
-/// Core trait for all compiler errors with unified span support
-pub trait CompilerError: fmt::Display + fmt::Debug + Send + Sync {
-    /// Error code for categorization
-    fn code(&self) -> &'static str;
-
-    /// Severity level
-    fn severity(&self) -> Severity {
-        Severity::Error
-    }
-
-    /// Optional help message
-    fn help(&self) -> Option<&str> {
-        None
-    }
-
-    /// Source location span
-    fn span(&self) -> Span;
-}
 
 // ============================================================================
 // --- Diagnostic Reporter
@@ -119,12 +37,12 @@ impl DiagnosticReporter {
     ///
     /// This method takes any error that implements the `CompilerError` trait,
     /// builds a report using `ariadne`, and prints it.
-    pub fn report<E: CompilerError>(&mut self, error: &E) -> io::Result<()> {
+    pub fn report(&mut self, error: &CompilerError) -> io::Result<()> {
         // Changed to &mut self
-        let severity = error.severity();
-        let message = error.to_string();
-        let code = error.code();
-        let span = error.span();
+        let severity = error.value.severity();
+        let message = error.value.to_string();
+        let code = error.value.code();
+        let span = error.span;
 
         let mut report_builder =
             Report::build(severity.report_kind(), (span.filename, span.range()))
@@ -136,7 +54,7 @@ impl DiagnosticReporter {
             .with_label(Label::new((span.filename, span.range())).with_color(severity.color()));
 
         // Add a help message if the error provides one
-        if let Some(help) = error.help() {
+        if let Some(help) = error.value.help() {
             report_builder = report_builder.with_help(help);
         }
 

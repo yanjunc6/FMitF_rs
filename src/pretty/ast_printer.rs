@@ -381,11 +381,11 @@ impl<W: Write> AstPrinter<W> {
                 left, op, right, ..
             } => {
                 self.print_expression_inline(prog, *left)?;
-                write!(self.writer, " {} ", op.value)?;
+                write!(self.writer, " {} ", op.name)?;
                 self.print_expression_inline(prog, *right)?;
             }
             Expression::Unary { op, expr, .. } => {
-                write!(self.writer, "{}", op.value)?;
+                write!(self.writer, "{}", op.name)?;
                 self.print_expression_inline(prog, *expr)?;
             }
             Expression::Assignment { lhs, rhs, .. } => {

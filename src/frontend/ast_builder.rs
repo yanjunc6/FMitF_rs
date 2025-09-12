@@ -1,189 +1,186 @@
-//! AST Builder
+//! frontend/ast_builder.rs
 //!
-//! This module provides the `AstBuilder` struct which converts Pest parse trees
-//! into the AST defined in `mod.rs`. It handles:
-//! - Converting Pest pairs to AST nodes
-//! - Creating proper arena-based storage for all nodes
-//! - Maintaining span information for error reporting
-//! - Building the complete program structure
+//! This module is responsible for walking the Pest parse tree and constructing
+//! the Abstract Syntax Tree (AST) defined in `crate::ast`.
 
-use pest::iterators::Pair;
+use crate::ast::{
+    AstType, Block, CallableDecl, CallableKind, ConstDecl, Decorator, Expression, ForInit,
+    FunctionId, GenericParam, GenericParamId, Identifier, Item, KeyValue, Literal, ParamId,
+    Parameter, Program, Spanned, Statement, TableDecl, TableElement, TableField, TableId,
+    TableNode, TypeDecl, TypeDeclId, VarDecl,
+};
+use crate::frontend::FrontEndErrorKind;
+use crate::util::{CompilerError, Span};
+use pest::iterators::{Pair, Pairs};
 use pest::Parser;
 use pest_derive::Parser;
-
-use crate::ast_old::errors::*;
-use crate::ast_old::*;
-use crate::util::Span;
 
 // ============================================================================
 // --- Pest Parser Definition
 // ============================================================================
 
 #[derive(Parser)]
-#[grammar = "ast/grammar.pest"]
+#[grammar = "frontend/grammar.pest"]
 pub struct TransactParser;
 
 // ============================================================================
 // --- AST Builder
 // ============================================================================
 
+type Result<T> = std::result::Result<T, CompilerError>;
+
+/// Consumes Pest `Pairs` and produces an `ast::Program`.
 pub struct AstBuilder {
-    pub program: Program,
-    current_file_name: &'static str,
-    errors: Vec<AstError>,
+    program: Program,
+    current_filename: &'static str,
 }
 
 impl AstBuilder {
-    pub fn new() -> Self {
+    /// Creates a new `AstBuilder`.
+    pub fn new(current_filename: &'static str) -> Self {
         AstBuilder {
             program: Program::default(),
-            current_file_name: "unknown",
-            errors: Vec::new(),
+            current_filename,
         }
     }
 
-    pub fn new_with_program(program: Program) -> Result<Self, AstError> {
-        Ok(AstBuilder {
-            program,
-            current_file_name: "unknown",
-            errors: Vec::new(),
-        })
+    /// Converts a pest::Span into our custom util::Span.
+    fn to_span(&self, span: pest::Span) -> Span {
+        // Leak the string to get a 'static lifetime
+        Span {
+            start: span.start(),
+            end: span.end(),
+            filename: self.current_filename,
+        }
     }
 
-    pub fn parse(source: &str, file_name: &'static str) -> Result<Program, Vec<AstError>> {
-        // Start with program that has prelude loaded
-        let mut builder = match AstBuilder::new_with_program(Program::with_prelude().unwrap_or_default()) {
-            Ok(builder) => builder,
-            Err(e) => return Err(vec![e]),
-        };
-
-        // Parse user code with Pest
-        let pairs = match TransactParser::parse(Rule::program, source) {
-            Ok(pairs) => pairs,
-            Err(e) => {
-                return Err(vec![AstError {
-                    kind: AstErrorKind::ParseError(e.to_string()),
-                    span: None,
-                }]);
-            }
-        };
-
-        // Build user AST into the program that already has prelude
-        for pair in pairs {
-            if pair.as_rule() == Rule::program {
-                builder.build_program(pair)?;
-            }
-        }
-
-        if !builder.errors.is_empty() {
-            return Err(builder.errors);
-        }
-
-        Ok(builder.program)
+    fn build_compiler_error(&self, kind: FrontEndErrorKind, span: pest::Span) -> CompilerError {
+        CompilerError::new(kind, self.to_span(span))
     }
 
-    fn build_program(&mut self, pair: Pair<Rule>) -> Result<(), Vec<AstError>> {
-        for inner in pair.into_inner() {
-            match inner.as_rule() {
-                Rule::callable_declaration => {
-                    let id = self.build_callable_declaration(inner)?;
-                    self.program.declarations.push(Declaration::Callable(id));
+    /// Builds the full `ast::Program` from the parsed pairs.
+    /// This is the main entry point for the builder.
+    pub fn build(mut self, pairs: Pairs<Rule>) -> Result<Program> {
+        let program_pair = pairs.peek().ok_or(self.build_compiler_error(
+            FrontEndErrorKind::ParseError("missing program rules".to_string()),
+            pairs.span(),
+        ))?;
+        if program_pair.as_rule() != Rule::program {
+            return Err(
+                self.build_compiler_error(FrontEndErrorKind::UnexpectedRule {
+                    message: "expected: program, found: ".to_string()
+                        + &program_pair.as_rule().to_string(),
+                }),
+            );
+        }
+
+        for pair in program_pair.into_inner() {
+            match pair.as_rule() {
+                Rule::declaration => {
+                    let item = self.build_declaration(pair)?;
+                    self.program.declarations.push(item);
                 }
-                Rule::type_declaration => {
-                    let id = self.build_type_declaration(inner)?;
-                    self.program.declarations.push(Declaration::Type(id));
-                }
-                Rule::const_declaration => {
-                    let id = self.build_const_declaration(inner)?;
-                    self.program.declarations.push(Declaration::Const(id));
-                }
-                Rule::table_declaration => {
-                    let id = self.build_table_declaration(inner)?;
-                    self.program.declarations.push(Declaration::Table(id));
-                }
-                Rule::EOI => {}
+                Rule::EOI => (),
                 _ => {
-                    self.errors.push(AstError {
-                        kind: AstErrorKind::UnexpectedRule(format!("{:?}", inner.as_rule())),
-                        span: Some(self.pair_to_span(&inner)),
-                    });
+                    return Err(AstBuilderError::UnexpectedRule {
+                        expected: vec![Rule::declaration, Rule::EOI],
+                        found: pair.as_rule(),
+                    })
                 }
             }
         }
-
-        if !self.errors.is_empty() {
-            return Err(self.errors.clone());
-        }
-
-        Ok(())
+        Ok(self.program)
     }
 
-    fn build_callable_declaration(
-        &mut self,
-        pair: Pair<Rule>,
-    ) -> Result<FunctionId, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let mut decorators = Vec::new();
-        let mut kind = CallableKind::Function;
-        let mut name = None;
-        let mut generic_params = Vec::new();
-        let mut params = Vec::new();
+    // ========================================================================
+    // --- Declarations
+    // ========================================================================
+
+    fn build_declaration(&mut self, pair: Pair<Rule>) -> Result<Item> {
+        let inner = pair
+            .into_inner()
+            .next()
+            .ok_or(AstBuilderError::MissingRule(Rule::declaration))?;
+        match inner.as_rule() {
+            Rule::callable_declaration => {
+                self.build_callable_declaration(inner).map(Item::Callable)
+            }
+            Rule::type_declaration => self.build_type_declaration(inner).map(Item::Type),
+            Rule::const_declaration => self.build_const_declaration(inner).map(Item::Const),
+            Rule::table_declaration => self.build_table_declaration(inner).map(Item::Table),
+            _ => Err(AstBuilderError::UnexpectedRule {
+                expected: vec![
+                    Rule::callable_declaration,
+                    Rule::type_declaration,
+                    Rule::const_declaration,
+                    Rule::table_declaration,
+                ],
+                found: inner.as_rule(),
+            }),
+        }
+    }
+
+    fn build_callable_declaration(&mut self, pair: Pair<Rule>) -> Result<FunctionId> {
+        let span = Some(self.to_span(pair.as_span()));
+        let mut inner = pair.into_inner();
+
+        let decorators = self.build_decorators(&mut inner)?;
+
+        // The next item is a choice between `function`, `operator`, etc.
+        let kind_pair = inner.next().unwrap();
+        let (kind, name) = if kind_pair.as_rule() == Rule::operator_symbol {
+            // It's an operator
+            let name = Identifier {
+                name: kind_pair.as_str().to_string(),
+                span: Some(self.to_span(kind_pair.as_span())),
+            };
+            (CallableKind::Operator, name)
+        } else {
+            // It's function/partition/transaction
+            let kind = match kind_pair.as_str() {
+                "function" => CallableKind::Function,
+                "partition" => CallableKind::Partition,
+                "transaction" => CallableKind::Transaction,
+                _ => unreachable!("Unexpected callable kind"),
+            };
+            let name = self.build_identifier(inner.next().unwrap())?;
+            (kind, name)
+        };
+
+        let mut generic_params = vec![];
+        let mut params = vec![];
         let mut return_type = None;
-        let mut assumptions = Vec::new();
+        let mut assumptions = vec![];
         let mut body = None;
 
-        for inner in pair.into_inner() {
-            match inner.as_rule() {
-                Rule::decorator => {
-                    decorators.push(self.build_decorator(inner)?);
-                }
-                Rule::identifier => {
-                    name = Some(CallableName::Identifier(self.build_identifier(inner)?));
-                }
-                Rule::operator_symbol => {
-                    kind = CallableKind::Operator;
-                    name = Some(CallableName::Operator(Spanned {
-                        value: inner.as_str().to_string(),
-                        span: Some(self.pair_to_span(&inner)),
-                    }));
-                }
-                Rule::generic_param_list => {
-                    generic_params = self.build_generic_param_list(inner)?;
-                }
-                Rule::parameter_list => {
-                    params = self.build_parameter_list(inner)?;
-                }
-                Rule::r#type => {
-                    return_type = Some(self.build_type(inner)?);
-                }
+        // Process remaining parts of the declaration
+        for p in inner {
+            match p.as_rule() {
+                Rule::generic_param_list => generic_params = self.build_generic_param_list(p)?,
+                Rule::parameter_list => params = self.build_parameter_list(p)?,
+                Rule::type_rule => return_type = Some(self.build_type(p)?),
                 Rule::assume_statement => {
-                    assumptions.push(self.build_assume_statement(inner)?);
+                    let expr_id = self.build_expression(p.into_inner().next().unwrap())?;
+                    assumptions.push(expr_id);
                 }
-                Rule::block => {
-                    body = Some(self.build_block(inner)?);
-                }
+                Rule::block => body = Some(self.build_block(p)?),
+                Rule::EOI | Rule::COMMENT => {} // Ignore
                 _ => {
-                    // Check for callable kind keywords
-                    let keyword = inner.as_str();
-                    match keyword {
-                        "function" => kind = CallableKind::Function,
-                        "partition" => kind = CallableKind::Partition,
-                        "transaction" => kind = CallableKind::Transaction,
-                        "operator" => kind = CallableKind::Operator,
-                        _ => {}
-                    }
+                    return Err(AstBuilderError::UnexpectedRule {
+                        expected: vec![
+                            Rule::generic_param_list,
+                            Rule::parameter_list,
+                            Rule::type_rule,
+                            Rule::assume_statement,
+                            Rule::block,
+                        ],
+                        found: p.as_rule(),
+                    })
                 }
             }
         }
 
-        let name = name.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("callable name".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        Ok(self.program.functions.alloc(CallableDecl {
+        let decl = CallableDecl {
             decorators,
             kind,
             name,
@@ -194,1517 +191,693 @@ impl AstBuilder {
             body,
             resolved_return_type: None,
             resolved_function_type: None,
-            span: Some(span),
-        }))
+            span,
+        };
+        Ok(self.program.functions.alloc(decl))
     }
 
-    fn build_type_declaration(&mut self, pair: Pair<Rule>) -> Result<TypeDeclId, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let mut decorators = Vec::new();
-        let mut name = None;
-        let mut generic_params = Vec::new();
+    fn build_type_declaration(&mut self, pair: Pair<Rule>) -> Result<TypeDeclId> {
+        let span = Some(self.to_span(pair.as_span()));
+        let mut inner = pair.into_inner();
 
-        for inner in pair.into_inner() {
-            match inner.as_rule() {
-                Rule::decorator => {
-                    decorators.push(self.build_decorator(inner)?);
-                }
-                Rule::identifier => {
-                    name = Some(self.build_identifier(inner)?);
-                }
-                Rule::generic_param_list => {
-                    generic_params = self.build_generic_param_list(inner)?;
-                }
-                _ => {}
+        let decorators = self.build_decorators(&mut inner)?;
+        let name = self.build_identifier(inner.next().unwrap())?;
+
+        let generic_params = if let Some(p) = inner.next() {
+            if p.as_rule() == Rule::generic_param_list {
+                self.build_generic_param_list(p)?
+            } else {
+                vec![]
             }
-        }
+        } else {
+            vec![]
+        };
 
-        let name = name.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("type name".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        Ok(self.program.type_decls.alloc(TypeDecl {
+        let decl = TypeDecl {
             decorators,
             name,
             generic_params,
-            span: Some(span),
-        }))
+            span,
+        };
+        Ok(self.program.type_decls.alloc(decl))
     }
 
-    fn build_const_declaration(&mut self, pair: Pair<Rule>) -> Result<ConstId, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let mut name = None;
-        let mut ty = None;
-        let mut value = None;
+    fn build_const_declaration(&mut self, pair: Pair<Rule>) -> Result<ConstId> {
+        let span = Some(self.to_span(pair.as_span()));
+        let mut inner = pair.into_inner();
 
-        for inner in pair.into_inner() {
-            match inner.as_rule() {
-                Rule::identifier => {
-                    name = Some(self.build_identifier(inner)?);
-                }
-                Rule::r#type => {
-                    ty = Some(self.build_type(inner)?);
-                }
-                Rule::expression => {
-                    value = Some(self.build_expression(inner)?);
-                }
-                _ => {}
-            }
-        }
+        let name = self.build_identifier(inner.next().unwrap())?;
+        let ty = self.build_type(inner.next().unwrap())?;
+        let value = self.build_expression(inner.next().unwrap())?;
 
-        let name = name.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("const name".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        let ty = ty.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("const type".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        let value = value.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("const value".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        Ok(self.program.const_decls.alloc(ConstDecl {
+        let decl = ConstDecl {
             name,
             ty,
             value,
             resolved_type: None,
-            span: Some(span),
-        }))
+            span,
+        };
+        Ok(self.program.const_decls.alloc(decl))
     }
 
-    fn build_table_declaration(&mut self, pair: Pair<Rule>) -> Result<TableId, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let mut name = None;
-        let mut elements = Vec::new();
+    fn build_table_declaration(&mut self, pair: Pair<Rule>) -> Result<TableId> {
+        let span = Some(self.to_span(pair.as_span()));
+        let mut inner = pair.into_inner();
 
-        for inner in pair.into_inner() {
-            match inner.as_rule() {
-                Rule::identifier => {
-                    name = Some(self.build_identifier(inner)?);
-                }
-                Rule::table_field => {
-                    elements.push(self.build_table_field(inner)?);
-                }
-                _ => {}
+        let name = self.build_identifier(inner.next().unwrap())?;
+        let mut elements = vec![];
+
+        for p in inner {
+            if p.as_rule() == Rule::table_field {
+                elements.push(self.build_table_element(p)?);
             }
         }
 
-        let name = name.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("table name".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        Ok(self.program.table_decls.alloc(TableDecl {
+        let decl = TableDecl {
             name,
             elements,
-            span: Some(span),
-        }))
+            span,
+        };
+        Ok(self.program.table_decls.alloc(decl))
     }
 
-    fn build_table_field(&mut self, pair: Pair<Rule>) -> Result<TableElement, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-
-        for inner in pair.into_inner() {
-            match inner.as_rule() {
-                Rule::field_declaration => {
-                    return self.build_field_declaration(inner);
-                }
-                Rule::node_declaration => {
-                    return self.build_node_declaration(inner);
-                }
-                Rule::invariant_declaration => {
-                    return self.build_invariant_declaration(inner);
-                }
-                _ => {}
-            }
-        }
-
-        Err(vec![AstError {
-            kind: AstErrorKind::UnexpectedRule("Empty table field".to_string()),
-            span: Some(span),
-        }])
-    }
-
-    fn build_field_declaration(&mut self, pair: Pair<Rule>) -> Result<TableElement, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let mut is_primary = false;
-        let mut name = None;
-        let mut ty = None;
-
-        for inner in pair.into_inner() {
-            match inner.as_rule() {
-                Rule::identifier => {
-                    name = Some(self.build_identifier(inner)?);
-                }
-                Rule::r#type => {
-                    ty = Some(self.build_type(inner)?);
-                }
-                _ => {
-                    // Check for "primary" literal
-                    if inner.as_str() == "primary" {
-                        is_primary = true;
-                    }
-                }
-            }
-        }
-
-        let name = name.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("field name".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        let ty = ty.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("field type".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        Ok(TableElement::Field(TableField {
-            is_primary,
-            name,
-            ty,
-            resolved_type: None,
-            span: Some(span),
-        }))
-    }
-
-    fn build_node_declaration(&mut self, pair: Pair<Rule>) -> Result<TableElement, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let mut name = None;
-        let mut args = Vec::new();
-
-        for inner in pair.into_inner() {
-            match inner.as_rule() {
-                Rule::identifier => {
-                    name = Some(self.build_identifier(inner)?);
-                }
-                Rule::expression_list => {
-                    args = self.build_expression_list(inner)?;
-                }
-                _ => {}
-            }
-        }
-
-        let name = name.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("node name".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        Ok(TableElement::Node(TableNode {
-            name,
-            args,
-            resolved_partition: None,
-            span: Some(span),
-        }))
-    }
-
-    fn build_invariant_declaration(
-        &mut self,
-        pair: Pair<Rule>,
-    ) -> Result<TableElement, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-
-        for inner in pair.into_inner() {
-            if inner.as_rule() == Rule::expression {
-                let expr = self.build_expression(inner)?;
-                return Ok(TableElement::Invariant(expr));
-            }
-        }
-
-        Err(vec![AstError {
-            kind: AstErrorKind::MissingField("invariant expression".to_string()),
-            span: Some(span),
-        }])
-    }
-
-    fn build_decorator(&mut self, pair: Pair<Rule>) -> Result<Decorator, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-
-        for inner in pair.into_inner() {
-            if inner.as_rule() == Rule::identifier {
-                return Ok(Decorator {
-                    name: self.build_identifier(inner)?,
-                    span: Some(span),
-                });
-            }
-        }
-
-        Err(vec![AstError {
-            kind: AstErrorKind::MissingField("decorator name".to_string()),
-            span: Some(span),
-        }])
-    }
-
-    fn build_identifier(&mut self, pair: Pair<Rule>) -> Result<Identifier, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let name = pair.as_str().to_string();
-
-        Ok(Identifier {
-            name,
-            span: Some(span),
-        })
-    }
-
-    fn build_generic_param_list(
-        &mut self,
-        pair: Pair<Rule>,
-    ) -> Result<Vec<GenericParamId>, Vec<AstError>> {
-        let mut params = Vec::new();
-
-        for inner in pair.into_inner() {
-            if inner.as_rule() == Rule::identifier {
-                let param = GenericParam {
-                    name: self.build_identifier(inner)?,
-                    span: None,
+    fn build_table_element(&mut self, pair: Pair<Rule>) -> Result<TableElement> {
+        let inner = pair.into_inner().next().unwrap();
+        match inner.as_rule() {
+            Rule::field_declaration => {
+                let mut p_inner = inner.into_inner();
+                let first = p_inner.peek().unwrap();
+                let is_primary = if first.as_rule() == Rule::primary {
+                    p_inner.next(); // consume "primary"
+                    true
+                } else {
+                    false
                 };
-                params.push(self.program.generic_params.alloc(param));
+
+                let name = self.build_identifier(p_inner.next().unwrap())?;
+                let ty = self.build_type(p_inner.next().unwrap())?;
+
+                let field = TableField {
+                    is_primary,
+                    name,
+                    ty,
+                    resolved_type: None,
+                    span: Some(self.to_span(inner.as_span())),
+                };
+                Ok(TableElement::Field(field))
             }
-        }
+            Rule::node_declaration => {
+                let mut p_inner = inner.into_inner();
+                let name = self.build_identifier(p_inner.next().unwrap())?;
+                let args = if let Some(expr_list) = p_inner.next() {
+                    self.build_expression_list(expr_list)?
+                } else {
+                    vec![]
+                };
 
-        Ok(params)
-    }
-
-    fn build_parameter_list(&mut self, pair: Pair<Rule>) -> Result<Vec<ParamId>, Vec<AstError>> {
-        let mut params = Vec::new();
-
-        for inner in pair.into_inner() {
-            if inner.as_rule() == Rule::parameter {
-                params.push(self.build_parameter(inner)?);
+                let node = TableNode {
+                    name,
+                    args,
+                    resolved_partition: None,
+                    span: Some(self.to_span(inner.as_span())),
+                };
+                Ok(TableElement::Node(node))
             }
-        }
-
-        Ok(params)
-    }
-
-    fn build_parameter(&mut self, pair: Pair<Rule>) -> Result<ParamId, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let mut name = None;
-        let mut ty = None;
-
-        for inner in pair.into_inner() {
-            match inner.as_rule() {
-                Rule::identifier => {
-                    name = Some(self.build_identifier(inner)?);
-                }
-                Rule::r#type => {
-                    ty = Some(self.build_type(inner)?);
-                }
-                _ => {}
+            Rule::invariant_declaration => {
+                let expr = self.build_expression(inner.into_inner().next().unwrap())?;
+                Ok(TableElement::Invariant(expr))
             }
+            _ => Err(AstBuilderError::UnexpectedRule {
+                expected: vec![
+                    Rule::field_declaration,
+                    Rule::node_declaration,
+                    Rule::invariant_declaration,
+                ],
+                found: inner.as_rule(),
+            }),
         }
-
-        let name = name.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("parameter name".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        let ty = ty.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("parameter type".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        Ok(self.program.params.alloc(Parameter {
-            name,
-            ty,
-            resolved_type: None, // Filled by type checker
-            span: Some(span),
-        }))
     }
 
-    fn build_type(&mut self, pair: Pair<Rule>) -> Result<TypeId, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
+    // ========================================================================
+    // --- Statements
+    // ========================================================================
 
-        for inner in pair.into_inner() {
-            match inner.as_rule() {
-                Rule::primitive_type => {
-                    let ident = self.build_identifier(inner.into_inner().next().unwrap())?;
-                    return Ok(self.program.types.alloc(Type::Named {
-                        name: ident,
-                        resolved_type: None, // Filled by name resolver
-                    }));
+    fn build_statement(&mut self, pair: Pair<Rule>) -> Result<StmtId> {
+        let inner = pair.into_inner().next().unwrap();
+        let span = Some(self.to_span(inner.as_span()));
+        let statement = match inner.as_rule() {
+            Rule::if_statement => {
+                let mut p = inner.into_inner();
+                let condition = self.build_expression(p.next().unwrap())?;
+                let then_block = self.build_block(p.next().unwrap())?;
+                let else_block = p.next().map(|pair| self.build_block(pair)).transpose()?;
+                Statement::If {
+                    condition,
+                    then_block,
+                    else_block,
+                    span,
                 }
-                Rule::generic_type => {
-                    return self.build_generic_type(inner);
-                }
-                Rule::function_type => {
-                    return self.build_function_type(inner);
-                }
-                _ => {}
             }
-        }
-
-        Err(vec![AstError {
-            kind: AstErrorKind::UnexpectedRule(format!("Invalid type")),
-            span: Some(span),
-        }])
-    }
-
-    fn build_generic_type(&mut self, pair: Pair<Rule>) -> Result<TypeId, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let mut base = None;
-        let mut args = Vec::new();
-
-        for inner in pair.into_inner() {
-            match inner.as_rule() {
-                Rule::identifier => {
-                    base = Some(self.build_identifier(inner)?);
+            Rule::for_statement => {
+                let mut p = inner.into_inner();
+                // for (init; cond; update) body
+                let init = self.build_for_init(p.next().unwrap())?;
+                let condition = p
+                    .next()
+                    .unwrap()
+                    .into_inner()
+                    .next()
+                    .map(|pair| self.build_expression(pair))
+                    .transpose()?;
+                let update = p
+                    .next()
+                    .unwrap()
+                    .into_inner()
+                    .next()
+                    .map(|pair| self.build_expression(pair))
+                    .transpose()?;
+                let body = self.build_block(p.next().unwrap())?;
+                Statement::For {
+                    init,
+                    condition,
+                    update,
+                    body,
+                    span,
                 }
-                Rule::type_list => {
-                    args = self.build_type_list(inner)?;
-                }
-                _ => {}
             }
-        }
-
-        let base = base.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("generic base type".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        Ok(self.program.types.alloc(Type::Generic {
-            resolved_base_type: None, // Filled by name resolver
-            base,
-            args,
-            span: Some(span),
-        }))
-    }
-
-    fn build_function_type(&mut self, pair: Pair<Rule>) -> Result<TypeId, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let mut params = Vec::new();
-        let mut return_type = None;
-
-        for inner in pair.into_inner() {
-            match inner.as_rule() {
-                Rule::type_list => {
-                    params = self.build_type_list(inner)?;
-                }
-                Rule::r#type => {
-                    return_type = Some(self.build_type(inner)?);
-                }
-                _ => {}
-            }
-        }
-
-        let return_type = return_type.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("function return type".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        Ok(self.program.types.alloc(Type::Function {
-            params,
-            return_type,
-            span: Some(span),
-        }))
-    }
-
-    fn build_type_list(&mut self, pair: Pair<Rule>) -> Result<Vec<TypeId>, Vec<AstError>> {
-        let mut types = Vec::new();
-
-        for inner in pair.into_inner() {
-            if inner.as_rule() == Rule::r#type {
-                types.push(self.build_type(inner)?);
-            }
-        }
-
-        Ok(types)
-    }
-
-    fn build_assume_statement(&mut self, pair: Pair<Rule>) -> Result<ExprId, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        for inner in pair.into_inner() {
-            if inner.as_rule() == Rule::expression {
-                return self.build_expression(inner);
-            }
-        }
-
-        Err(vec![AstError {
-            kind: AstErrorKind::MissingField("assume expression".to_string()),
-            span: Some(span),
-        }])
-    }
-
-    fn build_block(&mut self, pair: Pair<Rule>) -> Result<BlockId, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let mut statements = Vec::new();
-
-        for inner in pair.into_inner() {
-            statements.push(self.build_statement(inner)?);
-        }
-
-        Ok(self.program.blocks.alloc(Block {
-            statements,
-            span: Some(span),
-        }))
-    }
-
-    fn build_statement(&mut self, pair: Pair<Rule>) -> Result<StmtId, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-
-        // Since statement is a silent rule in the grammar, we get the actual rule directly
-        let stmt = match pair.as_rule() {
             Rule::var_declaration => {
-                let var_id = self.build_var_declaration(pair)?;
+                let var_id = self.build_var_decl_from_pair(inner)?;
                 Statement::VarDecl(var_id)
             }
-            Rule::if_statement => self.build_if_statement(pair)?,
-            Rule::for_statement => self.build_for_statement(pair)?,
-            Rule::return_statement => self.build_return_statement(pair)?,
-            Rule::assert_statement => self.build_assert_statement(pair)?,
-            Rule::hop_block => self.build_hop_block(pair)?,
-            Rule::hops_for_loop => self.build_hops_for_loop(pair)?,
-            Rule::block => {
-                let block_id = self.build_block(pair)?;
-                Statement::Block(block_id)
+            Rule::return_statement => {
+                let value = inner
+                    .into_inner()
+                    .next()
+                    .map(|pair| self.build_expression(pair))
+                    .transpose()?;
+                Statement::Return { value, span }
             }
-            Rule::expression_statement => {
-                let expr = self.build_expression_statement(pair)?;
-                Statement::Expression {
-                    expr,
-                    span: Some(span),
+            Rule::assert_statement => {
+                let expr = self.build_expression(inner.into_inner().next().unwrap())?;
+                Statement::Assert { expr, span }
+            }
+            Rule::hop_block => {
+                let mut p = inner.into_inner();
+                let decorators = self.build_decorators(&mut p)?;
+                let body = self.build_block(p.next().unwrap())?;
+                Statement::Hop {
+                    decorators,
+                    body,
+                    span,
                 }
             }
+            Rule::hops_for_loop => {
+                let mut p = inner.into_inner();
+                let decorators = self.build_decorators(&mut p)?;
+                let var_name = self.build_identifier(p.next().unwrap())?;
+                let ty = self.build_type(p.next().unwrap())?;
+                let start = self.build_expression(p.next().unwrap())?;
+                let end = self.build_expression(p.next().unwrap())?;
+                let body = self.build_block(p.next().unwrap())?;
+
+                // Hots for implicitly creates a var declaration for the loop variable
+                let var_decl = VarDecl {
+                    name: var_name,
+                    ty: Some(ty),
+                    init: Some(start), // The loop variable is initialized with the start value.
+                    resolved_type: None,
+                    span: None, // Or span of the variable part
+                };
+                let var = self.program.var_decls.alloc(var_decl);
+
+                Statement::HopsFor {
+                    decorators,
+                    var,
+                    start,
+                    end,
+                    body,
+                    span,
+                }
+            }
+            Rule::expression_statement => {
+                let expr = self.build_expression(inner.into_inner().next().unwrap())?;
+                Statement::Expression { expr, span }
+            }
+            Rule::block => {
+                let block_id = self.build_block(inner)?;
+                Statement::Block(block_id)
+            }
             _ => {
-                return Err(vec![AstError {
-                    kind: AstErrorKind::UnexpectedRule(format!(
-                        "Invalid statement: {:?}",
-                        pair.as_rule()
-                    )),
-                    span: Some(span),
-                }]);
+                return Err(AstBuilderError::UnexpectedRule {
+                    expected: vec![
+                        Rule::if_statement,
+                        Rule::for_statement,
+                        Rule::var_declaration,
+                        /* ... other statements */
+                    ],
+                    found: inner.as_rule(),
+                });
             }
         };
-
-        Ok(self.program.statements.alloc(stmt))
+        Ok(self.program.statements.alloc(statement))
     }
 
-    fn build_var_declaration(&mut self, pair: Pair<Rule>) -> Result<VarId, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let mut name = None;
+    fn build_for_init(&mut self, pair: Pair<Rule>) -> Result<Option<ForInit>> {
+        let Some(inner) = pair.into_inner().next() else {
+            return Ok(None); // Empty init statement (e.g., `for(;;){}`)
+        };
+        match inner.as_rule() {
+            Rule::var_declaration => {
+                let var_id = self.build_var_decl_from_pair(inner)?;
+                Ok(Some(ForInit::VarDecl(var_id)))
+            }
+            Rule::expression_statement => {
+                let expr_id = self.build_expression(inner.into_inner().next().unwrap())?;
+                Ok(Some(ForInit::Expression(expr_id)))
+            }
+            _ => Err(AstBuilderError::UnexpectedRule {
+                expected: vec![Rule::var_declaration, Rule::expression_statement],
+                found: inner.as_rule(),
+            }),
+        }
+    }
+
+    fn build_var_decl_from_pair(&mut self, pair: Pair<Rule>) -> Result<VarId> {
+        let span = Some(self.to_span(pair.as_span()));
+        let mut inner = pair.into_inner();
+
+        let name = self.build_identifier(inner.next().unwrap())?;
         let mut ty = None;
         let mut init = None;
 
-        for inner in pair.into_inner() {
-            match inner.as_rule() {
-                Rule::identifier => {
-                    name = Some(self.build_identifier(inner)?);
-                }
-                Rule::r#type => {
-                    ty = Some(self.build_type(inner)?);
-                }
-                Rule::expression => {
-                    init = Some(self.build_expression(inner)?);
-                }
-                _ => {}
+        if let Some(p) = inner.peek() {
+            if p.as_rule() == Rule::type_rule {
+                ty = Some(self.build_type(inner.next().unwrap())?);
+            }
+        }
+        if let Some(p) = inner.peek() {
+            if p.as_rule() == Rule::expression {
+                init = Some(self.build_expression(inner.next().unwrap())?);
             }
         }
 
-        let name = name.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("variable name".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        Ok(self.program.var_decls.alloc(VarDecl {
-            resolved_type: None, // Filled by type checker
+        let decl = VarDecl {
             name,
             ty,
             init,
-            span: Some(span),
-        }))
-    }
-
-    fn build_if_statement(&mut self, pair: Pair<Rule>) -> Result<Statement, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let mut condition = None;
-        let mut then_block = None;
-        let mut else_block = None;
-
-        for inner in pair.into_inner() {
-            match inner.as_rule() {
-                Rule::expression => {
-                    condition = Some(self.build_expression(inner)?);
-                }
-                Rule::block => {
-                    if then_block.is_none() {
-                        then_block = Some(self.build_block(inner)?);
-                    } else {
-                        else_block = Some(self.build_block(inner)?);
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        let condition = condition.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("if condition".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        let then_block = then_block.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("if then block".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        Ok(Statement::If {
-            condition,
-            then_block,
-            else_block,
-            span: Some(span),
-        })
-    }
-
-    fn build_for_statement(&mut self, pair: Pair<Rule>) -> Result<Statement, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let mut init = None;
-        let mut condition = None;
-        let mut update = None;
-        let mut body = None;
-
-        let mut inner_iter = pair.into_inner();
-
-        // Parse init (var_declaration, expression_statement, or empty)
-        if let Some(inner) = inner_iter.next() {
-            match inner.as_rule() {
-                Rule::var_declaration => {
-                    let var_id = self.build_var_declaration(inner)?;
-                    init = Some(ForInit::VarDecl(var_id));
-                }
-                Rule::expression_statement => {
-                    let expr = self.build_expression_statement(inner)?;
-                    init = Some(ForInit::Expression(expr));
-                }
-                _ => {}
-            }
-        }
-
-        // Parse condition (expression or empty)
-        if let Some(inner) = inner_iter.next() {
-            if inner.as_rule() == Rule::expression {
-                condition = Some(self.build_expression(inner)?);
-            }
-        }
-
-        // Parse update (expression or empty)
-        if let Some(inner) = inner_iter.next() {
-            if inner.as_rule() == Rule::expression {
-                update = Some(self.build_expression(inner)?);
-            }
-        }
-
-        // Parse body (block)
-        if let Some(inner) = inner_iter.next() {
-            if inner.as_rule() == Rule::block {
-                body = Some(self.build_block(inner)?);
-            }
-        }
-
-        let body = body.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("for loop body".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        Ok(Statement::For {
-            init,
-            condition,
-            update,
-            body,
-            span: Some(span),
-        })
-    }
-
-    fn build_return_statement(&mut self, pair: Pair<Rule>) -> Result<Statement, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let mut value = None;
-
-        for inner in pair.into_inner() {
-            if inner.as_rule() == Rule::expression {
-                value = Some(self.build_expression(inner)?);
-            }
-        }
-
-        Ok(Statement::Return {
-            value,
-            span: Some(span),
-        })
-    }
-
-    fn build_assert_statement(&mut self, pair: Pair<Rule>) -> Result<Statement, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let mut expr = None;
-
-        for inner in pair.into_inner() {
-            if inner.as_rule() == Rule::expression {
-                expr = Some(self.build_expression(inner)?);
-            }
-        }
-
-        let expr = expr.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("assert expression".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        Ok(Statement::Assert {
-            expr,
-            span: Some(span),
-        })
-    }
-
-    fn build_hop_block(&mut self, pair: Pair<Rule>) -> Result<Statement, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let mut decorators = Vec::new();
-        let mut body = None;
-
-        for inner in pair.into_inner() {
-            match inner.as_rule() {
-                Rule::decorator => {
-                    decorators.push(self.build_decorator(inner)?);
-                }
-                Rule::block => {
-                    body = Some(self.build_block(inner)?);
-                }
-                _ => {}
-            }
-        }
-
-        let body = body.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("hop body".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        Ok(Statement::Hop {
-            decorators,
-            body,
-            span: Some(span),
-        })
-    }
-
-    fn build_hops_for_loop(&mut self, pair: Pair<Rule>) -> Result<Statement, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let mut decorators = Vec::new();
-        let mut var_name = None;
-        let mut var_type = None;
-        let mut start = None;
-        let mut end = None;
-        let mut body = None;
-
-        for inner in pair.into_inner() {
-            match inner.as_rule() {
-                Rule::decorator => {
-                    decorators.push(self.build_decorator(inner)?);
-                }
-                Rule::identifier => {
-                    if var_name.is_none() {
-                        var_name = Some(self.build_identifier(inner)?);
-                    }
-                }
-                Rule::r#type => {
-                    var_type = Some(self.build_type(inner)?);
-                }
-                Rule::expression => {
-                    if start.is_none() {
-                        start = Some(self.build_expression(inner)?);
-                    } else if end.is_none() {
-                        end = Some(self.build_expression(inner)?);
-                    }
-                }
-                Rule::block => {
-                    body = Some(self.build_block(inner)?);
-                }
-                _ => {}
-            }
-        }
-
-        let var_name = var_name.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("hops for variable name".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        let var_type = var_type.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("hops for variable type".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        let start = start.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("hops for start expression".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        let end = end.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("hops for end expression".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        let body = body.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("hops for body".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        // Create the loop variable declaration
-        let var_decl = VarDecl {
-            resolved_type: None, // Filled by type checker
-            name: var_name,
-            ty: Some(var_type),
-            init: None,
-            span: Some(span.clone()),
+            resolved_type: None,
+            span,
         };
-        let var_id = self.program.var_decls.alloc(var_decl);
-
-        Ok(Statement::HopsFor {
-            decorators,
-            var: var_id,
-            start,
-            end,
-            body,
-            span: Some(span),
-        })
+        Ok(self.program.var_decls.alloc(decl))
     }
 
-    fn build_expression_statement(&mut self, pair: Pair<Rule>) -> Result<ExprId, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        for inner in pair.into_inner() {
-            if inner.as_rule() == Rule::expression {
-                return self.build_expression(inner);
-            }
+    // ========================================================================
+    // --- Expressions
+    // ========================================================================
+
+    fn build_expression(&mut self, pair: Pair<Rule>) -> Result<ExprId> {
+        match pair.as_rule() {
+            Rule::assignment
+            | Rule::level10_expr
+            | Rule::level9_expr
+            | Rule::level8_expr
+            | Rule::level7_expr
+            | Rule::level6_expr
+            | Rule::level5_expr
+            | Rule::level4_expr
+            | Rule::level3_expr => self.build_binary_or_unary_expr(pair),
+            Rule::prefix => self.build_binary_or_unary_expr(pair),
+            Rule::postfix => self.build_postfix_expr(pair),
+            Rule::primary => self.build_primary_expr(pair),
+            _ => Err(AstBuilderError::UnexpectedRule {
+                expected: vec![Rule::assignment /* ... other expression rules */],
+                found: pair.as_rule(),
+            }),
+        }
+    }
+
+    // This function handles all infix and prefix operators.
+    fn build_binary_or_unary_expr(&mut self, pair: Pair<Rule>) -> Result<ExprId> {
+        let span = Some(self.to_span(pair.as_span()));
+        let mut inner = pair.into_inner();
+
+        // Handle prefix operators
+        if inner.peek().unwrap().as_rule() == Rule::operator_symbol {
+            let op_pair = inner.next().unwrap();
+            let op = Spanned {
+                value: op_pair.as_str().to_string(),
+                span: Some(self.to_span(op_pair.as_span())),
+            };
+            let expr = self.build_expression(inner.next().unwrap())?;
+            let unary_expr = Expression::Unary {
+                op,
+                expr,
+                resolved_callable: None,
+                resolved_type: None,
+                span,
+            };
+            return Ok(self.program.expressions.alloc(unary_expr));
         }
 
-        Err(vec![AstError {
-            kind: AstErrorKind::MissingField("expression in statement".to_string()),
-            span: Some(span),
-        }])
-    }
+        // Handle infix operators
+        let mut lhs = self.build_expression(inner.next().unwrap())?;
 
-    fn build_expression(&mut self, pair: Pair<Rule>) -> Result<ExprId, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
+        while let Some(op_pair) = inner.next() {
+            let op = Spanned {
+                value: op_pair.as_str().to_string(),
+                span: Some(self.to_span(op_pair.as_span())),
+            };
+            let rhs = self.build_expression(inner.next().unwrap())?;
 
-        // Extract the assignment rule from the expression rule
-        for inner in pair.into_inner() {
-            if inner.as_rule() == Rule::assignment {
-                return self.build_assignment(inner);
-            }
-        }
-
-        Err(vec![AstError {
-            kind: AstErrorKind::UnexpectedRule("Invalid expression structure".to_string()),
-            span: Some(span),
-        }])
-    }
-
-    fn build_assignment(&mut self, pair: Pair<Rule>) -> Result<ExprId, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let inner_pairs: Vec<_> = pair.into_inner().collect();
-
-        match inner_pairs.len() {
-            1 => {
-                // No assignment, just the expression
-                self.build_level10_expr(inner_pairs.into_iter().next().unwrap())
-            }
-            2 => {
-                // Assignment: level10_expr and ("=" ~ assignment) group
-                let lhs = self.build_level10_expr(inner_pairs[0].clone())?;
-
-                // The second element should be the assignment part
-                let rhs = self.build_assignment(inner_pairs[1].clone())?; // Right-associative
-
-                Ok(self.program.expressions.alloc(Expression::Assignment {
+            let new_lhs_expr = if op.value == "=" {
+                Expression::Assignment {
                     lhs,
                     rhs,
                     resolved_type: None,
-                    span: Some(span),
-                }))
-            }
-            _ => Err(vec![AstError {
-                kind: AstErrorKind::UnexpectedRule(format!(
-                    "Invalid assignment structure: expected 1 or 2 elements, got {}",
-                    inner_pairs.len()
-                )),
-                span: Some(span),
-            }]),
-        }
-    }
-
-    fn build_level10_expr(&mut self, pair: Pair<Rule>) -> Result<ExprId, Vec<AstError>> {
-        // $ and | operators - left associative
-        let span = self.pair_to_span(&pair);
-        let inner_pairs: Vec<_> = pair.into_inner().collect();
-
-        if inner_pairs.len() == 1 {
-            return self.build_level9_expr(inner_pairs.into_iter().next().unwrap());
-        }
-
-        // Build left-associative binary expression
-        let mut expr = self.build_level9_expr(inner_pairs[0].clone())?;
-
-        let mut i = 1;
-        while i + 1 < inner_pairs.len() {
-            let op_str = inner_pairs[i].as_str().to_string();
-            let op = Spanned {
-                value: op_str,
-                span: Some(self.pair_to_span(&inner_pairs[i])),
+                    span, // Note: span covers the whole assignment
+                }
+            } else {
+                Expression::Binary {
+                    left: lhs,
+                    op,
+                    right: rhs,
+                    resolved_callable: None,
+                    resolved_type: None,
+                    span, // Note: span covers the whole binary expression
+                }
             };
-            let right = self.build_level9_expr(inner_pairs[i + 1].clone())?;
-
-            expr = self.program.expressions.alloc(Expression::Binary {
-                resolved_type: None,
-                resolved_callable: None,
-                left: expr,
-                op,
-                right,
-                span: Some(span.clone()),
-            });
-
-            i += 2;
+            lhs = self.program.expressions.alloc(new_lhs_expr);
         }
 
-        Ok(expr)
+        Ok(lhs)
     }
 
-    fn build_level9_expr(&mut self, pair: Pair<Rule>) -> Result<ExprId, Vec<AstError>> {
-        // ^ operators - right associative
-        let span = self.pair_to_span(&pair);
-        let inner_pairs: Vec<_> = pair.into_inner().collect();
+    fn build_postfix_expr(&mut self, pair: Pair<Rule>) -> Result<ExprId> {
+        let mut inner = pair.into_inner();
+        let mut current_expr_id = self.build_primary_expr(inner.next().unwrap())?;
 
-        if inner_pairs.len() == 1 {
-            return self.build_level8_expr(inner_pairs.into_iter().next().unwrap());
-        }
-
-        if inner_pairs.len() == 3 {
-            let left = self.build_level8_expr(inner_pairs[0].clone())?;
-            let op_str = inner_pairs[1].as_str().to_string();
-            let op = Spanned {
-                value: op_str,
-                span: Some(self.pair_to_span(&inner_pairs[1])),
-            };
-            let right = self.build_level9_expr(inner_pairs[2].clone())?;
-
-            return Ok(self.program.expressions.alloc(Expression::Binary {
-                resolved_type: None,
-                resolved_callable: None,
-                left,
-                op,
-                right,
-                span: Some(span),
-            }));
-        }
-
-        Err(vec![AstError {
-            kind: AstErrorKind::UnexpectedRule("Invalid level9 expression structure".to_string()),
-            span: Some(span),
-        }])
-    }
-
-    fn build_level8_expr(&mut self, pair: Pair<Rule>) -> Result<ExprId, Vec<AstError>> {
-        // & operators - left associative
-        let span = self.pair_to_span(&pair);
-        let inner_pairs: Vec<_> = pair.into_inner().collect();
-
-        if inner_pairs.len() == 1 {
-            return self.build_level7_expr(inner_pairs.into_iter().next().unwrap());
-        }
-
-        // Build left-associative binary expression
-        let mut expr = self.build_level7_expr(inner_pairs[0].clone())?;
-
-        let mut i = 1;
-        while i + 1 < inner_pairs.len() {
-            let op_str = inner_pairs[i].as_str().to_string();
-            let op = Spanned {
-                value: op_str,
-                span: Some(self.pair_to_span(&inner_pairs[i])),
-            };
-            let right = self.build_level7_expr(inner_pairs[i + 1].clone())?;
-
-            expr = self.program.expressions.alloc(Expression::Binary {
-                resolved_type: None,
-                resolved_callable: None,
-                left: expr,
-                op,
-                right,
-                span: Some(span.clone()),
-            });
-
-            i += 2;
-        }
-
-        Ok(expr)
-    }
-
-    fn build_level7_expr(&mut self, pair: Pair<Rule>) -> Result<ExprId, Vec<AstError>> {
-        // @ and ~ operators - right associative
-        let span = self.pair_to_span(&pair);
-        let inner_pairs: Vec<_> = pair.into_inner().collect();
-
-        if inner_pairs.len() == 1 {
-            return self.build_level6_expr(inner_pairs.into_iter().next().unwrap());
-        }
-
-        if inner_pairs.len() == 3 {
-            let left = self.build_level6_expr(inner_pairs[0].clone())?;
-            let op_str = inner_pairs[1].as_str().to_string();
-            let op = Spanned {
-                value: op_str,
-                span: Some(self.pair_to_span(&inner_pairs[1])),
-            };
-            let right = self.build_level7_expr(inner_pairs[2].clone())?;
-
-            return Ok(self.program.expressions.alloc(Expression::Binary {
-                resolved_type: None,
-                resolved_callable: None,
-                left,
-                op,
-                right,
-                span: Some(span),
-            }));
-        }
-
-        Err(vec![AstError {
-            kind: AstErrorKind::UnexpectedRule("Invalid level7 expression structure".to_string()),
-            span: Some(span),
-        }])
-    }
-
-    fn build_level6_expr(&mut self, pair: Pair<Rule>) -> Result<ExprId, Vec<AstError>> {
-        // <, >, =, ! operators - left associative
-        let span = self.pair_to_span(&pair);
-        let inner_pairs: Vec<_> = pair.into_inner().collect();
-
-        if inner_pairs.len() == 1 {
-            return self.build_level5_expr(inner_pairs.into_iter().next().unwrap());
-        }
-
-        // Build left-associative binary expression
-        let mut expr = self.build_level5_expr(inner_pairs[0].clone())?;
-
-        let mut i = 1;
-        while i + 1 < inner_pairs.len() {
-            let op_str = inner_pairs[i].as_str().to_string();
-            let op = Spanned {
-                value: op_str,
-                span: Some(self.pair_to_span(&inner_pairs[i])),
-            };
-            let right = self.build_level5_expr(inner_pairs[i + 1].clone())?;
-
-            expr = self.program.expressions.alloc(Expression::Binary {
-                resolved_type: None,
-                resolved_callable: None,
-                left: expr,
-                op,
-                right,
-                span: Some(span.clone()),
-            });
-
-            i += 2;
-        }
-
-        Ok(expr)
-    }
-
-    fn build_level5_expr(&mut self, pair: Pair<Rule>) -> Result<ExprId, Vec<AstError>> {
-        // : operators - right associative
-        let span = self.pair_to_span(&pair);
-        let inner_pairs: Vec<_> = pair.into_inner().collect();
-
-        if inner_pairs.len() == 1 {
-            return self.build_level4_expr(inner_pairs.into_iter().next().unwrap());
-        }
-
-        if inner_pairs.len() == 3 {
-            let left = self.build_level4_expr(inner_pairs[0].clone())?;
-            let op_str = inner_pairs[1].as_str().to_string();
-            let op = Spanned {
-                value: op_str,
-                span: Some(self.pair_to_span(&inner_pairs[1])),
-            };
-            let right = self.build_level5_expr(inner_pairs[2].clone())?;
-
-            return Ok(self.program.expressions.alloc(Expression::Binary {
-                resolved_type: None,
-                resolved_callable: None,
-                left,
-                op,
-                right,
-                span: Some(span),
-            }));
-        }
-
-        Err(vec![AstError {
-            kind: AstErrorKind::UnexpectedRule("Invalid level5 expression structure".to_string()),
-            span: Some(span),
-        }])
-    }
-
-    fn build_level4_expr(&mut self, pair: Pair<Rule>) -> Result<ExprId, Vec<AstError>> {
-        // + and - operators - left associative
-        let span = self.pair_to_span(&pair);
-        let inner_pairs: Vec<_> = pair.into_inner().collect();
-
-        if inner_pairs.len() == 1 {
-            return self.build_level3_expr(inner_pairs.into_iter().next().unwrap());
-        }
-
-        // Build left-associative binary expression
-        let mut expr = self.build_level3_expr(inner_pairs[0].clone())?;
-
-        let mut i = 1;
-        while i + 1 < inner_pairs.len() {
-            let op_str = inner_pairs[i].as_str().to_string();
-            let op = Spanned {
-                value: op_str,
-                span: Some(self.pair_to_span(&inner_pairs[i])),
-            };
-            let right = self.build_level3_expr(inner_pairs[i + 1].clone())?;
-
-            expr = self.program.expressions.alloc(Expression::Binary {
-                resolved_type: None,
-                resolved_callable: None,
-                left: expr,
-                op,
-                right,
-                span: Some(span.clone()),
-            });
-
-            i += 2;
-        }
-
-        Ok(expr)
-    }
-
-    fn build_level3_expr(&mut self, pair: Pair<Rule>) -> Result<ExprId, Vec<AstError>> {
-        // *, /, % operators - left associative
-        let span = self.pair_to_span(&pair);
-        let inner_pairs: Vec<_> = pair.into_inner().collect();
-
-        if inner_pairs.len() == 1 {
-            return self.build_prefix(inner_pairs.into_iter().next().unwrap());
-        }
-
-        // Build left-associative binary expression
-        let mut expr = self.build_prefix(inner_pairs[0].clone())?;
-
-        let mut i = 1;
-        while i + 1 < inner_pairs.len() {
-            let op_str = inner_pairs[i].as_str().to_string();
-            let op = Spanned {
-                value: op_str,
-                span: Some(self.pair_to_span(&inner_pairs[i])),
-            };
-            let right = self.build_prefix(inner_pairs[i + 1].clone())?;
-
-            expr = self.program.expressions.alloc(Expression::Binary {
-                resolved_type: None,
-                resolved_callable: None,
-                left: expr,
-                op,
-                right,
-                span: Some(span.clone()),
-            });
-
-            i += 2;
-        }
-
-        Ok(expr)
-    }
-
-    fn build_prefix(&mut self, pair: Pair<Rule>) -> Result<ExprId, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let inner_pairs: Vec<_> = pair.into_inner().collect();
-
-        if inner_pairs.len() == 1 {
-            // No prefix operator
-            return self.build_postfix(inner_pairs.into_iter().next().unwrap());
-        }
-
-        if inner_pairs.len() == 2 {
-            // Prefix operator
-            let op_str = inner_pairs[0].as_str().to_string();
-            let op = Spanned {
-                value: op_str,
-                span: Some(self.pair_to_span(&inner_pairs[0])),
-            };
-            let expr = self.build_prefix(inner_pairs[1].clone())?; // Right-associative
-
-            return Ok(self.program.expressions.alloc(Expression::Unary {
-                resolved_type: None,
-                resolved_callable: None,
-                op,
-                expr,
-                span: Some(span),
-            }));
-        }
-
-        Err(vec![AstError {
-            kind: AstErrorKind::UnexpectedRule("Invalid prefix expression structure".to_string()),
-            span: Some(span),
-        }])
-    }
-
-    fn build_postfix(&mut self, pair: Pair<Rule>) -> Result<ExprId, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let inner_pairs: Vec<_> = pair.into_inner().collect();
-
-        if inner_pairs.is_empty() {
-            return Err(vec![AstError {
-                kind: AstErrorKind::UnexpectedRule("Empty postfix expression".to_string()),
-                span: Some(span),
-            }]);
-        }
-
-        // Start with the primary expression
-        let mut expr = self.build_primary(inner_pairs[0].clone())?;
-
-        // Apply postfix operations left to right
-        for postfix_pair in inner_pairs.iter().skip(1) {
-            match postfix_pair.as_rule() {
+        for p in inner {
+            let span = Some(self.to_span(p.as_span()));
+            current_expr_id = match p.as_rule() {
                 Rule::call => {
-                    expr = self.build_call(expr, postfix_pair.clone())?;
+                    let args = p
+                        .into_inner()
+                        .next()
+                        .map(|list| self.build_expression_list(list))
+                        .transpose()?
+                        .unwrap_or_default();
+                    let call_expr = Expression::Call {
+                        callee: current_expr_id,
+                        args,
+                        resolved_callable: None,
+                        resolved_type: None,
+                        span,
+                    };
+                    self.program.expressions.alloc(call_expr)
                 }
                 Rule::member_access => {
-                    expr = self.build_member_access(expr, postfix_pair.clone())?;
+                    let member = self.build_identifier(p.into_inner().next().unwrap())?;
+                    let member_access_expr = Expression::MemberAccess {
+                        object: current_expr_id,
+                        member,
+                        resolved_table: None,
+                        resolved_field: None,
+                        resolved_type: None,
+                        span,
+                    };
+                    self.program.expressions.alloc(member_access_expr)
                 }
                 Rule::table_row_access => {
-                    expr = self.build_table_row_access(expr, postfix_pair.clone())?;
+                    let key_values = p
+                        .into_inner()
+                        .map(|kv_pair| self.build_key_value_pair(kv_pair))
+                        .collect::<Result<Vec<_>>>()?;
+                    let row_access_expr = Expression::TableRowAccess {
+                        table: current_expr_id,
+                        key_values,
+                        resolved_table: None,
+                        resolved_type: None,
+                        span,
+                    };
+                    self.program.expressions.alloc(row_access_expr)
                 }
                 _ => {
-                    return Err(vec![AstError {
-                        kind: AstErrorKind::UnexpectedRule(format!(
-                            "Unexpected postfix rule: {:?}",
-                            postfix_pair.as_rule()
-                        )),
-                        span: Some(self.pair_to_span(postfix_pair)),
-                    }]);
-                }
-            }
-        }
-
-        Ok(expr)
-    }
-
-    fn build_call(&mut self, callee: ExprId, pair: Pair<Rule>) -> Result<ExprId, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let mut args = Vec::new();
-
-        for inner in pair.into_inner() {
-            if inner.as_rule() == Rule::expression_list {
-                args = self.build_expression_list(inner)?;
-                break;
-            }
-        }
-
-        Ok(self.program.expressions.alloc(Expression::Call {
-                resolved_type: None,
-            callee,
-            args,
-            resolved_callable: None,
-            span: Some(span),
-        }))
-    }
-
-    fn build_member_access(
-        &mut self,
-        object: ExprId,
-        pair: Pair<Rule>,
-    ) -> Result<ExprId, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let mut member = None;
-
-        for inner in pair.into_inner() {
-            if inner.as_rule() == Rule::identifier {
-                member = Some(self.build_identifier(inner)?);
-                break;
-            }
-        }
-
-        let member = member.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("member name".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        Ok(self.program.expressions.alloc(Expression::MemberAccess {
-                resolved_type: None,
-            resolved_table: None, // Filled by name resolver
-            object,
-            member,
-            resolved_field: None,
-            span: Some(span),
-        }))
-    }
-
-    fn build_table_row_access(
-        &mut self,
-        table: ExprId,
-        pair: Pair<Rule>,
-    ) -> Result<ExprId, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let mut key_values = Vec::new();
-
-        for inner in pair.into_inner() {
-            if inner.as_rule() == Rule::key_value_pair {
-                key_values.push(self.build_key_value_pair(inner)?);
-            }
-        }
-
-        Ok(self.program.expressions.alloc(Expression::TableRowAccess {
-                resolved_type: None,
-            resolved_table: None, // Filled by name resolver
-            table,
-            key_values,
-            span: Some(span),
-        }))
-    }
-
-    fn build_primary(&mut self, pair: Pair<Rule>) -> Result<ExprId, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-
-        for inner in pair.into_inner() {
-            match inner.as_rule() {
-                Rule::literal => {
-                    return self.build_literal(inner);
-                }
-                Rule::lambda_expression => {
-                    return self.build_lambda_expression(inner);
-                }
-                Rule::identifier => {
-                    let identifier = self.build_identifier(inner)?;
-                    return Ok(self.program.expressions.alloc(Expression::Identifier {
-                resolved_type: None,
-                        name: identifier,
-                        resolved_declaration: None, // Filled by name resolver
-                        span: Some(span),
-                    }));
-                }
-                Rule::expression => {
-                    // Grouped expression
-                    let expr = self.build_expression(inner)?;
-                    return Ok(self.program.expressions.alloc(Expression::Grouped {
-                resolved_type: None,
-                        expr,
-                        span: Some(span),
-                    }));
-                }
-                _ => {}
-            }
-        }
-
-        Err(vec![AstError {
-            kind: AstErrorKind::UnexpectedRule("Invalid primary expression".to_string()),
-            span: Some(span),
-        }])
-    }
-
-    fn build_literal(&mut self, pair: Pair<Rule>) -> Result<ExprId, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-
-        for inner in pair.into_inner() {
-            let literal = match inner.as_rule() {
-                Rule::integer => Literal::Integer(inner.as_str().to_string()),
-                Rule::float => Literal::Float(inner.as_str().to_string()),
-                Rule::string => {
-                    // Remove quotes and handle escape sequences
-                    let s = inner.as_str();
-                    let unquoted = &s[1..s.len() - 1]; // Remove outer quotes
-                    Literal::String(unquoted.to_string())
-                }
-                Rule::bool => Literal::Bool(inner.as_str() == "true"),
-                Rule::list_literal => {
-                    let mut elements = Vec::new();
-                    for list_inner in inner.into_inner() {
-                        if list_inner.as_rule() == Rule::expression_list {
-                            elements = self.build_expression_list(list_inner)?;
-                            break;
-                        }
-                    }
-                    Literal::List(elements)
-                }
-                Rule::row_literal => {
-                    let mut key_values = Vec::new();
-                    for row_inner in inner.into_inner() {
-                        if row_inner.as_rule() == Rule::key_value_pair {
-                            key_values.push(self.build_key_value_pair(row_inner)?);
-                        }
-                    }
-                    Literal::RowLiteral(key_values)
-                }
-                _ => {
-                    return Err(vec![AstError {
-                        kind: AstErrorKind::UnexpectedRule(format!(
-                            "Unexpected literal rule: {:?}",
-                            inner.as_rule()
-                        )),
-                        span: Some(self.pair_to_span(&inner)),
-                    }]);
+                    return Err(AstBuilderError::UnexpectedRule {
+                        expected: vec![Rule::call, Rule::member_access, Rule::table_row_access],
+                        found: p.as_rule(),
+                    })
                 }
             };
-
-            return Ok(self.program.expressions.alloc(Expression::Literal {
-                resolved_type: None,
-                value: literal,
-                span: Some(span),
-            }));
         }
-
-        Err(vec![AstError {
-            kind: AstErrorKind::UnexpectedRule("Empty literal".to_string()),
-            span: Some(span),
-        }])
+        Ok(current_expr_id)
     }
 
-    fn build_lambda_expression(&mut self, pair: Pair<Rule>) -> Result<ExprId, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let mut params = Vec::new();
-        let mut return_type = None;
-        let mut body = None;
+    fn build_primary_expr(&mut self, pair: Pair<Rule>) -> Result<ExprId> {
+        let inner = pair.into_inner().next().unwrap();
+        let span = Some(self.to_span(inner.as_span()));
 
-        for inner in pair.into_inner() {
-            match inner.as_rule() {
-                Rule::parameter_list => {
-                    params = self.build_parameter_list(inner)?;
-                }
-                Rule::r#type => {
-                    return_type = Some(self.build_type(inner)?);
-                }
-                Rule::block => {
-                    body = Some(self.build_block(inner)?);
-                }
-                _ => {}
+        match inner.as_rule() {
+            Rule::literal => self.build_literal(inner),
+            Rule::identifier => {
+                let ident = self.build_identifier(inner)?;
+                let expr = Expression::Identifier {
+                    name: ident,
+                    resolved_declaration: None,
+                    resolved_type: None,
+                    span,
+                };
+                Ok(self.program.expressions.alloc(expr))
             }
+            Rule::expression => {
+                // This is a grouped expression `( ... )`
+                let expr = self.build_expression(inner)?;
+                let grouped_expr = Expression::Grouped {
+                    expr,
+                    resolved_type: None,
+                    span,
+                };
+                Ok(self.program.expressions.alloc(grouped_expr))
+            }
+            Rule::lambda_expression => {
+                let mut p = inner.into_inner();
+                let params = p
+                    .next()
+                    .and_then(|pair| pair.into_inner().next())
+                    .map(|param_list| self.build_parameter_list(param_list))
+                    .transpose()?
+                    .unwrap_or_default();
+                let return_type = self.build_type(p.next().unwrap())?;
+                let body = self.build_block(p.next().unwrap())?;
+                let lambda = Expression::Lambda {
+                    params,
+                    return_type,
+                    body,
+                    resolved_type: None,
+                    span,
+                };
+                Ok(self.program.expressions.alloc(lambda))
+            }
+            _ => Err(AstBuilderError::UnexpectedRule {
+                expected: vec![
+                    Rule::literal,
+                    Rule::identifier,
+                    Rule::expression,
+                    Rule::lambda_expression,
+                ],
+                found: inner.as_rule(),
+            }),
         }
-
-        let return_type = return_type.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("lambda return type".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        let body = body.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("lambda body".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
-
-        Ok(self.program.expressions.alloc(Expression::Lambda {
-                resolved_type: None,
-            params,
-            return_type,
-            body,
-            span: Some(span),
-        }))
     }
 
-    fn build_expression_list(&mut self, pair: Pair<Rule>) -> Result<Vec<ExprId>, Vec<AstError>> {
-        let mut expressions = Vec::new();
+    // ========================================================================
+    // --- Types
+    // ========================================================================
 
-        for inner in pair.into_inner() {
-            if inner.as_rule() == Rule::expression {
-                expressions.push(self.build_expression(inner)?);
+    fn build_type(&mut self, pair: Pair<Rule>) -> Result<AstTypeId> {
+        let inner = pair.into_inner().next().unwrap();
+        let span = Some(self.to_span(inner.as_span()));
+
+        let ast_type = match inner.as_rule() {
+            Rule::primitive_type => {
+                let name = self.build_identifier(inner.into_inner().next().unwrap())?;
+                AstType::Named {
+                    name,
+                    resolved_type: None,
+                }
             }
-        }
+            Rule::generic_type => {
+                let mut p = inner.into_inner();
+                let base = self.build_identifier(p.next().unwrap())?;
+                let args = p
+                    .next()
+                    .unwrap()
+                    .into_inner()
+                    .map(|pair| self.build_type(pair))
+                    .collect::<Result<Vec<_>>>()?;
+                AstType::Generic {
+                    base,
+                    args,
+                    resolved_base_type: None,
+                    span,
+                }
+            }
+            Rule::function_type => {
+                let mut p = inner.into_inner();
+                let params = p
+                    .next()
+                    .and_then(|pair| pair.into_inner().next())
+                    .map(|type_list| {
+                        type_list
+                            .into_inner()
+                            .map(|pair| self.build_type(pair))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                let return_type = self.build_type(p.next().unwrap())?;
+                AstType::Function {
+                    params,
+                    return_type,
+                    span,
+                }
+            }
+            _ => {
+                return Err(AstBuilderError::UnexpectedRule {
+                    expected: vec![
+                        Rule::primitive_type,
+                        Rule::generic_type,
+                        Rule::function_type,
+                    ],
+                    found: inner.as_rule(),
+                })
+            }
+        };
 
-        Ok(expressions)
+        Ok(self.program.types.alloc(ast_type))
     }
 
-    fn build_key_value_pair(&mut self, pair: Pair<Rule>) -> Result<KeyValue, Vec<AstError>> {
-        let span = self.pair_to_span(&pair);
-        let mut key = None;
-        let mut value = None;
+    // ========================================================================
+    // --- Literals & Helpers
+    // ========================================================================
 
-        for inner in pair.into_inner() {
-            match inner.as_rule() {
-                Rule::identifier => {
-                    key = Some(self.build_identifier(inner)?);
-                }
-                Rule::expression => {
-                    value = Some(self.build_expression(inner)?);
-                }
-                _ => {}
+    fn build_literal(&mut self, pair: Pair<Rule>) -> Result<ExprId> {
+        let span = Some(self.to_span(pair.as_span()));
+        let inner = pair.into_inner().next().unwrap();
+        let literal_value = match inner.as_rule() {
+            Rule::integer => Literal::Integer(inner.as_str().to_string()),
+            Rule::float => Literal::Float(inner.as_str().to_string()),
+            Rule::string => {
+                // Remove quotes from the string literal
+                let s = inner.as_str();
+                Literal::String(s[1..s.len() - 1].to_string())
             }
-        }
+            Rule::bool => Literal::Bool(inner.as_str().parse().unwrap()),
+            _ => {
+                return Err(AstBuilderError::UnexpectedRule {
+                    expected: vec![
+                        Rule::integer,
+                        Rule::float,
+                        Rule::string,
+                        Rule::bool, /* list/row */
+                    ],
+                    found: inner.as_rule(),
+                });
+            }
+        };
+        let expr = Expression::Literal {
+            value: literal_value,
+            resolved_type: None,
+            span,
+        };
+        Ok(self.program.expressions.alloc(expr))
+    }
 
-        let key = key.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("key in key-value pair".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
+    fn build_block(&mut self, pair: Pair<Rule>) -> Result<BlockId> {
+        let span = Some(self.to_span(pair.as_span()));
+        let statements = pair
+            .into_inner()
+            .filter(|p| p.as_rule() == Rule::statement)
+            .map(|stmt_pair| self.build_statement(stmt_pair))
+            .collect::<Result<Vec<_>>>()?;
+        let block = Block { statements, span };
+        Ok(self.program.blocks.alloc(block))
+    }
 
-        let value = value.ok_or_else(|| {
-            vec![AstError {
-                kind: AstErrorKind::MissingField("value in key-value pair".to_string()),
-                span: Some(span.clone()),
-            }]
-        })?;
+    fn build_parameter_list(&mut self, pair: Pair<Rule>) -> Result<Vec<ParamId>> {
+        pair.into_inner().map(|p| self.build_parameter(p)).collect()
+    }
 
+    fn build_parameter(&mut self, pair: Pair<Rule>) -> Result<ParamId> {
+        let span = Some(self.to_span(pair.as_span()));
+        let mut inner = pair.into_inner();
+        let name = self.build_identifier(inner.next().unwrap())?;
+        let ty = self.build_type(inner.next().unwrap())?;
+        let param = Parameter {
+            name,
+            ty,
+            resolved_type: None,
+            span,
+        };
+        Ok(self.program.params.alloc(param))
+    }
+
+    fn build_generic_param_list(&mut self, pair: Pair<Rule>) -> Result<Vec<GenericParamId>> {
+        pair.into_inner()
+            .map(|p| {
+                let span = Some(self.to_span(p.as_span()));
+                let name = self.build_identifier(p)?;
+                let param = GenericParam { name, span };
+                Ok(self.program.generic_params.alloc(param))
+            })
+            .collect()
+    }
+
+    fn build_expression_list(&mut self, pair: Pair<Rule>) -> Result<Vec<ExprId>> {
+        pair.into_inner()
+            .map(|p| self.build_expression(p))
+            .collect()
+    }
+
+    fn build_key_value_pair(&mut self, pair: Pair<Rule>) -> Result<KeyValue> {
+        let span = Some(self.to_span(pair.as_span()));
+        let mut inner = pair.into_inner();
+        let key = self.build_identifier(inner.next().unwrap())?;
+        let value = self.build_expression(inner.next().unwrap())?;
         Ok(KeyValue {
-            resolved_table: None, // Filled by name resolver
             key,
             value,
+            resolved_table: None,
             resolved_field: None,
-            span: Some(span),
+            span,
         })
     }
 
-    // Helper method to convert Pest Pair to Span
-    fn pair_to_span(&self, pair: &Pair<Rule>) -> Span {
-        let pest_span = pair.as_span();
-        let (line, column) = pest_span.start_pos().line_col();
-        Span {
-            start: pest_span.start(),
-            end: pest_span.end(),
-            line,
-            column,
+    fn build_decorators(&mut self, pairs: &mut Pairs<Rule>) -> Result<Vec<Decorator>> {
+        let mut decorators = vec![];
+        while let Some(p) = pairs.peek() {
+            if p.as_rule() == Rule::decorator {
+                let decorator_pair = pairs.next().unwrap();
+                let span = Some(self.to_span(decorator_pair.as_span()));
+                let name = self.build_identifier(decorator_pair.into_inner().next().unwrap())?;
+                decorators.push(Decorator { name, span });
+            } else {
+                break;
+            }
         }
+        Ok(decorators)
+    }
+
+    fn build_identifier(&self, pair: Pair<Rule>) -> Result<Identifier> {
+        if pair.as_rule() != Rule::identifier {
+            return Err(AstBuilderError::UnexpectedRule {
+                expected: vec![Rule::identifier],
+                found: pair.as_rule(),
+            });
+        }
+        Ok(Identifier {
+            name: pair.as_str().to_string(),
+            span: Some(self.to_span(pair.as_span())),
+        })
     }
 }
 
