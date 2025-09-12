@@ -7,12 +7,27 @@ use crate::ast::Program;
 use crate::frontend::parse_and_analyze_program;
 use crate::pretty::PrettyPrint;
 use crate::util::{CompilerError, DiagnosticReporter};
+use colored::*;
 use std::fs;
 use std::path::PathBuf;
 
 // ============================================================================
 // --- Compiler Structure
 // ============================================================================
+
+/// Custom error type for stage failures
+#[derive(Debug)]
+struct StageError {
+    message: String,
+}
+
+impl std::fmt::Display for StageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for StageError {}
 
 /// Main compiler orchestrator
 pub struct Compiler {
@@ -31,16 +46,16 @@ impl Compiler {
         self.reporter.add_source(filename, content);
     }
 
-    /// Report compiler errors and return a formatted error message
-    fn handle_compiler_errors(&mut self, errors: Vec<CompilerError>, context: &str) -> String {
-        // Always try to report errors, but don't fail if reporting fails
+    /// Report compiler errors and return a custom stage error
+    fn handle_compiler_errors(&mut self, errors: Vec<CompilerError>) -> StageError {
+        // Report all errors using the diagnostic reporter (this will print them)
         if let Err(report_err) = self.reporter.report_all(&errors) {
-            eprintln!(
-                "Warning: Failed to report {} errors: {}",
-                context, report_err
-            );
+            eprintln!("Warning: Failed to report errors: {}", report_err);
         }
-        format!("{} failed with {} errors", context, errors.len())
+        // Return a simple message for the stage error line
+        StageError {
+            message: format!("Failed with {} errors", errors.len()),
+        }
     }
 
     /// Compile a single source file
@@ -65,7 +80,7 @@ impl Compiler {
         output_dir: &PathBuf,
         _instances: usize,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Starting compilation pipeline...");
+        println!("{} compilation pipeline", "Starting".bold().green());
 
         const TOTAL_STAGES: usize = 5;
         let mut current_stage = 0;
@@ -76,12 +91,20 @@ impl Compiler {
             "Frontend",
             current_stage,
             TOTAL_STAGES,
-            || -> Result<_, Box<dyn std::error::Error>> {
+            || -> Result<Program, Box<dyn std::error::Error>> {
                 // 1. Parse prelude file
-                let prelude = self.read_file(&PathBuf::from("prelude.transact"))?;
+                let prelude_path = PathBuf::from("src/cli/prelude.transact");
+                let prelude = self.read_file(&prelude_path)?;
+                let prelude_filename = prelude_path.to_string_lossy();
+                let prelude_filename_static =
+                    Box::leak(prelude_filename.to_string().into_boxed_str()) as &'static str;
+
                 let prelude_program =
-                    parse_and_analyze_program(None, &prelude.1, "prelude.transact")
-                        .map_err(|errors| self.handle_compiler_errors(errors, "Prelude parsing"))?;
+                    parse_and_analyze_program(None, &prelude.1, prelude_filename_static).map_err(
+                        |errors| -> Box<dyn std::error::Error> {
+                            Box::new(self.handle_compiler_errors(errors))
+                        },
+                    )?;
 
                 // 2. Parse the main source file
                 let source = self.read_file(input_path)?;
@@ -94,11 +117,13 @@ impl Compiler {
                     &source.1,
                     source_filename_static,
                 )
-                .map_err(|errors| self.handle_compiler_errors(errors, "Source parsing"))?;
+                .map_err(|errors| -> Box<dyn std::error::Error> {
+                    Box::new(self.handle_compiler_errors(errors))
+                })?;
 
                 self.write_ast_pretty(&source_program, output_dir)?;
 
-                // 3. Merge them together
+                // 3. Return the program
                 Ok(source_program)
             },
         )?;
@@ -115,7 +140,7 @@ impl Compiler {
         // TODO: Stage 5: Output Generation
         // output_manager::write_outputs(sc_graph, output_dir)?;
 
-        println!("✅ Compilation pipeline completed successfully!");
+        println!("{}", "Completed".green().bold());
         Ok(())
     }
 

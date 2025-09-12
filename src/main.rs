@@ -1,8 +1,7 @@
 use FMitF_rs::cli;
 
 fn main() {
-    if let Err(e) = cli::run_cli() {
-        eprintln!("Error: {}", e);
+    if let Err(_) = cli::run_cli() {
         std::process::exit(1);
     }
 }
