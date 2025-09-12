@@ -8,11 +8,12 @@ pub use crate::util::CompilerError;
 /// Parse source code into AST with complete processing including name resolution,
 /// type checking, and semantic analysis
 pub fn parse_and_analyze_program(
+    program: Option<Program>,
     source: &str,
     filename: &'static str,
 ) -> Result<Program, Vec<CompilerError>> {
     // Stage 1: Basic AST parsing with prelude
-    let program = ast_builder::parse_program(source, filename)?;
+    let program = ast_builder::parse_program(program, source, filename)?;
 
     // Stage 2: Name resolution
     // if let Err(errors) = name_resolver::resolve_names(&mut program) {
