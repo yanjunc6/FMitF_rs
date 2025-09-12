@@ -65,6 +65,13 @@ impl DiagnosticReporter {
         // the necessary source file content to `ariadne`.
         report.eprint(self) // Now works with &mut self
     }
+
+    pub fn report_all(&mut self, errors: &[CompilerError]) -> io::Result<()> {
+        for error in errors {
+            self.report(error)?;
+        }
+        Ok(())
+    }
 }
 
 /// Implementation of ariadne's `Cache` trait for our reporter.

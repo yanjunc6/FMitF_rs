@@ -2,9 +2,12 @@
 //!
 //! This module contains the main compilation orchestration logic.
 
+use super::stage::execute_stage; // Import the new helper
 use crate::ast::Program;
+use crate::frontend::parse_and_analyze_program;
 use crate::pretty::PrettyPrint;
 use crate::util::DiagnosticReporter;
+use colored::*; // Import for using .bold()
 use std::fs;
 use std::path::PathBuf;
 
@@ -30,10 +33,10 @@ impl Compiler {
     }
 
     /// Compile a single source file
-    pub fn parse_file(
+    pub fn read_file(
         &mut self,
         input_path: &PathBuf,
-    ) -> Result<Program, Box<dyn std::error::Error>> {
+    ) -> Result<(String, String), Box<dyn std::error::Error>> {
         // Read input file
         let input_content = std::fs::read_to_string(input_path)?;
         let filename = input_path.to_string_lossy().to_string();
@@ -41,18 +44,7 @@ impl Compiler {
         // Add source for error reporting
         self.add_source(&filename, &input_content);
 
-        // For now, return a default empty program
-        // TODO: Integrate proper parsing when frontend is ready
-        let program = Program::default();
-        println!("✅ Parse stage successful!");
-        println!("Program has {} functions", program.functions.len());
-
-        // TODO: Add more compilation stages here:
-        // - CFG generation
-        // - Optimization
-        // - SC-Graph generation
-
-        Ok(program)
+        Ok((filename, input_content))
     }
 
     /// Run the full compilation pipeline
@@ -62,12 +54,33 @@ impl Compiler {
         output_dir: &PathBuf,
         _instances: usize,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        println!("🚀 Starting compilation pipeline...");
-        println!("Input: {}", input_path.display());
+        println!("Starting compilation pipeline...");
 
-        // Stage 1: Parse
-        let program = self.parse_file(input_path)?;
-        self.write_ast_pretty(&program, output_dir)?;
+        const TOTAL_STAGES: usize = 5;
+        let mut current_stage = 0;
+
+        // Stage 1: Frontend (Parsing)
+        current_stage += 1;
+        let program = execute_stage(
+            "Frontend",
+            current_stage,
+            TOTAL_STAGES,
+            || -> Result<_, Box<dyn std::error::Error>> {
+                // 1. Parse prelude file
+                let mut prelude = self.read_file(&PathBuf::from("prelude.transact"))?;
+                let prelude_program = parse_and_analyze_program(None, &prelude.1, &prelude.0)?;
+
+                // 2. Parse the main source file
+                let source = self.read_file(input_path)?;
+                let source_program =
+                    parse_and_analyze_program(Some(prelude_program), &source.1, &source.0)?;
+
+                self.write_ast_pretty(&source_program, output_dir)?;
+
+                // 3. Merge them together
+                Ok(source_program)
+            },
+        )?;
 
         // TODO: Stage 2: CFG Generation
         // let cfg_program = cfg::build_cfg(program)?;

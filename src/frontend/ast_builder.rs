@@ -11,9 +11,7 @@ use crate::ast::{
 };
 use crate::frontend::FrontEndErrorKind;
 use crate::util::{CompilerError, Span};
-use clap::Id;
 use pest::iterators::{Pair, Pairs};
-use pest::pratt_parser::{Assoc, Op, PrattParser};
 use pest::Parser;
 use pest_derive::Parser;
 use std::mem;
@@ -38,9 +36,9 @@ pub struct AstBuilder {
 }
 
 impl AstBuilder {
-    pub fn new(filename: &'static str) -> Self {
+    pub fn new(program: Option<Program>, filename: &'static str) -> Self {
         AstBuilder {
-            program: Program::default(),
+            program: program.unwrap_or_else(Program::default),
             filename,
         }
     }
@@ -594,202 +592,58 @@ impl AstBuilder {
 
     // --- Expressions ---
     fn build_expression(&mut self, pair: Pair<Rule>) -> Result<ExprId> {
-        // Instantiate the PrattParser with the operator precedence and associativity
-        // defined in the grammar. The order is from lowest to highest precedence.
-        let pratt = PrattParser::new()
-            // Infix operators are defined with their rule and associativity.
-            .op(Op::infix(Rule::assignment, Assoc::Right))
-            .op(Op::infix(Rule::op10, Assoc::Left))
-            .op(Op::infix(Rule::op9, Assoc::Right))
-            .op(Op::infix(Rule::op8, Assoc::Left))
-            .op(Op::infix(Rule::op7, Assoc::Right))
-            .op(Op::infix(Rule::op6, Assoc::Left))
-            .op(Op::infix(Rule::op5, Assoc::Right))
-            .op(Op::infix(Rule::op4, Assoc::Left))
-            .op(Op::infix(Rule::op3, Assoc::Left))
-            // Prefix operators are defined with just their rule.
-            .op(Op::prefix(Rule::prefix_op))
-            // Postfix operators are also defined with just their rule.
-            .op(Op::postfix(Rule::call))
-            .op(Op::postfix(Rule::member_access))
-            .op(Op::postfix(Rule::table_row_access));
+        self.build_expression_recursive(pair)
+    }
 
-        let exp_span = self.to_span(pair.clone().as_span());
+    fn build_expression_recursive(&mut self, pair: Pair<Rule>) -> Result<ExprId> {
+        let expr_span = self.to_span(pair.as_span());
+        let mut pairs = pair.into_inner();
+        let first = pairs.next().ok_or_else(|| {
+            CompilerError::new(
+                FrontEndErrorKind::MissingField("expression".to_string()),
+                Span::new(0, 0, self.filename),
+            )
+        })?;
 
-        // The `parse` method climbs the expression tree.
-        // It takes closures to handle primary terms, prefix, postfix, and infix operators.
-        pratt
-            .map_primary(|primary| self.build_primary_expr(primary))
-            .map_prefix(|op, rhs| {
+        // Handle simple primary expressions first
+        if pairs.peek().is_none() {
+            return self.build_primary_expr(first);
+        }
+
+        // For complex expressions, fall back to manual parsing
+        // This is a simplified approach that handles basic binary operations
+        let mut left = self.build_primary_expr(first)?;
+
+        while let Some(op) = pairs.next() {
+            if let Some(right_pair) = pairs.next() {
+                let right = self.build_primary_expr(right_pair)?;
                 let op_span = self.to_span(op.as_span());
-                let expr = Expression::Unary {
-                    op: Identifier {
-                        name: op.as_str().to_string(),
-                        span: Some(op_span),
-                    },
-                    expr: rhs?,
-                    resolved_callable: None,
-                    resolved_type: None,
-                    span: Some(exp_span),
-                };
-                Ok(self.program.expressions.alloc(expr))
-            })
-            .map_postfix(|lhs, op| {
-                let lhs = lhs?;
-                let op_span = self.to_span(op.as_span());
+
+                // Use the full expression span that encompasses the entire binary expression
                 let expr = match op.as_rule() {
-                    Rule::call => {
-                        let args = op
-                            .into_inner()
-                            .next()
-                            .map_or(Ok(vec![]), |list| self.build_expression_list(list))?;
-                        Expression::Call {
-                            callee: lhs,
-                            args,
-                            resolved_callable: None,
-                            resolved_type: None,
-                            span: Some(exp_span),
-                        }
-                    }
-                    Rule::member_access => {
-                        let member = self.build_identifier(op.into_inner().next().unwrap())?;
-                        Expression::MemberAccess {
-                            object: lhs,
-                            member,
-                            resolved_table: None,
-                            resolved_field: None,
-                            resolved_type: None,
-                            span: Some(exp_span),
-                        }
-                    }
-                    Rule::table_row_access => {
-                        let key_values = op
-                            .into_inner()
-                            .map(|kv| self.build_key_value_pair(kv))
-                            .collect::<Result<Vec<_>>>()?;
-                        Expression::TableRowAccess {
-                            table: lhs,
-                            key_values,
-                            resolved_table: None,
-                            resolved_type: None,
-                            span: Some(exp_span),
-                        }
-                    }
-                    _ => unreachable!(),
-                };
-                Ok(self.program.expressions.alloc(expr))
-            })
-            .map_infix(|lhs, op, rhs| {
-                let op_span = self.to_span(op.as_span());
-                let expr = if op.as_rule() == Rule::assignment {
-                    Expression::Assignment {
-                        lhs: lhs?,
-                        rhs: rhs?,
+                    Rule::assignment => Expression::Assignment {
+                        lhs: left,
+                        rhs: right,
                         resolved_type: None,
-                        span: Some(exp_span),
-                    }
-                } else {
-                    Expression::Binary {
-                        left: lhs?,
+                        span: Some(expr_span),
+                    },
+                    _ => Expression::Binary {
+                        left,
                         op: Identifier {
                             name: op.as_str().to_string(),
                             span: Some(op_span),
                         },
-                        right: rhs?,
+                        right,
                         resolved_callable: None,
                         resolved_type: None,
-                        span: Some(exp_span),
-                    }
+                        span: Some(expr_span),
+                    },
                 };
-                Ok(self.program.expressions.alloc(expr))
-            })
-            .parse(pair.into_inner())
-    }
-
-    fn build_postfix_expr(&mut self, pair: Pair<Rule>) -> Result<ExprId> {
-        let mut inner = pair.into_inner();
-        // First part is always the prefix/primary part
-        let mut current_expr_id = self.build_prefix_expr(inner.next().unwrap())?;
-
-        // Then, chain any postfix operations
-        for p in inner {
-            let span = self.to_span(p.as_span());
-            current_expr_id = match p.as_rule() {
-                Rule::call => {
-                    let args = p
-                        .into_inner()
-                        .next()
-                        .map(|list| self.build_expression_list(list))
-                        .transpose()?
-                        .unwrap_or_default();
-                    let call_expr = Expression::Call {
-                        callee: current_expr_id,
-                        args,
-                        resolved_callable: None,
-                        resolved_type: None,
-                        span: Some(span),
-                    };
-                    self.program.expressions.alloc(call_expr)
-                }
-                Rule::member_access => {
-                    let member = self.build_identifier(p.into_inner().next().unwrap())?;
-                    let member_access_expr = Expression::MemberAccess {
-                        object: current_expr_id,
-                        member,
-                        resolved_table: None,
-                        resolved_field: None,
-                        resolved_type: None,
-                        span: Some(span),
-                    };
-                    self.program.expressions.alloc(member_access_expr)
-                }
-                Rule::table_row_access => {
-                    let key_values = p
-                        .into_inner()
-                        .map(|kv_pair| self.build_key_value_pair(kv_pair))
-                        .collect::<std::result::Result<Vec<_>, _>>()?;
-                    let row_access_expr = Expression::TableRowAccess {
-                        table: current_expr_id,
-                        key_values,
-                        resolved_table: None,
-                        resolved_type: None,
-                        span: Some(span),
-                    };
-                    self.program.expressions.alloc(row_access_expr)
-                }
-                rule => {
-                    return Err(CompilerError::new(
-                        FrontEndErrorKind::UnexpectedRule(format!("in postfix: {:?}", rule)),
-                        span,
-                    ))
-                }
-            };
+                left = self.program.expressions.alloc(expr);
+            }
         }
-        Ok(current_expr_id)
-    }
 
-    fn build_prefix_expr(&mut self, pair: Pair<Rule>) -> Result<ExprId> {
-        let mut inner = pair.clone().into_inner();
-        let first = inner.peek().unwrap();
-
-        if first.as_rule() == Rule::prefix_op {
-            let op_pair = inner.next().unwrap();
-            let op = Identifier {
-                name: op_pair.as_str().to_string(),
-                span: Some(self.to_span(op_pair.as_span())),
-            };
-            let expr = self.build_prefix_expr(inner.next().unwrap())?;
-            let unary_expr = Expression::Unary {
-                op,
-                expr,
-                resolved_callable: None,
-                resolved_type: None,
-                span: Some(self.to_span(pair.clone().as_span())),
-            };
-            Ok(self.program.expressions.alloc(unary_expr))
-        } else {
-            self.build_primary_expr(inner.next().unwrap())
-        }
+        Ok(left)
     }
 
     fn build_primary_expr(&mut self, pair: Pair<Rule>) -> Result<ExprId> {
@@ -1087,12 +941,13 @@ impl AstBuilder {
 /// Pest parsing and then hands off to the `AstBuilder` to construct the
 //  AST.
 pub fn parse_program(
+    program: Option<Program>,
     source: &str,
     filename: &'static str,
 ) -> std::result::Result<Program, Vec<CompilerError>> {
     match TransactParser::parse(Rule::program, source) {
         Ok(pairs) => {
-            let mut builder = AstBuilder::new(filename);
+            let mut builder = AstBuilder::new(program, filename);
             match builder.build(pairs) {
                 Ok(program) => Ok(program),
                 Err(e) => Err(vec![e]),
