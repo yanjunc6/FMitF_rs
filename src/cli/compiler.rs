@@ -6,8 +6,7 @@ use super::stage::execute_stage; // Import the new helper
 use crate::ast::Program;
 use crate::frontend::parse_and_analyze_program;
 use crate::pretty::PrettyPrint;
-use crate::util::DiagnosticReporter;
-use colored::*; // Import for using .bold()
+use crate::util::{CompilerError, DiagnosticReporter};
 use std::fs;
 use std::path::PathBuf;
 
@@ -30,6 +29,18 @@ impl Compiler {
     /// Add source file for error reporting
     pub fn add_source(&mut self, filename: &str, content: &str) {
         self.reporter.add_source(filename, content);
+    }
+
+    /// Report compiler errors and return a formatted error message
+    fn handle_compiler_errors(&mut self, errors: Vec<CompilerError>, context: &str) -> String {
+        // Always try to report errors, but don't fail if reporting fails
+        if let Err(report_err) = self.reporter.report_all(&errors) {
+            eprintln!(
+                "Warning: Failed to report {} errors: {}",
+                context, report_err
+            );
+        }
+        format!("{} failed with {} errors", context, errors.len())
     }
 
     /// Compile a single source file
@@ -61,19 +72,29 @@ impl Compiler {
 
         // Stage 1: Frontend (Parsing)
         current_stage += 1;
-        let program = execute_stage(
+        let _program = execute_stage(
             "Frontend",
             current_stage,
             TOTAL_STAGES,
             || -> Result<_, Box<dyn std::error::Error>> {
                 // 1. Parse prelude file
-                let mut prelude = self.read_file(&PathBuf::from("prelude.transact"))?;
-                let prelude_program = parse_and_analyze_program(None, &prelude.1, &prelude.0)?;
+                let prelude = self.read_file(&PathBuf::from("prelude.transact"))?;
+                let prelude_program =
+                    parse_and_analyze_program(None, &prelude.1, "prelude.transact")
+                        .map_err(|errors| self.handle_compiler_errors(errors, "Prelude parsing"))?;
 
                 // 2. Parse the main source file
                 let source = self.read_file(input_path)?;
-                let source_program =
-                    parse_and_analyze_program(Some(prelude_program), &source.1, &source.0)?;
+                let source_filename = input_path.to_string_lossy();
+                // Convert to static string for the lifetime requirement
+                let source_filename_static =
+                    Box::leak(source_filename.to_string().into_boxed_str()) as &'static str;
+                let source_program = parse_and_analyze_program(
+                    Some(prelude_program),
+                    &source.1,
+                    source_filename_static,
+                )
+                .map_err(|errors| self.handle_compiler_errors(errors, "Source parsing"))?;
 
                 self.write_ast_pretty(&source_program, output_dir)?;
 
