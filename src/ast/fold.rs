@@ -364,11 +364,20 @@ pub fn foldwalk_expr<F: Fold>(
             resolved_type,
             span,
         } => {
-            if let Literal::List(items) = &value {
-                for item_id in items {
-                    let item_expr = prog.expressions[*item_id].clone();
-                    folder.fold_expr(prog, *item_id, item_expr);
+            match &value {
+                Literal::List(items) => {
+                    for item_id in items {
+                        let item_expr = prog.expressions[*item_id].clone();
+                        folder.fold_expr(prog, *item_id, item_expr);
+                    }
                 }
+                Literal::RowLiteral(key_values) => {
+                    for kv in key_values {
+                        let value_expr = prog.expressions[kv.value].clone();
+                        folder.fold_expr(prog, kv.value, value_expr);
+                    }
+                }
+                _ => {} // Other literals don't contain expressions
             }
             Expression::Literal {
                 value,

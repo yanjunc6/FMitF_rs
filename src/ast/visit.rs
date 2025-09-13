@@ -88,6 +88,12 @@ pub trait Visitor<'ast, R: Default = (), E = ()>: Sized {
         walk_expr(self, prog, id)
     }
 
+    // KeyValue (used in TableRowAccess and RowLiteral)
+    // This method is called for KeyValue resolution, not for recursive traversal
+    fn visit_key_value(&mut self, prog: &'ast Program, kv: &'ast KeyValue) -> Result<R, E> {
+        walk_key_value(self, prog, kv)
+    }
+
     // Types
     fn visit_ast_type(&mut self, prog: &'ast Program, id: AstTypeId) -> Result<R, E> {
         walk_ast_type(self, prog, id)
@@ -308,10 +314,18 @@ pub fn walk_expr<'ast, R: Default, E, V: Visitor<'ast, R, E>>(
 ) -> Result<R, E> {
     match &prog.expressions[id] {
         Expression::Literal { value, .. } => {
-            if let Literal::List(items) = value {
-                for item_id in items {
-                    let _ = visitor.visit_expr(prog, *item_id)?;
+            match value {
+                Literal::List(items) => {
+                    for item_id in items {
+                        let _ = visitor.visit_expr(prog, *item_id)?;
+                    }
                 }
+                Literal::RowLiteral(key_values) => {
+                    for kv in key_values {
+                        let _ = visitor.visit_key_value(prog, kv)?;
+                    }
+                }
+                _ => {} // Other literals don't contain expressions
             }
         }
         Expression::Identifier { .. } => {}
@@ -340,7 +354,7 @@ pub fn walk_expr<'ast, R: Default, E, V: Visitor<'ast, R, E>>(
         } => {
             let _ = visitor.visit_expr(prog, *table)?;
             for kv in key_values {
-                let _ = visitor.visit_expr(prog, kv.value)?;
+                let _ = visitor.visit_key_value(prog, kv)?;
             }
         }
         Expression::Grouped { expr, .. } => {
@@ -385,5 +399,14 @@ pub fn walk_ast_type<'ast, R: Default, E, V: Visitor<'ast, R, E>>(
             let _ = visitor.visit_ast_type(prog, *return_type)?;
         }
     }
+    Ok(R::default())
+}
+
+pub fn walk_key_value<'ast, R: Default, E, V: Visitor<'ast, R, E>>(
+    visitor: &mut V,
+    prog: &'ast Program,
+    kv: &'ast KeyValue,
+) -> Result<R, E> {
+    let _ = visitor.visit_expr(prog, kv.value)?;
     Ok(R::default())
 }
