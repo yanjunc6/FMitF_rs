@@ -50,6 +50,12 @@ pub trait VisitorMut<'ast, R: Default = (), E = ()>: Sized {
         walk_expr_mut(self, prog, id)
     }
 
+    // KeyValue (used in TableRowAccess and RowLiteral)
+    // This method is called for KeyValue resolution, not for recursive traversal
+    fn visit_key_value(&mut self, prog: &mut Program, kv: &mut KeyValue) -> Result<R, E> {
+        walk_key_value_mut(self, prog, kv)
+    }
+
     // Types
     fn visit_ast_type(&mut self, prog: &mut Program, id: AstTypeId) -> Result<R, E> {
         walk_ast_type_mut(self, prog, id)
@@ -277,10 +283,30 @@ pub fn walk_expr_mut<'ast, R: Default, E, V: VisitorMut<'ast, R, E>>(
     let expr = prog.expressions[id].clone();
     match expr {
         Expression::Literal { value, .. } => {
-            if let Literal::List(items) = value {
-                for item_id in items {
-                    let _ = visitor.visit_expr(prog, item_id)?;
+            match value {
+                Literal::List(items) => {
+                    for item_id in items {
+                        let _ = visitor.visit_expr(prog, item_id)?;
+                    }
                 }
+                Literal::RowLiteral(_) => {
+                    // For RowLiteral, collect the value IDs first to avoid borrowing issues
+                    let value_ids: Vec<ExprId> = if let Expression::Literal {
+                        value: Literal::RowLiteral(key_values),
+                        ..
+                    } = &prog.expressions[id]
+                    {
+                        key_values.iter().map(|kv| kv.value).collect()
+                    } else {
+                        Vec::new()
+                    };
+
+                    // Visit each value expression
+                    for value_id in value_ids {
+                        let _ = visitor.visit_expr(prog, value_id)?;
+                    }
+                }
+                _ => {} // Other literals don't contain expressions
             }
         }
         Expression::Identifier { .. } => {}
@@ -308,8 +334,10 @@ pub fn walk_expr_mut<'ast, R: Default, E, V: VisitorMut<'ast, R, E>>(
             table, key_values, ..
         } => {
             let _ = visitor.visit_expr(prog, table)?;
-            for kv in key_values {
-                let _ = visitor.visit_expr(prog, kv.value)?;
+            // Collect value IDs first to avoid borrowing issues
+            let value_ids: Vec<ExprId> = key_values.iter().map(|kv| kv.value).collect();
+            for value_id in value_ids {
+                let _ = visitor.visit_expr(prog, value_id)?;
             }
         }
         Expression::Grouped { expr, .. } => {
@@ -355,5 +383,14 @@ pub fn walk_ast_type_mut<'ast, R: Default, E, V: VisitorMut<'ast, R, E>>(
             let _ = visitor.visit_ast_type(prog, return_type)?;
         }
     }
+    Ok(R::default())
+}
+
+pub fn walk_key_value_mut<'ast, R: Default, E, V: VisitorMut<'ast, R, E>>(
+    visitor: &mut V,
+    prog: &mut Program,
+    kv: &mut KeyValue,
+) -> Result<R, E> {
+    let _ = visitor.visit_expr(prog, kv.value)?;
     Ok(R::default())
 }

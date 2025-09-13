@@ -1,5 +1,5 @@
 use crate::ast::common::IdentifierResolution;
-use crate::ast::expr::Expression;
+use crate::ast::expr::{Expression, KeyValue};
 use crate::ast::item::{Item, TableElement};
 use crate::ast::stmt::{ForInit, Statement};
 use crate::ast::visit_mut::{self, VisitorMut};
@@ -431,6 +431,25 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
                 // Return early since we handled the recursion manually
                 return Ok(());
             }
+            Expression::Literal { value, .. } => {
+                // Handle RowLiteral which contains KeyValue structures
+                if let crate::ast::expr::Literal::RowLiteral(key_values) = value {
+                    // For RowLiteral, we need to process KeyValues specially
+                    // Collect KeyValue data to avoid borrowing issues
+                    let kv_data: Vec<(String, ExprId)> = key_values
+                        .iter()
+                        .map(|kv| (kv.key.name.clone(), kv.value))
+                        .collect();
+
+                    // Visit each value expression
+                    for (_, value_id) in &kv_data {
+                        self.visit_expr(prog, *value_id)?;
+                    }
+
+                    // KeyValue resolution would be handled by context (table operations)
+                    return Ok(());
+                }
+            }
             _ => {
                 // For other expressions, just use the default walker
             }
@@ -438,6 +457,17 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
 
         // Use the default walker for all other cases
         visit_mut::walk_expr_mut(self, prog, id)
+    }
+
+    fn visit_key_value(&mut self, prog: &mut Program, kv: &mut KeyValue) -> Result<(), ()> {
+        // First visit the value expression
+        self.visit_expr(prog, kv.value)?;
+
+        // The KeyValue key might need resolution in table contexts
+        // The resolved_table and resolved_field will be set by the containing expression
+        // (like TableRowAccess or RowLiteral when used in table contexts)
+
+        Ok(())
     }
 
     fn visit_table_decl(
