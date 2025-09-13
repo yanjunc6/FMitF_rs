@@ -158,7 +158,7 @@ impl Compiler {
         let mut file = fs::File::create(&ast_file)?;
         program.pretty_print(&mut file)?;
 
-        println!("📄 AST written to: {}", ast_file.display());
+        // println!("📄 AST written to: {}", ast_file.display());
         Ok(())
     }
 }

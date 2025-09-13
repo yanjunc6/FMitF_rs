@@ -22,7 +22,7 @@ KEYWORD = @{
 word = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
 // -- IMPLEMENTATION NOTE: Use word only, keywords are handled by specific literal tokens in grammar rules.
-identifier = { word }
+identifier = { !KEYWORD ~ word }
 
 // -- IMPLEMENTATION NOTE: An operator symbol is one or more characters from the allowed set.
 //    This allows for multi-character custom operators like `++-` or `=>`.
@@ -50,7 +50,7 @@ type_list = { type_rule ~ ("," ~ type_rule)* }
 // ----------------------------------------------------------------------------
 program = { SOI ~ declaration* ~ EOI }
 
-declaration = _{
+declaration = {
     callable_declaration
   | type_declaration
   | const_declaration
@@ -68,7 +68,7 @@ decorator = { "@" ~ identifier }
 callable_declaration = {
     decorator* ~
     (
-      ("function" | "partition" | "transaction") ~ identifier
+      callable_keyword ~ identifier
       | "operator" ~ operator_symbol
     ) ~
     generic_param_list? ~
@@ -77,6 +77,8 @@ callable_declaration = {
     assume_statement* ~
     (block | ";") // A body is a block `{}`, or `;` for a forward declaration.
 }
+
+callable_keyword = { "function" | "partition" | "transaction" }
 
 type_declaration = { decorator* ~ "type" ~ identifier ~ generic_param_list? ~ ";" }
 

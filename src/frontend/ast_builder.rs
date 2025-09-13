@@ -111,27 +111,57 @@ impl AstBuilder {
 
         let decorators = self.build_decorators(&mut inner)?;
 
-        // The next item is a choice between `function`, `operator`, etc.
-        let kind_name_pair = inner.next().ok_or_else(|| {
+        // The next item depends on whether it's a function or operator
+        let first_token = inner.next().ok_or_else(|| {
             CompilerError::new(
-                FrontEndErrorKind::MissingField("callable kind and name".to_string()),
+                FrontEndErrorKind::MissingField("callable name or operator".to_string()),
                 span,
             )
         })?;
-        let (kind, name) = {
-            let mut p = kind_name_pair.into_inner();
-            let keyword = p.next().unwrap(); // Cannot fail based on grammar
-            let name_token = p.next().unwrap();
 
-            let kind = match keyword.as_str() {
-                "function" => CallableKind::Function,
-                "partition" => CallableKind::Partition,
-                "transaction" => CallableKind::Transaction,
-                "operator" => CallableKind::Operator,
-                _ => unreachable!(),
-            };
-            let name = self.build_identifier(name_token)?;
-            (kind, name)
+        let (kind, name) = match first_token.as_rule() {
+            Rule::callable_keyword => {
+                // Extract the keyword to determine the callable kind
+                let keyword = first_token.as_str();
+                let kind = match keyword {
+                    "function" => CallableKind::Function,
+                    "partition" => CallableKind::Partition,
+                    "transaction" => CallableKind::Transaction,
+                    _ => {
+                        return Err(CompilerError::new(
+                            FrontEndErrorKind::UnexpectedRule(format!(
+                                "unknown callable keyword: {}",
+                                keyword
+                            )),
+                            self.to_span(first_token.as_span()),
+                        ))
+                    }
+                };
+
+                // Get the identifier name
+                let name_token = inner.next().ok_or_else(|| {
+                    CompilerError::new(
+                        FrontEndErrorKind::MissingField("callable name".to_string()),
+                        span,
+                    )
+                })?;
+                let name = self.build_identifier(name_token)?;
+                (kind, name)
+            }
+            Rule::operator_symbol => {
+                // For operators, we get the operator symbol directly
+                let name = self.build_identifier(first_token)?;
+                (CallableKind::Operator, name)
+            }
+            rule => {
+                return Err(CompilerError::new(
+                    FrontEndErrorKind::UnexpectedRule(format!(
+                        "expected callable_keyword or operator_symbol, found {:?}",
+                        rule
+                    )),
+                    self.to_span(first_token.as_span()),
+                ));
+            }
         };
 
         let mut generic_params = vec![];
@@ -182,7 +212,7 @@ impl AstBuilder {
         let mut inner = pair.into_inner();
 
         let decorators = self.build_decorators(&mut inner)?;
-        let _type_keyword = inner.next().unwrap(); // consume "type"
+        // Note: The literal "type" keyword is consumed by the grammar but doesn't appear as a token
         let name = self.build_identifier(inner.next().ok_or_else(|| {
             CompilerError::new(
                 FrontEndErrorKind::MissingField("type name".to_string()),
@@ -212,7 +242,7 @@ impl AstBuilder {
     fn build_const_declaration(&mut self, pair: Pair<Rule>) -> Result<ConstId> {
         let span = self.to_span(pair.as_span());
         let mut inner = pair.into_inner();
-        let _const_keyword = inner.next().unwrap();
+        // Note: The literal "const" keyword is consumed by the grammar and doesn't appear as a token
         let name = self.build_identifier(inner.next().ok_or_else(|| {
             CompilerError::new(
                 FrontEndErrorKind::MissingField("const name".to_string()),
@@ -245,7 +275,8 @@ impl AstBuilder {
     fn build_table_declaration(&mut self, pair: Pair<Rule>) -> Result<TableId> {
         let span = self.to_span(pair.as_span());
         let mut inner = pair.into_inner();
-        let _table_keyword = inner.next().unwrap();
+
+        // Note: The literal "table" keyword is consumed by the grammar and doesn't appear as a token
         let name = self.build_identifier(inner.next().ok_or_else(|| {
             CompilerError::new(
                 FrontEndErrorKind::MissingField("table name".to_string()),
@@ -269,17 +300,20 @@ impl AstBuilder {
     }
 
     fn build_table_element(&mut self, pair: Pair<Rule>) -> Result<TableElement> {
-        let inner = pair.into_inner().next().unwrap();
-        let span = self.to_span(inner.as_span());
-        match inner.as_rule() {
+        // Handle the table_field wrapper
+        let actual_element = if pair.as_rule() == Rule::table_field {
+            pair.into_inner().next().unwrap()
+        } else {
+            pair
+        };
+
+        let span = self.to_span(actual_element.as_span());
+        match actual_element.as_rule() {
             Rule::field_declaration => {
-                let mut p_inner = inner.into_inner();
-                let is_primary = if p_inner.peek().unwrap().as_rule() == Rule::primary {
-                    p_inner.next(); // consume "primary"
-                    true
-                } else {
-                    false
-                };
+                // Check for "primary" keyword by looking at the source text before consuming
+                let is_primary = actual_element.as_str().trim_start().starts_with("primary");
+
+                let mut p_inner = actual_element.into_inner();
 
                 let name = self.build_identifier(p_inner.next().ok_or_else(|| {
                     CompilerError::new(
@@ -304,8 +338,8 @@ impl AstBuilder {
                 Ok(TableElement::Field(field))
             }
             Rule::node_declaration => {
-                let mut p_inner = inner.into_inner();
-                let _node_keyword = p_inner.next().unwrap();
+                let mut p_inner = actual_element.into_inner();
+                // Note: The literal "node" keyword is consumed by the grammar and doesn't appear as a token
                 let name = self.build_identifier(p_inner.next().ok_or_else(|| {
                     CompilerError::new(
                         FrontEndErrorKind::MissingField("node name".to_string()),
@@ -327,8 +361,8 @@ impl AstBuilder {
                 Ok(TableElement::Node(node))
             }
             Rule::invariant_declaration => {
-                let mut p_inner = inner.into_inner();
-                let _invariant_keyword = p_inner.next().unwrap();
+                let mut p_inner = actual_element.into_inner();
+                // The "invariant" keyword is consumed by the grammar pattern
                 let expr = self.build_expression(p_inner.next().ok_or_else(|| {
                     CompilerError::new(
                         FrontEndErrorKind::MissingField("invariant expression".to_string()),
@@ -346,16 +380,15 @@ impl AstBuilder {
 
     // --- Statements ---
     fn build_statement(&mut self, pair: Pair<Rule>) -> Result<StmtId> {
-        let inner = pair.into_inner().next().unwrap();
-        let span = self.to_span(inner.as_span());
-        let statement = match inner.as_rule() {
+        let span = self.to_span(pair.as_span());
+        let statement = match pair.as_rule() {
             Rule::var_declaration => {
-                let var_id = self.build_var_decl_from_pair(inner)?;
+                let var_id = self.build_var_decl_from_pair(pair)?;
                 Statement::VarDecl(var_id)
             }
             Rule::if_statement => {
-                let mut p = inner.into_inner();
-                let _if_keyword = p.next().unwrap();
+                let mut p = pair.into_inner();
+                // The "if" keyword is consumed by the grammar pattern
                 let condition = self.build_expression(p.next().ok_or_else(|| {
                     CompilerError::new(
                         FrontEndErrorKind::MissingField("if condition".to_string()),
@@ -365,13 +398,9 @@ impl AstBuilder {
                 let then_block = self.build_block(p.next().ok_or_else(|| {
                     CompilerError::new(FrontEndErrorKind::MissingField("if body".to_string()), span)
                 })?)?;
-                let else_block = if let Some(else_keyword) = p.next() {
-                    Some(self.build_block(p.next().ok_or_else(|| {
-                        CompilerError::new(
-                            FrontEndErrorKind::MissingField("else body".to_string()),
-                            self.to_span(else_keyword.as_span()),
-                        )
-                    })?)?)
+                // If there's a third element, it's the else block (the "else" keyword is consumed by grammar)
+                let else_block = if let Some(else_block_pair) = p.next() {
+                    Some(self.build_block(else_block_pair)?)
                 } else {
                     None
                 };
@@ -383,8 +412,8 @@ impl AstBuilder {
                 }
             }
             Rule::for_statement => {
-                let mut p = inner.into_inner();
-                let _for_keyword = p.next().unwrap();
+                let mut p = pair.into_inner();
+                // The "for" keyword is consumed by the grammar pattern
 
                 let init_pair = p.next().unwrap();
                 let init = self.build_for_init(init_pair)?;
@@ -418,8 +447,8 @@ impl AstBuilder {
                 }
             }
             Rule::return_statement => {
-                let mut p = inner.into_inner();
-                let _return_keyword = p.next().unwrap();
+                let mut p = pair.into_inner();
+                // The "return" keyword is consumed by the grammar pattern
                 let value = p
                     .next()
                     .map(|pair| self.build_expression(pair))
@@ -430,8 +459,8 @@ impl AstBuilder {
                 }
             }
             Rule::assert_statement => {
-                let mut p = inner.into_inner();
-                let _assert_keyword = p.next().unwrap();
+                let mut p = pair.into_inner();
+                // The "assert" keyword is consumed by the grammar pattern
                 let expr = self.build_expression(p.next().ok_or_else(|| {
                     CompilerError::new(
                         FrontEndErrorKind::MissingField("assert expression".to_string()),
@@ -444,9 +473,9 @@ impl AstBuilder {
                 }
             }
             Rule::hop_block => {
-                let mut p = inner.into_inner();
-                let decorators = self.build_decorators(&mut p)?;
-                let _hop_keyword = p.next().unwrap();
+                let mut p = pair.into_inner();
+                // The grammar pattern is "decorator* ~ "hop" ~ block"
+                // But in practice, we only get the block token
                 let body = self.build_block(p.next().ok_or_else(|| {
                     CompilerError::new(
                         FrontEndErrorKind::MissingField("hop body".to_string()),
@@ -454,16 +483,15 @@ impl AstBuilder {
                     )
                 })?)?;
                 Statement::Hop {
-                    decorators,
+                    decorators: vec![], // No decorators in this case
                     body,
                     span: Some(span),
                 }
             }
             Rule::hops_for_loop => {
-                let mut p = inner.into_inner();
-                let decorators = self.build_decorators(&mut p)?;
-                let _hops_keyword = p.next().unwrap();
-                let _for_keyword = p.next().unwrap();
+                let mut p = pair.into_inner();
+
+                // The keywords "hops", "for", and "to" are consumed by the grammar pattern
                 let var_name = self.build_identifier(p.next().ok_or_else(|| {
                     CompilerError::new(
                         FrontEndErrorKind::MissingField("hops for variable".to_string()),
@@ -482,7 +510,6 @@ impl AstBuilder {
                         span,
                     )
                 })?)?;
-                let _to_keyword = p.next().unwrap();
                 let end = self.build_expression(p.next().ok_or_else(|| {
                     CompilerError::new(
                         FrontEndErrorKind::MissingField("hops for end".to_string()),
@@ -506,7 +533,7 @@ impl AstBuilder {
                 let var = self.program.var_decls.alloc(var_decl);
 
                 Statement::HopsFor {
-                    decorators,
+                    decorators: vec![], // No decorators since they're consumed by grammar
                     var,
                     start,
                     end,
@@ -515,11 +542,11 @@ impl AstBuilder {
                 }
             }
             Rule::block => {
-                let block_id = self.build_block(inner)?;
+                let block_id = self.build_block(pair)?;
                 Statement::Block(block_id)
             }
             Rule::expression_statement => {
-                let expr = self.build_expression(inner.into_inner().next().unwrap())?;
+                let expr = self.build_expression(pair.into_inner().next().unwrap())?;
                 Statement::Expression {
                     expr,
                     span: Some(span),
@@ -535,17 +562,14 @@ impl AstBuilder {
         Ok(self.program.statements.alloc(statement))
     }
     fn build_for_init(&mut self, pair: Pair<Rule>) -> Result<Option<ForInit>> {
-        let Some(inner) = pair.into_inner().next() else {
-            return Ok(None); // Empty init statement (e.g., `for(;;){}`)
-        };
-        let span = self.to_span(inner.as_span());
-        match inner.as_rule() {
+        let span = self.to_span(pair.as_span());
+        match pair.as_rule() {
             Rule::var_declaration => {
-                let var_id = self.build_var_decl_from_pair(inner)?;
+                let var_id = self.build_var_decl_from_pair(pair)?;
                 Ok(Some(ForInit::VarDecl(var_id)))
             }
             Rule::expression_statement => {
-                let expr_id = self.build_expression(inner.into_inner().next().unwrap())?;
+                let expr_id = self.build_expression(pair.into_inner().next().unwrap())?;
                 Ok(Some(ForInit::Expression(expr_id)))
             }
             rule => Err(CompilerError::new(
@@ -558,7 +582,8 @@ impl AstBuilder {
     fn build_var_decl_from_pair(&mut self, pair: Pair<Rule>) -> Result<VarId> {
         let span = self.to_span(pair.as_span());
         let mut inner = pair.into_inner();
-        let _var_keyword = inner.next().unwrap();
+
+        // The "var" keyword is already consumed by the grammar
         let name = self.build_identifier(inner.next().ok_or_else(|| {
             CompilerError::new(
                 FrontEndErrorKind::MissingField("var name".to_string()),
@@ -596,54 +621,77 @@ impl AstBuilder {
     }
 
     fn build_expression_recursive(&mut self, pair: Pair<Rule>) -> Result<ExprId> {
-        let expr_span = self.to_span(pair.as_span());
-        let mut pairs = pair.into_inner();
-        let first = pairs.next().ok_or_else(|| {
-            CompilerError::new(
-                FrontEndErrorKind::MissingField("expression".to_string()),
-                Span::new(0, 0, self.filename),
-            )
-        })?;
+        let span = self.to_span(pair.as_span());
 
-        // Handle simple primary expressions first
-        if pairs.peek().is_none() {
-            return self.build_primary_expr(first);
-        }
-
-        // For complex expressions, fall back to manual parsing
-        // This is a simplified approach that handles basic binary operations
-        let mut left = self.build_primary_expr(first)?;
-
-        while let Some(op) = pairs.next() {
-            if let Some(right_pair) = pairs.next() {
-                let right = self.build_primary_expr(right_pair)?;
-                let op_span = self.to_span(op.as_span());
-
-                // Use the full expression span that encompasses the entire binary expression
-                let expr = match op.as_rule() {
-                    Rule::assignment => Expression::Assignment {
-                        lhs: left,
-                        rhs: right,
-                        resolved_type: None,
-                        span: Some(expr_span),
-                    },
-                    _ => Expression::Binary {
-                        left,
-                        op: Identifier {
-                            name: op.as_str().to_string(),
-                            span: Some(op_span),
-                        },
-                        right,
-                        resolved_callable: None,
-                        resolved_type: None,
-                        span: Some(expr_span),
-                    },
-                };
-                left = self.program.expressions.alloc(expr);
+        // Follow the grammar hierarchy properly
+        match pair.as_rule() {
+            Rule::expression => {
+                // expression has one inner item: assignment
+                let inner = pair.into_inner().next().unwrap();
+                self.build_expression_recursive(inner)
             }
+            Rule::assignment => {
+                // Handle assignment (for now, just pass through to lower level)
+                let inner = pair.into_inner().next().unwrap();
+                self.build_expression_recursive(inner)
+            }
+            Rule::level10_expr => {
+                // Handle level10_expr (for now, just pass through to lower level)
+                let inner = pair.into_inner().next().unwrap();
+                self.build_expression_recursive(inner)
+            }
+            Rule::level9_expr => {
+                let inner = pair.into_inner().next().unwrap();
+                self.build_expression_recursive(inner)
+            }
+            Rule::level8_expr => {
+                let inner = pair.into_inner().next().unwrap();
+                self.build_expression_recursive(inner)
+            }
+            Rule::level7_expr => {
+                let inner = pair.into_inner().next().unwrap();
+                self.build_expression_recursive(inner)
+            }
+            Rule::level6_expr => {
+                let inner = pair.into_inner().next().unwrap();
+                self.build_expression_recursive(inner)
+            }
+            Rule::level5_expr => {
+                let inner = pair.into_inner().next().unwrap();
+                self.build_expression_recursive(inner)
+            }
+            Rule::level4_expr => {
+                let inner = pair.into_inner().next().unwrap();
+                self.build_expression_recursive(inner)
+            }
+            Rule::level3_expr => {
+                let inner = pair.into_inner().next().unwrap();
+                self.build_expression_recursive(inner)
+            }
+            Rule::prefix => {
+                let inner = pair.into_inner().next().unwrap();
+                self.build_expression_recursive(inner)
+            }
+            Rule::postfix => {
+                let inner = pair.into_inner().next().unwrap();
+                self.build_expression_recursive(inner)
+            }
+            Rule::primary => self.build_primary_expr(pair),
+            Rule::identifier => {
+                let ident = self.build_identifier(pair)?;
+                let expr = Expression::Identifier {
+                    name: ident,
+                    resolved_declaration: None,
+                    resolved_type: None,
+                    span: Some(span),
+                };
+                Ok(self.program.expressions.alloc(expr))
+            }
+            rule => Err(CompilerError::new(
+                FrontEndErrorKind::UnexpectedRule(format!("in expression: {:?}", rule)),
+                span,
+            )),
         }
-
-        Ok(left)
     }
 
     fn build_primary_expr(&mut self, pair: Pair<Rule>) -> Result<ExprId> {
@@ -811,11 +859,12 @@ impl AstBuilder {
 
     fn build_block(&mut self, pair: Pair<Rule>) -> Result<BlockId> {
         let span = self.to_span(pair.as_span());
+
         let statements = pair
             .into_inner()
-            .filter(|p| p.as_rule() == Rule::statement)
             .map(|stmt_pair| self.build_statement(stmt_pair))
             .collect::<Result<Vec<_>>>()?;
+
         let block = Block {
             statements,
             span: Some(span),

@@ -15,8 +15,8 @@ where
 {
     // Print the stage start message with proper formatting
     // [Stage 1/5] in blue, stage name in bold green
-    println!(
-        "{} {} ...",
+    print!(
+        "{} {} ",
         format!("[Stage {}/{}]", current, total).blue(),
         stage_name
     );
