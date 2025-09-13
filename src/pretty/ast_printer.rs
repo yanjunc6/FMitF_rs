@@ -430,6 +430,7 @@ impl<W: Write> AstPrinter<W> {
             Expression::Lambda {
                 params,
                 return_type,
+                body,
                 ..
             } => {
                 write!(self.writer, "(")?;
@@ -444,9 +445,9 @@ impl<W: Write> AstPrinter<W> {
                 write!(self.writer, ") -> ")?;
                 self.print_ast_type_inline(prog, *return_type)?;
                 write!(self.writer, " ")?;
-                // For lambda body, we need to print inline but that's complex
-                // For now, just indicate it's a lambda body
-                write!(self.writer, "{{ ... }}")?;
+
+                // Print the lambda body using normal block printing
+                self.visit_block(prog, *body)?;
             }
         }
         Ok(())

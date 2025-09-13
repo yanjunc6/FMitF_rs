@@ -631,50 +631,358 @@ impl AstBuilder {
                 self.build_expression_recursive(inner)
             }
             Rule::assignment => {
-                // Handle assignment (for now, just pass through to lower level)
-                let inner = pair.into_inner().next().unwrap();
-                self.build_expression_recursive(inner)
+                // assignment = { level10_expr ~ ("=" ~ assignment)? }
+                let mut pairs = pair.into_inner();
+                let left = self.build_expression_recursive(pairs.next().unwrap())?;
+
+                if let Some(rhs_pair) = pairs.next() {
+                    // This is an assignment: left = right
+                    let right = self.build_expression_recursive(rhs_pair)?;
+                    let expr = Expression::Assignment {
+                        lhs: left,
+                        rhs: right,
+                        resolved_type: None,
+                        span: Some(span),
+                    };
+                    Ok(self.program.expressions.alloc(expr))
+                } else {
+                    // No assignment, just return the left expression
+                    Ok(left)
+                }
             }
             Rule::level10_expr => {
-                // Handle level10_expr (for now, just pass through to lower level)
-                let inner = pair.into_inner().next().unwrap();
-                self.build_expression_recursive(inner)
+                // level10_expr = { level9_expr ~ (op10 ~ level9_expr)* }
+                // op10 = @{ & ("$" | "|") ~ operator_symbol }
+                let mut pairs = pair.into_inner();
+                let mut left = self.build_expression_recursive(pairs.next().unwrap())?;
+
+                while let (Some(op_pair), Some(right_pair)) = (pairs.next(), pairs.next()) {
+                    let op_str = op_pair.as_str();
+                    let op_span = self.to_span(op_pair.as_span());
+                    let right = self.build_expression_recursive(right_pair)?;
+
+                    let op_ident = Identifier {
+                        name: op_str.to_string(),
+                        span: Some(op_span),
+                    };
+
+                    let expr = Expression::Binary {
+                        left,
+                        op: op_ident,
+                        right,
+                        resolved_callable: None,
+                        resolved_type: None,
+                        span: Some(span),
+                    };
+                    left = self.program.expressions.alloc(expr);
+                }
+
+                Ok(left)
             }
             Rule::level9_expr => {
-                let inner = pair.into_inner().next().unwrap();
-                self.build_expression_recursive(inner)
+                // level9_expr = { level8_expr ~ (op9 ~ level9_expr)? } (right-associative)
+                // op9 = @{ & ("^") ~ operator_symbol }
+                let mut pairs = pair.into_inner();
+                let left = self.build_expression_recursive(pairs.next().unwrap())?;
+
+                if let Some(op_pair) = pairs.next() {
+                    let op_str = op_pair.as_str();
+                    let op_span = self.to_span(op_pair.as_span());
+                    let right = self.build_expression_recursive(pairs.next().unwrap())?;
+
+                    let op_ident = Identifier {
+                        name: op_str.to_string(),
+                        span: Some(op_span),
+                    };
+
+                    let expr = Expression::Binary {
+                        left,
+                        op: op_ident,
+                        right,
+                        resolved_callable: None,
+                        resolved_type: None,
+                        span: Some(span),
+                    };
+                    Ok(self.program.expressions.alloc(expr))
+                } else {
+                    Ok(left)
+                }
             }
             Rule::level8_expr => {
-                let inner = pair.into_inner().next().unwrap();
-                self.build_expression_recursive(inner)
+                // level8_expr = { level7_expr ~ (op8 ~ level7_expr)* }
+                // op8 = @{ & ("&") ~ operator_symbol }
+                let mut pairs = pair.into_inner();
+                let mut left = self.build_expression_recursive(pairs.next().unwrap())?;
+
+                while let (Some(op_pair), Some(right_pair)) = (pairs.next(), pairs.next()) {
+                    let op_str = op_pair.as_str();
+                    let op_span = self.to_span(op_pair.as_span());
+                    let right = self.build_expression_recursive(right_pair)?;
+
+                    let op_ident = Identifier {
+                        name: op_str.to_string(),
+                        span: Some(op_span),
+                    };
+
+                    let expr = Expression::Binary {
+                        left,
+                        op: op_ident,
+                        right,
+                        resolved_callable: None,
+                        resolved_type: None,
+                        span: Some(span),
+                    };
+                    left = self.program.expressions.alloc(expr);
+                }
+
+                Ok(left)
             }
             Rule::level7_expr => {
-                let inner = pair.into_inner().next().unwrap();
-                self.build_expression_recursive(inner)
+                // level7_expr = { level6_expr ~ (op7 ~ level7_expr)? } (right-associative)
+                // op7 = @{ & ("~") ~ operator_symbol }
+                let mut pairs = pair.into_inner();
+                let left = self.build_expression_recursive(pairs.next().unwrap())?;
+
+                if let Some(op_pair) = pairs.next() {
+                    let op_str = op_pair.as_str();
+                    let op_span = self.to_span(op_pair.as_span());
+                    let right = self.build_expression_recursive(pairs.next().unwrap())?;
+
+                    let op_ident = Identifier {
+                        name: op_str.to_string(),
+                        span: Some(op_span),
+                    };
+
+                    let expr = Expression::Binary {
+                        left,
+                        op: op_ident,
+                        right,
+                        resolved_callable: None,
+                        resolved_type: None,
+                        span: Some(span),
+                    };
+                    Ok(self.program.expressions.alloc(expr))
+                } else {
+                    Ok(left)
+                }
             }
             Rule::level6_expr => {
-                let inner = pair.into_inner().next().unwrap();
-                self.build_expression_recursive(inner)
+                // level6_expr = { level5_expr ~ (op6 ~ level5_expr)* }
+                // op6 = @{ (&("<" | ">" | "!") ~ operator_symbol) | ("=" ~ operator_char+) }
+                let mut pairs = pair.into_inner();
+                let mut left = self.build_expression_recursive(pairs.next().unwrap())?;
+
+                while let (Some(op_pair), Some(right_pair)) = (pairs.next(), pairs.next()) {
+                    let op_str = op_pair.as_str();
+                    let op_span = self.to_span(op_pair.as_span());
+                    let right = self.build_expression_recursive(right_pair)?;
+
+                    let op_ident = Identifier {
+                        name: op_str.to_string(),
+                        span: Some(op_span),
+                    };
+
+                    let expr = Expression::Binary {
+                        left,
+                        op: op_ident,
+                        right,
+                        resolved_callable: None,
+                        resolved_type: None,
+                        span: Some(span),
+                    };
+                    left = self.program.expressions.alloc(expr);
+                }
+
+                Ok(left)
             }
             Rule::level5_expr => {
-                let inner = pair.into_inner().next().unwrap();
-                self.build_expression_recursive(inner)
+                // level5_expr = { level4_expr ~ (op5 ~ level4_expr)? } (right-associative)
+                // op5 = @{ & (":") ~ operator_symbol }
+                let mut pairs = pair.into_inner();
+                let left = self.build_expression_recursive(pairs.next().unwrap())?;
+
+                if let Some(op_pair) = pairs.next() {
+                    let op_str = op_pair.as_str();
+                    let op_span = self.to_span(op_pair.as_span());
+                    let right = self.build_expression_recursive(pairs.next().unwrap())?;
+
+                    let op_ident = Identifier {
+                        name: op_str.to_string(),
+                        span: Some(op_span),
+                    };
+
+                    let expr = Expression::Binary {
+                        left,
+                        op: op_ident,
+                        right,
+                        resolved_callable: None,
+                        resolved_type: None,
+                        span: Some(span),
+                    };
+                    Ok(self.program.expressions.alloc(expr))
+                } else {
+                    Ok(left)
+                }
             }
             Rule::level4_expr => {
-                let inner = pair.into_inner().next().unwrap();
-                self.build_expression_recursive(inner)
+                // level4_expr = { level3_expr ~ (op4 ~ level3_expr)* }
+                // op4 = @{ & ("+" | "-") ~ operator_symbol }
+                let mut pairs = pair.into_inner();
+                let mut left = self.build_expression_recursive(pairs.next().unwrap())?;
+
+                while let (Some(op_pair), Some(right_pair)) = (pairs.next(), pairs.next()) {
+                    let op_str = op_pair.as_str();
+                    let op_span = self.to_span(op_pair.as_span());
+                    let right = self.build_expression_recursive(right_pair)?;
+
+                    let op_ident = Identifier {
+                        name: op_str.to_string(),
+                        span: Some(op_span),
+                    };
+
+                    let expr = Expression::Binary {
+                        left,
+                        op: op_ident,
+                        right,
+                        resolved_callable: None,
+                        resolved_type: None,
+                        span: Some(span),
+                    };
+                    left = self.program.expressions.alloc(expr);
+                }
+
+                Ok(left)
             }
             Rule::level3_expr => {
-                let inner = pair.into_inner().next().unwrap();
-                self.build_expression_recursive(inner)
+                // level3_expr = { prefix ~ (op3 ~ prefix)* }
+                // op3 = @{ & ("*" | "/" | "%") ~ operator_symbol }
+                let mut pairs = pair.into_inner();
+                let mut left = self.build_expression_recursive(pairs.next().unwrap())?;
+
+                while let (Some(op_pair), Some(right_pair)) = (pairs.next(), pairs.next()) {
+                    let op_str = op_pair.as_str();
+                    let op_span = self.to_span(op_pair.as_span());
+                    let right = self.build_expression_recursive(right_pair)?;
+
+                    let op_ident = Identifier {
+                        name: op_str.to_string(),
+                        span: Some(op_span),
+                    };
+
+                    let expr = Expression::Binary {
+                        left,
+                        op: op_ident,
+                        right,
+                        resolved_callable: None,
+                        resolved_type: None,
+                        span: Some(span),
+                    };
+                    left = self.program.expressions.alloc(expr);
+                }
+
+                Ok(left)
             }
             Rule::prefix => {
-                let inner = pair.into_inner().next().unwrap();
-                self.build_expression_recursive(inner)
+                // prefix = { (prefix_op ~ prefix) | postfix }
+                let mut pairs = pair.into_inner();
+                let first = pairs.next().unwrap();
+
+                match first.as_rule() {
+                    Rule::prefix_op => {
+                        // This is a unary prefix operator
+                        let op_str = first.as_str();
+                        let op_span = self.to_span(first.as_span());
+                        let operand = self.build_expression_recursive(pairs.next().unwrap())?;
+
+                        let op_ident = Identifier {
+                            name: op_str.to_string(),
+                            span: Some(op_span),
+                        };
+
+                        let expr = Expression::Unary {
+                            op: op_ident,
+                            expr: operand,
+                            resolved_callable: None,
+                            resolved_type: None,
+                            span: Some(span),
+                        };
+                        Ok(self.program.expressions.alloc(expr))
+                    }
+                    _ => {
+                        // No prefix operator, just pass through the postfix
+                        self.build_expression_recursive(first)
+                    }
+                }
             }
             Rule::postfix => {
-                let inner = pair.into_inner().next().unwrap();
-                self.build_expression_recursive(inner)
+                // postfix = { primary ~ (call | member_access | table_row_access)* }
+                let mut pairs = pair.into_inner();
+                let mut expr = self.build_expression_recursive(pairs.next().unwrap())?;
+
+                for postfix_op in pairs {
+                    match postfix_op.as_rule() {
+                        Rule::call => {
+                            // call = { "(" ~ expression_list? ~ ")" }
+                            let mut call_pairs = postfix_op.into_inner();
+                            let args = if let Some(expr_list) = call_pairs.next() {
+                                self.build_expression_list(expr_list)?
+                            } else {
+                                Vec::new()
+                            };
+
+                            let call_expr = Expression::Call {
+                                callee: expr,
+                                args,
+                                resolved_callable: None,
+                                resolved_type: None,
+                                span: Some(span),
+                            };
+                            expr = self.program.expressions.alloc(call_expr);
+                        }
+                        Rule::member_access => {
+                            // member_access = { "." ~ identifier }
+                            let member_name =
+                                self.build_identifier(postfix_op.into_inner().next().unwrap())?;
+
+                            let member_expr = Expression::MemberAccess {
+                                object: expr,
+                                member: member_name,
+                                resolved_table: None,
+                                resolved_field: None,
+                                resolved_type: None,
+                                span: Some(span),
+                            };
+                            expr = self.program.expressions.alloc(member_expr);
+                        }
+                        Rule::table_row_access => {
+                            // table_row_access = { "[" ~ (key_value_pair ~ ("," ~ key_value_pair)*)? ~ "]" }
+                            let mut key_values = Vec::new();
+                            for kv_pair in postfix_op.into_inner() {
+                                key_values.push(self.build_key_value_pair(kv_pair)?);
+                            }
+
+                            let table_access_expr = Expression::TableRowAccess {
+                                table: expr,
+                                key_values,
+                                resolved_table: None,
+                                resolved_type: None,
+                                span: Some(span),
+                            };
+                            expr = self.program.expressions.alloc(table_access_expr);
+                        }
+                        _ => {
+                            return Err(CompilerError::new(
+                                FrontEndErrorKind::UnexpectedRule(format!(
+                                    "in postfix: {:?}",
+                                    postfix_op.as_rule()
+                                )),
+                                self.to_span(postfix_op.as_span()),
+                            ));
+                        }
+                    }
+                }
+
+                Ok(expr)
             }
             Rule::primary => self.build_primary_expr(pair),
             Rule::identifier => {
