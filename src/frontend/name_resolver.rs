@@ -480,9 +480,39 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
                         self.errors.push(CompilerError::new(err, default_span));
                     }
 
-                    // Visit the arguments
+                    // Visit the arguments - these should resolve to table fields
                     for arg_id in &args {
-                        self.visit_expr(prog, *arg_id)?;
+                        // For expressions in table node arguments, check if they are valid field references
+                        if let Expression::Identifier { name: arg_name, .. } =
+                            &prog.expressions[*arg_id]
+                        {
+                            // Look for this identifier as a field in the current table
+                            let table = &prog.table_decls[id];
+                            let mut found_field = false;
+
+                            for element in &table.elements {
+                                if let TableElement::Field(field) = element {
+                                    if field.name.name == arg_name.name {
+                                        found_field = true;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if !found_field {
+                                // This identifier is not a field in this table
+                                let err = FrontEndErrorKind::UndefinedIdentifier {
+                                    name: arg_name.name.clone(),
+                                };
+                                let default_span = arg_name
+                                    .span
+                                    .unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
+                                self.errors.push(CompilerError::new(err, default_span));
+                            }
+                        } else {
+                            // For other expression types, use regular resolution
+                            self.visit_expr(prog, *arg_id)?;
+                        }
                     }
                 }
                 TableElement::Invariant(_) => {
