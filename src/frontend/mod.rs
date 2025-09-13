@@ -13,12 +13,10 @@ pub fn parse_and_analyze_program(
     filename: &'static str,
 ) -> Result<Program, Vec<CompilerError>> {
     // Stage 1: Basic AST parsing with prelude
-    let program = ast_builder::parse_program(program, source, filename)?;
+    let mut program = ast_builder::parse_program(program, source, filename)?;
 
     // Stage 2: Name resolution
-    // if let Err(errors) = name_resolver::resolve_names(&mut program) {
-    //     return Err(errors);
-    // }
+    let _ = name_resolver::resolve_names(&mut program)?;
 
     // Stage 3: Type checking (disabled for now)
     // if let Err(errors) = type_checker::check_types(&mut program) {
@@ -39,7 +37,7 @@ pub fn parse_and_analyze_program(
 
 pub mod ast_builder;
 pub mod errors;
-// pub mod name_resolver;
+pub mod name_resolver;
 pub mod util;
 // pub mod type_resolver;
 // pub mod type_checker;

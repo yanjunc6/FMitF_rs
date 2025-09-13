@@ -1,110 +1,77 @@
-//! Name Resolution for AST
-//!
-//! This module implements symbol table based name resolution for the FMitF DSL.
-//! It resolves all identifier references to their declarations and populates
-//! the AST resolved fields accordingly.
-//!
-//! Key features:
-//! - Traditional symbol table with scope stack
-//! - Special handling for `hop` (no new scope) and `hops_for` (creates scope with loop var)
-//! - Operator resolution with infix/prefix classification
-//! - Populates AST resolved fields: Identifier.resolved, Call.resolved_callable, etc.
-//! - Validates identifier existence and reports undefined identifier errors
-
-use crate::ast_old::errors::{AstError, AstErrorKind};
-use crate::ast_old::*;
+use crate::ast::common::IdentifierResolution;
+use crate::ast::expr::Expression;
+use crate::ast::item::{Item, TableElement};
+use crate::ast::stmt::{ForInit, Statement};
+use crate::ast::visit_mut::{self, VisitorMut};
+use crate::ast::{BlockId, ExprId, FunctionId, Program, StmtId, VarId};
+use crate::frontend::errors::FrontEndErrorKind;
+use crate::util::CompilerError;
 use std::collections::HashMap;
 
 // ============================================================================
 // --- Symbol Table
 // ============================================================================
 
-/// Symbol table for name resolution using a scope stack
-#[derive(Debug)]
+/// Represents a single scope in the symbol table.
+#[derive(Debug, Clone, Default)]
+struct Scope {
+    /// Maps a name to a list of declarations. The list handles function/operator overloading.
+    symbols: HashMap<String, Vec<IdentifierResolution>>,
+}
+
+impl Scope {
+    /// Add a new symbol definition to this scope.
+    fn define(&mut self, name: String, resolution: IdentifierResolution) {
+        self.symbols.entry(name).or_default().push(resolution);
+    }
+
+    /// Find a symbol in this scope.
+    fn find(&self, name: &str) -> Option<&Vec<IdentifierResolution>> {
+        self.symbols.get(name)
+    }
+}
+
+/// A stack-based symbol table for managing scopes during name resolution.
+#[derive(Debug, Default)]
 struct SymbolTable {
-    /// Stack of scopes, with global scope at index 0
     scopes: Vec<Scope>,
 }
 
-/// A single scope containing symbol bindings
-#[derive(Debug)]
-struct Scope {
-    /// Map from symbol name to declaration reference(s)
-    /// For functions/operators, we can have multiple with same name (overloading)
-    symbols: HashMap<String, Vec<IdentifierResolution>>,
-    /// Whether this scope is a function scope (for return statements)
-    is_function_scope: bool,
-}
-
 impl SymbolTable {
+    /// Creates a new symbol table with a single global scope.
     fn new() -> Self {
         Self {
-            scopes: vec![Scope {
-                symbols: HashMap::new(),
-                is_function_scope: false,
-            }],
+            scopes: vec![Scope::default()],
         }
     }
 
-    /// Enter a new scope
-    fn enter_scope(&mut self, is_function_scope: bool) {
-        self.scopes.push(Scope {
-            symbols: HashMap::new(),
-            is_function_scope,
-        });
+    /// Pushes a new scope onto the stack.
+    fn enter_scope(&mut self) {
+        self.scopes.push(Scope::default());
     }
 
-    /// Exit the current scope
+    /// Pops the current scope from the stack.
     fn exit_scope(&mut self) {
         if self.scopes.len() > 1 {
             self.scopes.pop();
         }
     }
 
-    /// Define a symbol in the current scope
-    fn define(&mut self, name: String, decl_ref: IdentifierResolution) -> Result<(), AstError> {
-        let current_scope = self.scopes.last_mut().unwrap();
-
-        // For functions, allow multiple definitions (overloading)
-        // For other types, check for duplicates
-        match decl_ref {
-            IdentifierResolution::Function(_) => {
-                // Allow multiple function definitions with same name (overloading)
-                current_scope
-                    .symbols
-                    .entry(name)
-                    .or_insert_with(Vec::new)
-                    .push(decl_ref);
-            }
-            _ => {
-                // For non-functions, don't allow duplicates
-                if let Some(existing) = current_scope.symbols.get(&name) {
-                    if !existing.is_empty() {
-                        return Err(AstError::duplicate_definition(name)); // TODO: add span info
-                    }
-                }
-                current_scope.symbols.insert(name, vec![decl_ref]);
-            }
+    /// Defines a new identifier in the current scope.
+    fn define(&mut self, name: String, resolution: IdentifierResolution) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.define(name, resolution);
         }
-        Ok(())
     }
 
-    /// Look up a symbol, searching from current scope to global scope
-    /// Returns the first match found (for overloaded functions, you may get any overload)
-    fn lookup(&self, name: &str) -> Option<IdentifierResolution> { // TODO: return all overloads, let type checker decide
+    /// Resolves an identifier by searching from the innermost scope outwards.
+    fn resolve(&self, name: &str) -> Option<&Vec<IdentifierResolution>> {
         for scope in self.scopes.iter().rev() {
-            if let Some(decl_refs) = scope.symbols.get(name) {
-                if let Some(&first_decl) = decl_refs.first() {
-                    return Some(first_decl);
-                }
+            if let Some(resolutions) = scope.find(name) {
+                return Some(resolutions);
             }
         }
         None
-    }
-
-    /// Check if we're currently in a function scope
-    fn is_in_function(&self) -> bool {
-        self.scopes.iter().any(|scope| scope.is_function_scope)
     }
 }
 
@@ -112,784 +79,422 @@ impl SymbolTable {
 // --- Name Resolver
 // ============================================================================
 
-/// Main name resolver struct
+/// The main struct for performing name resolution.
+/// It traverses the AST, using a symbol table to resolve identifiers.
 pub struct NameResolver {
-    symbol_table: SymbolTable,
-    errors: Vec<AstError>,
+    symbols: SymbolTable,
+    errors: Vec<CompilerError>,
+    // This tracks if we are inside a loop, useful for `break` or `continue` validation later.
+    loop_depth: u32,
 }
 
-impl NameResolver {
-    fn new() -> Self {
-        Self {
-            symbol_table: SymbolTable::new(),
-            errors: Vec::new(),
+/// Public function to start the name resolution process.
+pub fn resolve_names(prog: &mut Program) -> Result<(), Vec<CompilerError>> {
+    let mut resolver = NameResolver {
+        symbols: SymbolTable::new(),
+        errors: Vec::new(),
+        loop_depth: 0,
+    };
+
+    // First Pass: Collect all top-level (global) declarations.
+    // This allows functions/types to be used before they are declared in the source file.
+    for item in &prog.declarations {
+        match item {
+            Item::Callable(id) => {
+                let decl = &prog.functions[*id];
+                resolver
+                    .symbols
+                    .define(decl.name.name.clone(), IdentifierResolution::Function(*id));
+            }
+            Item::Type(id) => {
+                let decl = &prog.type_decls[*id];
+                resolver
+                    .symbols
+                    .define(decl.name.name.clone(), IdentifierResolution::Type(*id));
+            }
+            Item::Const(id) => {
+                let decl = &prog.const_decls[*id];
+                resolver
+                    .symbols
+                    .define(decl.name.name.clone(), IdentifierResolution::Const(*id));
+            }
+            Item::Table(id) => {
+                let decl = &prog.table_decls[*id];
+                resolver
+                    .symbols
+                    .define(decl.name.name.clone(), IdentifierResolution::Table(*id));
+            }
         }
     }
 
-    /// Resolve all names in the program
-    pub fn resolve(program: &mut Program) -> Result<(), Vec<AstError>> {
-        let mut resolver = Self::new();
+    // Second Pass: Visit and resolve all nodes in the AST.
+    let _ = resolver.visit_program(prog);
 
-        // Phase 1: Collect all top-level declarations
-        resolver.collect_global_declarations(program);
-
-        // Phase 2: Resolve names within each declaration
-        resolver.resolve_all_declarations(program);
-
-        if resolver.errors.is_empty() {
-            Ok(())
-        } else {
-            Err(resolver.errors)
-        }
+    if resolver.errors.is_empty() {
+        Ok(())
+    } else {
+        Err(resolver.errors)
     }
+}
 
-    /// Collect all global declarations and add them to the symbol table
-    fn collect_global_declarations(&mut self, program: &Program) {
-        for declaration in &program.declarations {
-            match declaration {
-                Declaration::Callable(func_id) => {
-                    if let Some(func) = program.functions.get(*func_id) {
-                        let name = Self::get_callable_name(func);
-                        if let Err(e) = self
-                            .symbol_table
-                            .define(name, IdentifierResolution::Function(*func_id))
-                        {
-                            self.errors.push(e);
-                        }
-                    }
+impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
+    // We only need to implement visit methods for nodes that define or reference names,
+    // or that create new scopes.
+
+    fn visit_program(&mut self, prog: &mut Program) -> Result<(), ()> {
+        // First visit all the top-level items using the default walker
+        visit_mut::walk_program_mut(self, prog)?;
+
+        // Collect table IDs to avoid borrowing issues
+        let table_ids: Vec<_> = prog
+            .declarations
+            .iter()
+            .filter_map(|item| {
+                if let Item::Table(table_id) = item {
+                    Some(*table_id)
+                } else {
+                    None
                 }
-                Declaration::Type(type_id) => {
-                    if let Some(type_decl) = program.type_decls.get(*type_id) {
-                        let name = type_decl.name.name.clone();
-                        if let Err(e) = self
-                            .symbol_table
-                            .define(name, IdentifierResolution::Type(*type_id))
-                        {
-                            self.errors.push(e);
-                        }
-                    }
+            })
+            .collect();
+
+        // Then explicitly visit table declarations to resolve partition references
+        for table_id in table_ids {
+            self.visit_table_decl(prog, table_id)?;
+        }
+
+        Ok(())
+    }
+
+    fn visit_callable_decl(&mut self, prog: &mut Program, id: FunctionId) -> Result<(), ()> {
+        self.symbols.enter_scope();
+        let decl = prog.functions[id].clone();
+
+        for param_id in &decl.generic_params {
+            let param = &prog.generic_params[*param_id];
+            self.symbols.define(
+                param.name.name.clone(),
+                IdentifierResolution::GenericParam(*param_id),
+            );
+        }
+
+        for param_id in &decl.params {
+            let param = &prog.params[*param_id];
+            self.symbols.define(
+                param.name.name.clone(),
+                IdentifierResolution::Param(*param_id),
+            );
+        }
+
+        // Use the default walker to visit the body.
+        visit_mut::walk_callable_decl_mut(self, prog, id)?;
+
+        self.symbols.exit_scope();
+        Ok(())
+    }
+
+    fn visit_block(&mut self, prog: &mut Program, id: BlockId) -> Result<(), ()> {
+        self.symbols.enter_scope();
+        visit_mut::walk_block_mut(self, prog, id)?;
+        self.symbols.exit_scope();
+        Ok(())
+    }
+
+    fn visit_var_decl(&mut self, prog: &mut Program, id: VarId) -> Result<(), ()> {
+        // First, visit the initializer expression if it exists.
+        // This prevents `let x = x;` from being valid.
+        visit_mut::walk_var_decl_mut(self, prog, id)?;
+
+        // Then, define the variable in the current scope.
+        let decl = &prog.var_decls[id];
+        self.symbols
+            .define(decl.name.name.clone(), IdentifierResolution::Var(id));
+
+        Ok(())
+    }
+
+    fn visit_stmt(&mut self, prog: &mut Program, id: StmtId) -> Result<(), ()> {
+        let stmt = prog.statements[id].clone();
+        match stmt {
+            // `hop` does not create a new scope.
+            Statement::Hop { body, .. } => {
+                let _ = self.visit_block(prog, body);
+            }
+            // `HopsFor` creates a new scope for its loop variable.
+            Statement::HopsFor {
+                var,
+                body,
+                start,
+                end,
+                ..
+            } => {
+                self.loop_depth += 1;
+                self.symbols.enter_scope();
+                let _ = self.visit_expr(prog, start);
+                let _ = self.visit_expr(prog, end);
+                let var_decl = &prog.var_decls[var];
+                self.symbols
+                    .define(var_decl.name.name.clone(), IdentifierResolution::Var(var));
+                let _ = self.visit_block(prog, body);
+                self.symbols.exit_scope();
+                self.loop_depth -= 1;
+            }
+            // `For` also creates a scope if it has a variable declaration.
+            Statement::For {
+                init,
+                condition,
+                update,
+                body,
+                ..
+            } => {
+                self.loop_depth += 1;
+                self.symbols.enter_scope();
+                if let Some(ForInit::VarDecl(var_id)) = init {
+                    let _ = self.visit_var_decl(prog, var_id);
+                } else if let Some(ForInit::Expression(expr_id)) = init {
+                    let _ = self.visit_expr(prog, expr_id);
                 }
-                Declaration::Const(const_id) => {
-                    if let Some(const_decl) = program.const_decls.get(*const_id) {
-                        let name = const_decl.name.name.clone();
-                        if let Err(e) = self
-                            .symbol_table
-                            .define(name, IdentifierResolution::Const(*const_id))
-                        {
-                            self.errors.push(e);
-                        }
-                    }
+
+                if let Some(cond_id) = condition {
+                    let _ = self.visit_expr(prog, cond_id);
                 }
-                Declaration::Table(table_id) => {
-                    if let Some(table_decl) = program.table_decls.get(*table_id) {
-                        let name = table_decl.name.name.clone();
-                        if let Err(e) = self
-                            .symbol_table
-                            .define(name, IdentifierResolution::Table(*table_id))
-                        {
-                            self.errors.push(e);
-                        }
-                    }
+                if let Some(update_id) = update {
+                    let _ = self.visit_expr(prog, update_id);
                 }
+                let _ = self.visit_block(prog, body);
+                self.symbols.exit_scope();
+                self.loop_depth -= 1;
+            }
+            // For all other statements, use the default walker.
+            _ => {
+                visit_mut::walk_stmt_mut(self, prog, id)?;
             }
         }
+        Ok(())
     }
 
-    /// Resolve names in all declarations
-    fn resolve_all_declarations(&mut self, program: &mut Program) {
-        let declarations: Vec<_> = program.declarations.clone();
-        for declaration in declarations {
-            self.resolve_declaration(program, declaration);
-        }
-    }
-
-    /// Resolve names in a declaration
-    fn resolve_declaration(&mut self, program: &mut Program, declaration: Declaration) {
-        match declaration {
-            Declaration::Callable(func_id) => {
-                self.resolve_callable(program, func_id);
-            }
-            Declaration::Type(type_id) => {
-                self.resolve_type_declaration(program, type_id);
-            }
-            Declaration::Const(const_id) => {
-                self.resolve_const(program, const_id);
-            }
-            Declaration::Table(table_id) => {
-                self.resolve_table(program, table_id);
-            }
-        }
-    }
-
-    /// Get the name of a callable declaration
-    fn get_callable_name(func: &CallableDecl) -> String {
-        match &func.name {
-            CallableName::Identifier(id) => id.name.clone(),
-            CallableName::Operator(op) => op.value.clone(),
-        }
-    }
-
-    /// Resolve names in a callable declaration
-    fn resolve_callable(&mut self, program: &mut Program, func_id: FunctionId) {
-        // Enter function scope
-        self.symbol_table.enter_scope(true);
-
-        // Clone the function to avoid borrowing conflicts
-        let func = if let Some(func) = program.functions.get(func_id) {
-            func.clone()
-        } else {
-            return;
-        };
-
-        // Add generic parameters to scope first
-        for &generic_param_id in &func.generic_params {
-            if let Some(generic_param) = program.generic_params.get(generic_param_id) {
-                let name = generic_param.name.name.clone();
-                if let Err(e) = self
-                    .symbol_table
-                    .define(name, IdentifierResolution::GenericParam(generic_param_id))
-                {
-                    self.errors.push(e);
-                }
-            }
-        }
-
-        // Add parameters to scope
-        for &param_id in &func.params {
-            if let Some(param) = program.params.get(param_id) {
-                let name = param.name.name.clone();
-                if let Err(e) = self
-                    .symbol_table
-                    .define(name, IdentifierResolution::Param(param_id))
-                {
-                    self.errors.push(e);
-                }
-                // Resolve parameter type
-                self.resolve_type(program, param.ty);
-            }
-        }
-
-        // Resolve return type
-        if let Some(return_type_id) = func.return_type {
-            self.resolve_type(program, return_type_id);
-        }
-
-        // Resolve assumptions
-        for &assumption_id in &func.assumptions {
-            self.resolve_expression(program, assumption_id);
-        }
-
-        // Resolve body
-        if let Some(body_id) = func.body {
-            self.resolve_block(program, body_id);
-        }
-
-        // Exit function scope
-        self.symbol_table.exit_scope();
-    }
-
-    /// Resolve names in a const declaration
-    fn resolve_const(&mut self, program: &mut Program, const_id: ConstId) {
-        if let Some(const_decl) = program.const_decls.get(const_id) {
-            let const_decl = const_decl.clone();
-
-            // Resolve type
-            self.resolve_type(program, const_decl.ty);
-
-            // Resolve value expression
-            self.resolve_expression(program, const_decl.value);
-        }
-    }
-
-    /// Resolve names in a type declaration
-    fn resolve_type_declaration(&mut self, program: &mut Program, type_id: TypeDeclId) {
-        let type_decl = if let Some(type_decl) = program.type_decls.get(type_id) {
-            type_decl.clone()
-        } else {
-            return;
-        };
-
-        // Enter scope for generic parameters
-        self.symbol_table.enter_scope(false);
-
-        // Add generic parameters to scope
-        for &generic_param_id in &type_decl.generic_params {
-            if let Some(generic_param) = program.generic_params.get(generic_param_id) {
-                let name = generic_param.name.name.clone();
-                if let Err(e) = self
-                    .symbol_table
-                    .define(name, IdentifierResolution::GenericParam(generic_param_id))
-                {
-                    self.errors.push(e);
-                }
-            }
-        }
-
-        // Exit scope
-        self.symbol_table.exit_scope();
-    }
-
-    /// Resolve names in a table declaration
-    fn resolve_table(&mut self, program: &mut Program, table_id: TableId) {
-        let table_decl = if let Some(table_decl) = program.table_decls.get(table_id) {
-            table_decl.clone()
-        } else {
-            return;
-        };
-
-        // Enter scope for table field resolution
-        self.symbol_table.enter_scope(false);
-
-        // Collect table fields for field reference resolution
-        let mut table_fields = HashMap::new();
-
-        // Add table fields to scope and collect field info
-        for element in &table_decl.elements {
-            if let TableElement::Field(field) = element {
-                table_fields.insert(field.name.name.clone(), field.clone());
-
-                // Resolve field type
-                self.resolve_type(program, field.ty);
-            }
-        }
-
-        // Resolve partition function call
-        for element in &table_decl.elements {
-            if let TableElement::Node(table_node) = element {
-                // Resolve partition function reference
-                if let Some(decl_ref) = self.symbol_table.lookup(&table_node.name.name) {
-                    if let IdentifierResolution::Function(func_id) = decl_ref {
-                        // Populate the resolved_partition field
-                        if let Some(mut_table_decl) = program.table_decls.get_mut(table_id) {
-                            for element in &mut mut_table_decl.elements {
-                                if let TableElement::Node(node) = element {
-                                    node.resolved_partition = Some(func_id);
-                                    break;
-                                }
-                            }
-                        }
+    fn visit_expr(&mut self, prog: &mut Program, id: ExprId) -> Result<(), ()> {
+        // First, handle the specific cases that need resolution before recursing
+        match &prog.expressions[id] {
+            Expression::Identifier { name, span, .. } => {
+                if let Some(resolutions) = self.symbols.resolve(&name.name) {
+                    // In case of overloading, we just take the first one.
+                    // The type checker will be responsible for picking the correct overload.
+                    if let Expression::Identifier {
+                        resolved_declaration,
+                        ..
+                    } = &mut prog.expressions[id]
+                    {
+                        *resolved_declaration = Some(resolutions[0]);
                     }
                 } else {
-                    self.errors
-                        .push(AstError::undefined_identifier(table_node.name.name.clone()));
-                }
-
-                // Resolve arguments with table field context
-                for &arg_id in &table_node.args {
-                    self.resolve_expression_with_table_fields(program, arg_id, &table_fields);
-                }
-            }
-        }
-
-        // Exit table scope
-        self.symbol_table.exit_scope();
-    }
-
-    /// Resolve an expression with table field context for validation
-    fn resolve_expression_with_table_fields(
-        &mut self,
-        program: &mut Program,
-        expr_id: ExprId,
-        table_fields: &HashMap<String, TableField>,
-    ) {
-        if let Some(expression) = program.expressions.get(expr_id) {
-            let expression = expression.clone();
-            match expression {
-                Expression::Identifier {
-                    name: identifier, ..
-                } => {
-                    // Check if this identifier refers to a table field or a normal identifier
-                    if table_fields.contains_key(&identifier.name) {
-                        // This is a table field reference - valid
-                    } else {
-                        // Normal identifier - resolve it
-                        self.resolve_identifier(program, expr_id, &identifier.name);
-                    }
-                }
-                Expression::Binary {
-                    left, right, op, ..
-                } => {
-                    self.resolve_expression_with_table_fields(program, left, table_fields);
-                    self.resolve_expression_with_table_fields(program, right, table_fields);
-                    self.resolve_operator(program, &op.value, 2);
-                }
-                Expression::Unary { expr, op, .. } => {
-                    self.resolve_expression_with_table_fields(program, expr, table_fields);
-                    self.resolve_operator(program, &op.value, 1);
-                }
-                Expression::Call { callee, args, .. } => {
-                    self.resolve_expression_with_table_fields(program, callee, table_fields);
-                    for &arg_id in &args {
-                        self.resolve_expression_with_table_fields(program, arg_id, table_fields);
-                    }
-                }
-                _ => {
-                    // For other expression types, delegate to normal resolution
-                    self.resolve_expression(program, expr_id);
+                    let err = FrontEndErrorKind::UndefinedIdentifier {
+                        name: name.name.clone(),
+                    };
+                    let default_span =
+                        span.unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
+                    self.errors.push(CompilerError::new(err, default_span));
                 }
             }
-        }
-    }
+            Expression::MemberAccess { object, member, .. } => {
+                // Collect information before modifying
+                let object_id = *object;
+                let member_name = member.name.clone();
 
-    /// Resolve names in a type
-    fn resolve_type(&mut self, program: &mut Program, type_id: TypeId) {
-        if let Some(type_decl) = program.types.get(type_id) {
-            let type_decl = type_decl.clone();
-            match type_decl {
-                Type::Named {
-                    name: identifier, ..
-                } => {
-                    self.resolve_identifier_name(&identifier.name);
-                }
-                Type::Generic { base, args, .. } => {
-                    self.resolve_identifier_name(&base.name);
-                    for &arg_id in &args {
-                        self.resolve_type(program, arg_id);
-                    }
-                }
-                Type::Function {
-                    params,
-                    return_type,
-                    ..
-                } => {
-                    for &param_id in &params {
-                        self.resolve_type(program, param_id);
-                    }
-                    self.resolve_type(program, return_type);
-                }
-            }
-        }
-    }
-
-    /// Resolve names in a block
-    fn resolve_block(&mut self, program: &mut Program, block_id: BlockId) {
-        if let Some(block) = program.blocks.get(block_id) {
-            let statements = block.statements.clone();
-            for &stmt_id in &statements {
-                self.resolve_statement(program, stmt_id);
-            }
-        }
-    }
-
-    /// Resolve names in a statement
-    fn resolve_statement(&mut self, program: &mut Program, stmt_id: StmtId) {
-        if let Some(statement) = program.statements.get(stmt_id) {
-            let statement = statement.clone();
-            match statement {
-                Statement::VarDecl(var_id) => {
-                    if let Some(var_decl) = program.var_decls.get(var_id) {
-                        let var_decl = var_decl.clone();
-
-                        // Define the variable in current scope
-                        let name = var_decl.name.name.clone();
-                        if let Err(e) = self
-                            .symbol_table
-                            .define(name, IdentifierResolution::Var(var_id))
-                        {
-                            self.errors.push(e);
-                        }
-
-                        // Resolve type if present
-                        if let Some(type_id) = var_decl.ty {
-                            self.resolve_type(program, type_id);
-                        }
-
-                        // Resolve initializer if present
-                        if let Some(init_id) = var_decl.init {
-                            self.resolve_expression(program, init_id);
-                        }
-                    }
-                }
-                Statement::If {
-                    condition,
-                    then_block,
-                    else_block,
-                    ..
-                } => {
-                    self.resolve_expression(program, condition);
-
-                    // Enter scope for then block
-                    self.symbol_table.enter_scope(false);
-                    self.resolve_block(program, then_block);
-                    self.symbol_table.exit_scope();
-
-                    if let Some(else_block_id) = else_block {
-                        // Enter scope for else block
-                        self.symbol_table.enter_scope(false);
-                        self.resolve_block(program, else_block_id);
-                        self.symbol_table.exit_scope();
-                    }
-                }
-                Statement::For {
-                    init,
-                    condition,
-                    update,
-                    body,
-                    ..
-                } => {
-                    // Enter scope for the entire for loop
-                    self.symbol_table.enter_scope(false);
-
-                    // Resolve init
-                    if let Some(for_init) = init {
-                        match for_init {
-                            ForInit::VarDecl(var_id) => {
-                                if let Some(var_decl) = program.var_decls.get(var_id) {
-                                    let var_decl = var_decl.clone();
-                                    let name = var_decl.name.name.clone();
-                                    if let Err(e) = self
-                                        .symbol_table
-                                        .define(name, IdentifierResolution::Var(var_id))
-                                    {
-                                        self.errors.push(e);
-                                    }
-
-                                    if let Some(type_id) = var_decl.ty {
-                                        self.resolve_type(program, type_id);
-                                    }
-
-                                    if let Some(init_id) = var_decl.init {
-                                        self.resolve_expression(program, init_id);
+                // Check if object is an identifier
+                if let Expression::Identifier {
+                    name: table_name, ..
+                } = &prog.expressions[object_id]
+                {
+                    let table_name = table_name.name.clone();
+                    if let Some(resolutions) = self.symbols.resolve(&table_name) {
+                        if let IdentifierResolution::Table(table_id) = resolutions[0] {
+                            // Look up the field in the table
+                            let mut resolved_field = None;
+                            if let Some(table_item) = prog.table_decls.get(table_id) {
+                                for element in &table_item.elements {
+                                    if let TableElement::Field(field) = element {
+                                        if field.name.name == member_name {
+                                            resolved_field = Some(field.clone());
+                                            break;
+                                        }
                                     }
                                 }
                             }
-                            ForInit::Expression(expr_id) => {
-                                self.resolve_expression(program, expr_id);
-                            }
-                        }
-                    }
 
-                    // Resolve condition
-                    if let Some(condition_id) = condition {
-                        self.resolve_expression(program, condition_id);
-                    }
-
-                    // Resolve update
-                    if let Some(update_id) = update {
-                        self.resolve_expression(program, update_id);
-                    }
-
-                    // Resolve body
-                    self.resolve_block(program, body);
-
-                    // Exit for loop scope
-                    self.symbol_table.exit_scope();
-                }
-                Statement::Return { value, .. } => {
-                    if !self.symbol_table.is_in_function() {
-                        self.errors.push(AstError::return_outside_function());
-                    }
-
-                    if let Some(value_id) = value {
-                        self.resolve_expression(program, value_id);
-                    }
-                }
-                Statement::Assert { expr, .. } => {
-                    self.resolve_expression(program, expr);
-                }
-                Statement::Hop { body, .. } => {
-                    // IMPORTANT: Hop does NOT create a new scope
-                    self.resolve_block(program, body);
-                }
-                Statement::HopsFor {
-                    var,
-                    start,
-                    end,
-                    body,
-                    ..
-                } => {
-                    // IMPORTANT: HopsFor DOES create a new scope with the loop variable
-                    self.symbol_table.enter_scope(false);
-
-                    // Define the loop variable
-                    if let Some(var_decl) = program.var_decls.get(var) {
-                        let var_decl = var_decl.clone();
-                        let name = var_decl.name.name.clone();
-                        if let Err(e) = self
-                            .symbol_table
-                            .define(name, IdentifierResolution::Var(var))
-                        {
-                            self.errors.push(e);
-                        }
-
-                        if let Some(type_id) = var_decl.ty {
-                            self.resolve_type(program, type_id);
-                        }
-                    }
-
-                    // Resolve start and end expressions
-                    self.resolve_expression(program, start);
-                    self.resolve_expression(program, end);
-
-                    // Resolve body
-                    self.resolve_block(program, body);
-
-                    // Exit hops_for scope
-                    self.symbol_table.exit_scope();
-                }
-                Statement::Expression { expr, .. } => {
-                    self.resolve_expression(program, expr);
-                }
-                Statement::Block(block_id) => {
-                    // Enter scope for nested block
-                    self.symbol_table.enter_scope(false);
-                    self.resolve_block(program, block_id);
-                    self.symbol_table.exit_scope();
-                }
-            }
-        }
-    }
-
-    /// Resolve names in an expression
-    fn resolve_expression(&mut self, program: &mut Program, expr_id: ExprId) {
-        if let Some(expression) = program.expressions.get(expr_id) {
-            let expression = expression.clone();
-            match expression {
-                Expression::Literal { .. } => {
-                    // Literals don't need name resolution
-                }
-                Expression::Identifier {
-                    name: identifier, ..
-                } => {
-                    self.resolve_identifier(program, expr_id, &identifier.name);
-                }
-                Expression::Binary {
-                    left, right, op, ..
-                } => {
-                    self.resolve_expression(program, left);
-                    self.resolve_expression(program, right);
-
-                    // Resolve binary operator (2 parameters)
-                    self.resolve_operator(program, &op.value, 2);
-                }
-                Expression::Unary { expr, op, .. } => {
-                    self.resolve_expression(program, expr);
-
-                    // Resolve unary operator (1 parameter)
-                    self.resolve_operator(program, &op.value, 1);
-                }
-                Expression::Assignment { lhs, rhs, .. } => {
-                    self.resolve_expression(program, lhs);
-                    self.resolve_expression(program, rhs);
-                }
-                Expression::Call { callee, args, .. } => {
-                    self.resolve_expression(program, callee);
-
-                    // Resolve call - populate resolved_callable if callee is an identifier
-                    if let Some(Expression::Identifier { name: ident, .. }) =
-                        program.expressions.get(callee)
-                    {
-                        if let Some(decl_ref) = self.symbol_table.lookup(&ident.name) {
-                            if let IdentifierResolution::Function(func_id) = decl_ref {
-                                // Populate the resolved_callable field
-                                if let Some(Expression::Call {
-                                    resolved_callable, ..
-                                }) = program.expressions.get_mut(expr_id)
-                                {
-                                    *resolved_callable = Some(func_id);
-                                }
-                            }
-                        }
-                    }
-
-                    for &arg_id in &args {
-                        self.resolve_expression(program, arg_id);
-                    }
-                }
-                Expression::MemberAccess { object, member, .. } => {
-                    self.resolve_expression(program, object);
-
-                    // Resolve member access - populate resolved_field if object is a table
-                    self.resolve_member_access(program, expr_id, object, &member.name);
-                }
-                Expression::TableRowAccess {
-                    table, key_values, ..
-                } => {
-                    self.resolve_expression(program, table);
-                    for key_value in &key_values {
-                        self.resolve_expression(program, key_value.value);
-
-                        // Resolve key field - populate resolved_field
-                        self.resolve_key_value_field(program, key_value, table);
-                    }
-                }
-                Expression::Grouped { expr, .. } => {
-                    self.resolve_expression(program, expr);
-                }
-                Expression::Lambda {
-                    params,
-                    return_type,
-                    body,
-                    ..
-                } => {
-                    // Enter scope for lambda
-                    self.symbol_table.enter_scope(true); // Lambda is a function scope
-
-                    // Add parameters to scope
-                    for &param_id in &params {
-                        if let Some(param) = program.params.get(param_id) {
-                            let name = param.name.name.clone();
-                            if let Err(e) = self
-                                .symbol_table
-                                .define(name, IdentifierResolution::Param(param_id))
+                            // Now update the expression
+                            if let Expression::MemberAccess {
+                                resolved_table,
+                                resolved_field: rf,
+                                ..
+                            } = &mut prog.expressions[id]
                             {
-                                self.errors.push(e);
+                                *resolved_table = Some(table_id);
+                                *rf = resolved_field;
                             }
-                            // Resolve parameter type
-                            self.resolve_type(program, param.ty);
                         }
                     }
-
-                    // Resolve return type
-                    self.resolve_type(program, return_type);
-
-                    // Resolve body
-                    self.resolve_block(program, body);
-
-                    // Exit lambda scope
-                    self.symbol_table.exit_scope();
                 }
             }
-        }
-    }
+            Expression::TableRowAccess { table, .. } => {
+                let table_id = *table;
 
-    /// Resolve an identifier and populate the resolved_declaration field
-    fn resolve_identifier(&mut self, program: &mut Program, expr_id: ExprId, name: &str) {
-        if let Some(decl_ref) = self.symbol_table.lookup(name) {
-            // Populate the resolved_declaration field
-            if let Some(Expression::Identifier {
-                resolved_declaration,
-                ..
-            }) = program.expressions.get_mut(expr_id)
-            {
-                *resolved_declaration = Some(decl_ref);
+                // Check if table is an identifier
+                if let Expression::Identifier {
+                    name: table_name, ..
+                } = &prog.expressions[table_id]
+                {
+                    let table_name = table_name.name.clone();
+                    if let Some(resolutions) = self.symbols.resolve(&table_name) {
+                        if let IdentifierResolution::Table(table_id) = resolutions[0] {
+                            // Update the expression
+                            if let Expression::TableRowAccess { resolved_table, .. } =
+                                &mut prog.expressions[id]
+                            {
+                                *resolved_table = Some(table_id);
+                            }
+                        }
+                    }
+                }
             }
-        } else {
-            self.errors
-                .push(AstError::undefined_identifier(name.to_string()));
+            Expression::Call { callee, .. } => {
+                let callee_id = *callee;
+
+                // If callee is an identifier, try to resolve it as a function
+                if let Expression::Identifier { name, .. } = &prog.expressions[callee_id] {
+                    let func_name = name.name.clone();
+                    if let Some(resolutions) = self.symbols.resolve(&func_name) {
+                        if let IdentifierResolution::Function(func_id) = resolutions[0] {
+                            if let Expression::Call {
+                                resolved_callable, ..
+                            } = &mut prog.expressions[id]
+                            {
+                                *resolved_callable = Some(func_id);
+                            }
+                        }
+                    } else {
+                        let err = FrontEndErrorKind::UndefinedIdentifier { name: func_name };
+                        let default_span = name
+                            .span
+                            .unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
+                        self.errors.push(CompilerError::new(err, default_span));
+                    }
+                }
+            }
+            Expression::Binary { op, .. } => {
+                // Try to resolve the operator as a function
+                if let Some(resolutions) = self.symbols.resolve(&op.name) {
+                    if let IdentifierResolution::Function(func_id) = resolutions[0] {
+                        if let Expression::Binary {
+                            resolved_callable, ..
+                        } = &mut prog.expressions[id]
+                        {
+                            *resolved_callable = Some(func_id);
+                        }
+                    }
+                }
+                // For binary operators, this might be a built-in operator, so we don't error
+            }
+            Expression::Unary { op, .. } => {
+                // Try to resolve the operator as a function
+                if let Some(resolutions) = self.symbols.resolve(&op.name) {
+                    if let IdentifierResolution::Function(func_id) = resolutions[0] {
+                        if let Expression::Unary {
+                            resolved_callable, ..
+                        } = &mut prog.expressions[id]
+                        {
+                            *resolved_callable = Some(func_id);
+                        }
+                    }
+                }
+                // For unary operators, this might be a built-in operator, so we don't error
+            }
+            Expression::Lambda { params, body, .. } => {
+                // Enter a new scope for lambda parameters
+                self.symbols.enter_scope();
+
+                // Add lambda parameters to symbol table
+                for param_id in params {
+                    let param = &prog.params[*param_id];
+                    self.symbols.define(
+                        param.name.name.clone(),
+                        IdentifierResolution::Param(*param_id),
+                    );
+                }
+
+                // Visit the body
+                self.visit_block(prog, *body)?;
+
+                // Exit lambda scope
+                self.symbols.exit_scope();
+
+                // Return early since we handled the recursion manually
+                return Ok(());
+            }
+            _ => {
+                // For other expressions, just use the default walker
+            }
         }
+
+        // Use the default walker for all other cases
+        visit_mut::walk_expr_mut(self, prog, id)
     }
 
-    /// Resolve an identifier name (without AST mutation)
-    fn resolve_identifier_name(&mut self, name: &str) {
-        if self.symbol_table.lookup(name).is_none() {
-            self.errors
-                .push(AstError::undefined_identifier(name.to_string()));
-        }
-    }
-
-    /// Resolve member access and populate resolved_field
-    fn resolve_member_access(
+    fn visit_table_decl(
         &mut self,
-        program: &mut Program,
-        expr_id: ExprId,
-        _object_id: ExprId,
-        member_name: &str,
-    ) {
-        // Get the type of the object to determine if it's a table
-        // For now, we'll implement basic validation
-        // In a full implementation, this would use type information
+        prog: &mut Program,
+        id: crate::ast::item::TableId,
+    ) -> Result<(), ()> {
+        // Visit table elements to resolve partition references
+        let table = &prog.table_decls[id];
+        let mut elements_to_visit = Vec::new();
 
-        // Try to find the field in any table that matches
-        let mut found_field = None;
-        for table_decl in program.table_decls.iter() {
-            for element in &table_decl.1.elements {
-                if let TableElement::Field(field) = element {
-                    if field.name.name == member_name {
-                        found_field = Some(field.clone());
-                        break;
+        // Collect elements that need visiting to avoid borrowing issues
+        for (idx, element) in table.elements.iter().enumerate() {
+            match element {
+                TableElement::Node(node) => {
+                    elements_to_visit.push((idx, node.name.name.clone(), node.args.clone()));
+                }
+                TableElement::Invariant(expr_id) => {
+                    elements_to_visit.push((idx, String::new(), vec![*expr_id]));
+                }
+                _ => {}
+            }
+        }
+
+        // Now process the elements
+        for (idx, name, args) in elements_to_visit {
+            match &mut prog.table_decls[id].elements[idx] {
+                TableElement::Node(node) => {
+                    // Try to resolve the partition function
+                    if let Some(resolutions) = self.symbols.resolve(&name) {
+                        if let IdentifierResolution::Function(func_id) = resolutions[0] {
+                            node.resolved_partition = Some(func_id);
+                        }
+                    } else {
+                        let err = FrontEndErrorKind::UndefinedIdentifier { name: name.clone() };
+                        let default_span = node
+                            .name
+                            .span
+                            .unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
+                        self.errors.push(CompilerError::new(err, default_span));
+                    }
+
+                    // Visit the arguments
+                    for arg_id in &args {
+                        self.visit_expr(prog, *arg_id)?;
                     }
                 }
-            }
-            if found_field.is_some() {
-                break;
-            }
-        }
-
-        if let Some(field) = found_field {
-            // Populate the resolved_field
-            if let Some(Expression::MemberAccess { resolved_field, .. }) =
-                program.expressions.get_mut(expr_id)
-            {
-                *resolved_field = Some(field);
-            }
-        } else {
-            self.errors.push(AstError::undefined_identifier(format!(
-                "field '{}'",
-                member_name
-            )));
-        }
-    }
-
-    /// Resolve key-value field and populate resolved_field
-    fn resolve_key_value_field(
-        &mut self,
-        program: &mut Program,
-        key_value: &KeyValue,
-        _table_id: ExprId,
-    ) {
-        // Find the table and verify the key field exists
-        // This is a simplified implementation
-        let mut found_field = None;
-
-        for table_decl in program.table_decls.iter() {
-            for element in &table_decl.1.elements {
-                if let TableElement::Field(field) = element {
-                    if field.name.name == key_value.key.name {
-                        found_field = Some(field.clone());
-                        break;
+                TableElement::Invariant(_) => {
+                    // Visit the invariant expression
+                    for arg_id in &args {
+                        self.visit_expr(prog, *arg_id)?;
                     }
                 }
-            }
-            if found_field.is_some() {
-                break;
+                _ => {}
             }
         }
 
-        if found_field.is_none() {
-            self.errors.push(AstError::undefined_identifier(format!(
-                "table key field '{}'",
-                key_value.key.name
-            )));
-        }
-
-        // Note: We can't mutate key_value here since it's borrowed immutably
-        // In a real implementation, we'd need to restructure this to allow mutation
+        Ok(())
     }
-
-    /// Resolve an operator by looking for its declaration
-    fn resolve_operator(&mut self, _program: &mut Program, op: &str, expected_params: usize) {
-        // Look for operator declaration in symbol table (custom operators)
-        if let Some(decl_ref) = self.symbol_table.lookup(op) {
-            if let IdentifierResolution::Function(func_id) = decl_ref {
-                // Validate parameter count matches expected usage
-                if let Some(func) = _program.functions.get(func_id) {
-                    let param_count = func.params.len();
-                    if param_count != expected_params {
-                        self.errors
-                            .push(AstError::new(AstErrorKind::InvalidOperation {
-                                op: op.to_string(),
-                                details: format!(
-                                    "Expected {} parameters, found {}",
-                                    expected_params, param_count
-                                ),
-                            }));
-                    }
-                }
-            }
-        } else {
-            // Operator not found in symbol table - it's undefined
-            self.errors
-                .push(AstError::undefined_identifier(op.to_string()));
-        }
-    }
-}
-
-// ============================================================================
-// --- Public Interface
-// ============================================================================
-
-/// Resolve all names in the program
-pub fn resolve_names(program: &mut Program) -> Result<(), Vec<AstError>> {
-    NameResolver::resolve(program)
 }
