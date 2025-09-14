@@ -87,6 +87,8 @@
 @intrinsic function length<T>(list: List<T>) -> int;
 @intrinsic function get<T>(list: List<T>, idx: int) -> T;
 
+// Type conversion functions
+@intrinsic function float(x: int) -> float;
 @intrinsic function str<T>(x: T) -> string;
 
 @intrinsic function genUUID() -> UUID;

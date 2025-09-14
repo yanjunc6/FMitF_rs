@@ -48,19 +48,33 @@ impl AstBuilder {
         Span::new(span.start(), span.end(), self.filename)
     }
 
+    /// Helper method to create errors for unexpected rules
+    fn unexpected_rule_error(&self, context: &str, rule: Rule, span: pest::Span) -> CompilerError {
+        CompilerError::new(
+            FrontEndErrorKind::UnexpectedRule(format!("in {}: {:?}", context, rule)),
+            self.to_span(span),
+        )
+    }
+
+    /// Helper method to create errors for missing fields
+    fn missing_field_error(&self, field: &str, span: pest::Span) -> CompilerError {
+        CompilerError::new(
+            FrontEndErrorKind::MissingField(field.to_string()),
+            self.to_span(span),
+        )
+    }
+
     /// Main build method that consumes Pest pairs and returns a complete `Program`.
     pub fn build(&mut self, pairs: Pairs<Rule>) -> Result<Program> {
         let program_pair = pairs.peek().ok_or_else(|| {
-            CompilerError::new(
-                FrontEndErrorKind::MissingField("program root".to_string()),
-                Span::new(0, 0, self.filename),
-            )
+            self.missing_field_error("program root", pest::Span::new("", 0, 0).unwrap())
         })?;
 
         if program_pair.as_rule() != Rule::program {
-            return Err(CompilerError::new(
-                FrontEndErrorKind::UnexpectedRule(format!("{:?}", program_pair.as_rule())),
-                self.to_span(program_pair.as_span()),
+            return Err(self.unexpected_rule_error(
+                "program",
+                program_pair.as_rule(),
+                program_pair.as_span(),
             ));
         }
 
@@ -71,12 +85,7 @@ impl AstBuilder {
                     self.program.declarations.push(item);
                 }
                 Rule::EOI => (),
-                rule => {
-                    return Err(CompilerError::new(
-                        FrontEndErrorKind::UnexpectedRule(format!("top-level: {:?}", rule)),
-                        self.to_span(pair.as_span()),
-                    ))
-                }
+                rule => return Err(self.unexpected_rule_error("top-level", rule, pair.as_span())),
             }
         }
         Ok(mem::take(&mut self.program))
@@ -85,13 +94,12 @@ impl AstBuilder {
     // --- Declarations ---
 
     fn build_declaration(&mut self, pair: Pair<Rule>) -> Result<Item> {
-        let inner = pair.clone().into_inner().next().ok_or_else(|| {
-            CompilerError::new(
-                FrontEndErrorKind::MissingField("declaration body".to_string()),
-                self.to_span(pair.as_span()),
-            )
-        })?;
-        let span = self.to_span(inner.as_span());
+        let inner = pair
+            .clone()
+            .into_inner()
+            .next()
+            .ok_or_else(|| self.missing_field_error("declaration body", pair.as_span()))?;
+        let span = inner.as_span();
         match inner.as_rule() {
             Rule::callable_declaration => {
                 self.build_callable_declaration(inner).map(Item::Callable)
@@ -99,10 +107,7 @@ impl AstBuilder {
             Rule::type_declaration => self.build_type_declaration(inner).map(Item::Type),
             Rule::const_declaration => self.build_const_declaration(inner).map(Item::Const),
             Rule::table_declaration => self.build_table_declaration(inner).map(Item::Table),
-            rule => Err(CompilerError::new(
-                FrontEndErrorKind::UnexpectedRule(format!("in declaration: {:?}", rule)),
-                span,
-            )),
+            rule => Err(self.unexpected_rule_error("declaration", rule, span)),
         }
     }
     fn build_callable_declaration(&mut self, pair: Pair<Rule>) -> Result<FunctionId> {
