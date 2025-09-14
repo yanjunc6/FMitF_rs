@@ -355,7 +355,7 @@ impl AstBuilder {
                 let node = TableNode {
                     name,
                     args,
-                    resolved_partition: None,
+                    resolved_partitions: Vec::new(),
                     span: Some(span),
                 };
                 Ok(TableElement::Node(node))
@@ -670,7 +670,7 @@ impl AstBuilder {
                         left,
                         op: op_ident,
                         right,
-                        resolved_callable: None,
+                        resolved_callables: Vec::new(),
                         resolved_type: None,
                         span: Some(span),
                     };
@@ -699,7 +699,7 @@ impl AstBuilder {
                         left,
                         op: op_ident,
                         right,
-                        resolved_callable: None,
+                        resolved_callables: Vec::new(),
                         resolved_type: None,
                         span: Some(span),
                     };
@@ -728,7 +728,7 @@ impl AstBuilder {
                         left,
                         op: op_ident,
                         right,
-                        resolved_callable: None,
+                        resolved_callables: Vec::new(),
                         resolved_type: None,
                         span: Some(span),
                     };
@@ -757,7 +757,7 @@ impl AstBuilder {
                         left,
                         op: op_ident,
                         right,
-                        resolved_callable: None,
+                        resolved_callables: Vec::new(),
                         resolved_type: None,
                         span: Some(span),
                     };
@@ -786,7 +786,7 @@ impl AstBuilder {
                         left,
                         op: op_ident,
                         right,
-                        resolved_callable: None,
+                        resolved_callables: Vec::new(),
                         resolved_type: None,
                         span: Some(span),
                     };
@@ -815,7 +815,7 @@ impl AstBuilder {
                         left,
                         op: op_ident,
                         right,
-                        resolved_callable: None,
+                        resolved_callables: Vec::new(),
                         resolved_type: None,
                         span: Some(span),
                     };
@@ -844,7 +844,7 @@ impl AstBuilder {
                         left,
                         op: op_ident,
                         right,
-                        resolved_callable: None,
+                        resolved_callables: Vec::new(),
                         resolved_type: None,
                         span: Some(span),
                     };
@@ -873,7 +873,7 @@ impl AstBuilder {
                         left,
                         op: op_ident,
                         right,
-                        resolved_callable: None,
+                        resolved_callables: Vec::new(),
                         resolved_type: None,
                         span: Some(span),
                     };
@@ -902,7 +902,7 @@ impl AstBuilder {
                         let expr = Expression::Unary {
                             op: op_ident,
                             expr: operand,
-                            resolved_callable: None,
+                            resolved_callables: Vec::new(),
                             resolved_type: None,
                             span: Some(span),
                         };
@@ -933,7 +933,7 @@ impl AstBuilder {
                             let call_expr = Expression::Call {
                                 callee: expr,
                                 args,
-                                resolved_callable: None,
+                                resolved_callables: Vec::new(),
                                 resolved_type: None,
                                 span: Some(span),
                             };
@@ -989,7 +989,7 @@ impl AstBuilder {
                 let ident = self.build_identifier(pair)?;
                 let expr = Expression::Identifier {
                     name: ident,
-                    resolved_declaration: None,
+                    resolved_declarations: Vec::new(),
                     resolved_type: None,
                     span: Some(span),
                 };
@@ -1012,7 +1012,7 @@ impl AstBuilder {
                 let ident = self.build_identifier(inner)?;
                 let expr = Expression::Identifier {
                     name: ident,
-                    resolved_declaration: None,
+                    resolved_declarations: Vec::new(),
                     resolved_type: None,
                     span: Some(span),
                 };
