@@ -9,11 +9,18 @@ use crate::ast::visit_mut::VisitorMut;
 use crate::ast::*;
 use crate::frontend::errors::FrontEndErrorKind;
 use crate::util::{CompilerError, Span};
-// use std::collections::HashMap;
+use std::collections::HashMap;
 
 pub fn resolve_types(program: &mut Program) -> Result<(), Vec<CompilerError>> {
     let mut resolver = TypeResolver::new();
-    resolver.visit_program(program).unwrap(); // Assuming no errors from visitor for now
+    // We explicitly walk the program declarations to control the order.
+    // This isn't a typical visitor pattern, but it ensures function signatures are resolved before bodies.
+    if let Err(errors) = resolver.resolve_signatures(program) {
+        return Err(errors);
+    }
+    if let Err(errors) = resolver.resolve_bodies(program) {
+        return Err(errors);
+    }
 
     if resolver.errors.is_empty() {
         Ok(())
@@ -26,8 +33,8 @@ struct TypeResolver {
     errors: Vec<CompilerError>,
     type_vars: u32,
     substitution: Substitution,
-    // A map from `AstTypeId` to `ResolvedType` to avoid re-resolving.
-    // resolved_ast_types: HashMap<AstTypeId, ResolvedType>,
+    // A cache for resolved AST types to avoid re-computation.
+    ast_type_cache: HashMap<AstTypeId, ResolvedType>,
 }
 
 impl TypeResolver {
@@ -36,8 +43,54 @@ impl TypeResolver {
             errors: Vec::new(),
             type_vars: 0,
             substitution: Substitution::new(),
-            // resolved_ast_types: HashMap::new(),
+            ast_type_cache: HashMap::new(),
         }
+    }
+
+    /// Stage 1: Resolve all function signatures and explicit types first.
+    fn resolve_signatures(&mut self, program: &mut Program) -> Result<(), Vec<CompilerError>> {
+        let function_ids: Vec<FunctionId> = program
+            .declarations
+            .iter()
+            .filter_map(|item| match item {
+                Item::Callable(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+
+        for id in function_ids {
+            self.visit_callable_decl(program, id).unwrap();
+        }
+        if !self.errors.is_empty() {
+            return Err(std::mem::take(&mut self.errors));
+        }
+        Ok(())
+    }
+
+    /// Stage 2: Resolve function bodies and expressions.
+    fn resolve_bodies(&mut self, program: &mut Program) -> Result<(), Vec<CompilerError>> {
+        let function_bodies: Vec<(FunctionId, BlockId)> = program
+            .declarations
+            .iter()
+            .filter_map(|item| match item {
+                Item::Callable(id) => {
+                    if let Some(body_id) = program.functions[*id].body {
+                        Some((*id, body_id))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            })
+            .collect();
+
+        for (_, body_id) in function_bodies {
+            self.visit_block(program, body_id).unwrap();
+        }
+        if !self.errors.is_empty() {
+            return Err(std::mem::take(&mut self.errors));
+        }
+        Ok(())
     }
 
     fn new_type_var(&mut self) -> ResolvedType {
@@ -47,6 +100,63 @@ impl TypeResolver {
             var_id,
             name: format!("T{}", var_id),
         }
+    }
+
+    /// Resolves an `AstTypeId` into a `ResolvedType`, using a cache to avoid re-computation.
+    fn resolve_ast_type(&mut self, prog: &Program, id: AstTypeId) -> ResolvedType {
+        if let Some(cached) = self.ast_type_cache.get(&id) {
+            return cached.clone();
+        }
+
+        let ast_type = &prog.types[id];
+        let resolved_type = match ast_type {
+            AstType::Named { name, .. } => {
+                // In a real compiler, this would look up the type declaration.
+                // Here, we'll just handle primitives by name as a simplification.
+                match name.name.as_str() {
+                    "int" | "float" | "string" | "bool" => {
+                        // For primitive types, we just create a simple type var with meaningful name
+                        ResolvedType::TypeVariable {
+                            var_id: self.type_vars,
+                            name: name.name.clone(),
+                        }
+                    }
+                    _ => self.new_type_var(), // For generic parameters or user-defined types
+                }
+            }
+            AstType::Generic { args, .. } => {
+                let arg_types: Vec<ResolvedType> = args
+                    .iter()
+                    .map(|arg_id| self.resolve_ast_type(prog, *arg_id))
+                    .collect();
+                // This is a simplification. A full implementation would use the resolved base type.
+                ResolvedType::List {
+                    element_type: arg_types
+                        .get(0)
+                        .cloned()
+                        .map(Box::new)
+                        .unwrap_or(Box::new(self.new_type_var())),
+                }
+            }
+            AstType::Function {
+                params,
+                return_type,
+                ..
+            } => {
+                let param_types = params
+                    .iter()
+                    .map(|p_id| self.resolve_ast_type(prog, *p_id))
+                    .collect();
+                let ret_type = self.resolve_ast_type(prog, *return_type);
+                ResolvedType::Function {
+                    param_types,
+                    return_type: Box::new(ret_type),
+                }
+            }
+        };
+
+        self.ast_type_cache.insert(id, resolved_type.clone());
+        resolved_type
     }
 
     fn unify(&mut self, t1: &ResolvedType, t2: &ResolvedType, span: Span) {
@@ -101,7 +211,12 @@ impl TypeResolver {
             (ResolvedType::Void, ResolvedType::Void) => {}
             (ResolvedType::Unknown, _) | (_, ResolvedType::Unknown) => {}
             (ResolvedType::Unresolved(_), _) | (_, ResolvedType::Unresolved(_)) => {
-                // Should be resolved before unifying
+                self.errors.push(CompilerError::new(
+                    FrontEndErrorKind::SyntaxError {
+                        message: "Cannot unify unresolved types".to_string(),
+                    },
+                    span,
+                ));
             }
             (t1, t2) if t1 == t2 => {}
             (t1, t2) => {
@@ -118,21 +233,35 @@ impl TypeResolver {
 }
 
 impl<'ast> VisitorMut<'ast> for TypeResolver {
+    fn visit_callable_decl(&mut self, prog: &mut Program, id: FunctionId) -> Result<(), ()> {
+        // First, collect the type info we need
+        let params_info: Vec<(ParamId, AstTypeId)> = prog.functions[id]
+            .params
+            .iter()
+            .map(|&param_id| (param_id, prog.params[param_id].ty))
+            .collect();
+
+        let return_type_id = prog.functions[id].return_type;
+
+        // Resolve parameter types
+        for (param_id, ast_type_id) in params_info {
+            let resolved_type = self.resolve_ast_type(prog, ast_type_id);
+            prog.params[param_id].resolved_type = Some(resolved_type);
+        }
+
+        // Resolve return type
+        let resolved_return_type = if let Some(ret_type_id) = return_type_id {
+            self.resolve_ast_type(prog, ret_type_id)
+        } else {
+            ResolvedType::Void
+        };
+        prog.functions[id].resolved_return_type = Some(resolved_return_type);
+        Ok(())
+    }
+
     fn visit_expr(&mut self, prog: &mut Program, id: ExprId) -> Result<(), ()> {
         let mut expr = prog.expressions[id].clone();
-        let span = match &expr {
-            Expression::Literal { span, .. } => span,
-            Expression::Identifier { span, .. } => span,
-            Expression::Binary { span, .. } => span,
-            Expression::Unary { span, .. } => span,
-            Expression::Assignment { span, .. } => span,
-            Expression::Call { span, .. } => span,
-            Expression::MemberAccess { span, .. } => span,
-            Expression::TableRowAccess { span, .. } => span,
-            Expression::Grouped { span, .. } => span,
-            Expression::Lambda { span, .. } => span,
-        }
-        .unwrap_or_else(|| Span::new(0, 0, "unknown"));
+        let span = expr.span().unwrap_or_else(|| Span::new(0, 0, "unknown"));
 
         let new_type = match &mut expr {
             Expression::Literal {
@@ -141,42 +270,22 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
                 ..
             } => {
                 let literal_type = match value {
-                    Literal::Integer(_) => {
-                        ResolvedType::Unresolved(prog.types.alloc(AstType::Named {
-                            name: Identifier {
-                                name: "int".to_string(),
-                                span: None,
-                            },
-                            resolved_type: None,
-                        }))
-                    }
-                    Literal::Float(_) => {
-                        ResolvedType::Unresolved(prog.types.alloc(AstType::Named {
-                            name: Identifier {
-                                name: "float".to_string(),
-                                span: None,
-                            },
-                            resolved_type: None,
-                        }))
-                    }
-                    Literal::String(_) => {
-                        ResolvedType::Unresolved(prog.types.alloc(AstType::Named {
-                            name: Identifier {
-                                name: "string".to_string(),
-                                span: None,
-                            },
-                            resolved_type: None,
-                        }))
-                    }
-                    Literal::Bool(_) => {
-                        ResolvedType::Unresolved(prog.types.alloc(AstType::Named {
-                            name: Identifier {
-                                name: "bool".to_string(),
-                                span: None,
-                            },
-                            resolved_type: None,
-                        }))
-                    }
+                    Literal::Integer(_) => ResolvedType::TypeVariable {
+                        var_id: self.type_vars,
+                        name: "int".to_string(),
+                    },
+                    Literal::Float(_) => ResolvedType::TypeVariable {
+                        var_id: self.type_vars,
+                        name: "float".to_string(),
+                    },
+                    Literal::String(_) => ResolvedType::TypeVariable {
+                        var_id: self.type_vars,
+                        name: "string".to_string(),
+                    },
+                    Literal::Bool(_) => ResolvedType::TypeVariable {
+                        var_id: self.type_vars,
+                        name: "bool".to_string(),
+                    },
                     Literal::List(items) => {
                         let element_type = self.new_type_var();
                         for item_id in items {
@@ -222,6 +331,7 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
             Expression::Binary {
                 left,
                 right,
+                op,
                 resolved_callables,
                 resolved_type,
                 ..
@@ -229,39 +339,54 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
                 self.visit_expr(prog, *left)?;
                 self.visit_expr(prog, *right)?;
 
-                let left_type = prog.expressions[*left].resolved_type().unwrap();
-                let right_type = prog.expressions[*right].resolved_type().unwrap();
+                let left_type = prog.expressions[*left]
+                    .resolved_type()
+                    .cloned()
+                    .unwrap_or(ResolvedType::Unknown);
+                let right_type = prog.expressions[*right]
+                    .resolved_type()
+                    .cloned()
+                    .unwrap_or(ResolvedType::Unknown);
 
                 let mut matching_overloads = Vec::new();
                 for func_id in resolved_callables.iter() {
                     let func = &prog.functions[*func_id];
                     if func.params.len() == 2 {
-                        let param1_type =
-                            prog.params[func.params[0]].resolved_type.as_ref().unwrap();
-                        let param2_type =
-                            prog.params[func.params[1]].resolved_type.as_ref().unwrap();
-                        if self.try_unify(left_type, param1_type)
-                            && self.try_unify(right_type, param2_type)
-                        {
-                            matching_overloads.push(*func_id);
+                        // These types should be resolved because we ran `resolve_signatures` first.
+                        if let (Some(param1_type), Some(param2_type)) = (
+                            prog.params[func.params[0]].resolved_type.as_ref(),
+                            prog.params[func.params[1]].resolved_type.as_ref(),
+                        ) {
+                            if self.try_unify(&left_type, param1_type)
+                                && self.try_unify(&right_type, param2_type)
+                            {
+                                matching_overloads.push(*func_id);
+                            }
                         }
                     }
                 }
 
                 if matching_overloads.len() == 1 {
                     let func_id = matching_overloads[0];
+                    let func = &prog.functions[func_id];
                     *resolved_callables = vec![func_id];
-                    let return_type = prog.functions[func_id]
+                    // The return type should also be resolved in the first pass.
+                    let return_type = func
                         .resolved_return_type
                         .clone()
-                        .unwrap();
+                        .unwrap_or_else(|| ResolvedType::Unknown);
                     *resolved_type = Some(return_type.clone());
                     return_type
                 } else {
+                    let details = if matching_overloads.is_empty() {
+                        "No matching operator overload found".to_string()
+                    } else {
+                        "Ambiguous operator overload".to_string()
+                    };
                     self.errors.push(CompilerError::new(
                         FrontEndErrorKind::InvalidOperation {
-                            op: "binary".to_string(),
-                            details: "Cannot resolve overload".to_string(),
+                            op: op.name.clone(),
+                            details,
                         },
                         span,
                     ));
@@ -275,12 +400,19 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
                 ..
             } => {
                 self.visit_expr(prog, *callee)?;
-                let callee_type = prog.expressions[*callee].resolved_type().unwrap().clone();
+                let callee_type = prog.expressions[*callee]
+                    .resolved_type()
+                    .cloned()
+                    .unwrap_or_else(|| self.new_type_var());
 
                 let mut arg_types = Vec::new();
                 for arg_id in args.iter() {
                     self.visit_expr(prog, *arg_id)?;
-                    arg_types.push(prog.expressions[*arg_id].resolved_type().unwrap().clone());
+                    let arg_type = prog.expressions[*arg_id]
+                        .resolved_type()
+                        .cloned()
+                        .unwrap_or_else(|| self.new_type_var());
+                    arg_types.push(arg_type);
                 }
 
                 let return_type = self.new_type_var();
@@ -293,7 +425,6 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
                 *resolved_type = Some(return_type.clone());
                 return_type
             }
-            // other expressions...
             _ => self.new_type_var(),
         };
         prog.expressions[id].set_resolved_type(new_type);
@@ -305,6 +436,7 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
 trait ExpressionExt {
     fn resolved_type(&self) -> Option<&ResolvedType>;
     fn set_resolved_type(&mut self, ty: ResolvedType);
+    fn span(&self) -> Option<Span>;
 }
 
 impl ExpressionExt for Expression {
@@ -335,6 +467,21 @@ impl ExpressionExt for Expression {
             Expression::TableRowAccess { resolved_type, .. } => *resolved_type = Some(ty),
             Expression::Grouped { resolved_type, .. } => *resolved_type = Some(ty),
             Expression::Lambda { resolved_type, .. } => *resolved_type = Some(ty),
+        }
+    }
+
+    fn span(&self) -> Option<Span> {
+        match self {
+            Expression::Literal { span, .. } => *span,
+            Expression::Identifier { span, .. } => *span,
+            Expression::Binary { span, .. } => *span,
+            Expression::Unary { span, .. } => *span,
+            Expression::Assignment { span, .. } => *span,
+            Expression::Call { span, .. } => *span,
+            Expression::MemberAccess { span, .. } => *span,
+            Expression::TableRowAccess { span, .. } => *span,
+            Expression::Grouped { span, .. } => *span,
+            Expression::Lambda { span, .. } => *span,
         }
     }
 }

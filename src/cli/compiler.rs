@@ -5,7 +5,6 @@
 use super::stage::execute_stage; // Import the new helper
 use crate::ast::Program;
 use crate::frontend::parse_and_analyze_program;
-use crate::pretty::PrettyPrint;
 use crate::util::{CompilerError, DiagnosticReporter};
 use colored::*;
 use std::fs;
@@ -153,12 +152,12 @@ impl Compiler {
         // Create output directory if it doesn't exist
         fs::create_dir_all(output_dir)?;
 
-        // Write AST pretty print using the PrettyPrint trait
+        // Write AST with debug information (includes IDs, name resolution, and type resolution if constants are enabled)
         let ast_file = output_dir.join("ast_pretty.txt");
         let mut file = fs::File::create(&ast_file)?;
-        program.pretty_print(&mut file)?;
+        program.pretty_print_with_debug(&mut file)?;
 
-        // println!("📄 AST written to: {}", ast_file.display());
+        println!("📄 AST file written to: {}", ast_file.display());
         Ok(())
     }
 }
