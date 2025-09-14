@@ -257,7 +257,7 @@ transaction Delivery(w_id: int, o_carrier_id: int, date: int) {
         var ol_total: float = 0.0;
         for (var ol_number: int = 0; ol_number < ol_cnt; ol_number = ol_number + 1) {
             Order_Line[OL_W_ID: w_id, OL_D_ID: d_id, OL_O_ID: no_o_id, OL_NUMBER: ol_number].OL_DELIVERY_DATE = date;
-            ol_total = ol_total + Order_Line[OL_W_ID: w_id, OL_D_ID: d_id, OL_O_ID: no_o_id, OL_NUMBER: ol_number].OL_AMOUNT;
+            ol_total = ol_total + float(Order_Line[OL_W_ID: w_id, OL_D_ID: d_id, OL_O_ID: no_o_id, OL_NUMBER: ol_number].OL_AMOUNT);
         }
 
         // Update Customer

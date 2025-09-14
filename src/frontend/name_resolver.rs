@@ -184,66 +184,39 @@ pub fn resolve_names(prog: &mut Program) -> Result<(), Vec<CompilerError>> {
         match item {
             Item::Callable(id) => {
                 let decl = &prog.functions[*id];
-                if let Err(err_kind) = resolver
-                    .symbols
-                    .define(decl.name.name.clone(), IdentifierResolution::Function(*id))
-                {
-                    let default_span = decl
-                        .name
-                        .span
-                        .unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
-                    resolver
-                        .errors
-                        .push(CompilerError::new(err_kind, default_span));
-                }
+                resolver.define_symbol_or_error(
+                    decl.name.name.clone(),
+                    IdentifierResolution::Function(*id),
+                    &decl.name,
+                    |name| name.span,
+                );
             }
             Item::Type(id) => {
                 let decl = &prog.type_decls[*id];
-                if let Err(err_kind) = resolver
-                    .symbols
-                    .define(decl.name.name.clone(), IdentifierResolution::Type(*id))
-                {
-                    // Error kind already returned directly
-                    let default_span = decl
-                        .name
-                        .span
-                        .unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
-                    resolver
-                        .errors
-                        .push(CompilerError::new(err_kind, default_span));
-                }
+                resolver.define_symbol_or_error(
+                    decl.name.name.clone(),
+                    IdentifierResolution::Type(*id),
+                    &decl.name,
+                    |name| name.span,
+                );
             }
             Item::Const(id) => {
                 let decl = &prog.const_decls[*id];
-                if let Err(err_kind) = resolver
-                    .symbols
-                    .define(decl.name.name.clone(), IdentifierResolution::Const(*id))
-                {
-                    // Error kind already returned directly
-                    let default_span = decl
-                        .name
-                        .span
-                        .unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
-                    resolver
-                        .errors
-                        .push(CompilerError::new(err_kind, default_span));
-                }
+                resolver.define_symbol_or_error(
+                    decl.name.name.clone(),
+                    IdentifierResolution::Const(*id),
+                    &decl.name,
+                    |name| name.span,
+                );
             }
             Item::Table(id) => {
                 let decl = &prog.table_decls[*id];
-                if let Err(err_kind) = resolver
-                    .symbols
-                    .define(decl.name.name.clone(), IdentifierResolution::Table(*id))
-                {
-                    // Error kind already returned directly
-                    let default_span = decl
-                        .name
-                        .span
-                        .unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
-                    resolver
-                        .errors
-                        .push(CompilerError::new(err_kind, default_span));
-                }
+                resolver.define_symbol_or_error(
+                    decl.name.name.clone(),
+                    IdentifierResolution::Table(*id),
+                    &decl.name,
+                    |name| name.span,
+                );
             }
         }
     }
@@ -255,6 +228,25 @@ pub fn resolve_names(prog: &mut Program) -> Result<(), Vec<CompilerError>> {
         Ok(())
     } else {
         Err(resolver.errors)
+    }
+}
+
+impl NameResolver {
+    /// Helper method to define a symbol and handle errors consistently
+    fn define_symbol_or_error<T>(
+        &mut self,
+        name: String,
+        resolution: IdentifierResolution,
+        span_source: &T,
+        get_span: impl Fn(&T) -> Option<crate::util::Span>,
+    ) where
+        T: ?Sized,
+    {
+        if let Err(err_kind) = self.symbols.define(name, resolution) {
+            let default_span =
+                get_span(span_source).unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
+            self.errors.push(CompilerError::new(err_kind, default_span));
+        }
     }
 }
 
@@ -293,32 +285,22 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
 
         for param_id in &decl.generic_params {
             let param = &prog.generic_params[*param_id];
-            if let Err(err_kind) = self.symbols.define(
+            self.define_symbol_or_error(
                 param.name.name.clone(),
                 IdentifierResolution::GenericParam(*param_id),
-            ) {
-                // Error kind already returned directly
-                let default_span = param
-                    .name
-                    .span
-                    .unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
-                self.errors.push(CompilerError::new(err_kind, default_span));
-            }
+                &param.name,
+                |name| name.span,
+            );
         }
 
         for param_id in &decl.params {
             let param = &prog.params[*param_id];
-            if let Err(err_kind) = self.symbols.define(
+            self.define_symbol_or_error(
                 param.name.name.clone(),
                 IdentifierResolution::Param(*param_id),
-            ) {
-                // Error kind already returned directly
-                let default_span = param
-                    .name
-                    .span
-                    .unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
-                self.errors.push(CompilerError::new(err_kind, default_span));
-            }
+                &param.name,
+                |name| name.span,
+            );
         }
 
         // Use the default walker to visit the body.
@@ -342,17 +324,12 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
 
         // Then, define the variable in the current scope.
         let decl = &prog.var_decls[id];
-        if let Err(err_kind) = self
-            .symbols
-            .define(decl.name.name.clone(), IdentifierResolution::Var(id))
-        {
-            // Error kind already returned directly
-            let default_span = decl
-                .name
-                .span
-                .unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
-            self.errors.push(CompilerError::new(err_kind, default_span));
-        }
+        self.define_symbol_or_error(
+            decl.name.name.clone(),
+            IdentifierResolution::Var(id),
+            &decl.name,
+            |name| name.span,
+        );
 
         Ok(())
     }
@@ -377,17 +354,12 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
                 let _ = self.visit_expr(prog, start);
                 let _ = self.visit_expr(prog, end);
                 let var_decl = &prog.var_decls[var];
-                if let Err(err_kind) = self
-                    .symbols
-                    .define(var_decl.name.name.clone(), IdentifierResolution::Var(var))
-                {
-                    // Error kind already returned directly
-                    let default_span = var_decl
-                        .name
-                        .span
-                        .unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
-                    self.errors.push(CompilerError::new(err_kind, default_span));
-                }
+                self.define_symbol_or_error(
+                    var_decl.name.name.clone(),
+                    IdentifierResolution::Var(var),
+                    &var_decl.name,
+                    |name| name.span,
+                );
                 let _ = self.visit_block(prog, body);
                 self.symbols.exit_scope();
                 self.loop_depth -= 1;

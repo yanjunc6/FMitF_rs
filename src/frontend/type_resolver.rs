@@ -64,6 +64,97 @@ impl TypeResolver {
         None
     }
 
+    /// Create a primitive type with fallback to type variable
+    fn resolve_primitive_type(&mut self, prog: &Program, type_name: &str) -> ResolvedType {
+        if let Some(type_id) = self.find_primitive_type(prog, type_name) {
+            ResolvedType::Primitive {
+                type_id,
+                type_args: vec![],
+            }
+        } else {
+            ResolvedType::TypeVariable {
+                var_id: self.type_vars,
+                name: type_name.to_string(),
+            }
+        }
+    }
+
+    /// Resolve literal types systematically
+    fn resolve_literal_type(&mut self, prog: &Program, literal: &Literal) -> ResolvedType {
+        match literal {
+            Literal::Integer(_) => self.resolve_primitive_type(prog, "int"),
+            Literal::Float(_) => self.resolve_primitive_type(prog, "float"),
+            Literal::String(_) => self.resolve_primitive_type(prog, "string"),
+            Literal::Bool(_) => self.resolve_primitive_type(prog, "bool"),
+            Literal::List(_items) => {
+                let element_type = self.new_type_var();
+                // Note: item processing would be done by caller
+                ResolvedType::List {
+                    element_type: Box::new(element_type),
+                }
+            }
+            Literal::RowLiteral(_) => self.new_type_var(),
+        }
+    }
+
+    /// Generic operator resolution for both binary and unary operators
+    fn resolve_operator_overloads(
+        &mut self,
+        prog: &Program,
+        operator_name: &str,
+        operand_types: &[ResolvedType],
+        resolved_callables: &mut Vec<FunctionId>,
+        span: Span,
+    ) -> Result<ResolvedType, ResolvedType> {
+        let mut matching_overloads = Vec::new();
+
+        for func_id in resolved_callables.iter() {
+            let func = &prog.functions[*func_id];
+            if func.params.len() == operand_types.len() {
+                let mut all_match = true;
+                for (i, operand_type) in operand_types.iter().enumerate() {
+                    if let Some(param_type) = prog.params[func.params[i]].resolved_type.as_ref() {
+                        if !self.try_unify(operand_type, param_type) {
+                            all_match = false;
+                            break;
+                        }
+                    } else {
+                        all_match = false;
+                        break;
+                    }
+                }
+                if all_match {
+                    matching_overloads.push(*func_id);
+                }
+            }
+        }
+
+        if matching_overloads.len() == 1 {
+            let func_id = matching_overloads[0];
+            let func = &prog.functions[func_id];
+            *resolved_callables = vec![func_id];
+            let return_type = func
+                .resolved_return_type
+                .clone()
+                .unwrap_or_else(|| ResolvedType::Unknown);
+            Ok(return_type)
+        } else {
+            let details = if matching_overloads.is_empty() {
+                "No matching operator overload found".to_string()
+            } else {
+                "Ambiguous operator overload".to_string()
+            };
+            self.errors.push(CompilerError::new(
+                FrontEndErrorKind::InvalidOperation {
+                    op: operator_name.to_string(),
+                    details,
+                },
+                span,
+            ));
+            Err(ResolvedType::Unknown)
+        }
+    }
+
     /// Stage 1: Resolve all function signatures and explicit types first.
     fn resolve_signatures(&mut self, program: &mut Program) -> Result<(), Vec<CompilerError>> {
         let function_ids: Vec<FunctionId> = program
@@ -325,77 +416,20 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
                 resolved_type,
                 ..
             } => {
-                let literal_type = match value {
-                    Literal::Integer(_) => {
-                        // Find the int primitive type
-                        if let Some(int_type_id) = self.find_primitive_type(prog, "int") {
-                            ResolvedType::Primitive {
-                                type_id: int_type_id,
-                                type_args: vec![],
-                            }
-                        } else {
-                            ResolvedType::TypeVariable {
-                                var_id: self.type_vars,
-                                name: "int".to_string(),
-                            }
+                let literal_type = if let Literal::List(items) = value {
+                    let element_type = self.new_type_var();
+                    for item_id in items {
+                        self.visit_expr(prog, *item_id)?;
+                        let item_expr = &prog.expressions[*item_id];
+                        if let Some(item_type) = item_expr.resolved_type() {
+                            self.unify(&element_type, item_type, span);
                         }
                     }
-                    Literal::Float(_) => {
-                        // Find the float primitive type
-                        if let Some(float_type_id) = self.find_primitive_type(prog, "float") {
-                            ResolvedType::Primitive {
-                                type_id: float_type_id,
-                                type_args: vec![],
-                            }
-                        } else {
-                            ResolvedType::TypeVariable {
-                                var_id: self.type_vars,
-                                name: "float".to_string(),
-                            }
-                        }
+                    ResolvedType::List {
+                        element_type: Box::new(element_type),
                     }
-                    Literal::String(_) => {
-                        // Find the string primitive type
-                        if let Some(string_type_id) = self.find_primitive_type(prog, "string") {
-                            ResolvedType::Primitive {
-                                type_id: string_type_id,
-                                type_args: vec![],
-                            }
-                        } else {
-                            ResolvedType::TypeVariable {
-                                var_id: self.type_vars,
-                                name: "string".to_string(),
-                            }
-                        }
-                    }
-                    Literal::Bool(_) => {
-                        // Find the bool primitive type
-                        if let Some(bool_type_id) = self.find_primitive_type(prog, "bool") {
-                            ResolvedType::Primitive {
-                                type_id: bool_type_id,
-                                type_args: vec![],
-                            }
-                        } else {
-                            ResolvedType::TypeVariable {
-                                var_id: self.type_vars,
-                                name: "bool".to_string(),
-                            }
-                        }
-                    }
-                    Literal::List(items) => {
-                        let element_type = self.new_type_var();
-                        for item_id in items {
-                            self.visit_expr(prog, *item_id)?;
-                            let item_expr = &prog.expressions[*item_id];
-                            if let Some(item_type) = item_expr.resolved_type() {
-                                self.unify(&element_type, item_type, span);
-                            }
-                        }
-                        ResolvedType::List {
-                            element_type: Box::new(element_type),
-                        }
-                    }
-                    Literal::RowLiteral(_) => self.new_type_var(),
+                } else {
+                    self.resolve_literal_type(prog, value)
                 };
                 *resolved_type = Some(literal_type.clone());
                 literal_type
@@ -444,49 +478,19 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
                     .cloned()
                     .unwrap_or(ResolvedType::Unknown);
 
-                let mut matching_overloads = Vec::new();
-                for func_id in resolved_callables.iter() {
-                    let func = &prog.functions[*func_id];
-                    if func.params.len() == 2 {
-                        // These types should be resolved because we ran `resolve_signatures` first.
-                        if let (Some(param1_type), Some(param2_type)) = (
-                            prog.params[func.params[0]].resolved_type.as_ref(),
-                            prog.params[func.params[1]].resolved_type.as_ref(),
-                        ) {
-                            if self.try_unify(&left_type, param1_type)
-                                && self.try_unify(&right_type, param2_type)
-                            {
-                                matching_overloads.push(*func_id);
-                            }
-                        }
+                let operand_types = vec![left_type, right_type];
+                match self.resolve_operator_overloads(
+                    prog,
+                    &op.name,
+                    &operand_types,
+                    resolved_callables,
+                    span,
+                ) {
+                    Ok(return_type) => {
+                        *resolved_type = Some(return_type.clone());
+                        return_type
                     }
-                }
-
-                if matching_overloads.len() == 1 {
-                    let func_id = matching_overloads[0];
-                    let func = &prog.functions[func_id];
-                    *resolved_callables = vec![func_id];
-                    // The return type should also be resolved in the first pass.
-                    let return_type = func
-                        .resolved_return_type
-                        .clone()
-                        .unwrap_or_else(|| ResolvedType::Unknown);
-                    *resolved_type = Some(return_type.clone());
-                    return_type
-                } else {
-                    let details = if matching_overloads.is_empty() {
-                        "No matching operator overload found".to_string()
-                    } else {
-                        "Ambiguous operator overload".to_string()
-                    };
-                    self.errors.push(CompilerError::new(
-                        FrontEndErrorKind::InvalidOperation {
-                            op: op.name.clone(),
-                            details,
-                        },
-                        span,
-                    ));
-                    ResolvedType::Unknown
+                    Err(fallback_type) => fallback_type,
                 }
             }
             Expression::Call {
@@ -601,7 +605,6 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
                 resolved_type,
                 ..
             } => {
-                // Visit the operand
                 self.visit_expr(prog, *expr)?;
 
                 let operand_type = prog.expressions[*expr]
@@ -609,47 +612,21 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
                     .cloned()
                     .unwrap_or(ResolvedType::Unknown);
 
-                let mut matching_overloads = Vec::new();
-                for func_id in resolved_callables.iter() {
-                    let func = &prog.functions[*func_id];
-                    if func.params.len() == 1 {
-                        // This is a unary operator, check if parameter type matches
-                        if let Some(param_type) = prog.params[func.params[0]].resolved_type.as_ref()
-                        {
-                            if self.try_unify(&operand_type, param_type) {
-                                matching_overloads.push(*func_id);
-                            }
-                        }
+                let operand_types = vec![operand_type];
+                match self.resolve_operator_overloads(
+                    prog,
+                    &op.name,
+                    &operand_types,
+                    resolved_callables,
+                    prog.expressions[*expr]
+                        .span()
+                        .unwrap_or_else(|| Span::new(0, 0, "unknown")),
+                ) {
+                    Ok(return_type) => {
+                        *resolved_type = Some(return_type.clone());
+                        return_type
                     }
-                }
-
-                if matching_overloads.len() == 1 {
-                    let func_id = matching_overloads[0];
-                    let func = &prog.functions[func_id];
-                    *resolved_callables = vec![func_id];
-                    // The return type should be resolved in the first pass
-                    let return_type = func
-                        .resolved_return_type
-                        .clone()
-                        .unwrap_or_else(|| ResolvedType::Unknown);
-                    *resolved_type = Some(return_type.clone());
-                    return_type
-                } else {
-                    let details = if matching_overloads.is_empty() {
-                        "No matching operator overload found".to_string()
-                    } else {
-                        "Ambiguous operator overload".to_string()
-                    };
-                    self.errors.push(CompilerError::new(
-                        FrontEndErrorKind::InvalidOperation {
-                            op: op.name.clone(),
-                            details,
-                        },
-                        prog.expressions[*expr]
-                            .span()
-                            .unwrap_or_else(|| Span::new(0, 0, "unknown")),
-                    ));
-                    ResolvedType::Unknown
+                    Err(fallback_type) => fallback_type,
                 }
             }
             Expression::TableRowAccess {
