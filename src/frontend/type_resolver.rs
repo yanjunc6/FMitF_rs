@@ -546,7 +546,7 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
                                     let field_type = self.resolve_ast_type(prog, table_field.ty);
                                     *resolved_type = Some(field_type.clone());
                                     *resolved_table = Some(*table_id);
-                                    // TODO: Store field reference if needed
+                                    *resolved_field = Some(table_field.clone());
                                     return Ok(());
                                 }
                             }
@@ -596,17 +596,61 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
             }
             Expression::Unary {
                 expr,
+                op,
+                resolved_callables,
                 resolved_type,
                 ..
             } => {
                 // Visit the operand
                 self.visit_expr(prog, *expr)?;
 
-                // For now, just create a type variable
-                // TODO: Implement proper unary operator resolution
-                let ty = self.new_type_var();
-                *resolved_type = Some(ty.clone());
-                ty
+                let operand_type = prog.expressions[*expr]
+                    .resolved_type()
+                    .cloned()
+                    .unwrap_or(ResolvedType::Unknown);
+
+                let mut matching_overloads = Vec::new();
+                for func_id in resolved_callables.iter() {
+                    let func = &prog.functions[*func_id];
+                    if func.params.len() == 1 {
+                        // This is a unary operator, check if parameter type matches
+                        if let Some(param_type) = prog.params[func.params[0]].resolved_type.as_ref()
+                        {
+                            if self.try_unify(&operand_type, param_type) {
+                                matching_overloads.push(*func_id);
+                            }
+                        }
+                    }
+                }
+
+                if matching_overloads.len() == 1 {
+                    let func_id = matching_overloads[0];
+                    let func = &prog.functions[func_id];
+                    *resolved_callables = vec![func_id];
+                    // The return type should be resolved in the first pass
+                    let return_type = func
+                        .resolved_return_type
+                        .clone()
+                        .unwrap_or_else(|| ResolvedType::Unknown);
+                    *resolved_type = Some(return_type.clone());
+                    return_type
+                } else {
+                    let details = if matching_overloads.is_empty() {
+                        "No matching operator overload found".to_string()
+                    } else {
+                        "Ambiguous operator overload".to_string()
+                    };
+                    self.errors.push(CompilerError::new(
+                        FrontEndErrorKind::InvalidOperation {
+                            op: op.name.clone(),
+                            details,
+                        },
+                        prog.expressions[*expr]
+                            .span()
+                            .unwrap_or_else(|| Span::new(0, 0, "unknown")),
+                    ));
+                    ResolvedType::Unknown
+                }
             }
             Expression::TableRowAccess {
                 key_values,
