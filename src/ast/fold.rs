@@ -387,12 +387,12 @@ pub fn foldwalk_expr<F: Fold>(
         }
         Expression::Identifier {
             name,
-            resolved_declaration,
+            resolved_declarations,
             resolved_type,
             span,
         } => Expression::Identifier {
             name,
-            resolved_declaration,
+            resolved_declarations,
             resolved_type,
             span,
         },
@@ -400,7 +400,7 @@ pub fn foldwalk_expr<F: Fold>(
             left,
             op,
             right,
-            resolved_callable,
+            resolved_callables,
             resolved_type,
             span,
         } => {
@@ -414,7 +414,7 @@ pub fn foldwalk_expr<F: Fold>(
                 left,
                 op,
                 right,
-                resolved_callable,
+                resolved_callables,
                 resolved_type,
                 span,
             }
@@ -422,7 +422,7 @@ pub fn foldwalk_expr<F: Fold>(
         Expression::Unary {
             op,
             expr,
-            resolved_callable,
+            resolved_callables,
             resolved_type,
             span,
         } => {
@@ -431,7 +431,7 @@ pub fn foldwalk_expr<F: Fold>(
             Expression::Unary {
                 op,
                 expr,
-                resolved_callable,
+                resolved_callables,
                 resolved_type,
                 span,
             }
@@ -458,7 +458,7 @@ pub fn foldwalk_expr<F: Fold>(
         Expression::Call {
             callee,
             args,
-            resolved_callable,
+            resolved_callables,
             resolved_type,
             span,
         } => {
@@ -473,7 +473,7 @@ pub fn foldwalk_expr<F: Fold>(
             Expression::Call {
                 callee,
                 args,
-                resolved_callable,
+                resolved_callables,
                 resolved_type,
                 span,
             }

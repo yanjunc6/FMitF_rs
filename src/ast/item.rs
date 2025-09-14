@@ -95,7 +95,7 @@ pub struct TableField {
 pub struct TableNode {
     pub name: Identifier,
     pub args: Vec<ExprId>,
-    pub resolved_partition: Option<FunctionId>,
+    pub resolved_partitions: Vec<FunctionId>,
     pub span: Option<Span>,
 }
 

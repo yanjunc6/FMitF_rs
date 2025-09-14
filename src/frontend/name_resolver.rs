@@ -15,19 +15,90 @@ use std::collections::HashMap;
 /// Represents a single scope in the symbol table.
 #[derive(Debug, Clone, Default)]
 struct Scope {
-    /// Maps a name to a list of declarations. The list handles function/operator overloading.
-    symbols: HashMap<String, Vec<IdentifierResolution>>,
+    /// Value namespace: functions (overloadable), variables, parameters, constants
+    values: HashMap<String, Vec<IdentifierResolution>>,
+    /// Type namespace: type declarations (not overloadable)
+    types: HashMap<String, IdentifierResolution>,
+    /// Table namespace: table declarations (not overloadable)
+    tables: HashMap<String, IdentifierResolution>,
 }
 
 impl Scope {
     /// Add a new symbol definition to this scope.
-    fn define(&mut self, name: String, resolution: IdentifierResolution) {
-        self.symbols.entry(name).or_default().push(resolution);
+    /// Returns an error if the symbol cannot be overloaded and already exists in its namespace.
+    fn define(
+        &mut self,
+        name: String,
+        resolution: IdentifierResolution,
+    ) -> Result<(), FrontEndErrorKind> {
+        match resolution {
+            // Value namespace
+            IdentifierResolution::Function(_) => {
+                // Functions can be overloaded
+                self.values.entry(name).or_default().push(resolution);
+                Ok(())
+            }
+            IdentifierResolution::Var(_)
+            | IdentifierResolution::Param(_)
+            | IdentifierResolution::GenericParam(_)
+            | IdentifierResolution::Const(_) => {
+                // Variables, parameters, generic params, and constants cannot be overloaded within same scope
+                // but they can shadow functions and each other
+                let existing = self.values.entry(name.clone()).or_default();
+
+                // Check if there are non-function definitions already
+                for existing_resolution in existing.iter() {
+                    if !matches!(existing_resolution, IdentifierResolution::Function(_)) {
+                        return Err(FrontEndErrorKind::DuplicateDefinition { name });
+                    }
+                }
+
+                // Clear any functions and add this definition
+                existing.clear();
+                existing.push(resolution);
+                Ok(())
+            }
+            // Type namespace
+            IdentifierResolution::Type(_) => {
+                if self.types.contains_key(&name) {
+                    Err(FrontEndErrorKind::DuplicateDefinition { name })
+                } else {
+                    self.types.insert(name, resolution);
+                    Ok(())
+                }
+            }
+            // Table namespace
+            IdentifierResolution::Table(_) => {
+                if self.tables.contains_key(&name) {
+                    Err(FrontEndErrorKind::DuplicateDefinition { name })
+                } else {
+                    self.tables.insert(name, resolution);
+                    Ok(())
+                }
+            }
+        }
     }
 
-    /// Find a symbol in this scope.
-    fn find(&self, name: &str) -> Option<&Vec<IdentifierResolution>> {
-        self.symbols.get(name)
+    /// Find a symbol in this scope, searching all namespaces.
+    fn find(&self, name: &str) -> Vec<IdentifierResolution> {
+        let mut results = Vec::new();
+
+        // Search value namespace
+        if let Some(value_resolutions) = self.values.get(name) {
+            results.extend(value_resolutions.iter().cloned());
+        }
+
+        // Search type namespace
+        if let Some(&type_resolution) = self.types.get(name) {
+            results.push(type_resolution);
+        }
+
+        // Search table namespace
+        if let Some(&table_resolution) = self.tables.get(name) {
+            results.push(table_resolution);
+        }
+
+        results
     }
 }
 
@@ -58,20 +129,31 @@ impl SymbolTable {
     }
 
     /// Defines a new identifier in the current scope.
-    fn define(&mut self, name: String, resolution: IdentifierResolution) {
+    /// Returns an error if the symbol cannot be overloaded and already exists.
+    fn define(
+        &mut self,
+        name: String,
+        resolution: IdentifierResolution,
+    ) -> Result<(), FrontEndErrorKind> {
         if let Some(scope) = self.scopes.last_mut() {
-            scope.define(name, resolution);
+            scope.define(name, resolution)
+        } else {
+            Err(FrontEndErrorKind::InvalidScope {
+                name: "No active scope".to_string(),
+                details: "Attempted to define symbol without an active scope".to_string(),
+            })
         }
     }
 
     /// Resolves an identifier by searching from the innermost scope outwards.
-    fn resolve(&self, name: &str) -> Option<&Vec<IdentifierResolution>> {
+    fn resolve(&self, name: &str) -> Vec<IdentifierResolution> {
         for scope in self.scopes.iter().rev() {
-            if let Some(resolutions) = scope.find(name) {
-                return Some(resolutions);
+            let results = scope.find(name);
+            if !results.is_empty() {
+                return results;
             }
         }
-        None
+        Vec::new()
     }
 }
 
@@ -102,27 +184,66 @@ pub fn resolve_names(prog: &mut Program) -> Result<(), Vec<CompilerError>> {
         match item {
             Item::Callable(id) => {
                 let decl = &prog.functions[*id];
-                resolver
+                if let Err(err_kind) = resolver
                     .symbols
-                    .define(decl.name.name.clone(), IdentifierResolution::Function(*id));
+                    .define(decl.name.name.clone(), IdentifierResolution::Function(*id))
+                {
+                    let default_span = decl
+                        .name
+                        .span
+                        .unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
+                    resolver
+                        .errors
+                        .push(CompilerError::new(err_kind, default_span));
+                }
             }
             Item::Type(id) => {
                 let decl = &prog.type_decls[*id];
-                resolver
+                if let Err(err_kind) = resolver
                     .symbols
-                    .define(decl.name.name.clone(), IdentifierResolution::Type(*id));
+                    .define(decl.name.name.clone(), IdentifierResolution::Type(*id))
+                {
+                    // Error kind already returned directly
+                    let default_span = decl
+                        .name
+                        .span
+                        .unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
+                    resolver
+                        .errors
+                        .push(CompilerError::new(err_kind, default_span));
+                }
             }
             Item::Const(id) => {
                 let decl = &prog.const_decls[*id];
-                resolver
+                if let Err(err_kind) = resolver
                     .symbols
-                    .define(decl.name.name.clone(), IdentifierResolution::Const(*id));
+                    .define(decl.name.name.clone(), IdentifierResolution::Const(*id))
+                {
+                    // Error kind already returned directly
+                    let default_span = decl
+                        .name
+                        .span
+                        .unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
+                    resolver
+                        .errors
+                        .push(CompilerError::new(err_kind, default_span));
+                }
             }
             Item::Table(id) => {
                 let decl = &prog.table_decls[*id];
-                resolver
+                if let Err(err_kind) = resolver
                     .symbols
-                    .define(decl.name.name.clone(), IdentifierResolution::Table(*id));
+                    .define(decl.name.name.clone(), IdentifierResolution::Table(*id))
+                {
+                    // Error kind already returned directly
+                    let default_span = decl
+                        .name
+                        .span
+                        .unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
+                    resolver
+                        .errors
+                        .push(CompilerError::new(err_kind, default_span));
+                }
             }
         }
     }
@@ -172,18 +293,32 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
 
         for param_id in &decl.generic_params {
             let param = &prog.generic_params[*param_id];
-            self.symbols.define(
+            if let Err(err_kind) = self.symbols.define(
                 param.name.name.clone(),
                 IdentifierResolution::GenericParam(*param_id),
-            );
+            ) {
+                // Error kind already returned directly
+                let default_span = param
+                    .name
+                    .span
+                    .unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
+                self.errors.push(CompilerError::new(err_kind, default_span));
+            }
         }
 
         for param_id in &decl.params {
             let param = &prog.params[*param_id];
-            self.symbols.define(
+            if let Err(err_kind) = self.symbols.define(
                 param.name.name.clone(),
                 IdentifierResolution::Param(*param_id),
-            );
+            ) {
+                // Error kind already returned directly
+                let default_span = param
+                    .name
+                    .span
+                    .unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
+                self.errors.push(CompilerError::new(err_kind, default_span));
+            }
         }
 
         // Use the default walker to visit the body.
@@ -207,8 +342,17 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
 
         // Then, define the variable in the current scope.
         let decl = &prog.var_decls[id];
-        self.symbols
-            .define(decl.name.name.clone(), IdentifierResolution::Var(id));
+        if let Err(err_kind) = self
+            .symbols
+            .define(decl.name.name.clone(), IdentifierResolution::Var(id))
+        {
+            // Error kind already returned directly
+            let default_span = decl
+                .name
+                .span
+                .unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
+            self.errors.push(CompilerError::new(err_kind, default_span));
+        }
 
         Ok(())
     }
@@ -233,8 +377,17 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
                 let _ = self.visit_expr(prog, start);
                 let _ = self.visit_expr(prog, end);
                 let var_decl = &prog.var_decls[var];
-                self.symbols
-                    .define(var_decl.name.name.clone(), IdentifierResolution::Var(var));
+                if let Err(err_kind) = self
+                    .symbols
+                    .define(var_decl.name.name.clone(), IdentifierResolution::Var(var))
+                {
+                    // Error kind already returned directly
+                    let default_span = var_decl
+                        .name
+                        .span
+                        .unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
+                    self.errors.push(CompilerError::new(err_kind, default_span));
+                }
                 let _ = self.visit_block(prog, body);
                 self.symbols.exit_scope();
                 self.loop_depth -= 1;
@@ -277,15 +430,15 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
         // First, handle the specific cases that need resolution before recursing
         match &prog.expressions[id] {
             Expression::Identifier { name, span, .. } => {
-                if let Some(resolutions) = self.symbols.resolve(&name.name) {
-                    // In case of overloading, we just take the first one.
-                    // The type checker will be responsible for picking the correct overload.
+                let resolutions = self.symbols.resolve(&name.name);
+                if !resolutions.is_empty() {
+                    // Store all resolutions for overloadable identifiers
                     if let Expression::Identifier {
-                        resolved_declaration,
+                        resolved_declarations,
                         ..
                     } = &mut prog.expressions[id]
                     {
-                        *resolved_declaration = Some(resolutions[0]);
+                        *resolved_declarations = resolutions;
                     }
                 } else {
                     let err = FrontEndErrorKind::UndefinedIdentifier {
@@ -306,32 +459,50 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
                     name: table_name, ..
                 } = &prog.expressions[object_id]
                 {
-                    let table_name = table_name.name.clone();
-                    if let Some(resolutions) = self.symbols.resolve(&table_name) {
-                        if let IdentifierResolution::Table(table_id) = resolutions[0] {
-                            // Look up the field in the table
-                            let mut resolved_field = None;
-                            if let Some(table_item) = prog.table_decls.get(table_id) {
-                                for element in &table_item.elements {
-                                    if let TableElement::Field(field) = element {
-                                        if field.name.name == member_name {
-                                            resolved_field = Some(field.clone());
-                                            break;
-                                        }
+                    let table_name_str = table_name.name.clone();
+                    let resolutions = self.symbols.resolve(&table_name_str);
+
+                    // Find table resolution specifically
+                    let table_resolutions: Vec<_> = resolutions
+                        .iter()
+                        .filter_map(|r| {
+                            if let IdentifierResolution::Table(table_id) = r {
+                                Some(*table_id)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    if table_resolutions.len() > 1 {
+                        let err = FrontEndErrorKind::DuplicateDefinition {
+                            name: format!("Ambiguous table name: {}", table_name_str),
+                        };
+                        let default_span = crate::util::Span::new(0, 0, "<unknown>");
+                        self.errors.push(CompilerError::new(err, default_span));
+                    } else if let Some(&table_id) = table_resolutions.first() {
+                        // Look up the field in the table
+                        let mut resolved_field = None;
+                        if let Some(table_item) = prog.table_decls.get(table_id) {
+                            for element in &table_item.elements {
+                                if let TableElement::Field(field) = element {
+                                    if field.name.name == member_name {
+                                        resolved_field = Some(field.clone());
+                                        break;
                                     }
                                 }
                             }
+                        }
 
-                            // Now update the expression
-                            if let Expression::MemberAccess {
-                                resolved_table,
-                                resolved_field: rf,
-                                ..
-                            } = &mut prog.expressions[id]
-                            {
-                                *resolved_table = Some(table_id);
-                                *rf = resolved_field;
-                            }
+                        // Now update the expression
+                        if let Expression::MemberAccess {
+                            resolved_table,
+                            resolved_field: rf,
+                            ..
+                        } = &mut prog.expressions[id]
+                        {
+                            *resolved_table = Some(table_id);
+                            *rf = resolved_field;
                         }
                     }
                 }
@@ -344,15 +515,33 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
                     name: table_name, ..
                 } = &prog.expressions[table_id]
                 {
-                    let table_name = table_name.name.clone();
-                    if let Some(resolutions) = self.symbols.resolve(&table_name) {
-                        if let IdentifierResolution::Table(table_id) = resolutions[0] {
-                            // Update the expression
-                            if let Expression::TableRowAccess { resolved_table, .. } =
-                                &mut prog.expressions[id]
-                            {
-                                *resolved_table = Some(table_id);
+                    let table_name_str = table_name.name.clone();
+                    let resolutions = self.symbols.resolve(&table_name_str);
+
+                    // Find table resolution specifically
+                    let table_resolutions: Vec<_> = resolutions
+                        .iter()
+                        .filter_map(|r| {
+                            if let IdentifierResolution::Table(table_id) = r {
+                                Some(*table_id)
+                            } else {
+                                None
                             }
+                        })
+                        .collect();
+
+                    if table_resolutions.len() > 1 {
+                        let err = FrontEndErrorKind::DuplicateDefinition {
+                            name: format!("Ambiguous table name: {}", table_name_str),
+                        };
+                        let default_span = crate::util::Span::new(0, 0, "<unknown>");
+                        self.errors.push(CompilerError::new(err, default_span));
+                    } else if let Some(&table_id) = table_resolutions.first() {
+                        // Update the expression
+                        if let Expression::TableRowAccess { resolved_table, .. } =
+                            &mut prog.expressions[id]
+                        {
+                            *resolved_table = Some(table_id);
                         }
                     }
                 }
@@ -363,16 +552,23 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
                 // If callee is an identifier, try to resolve it as a function
                 if let Expression::Identifier { name, .. } = &prog.expressions[callee_id] {
                     let func_name = name.name.clone();
-                    if let Some(resolutions) = self.symbols.resolve(&func_name) {
-                        if let IdentifierResolution::Function(func_id) = resolutions[0] {
-                            if let Expression::Call {
-                                resolved_callable, ..
-                            } = &mut prog.expressions[id]
-                            {
-                                *resolved_callable = Some(func_id);
-                            }
+                    let resolutions = self.symbols.resolve(&func_name);
+
+                    // Collect all function resolutions for overloading
+                    let mut func_ids = Vec::new();
+                    for resolution in &resolutions {
+                        if let IdentifierResolution::Function(func_id) = resolution {
+                            func_ids.push(*func_id);
                         }
-                    } else {
+                    }
+                    if !func_ids.is_empty() {
+                        if let Expression::Call {
+                            resolved_callables, ..
+                        } = &mut prog.expressions[id]
+                        {
+                            *resolved_callables = func_ids;
+                        }
+                    } else if resolutions.is_empty() {
                         let err = FrontEndErrorKind::UndefinedIdentifier { name: func_name };
                         let default_span = name
                             .span
@@ -383,28 +579,40 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
             }
             Expression::Binary { op, .. } => {
                 // Try to resolve the operator as a function
-                if let Some(resolutions) = self.symbols.resolve(&op.name) {
-                    if let IdentifierResolution::Function(func_id) = resolutions[0] {
-                        if let Expression::Binary {
-                            resolved_callable, ..
-                        } = &mut prog.expressions[id]
-                        {
-                            *resolved_callable = Some(func_id);
-                        }
+                let resolutions = self.symbols.resolve(&op.name);
+                // Collect all function resolutions for overloading
+                let mut func_ids = Vec::new();
+                for resolution in &resolutions {
+                    if let IdentifierResolution::Function(func_id) = resolution {
+                        func_ids.push(*func_id);
+                    }
+                }
+                if !func_ids.is_empty() {
+                    if let Expression::Binary {
+                        resolved_callables, ..
+                    } = &mut prog.expressions[id]
+                    {
+                        *resolved_callables = func_ids;
                     }
                 }
                 // For binary operators, this might be a built-in operator, so we don't error
             }
             Expression::Unary { op, .. } => {
                 // Try to resolve the operator as a function
-                if let Some(resolutions) = self.symbols.resolve(&op.name) {
-                    if let IdentifierResolution::Function(func_id) = resolutions[0] {
-                        if let Expression::Unary {
-                            resolved_callable, ..
-                        } = &mut prog.expressions[id]
-                        {
-                            *resolved_callable = Some(func_id);
-                        }
+                let resolutions = self.symbols.resolve(&op.name);
+                // Collect all function resolutions for overloading
+                let mut func_ids = Vec::new();
+                for resolution in &resolutions {
+                    if let IdentifierResolution::Function(func_id) = resolution {
+                        func_ids.push(*func_id);
+                    }
+                }
+                if !func_ids.is_empty() {
+                    if let Expression::Unary {
+                        resolved_callables, ..
+                    } = &mut prog.expressions[id]
+                    {
+                        *resolved_callables = func_ids;
                     }
                 }
                 // For unary operators, this might be a built-in operator, so we don't error
@@ -416,10 +624,17 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
                 // Add lambda parameters to symbol table
                 for param_id in params {
                     let param = &prog.params[*param_id];
-                    self.symbols.define(
+                    if let Err(err_kind) = self.symbols.define(
                         param.name.name.clone(),
                         IdentifierResolution::Param(*param_id),
-                    );
+                    ) {
+                        // Error kind already returned directly
+                        let default_span = param
+                            .name
+                            .span
+                            .unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
+                        self.errors.push(CompilerError::new(err_kind, default_span));
+                    }
                 }
 
                 // Visit the body
@@ -497,11 +712,17 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
             match &mut prog.table_decls[id].elements[idx] {
                 TableElement::Node(node) => {
                     // Try to resolve the partition function
-                    if let Some(resolutions) = self.symbols.resolve(&name) {
-                        if let IdentifierResolution::Function(func_id) = resolutions[0] {
-                            node.resolved_partition = Some(func_id);
+                    let resolutions = self.symbols.resolve(&name);
+                    // Collect all function resolutions for overloading
+                    let mut func_ids = Vec::new();
+                    for resolution in &resolutions {
+                        if let IdentifierResolution::Function(func_id) = resolution {
+                            func_ids.push(*func_id);
                         }
-                    } else {
+                    }
+                    if !func_ids.is_empty() {
+                        node.resolved_partitions = func_ids;
+                    } else if resolutions.is_empty() {
                         let err = FrontEndErrorKind::UndefinedIdentifier { name: name.clone() };
                         let default_span = node
                             .name
