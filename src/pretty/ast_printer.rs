@@ -3,6 +3,11 @@ use crate::ast::*;
 use crate::pretty::PrettyPrint;
 use std::io::{self, Write};
 
+// Debug options - simple constants for development
+const SHOW_IDS: bool = false;
+const SHOW_NAME_RESOLUTION: bool = false;
+const SHOW_TYPE_RESOLUTION: bool = false;
+
 /// A pretty printer that uses the visitor pattern to traverse and format AST nodes.
 pub struct AstPrinter<W: Write> {
     writer: W,
@@ -36,6 +41,69 @@ impl<W: Write> AstPrinter<W> {
 
     pub fn print_program(&mut self, program: &Program) -> io::Result<()> {
         self.visit_program(program).map_err(|e| e)
+    }
+
+    /// Helper to print debug info if enabled
+    fn debug_info(
+        &mut self,
+        id: impl std::fmt::Display,
+        node_type: &str,
+        resolutions: &[IdentifierResolution],
+        resolved_type: &Option<ResolvedType>,
+    ) -> io::Result<()> {
+        if SHOW_IDS {
+            write!(self.writer, " /*{}:{}*/", node_type, id)?;
+        }
+        if SHOW_NAME_RESOLUTION && !resolutions.is_empty() {
+            write!(self.writer, " /*name:")?;
+            for (i, res) in resolutions.iter().enumerate() {
+                if i > 0 {
+                    write!(self.writer, ",")?;
+                }
+                match res {
+                    IdentifierResolution::Var(id) => write!(self.writer, "var:{}", id.index())?,
+                    IdentifierResolution::Param(id) => write!(self.writer, "param:{}", id.index())?,
+                    IdentifierResolution::Const(id) => write!(self.writer, "const:{}", id.index())?,
+                    IdentifierResolution::Function(id) => {
+                        write!(self.writer, "func:{}", id.index())?
+                    }
+                    IdentifierResolution::Type(id) => write!(self.writer, "type:{}", id.index())?,
+                    IdentifierResolution::Table(id) => write!(self.writer, "table:{}", id.index())?,
+                    IdentifierResolution::GenericParam(id) => {
+                        write!(self.writer, "generic:{}", id.index())?
+                    }
+                }
+            }
+            write!(self.writer, "*/")?;
+        }
+        if SHOW_TYPE_RESOLUTION {
+            match resolved_type {
+                Some(ty) => {
+                    write!(self.writer, " /*type:")?;
+                    self.write_type(ty)?;
+                    write!(self.writer, "*/")?;
+                }
+                None => write!(self.writer, " /*type:unresolved*/")?,
+            }
+        }
+        Ok(())
+    }
+
+    /// Helper to write type information
+    fn write_type(&mut self, ty: &ResolvedType) -> io::Result<()> {
+        match ty {
+            ResolvedType::Primitive { type_id, .. } => {
+                write!(self.writer, "prim:{}", type_id.index())
+            }
+            ResolvedType::Table { table_id } => write!(self.writer, "table:{}", table_id.index()),
+            ResolvedType::TypeVariable { name, var_id } => {
+                write!(self.writer, "{}#{}", name, var_id)
+            }
+            ResolvedType::Void => write!(self.writer, "void"),
+            ResolvedType::Unknown => write!(self.writer, "unknown"),
+            ResolvedType::Unresolved(name) => write!(self.writer, "unresolved:{:?}", name),
+            _ => write!(self.writer, "complex"), // Simplified for brevity
+        }
     }
 }
 
@@ -92,6 +160,7 @@ impl<W: Write> Visitor<'_, (), io::Error> for AstPrinter<W> {
             }
             let param = &prog.params[*param_id];
             write!(self.writer, "{}: ", param.name.name)?;
+            self.debug_info(param_id.index(), "param", &[], &param.resolved_type)?;
             self.print_ast_type_inline(prog, param.ty)?;
         }
         write!(self.writer, ")")?;
@@ -100,6 +169,7 @@ impl<W: Write> Visitor<'_, (), io::Error> for AstPrinter<W> {
         if let Some(return_type_id) = decl.return_type {
             write!(self.writer, " -> ")?;
             self.print_ast_type_inline(prog, return_type_id)?;
+            self.debug_info(0, "ret", &[], &decl.resolved_return_type)?;
         }
 
         // Assumptions
@@ -370,12 +440,13 @@ impl<W: Write> AstPrinter<W> {
     // Helper methods for inline printing without visiting
     fn print_expression_inline(&mut self, prog: &Program, expr_id: ExprId) -> io::Result<()> {
         let expr = &prog.expressions[expr_id];
+
         match expr {
             Expression::Literal { value, .. } => {
-                self.print_literal_inline(prog, value)?;
+                self.print_literal_with_decorators(prog, value, expr_id, expr)?;
             }
             Expression::Identifier { name, .. } => {
-                write!(self.writer, "{}", name.name)?;
+                self.print_identifier_with_decorators(name.name.clone(), expr_id, expr)?;
             }
             Expression::Binary {
                 left, op, right, ..
@@ -384,9 +455,13 @@ impl<W: Write> AstPrinter<W> {
                 write!(self.writer, " {} ", op.name)?;
                 self.print_expression_inline(prog, *right)?;
             }
-            Expression::Unary { op, expr, .. } => {
+            Expression::Unary {
+                op,
+                expr: inner_expr,
+                ..
+            } => {
                 write!(self.writer, "{}", op.name)?;
-                self.print_expression_inline(prog, *expr)?;
+                self.print_expression_inline(prog, *inner_expr)?;
             }
             Expression::Assignment { lhs, rhs, .. } => {
                 self.print_expression_inline(prog, *lhs)?;
@@ -518,10 +593,157 @@ impl<W: Write> AstPrinter<W> {
         }
         Ok(())
     }
+
+    /// Print literal value with decorators like: 42[e17][int]
+    fn print_literal_with_decorators(
+        &mut self,
+        prog: &Program,
+        value: &Literal,
+        expr_id: ExprId,
+        expr: &Expression,
+    ) -> io::Result<()> {
+        // Print the literal value first
+        self.print_literal_inline(prog, value)?;
+
+        // Add decorators if enabled
+        self.print_expression_decorators(expr_id, expr)?;
+        Ok(())
+    }
+
+    /// Print identifier with decorators like: a[e17][int][var:5]
+    fn print_identifier_with_decorators(
+        &mut self,
+        name: String,
+        expr_id: ExprId,
+        expr: &Expression,
+    ) -> io::Result<()> {
+        // Print the identifier name first
+        write!(self.writer, "{}", name)?;
+
+        // Add decorators if enabled
+        self.print_expression_decorators(expr_id, expr)?;
+        Ok(())
+    }
+
+    /// Print decorators for expressions like [e17][int][var:5]
+    fn print_expression_decorators(
+        &mut self,
+        expr_id: ExprId,
+        expr: &Expression,
+    ) -> io::Result<()> {
+        // Expression ID decorator
+        if SHOW_IDS {
+            write!(self.writer, "[e{}]", expr_id.index())?;
+        }
+
+        // Type decorator
+        if SHOW_TYPE_RESOLUTION {
+            let resolved_type = match expr {
+                Expression::Literal { resolved_type, .. } => resolved_type,
+                Expression::Identifier { resolved_type, .. } => resolved_type,
+                Expression::Binary { resolved_type, .. } => resolved_type,
+                Expression::Unary { resolved_type, .. } => resolved_type,
+                Expression::Assignment { resolved_type, .. } => resolved_type,
+                Expression::Call { resolved_type, .. } => resolved_type,
+                Expression::MemberAccess { resolved_type, .. } => resolved_type,
+                Expression::TableRowAccess { resolved_type, .. } => resolved_type,
+                Expression::Grouped { resolved_type, .. } => resolved_type,
+                Expression::Lambda { resolved_type, .. } => resolved_type,
+            };
+
+            if let Some(ty) = resolved_type {
+                write!(self.writer, "[")?;
+                self.write_type_simple(ty)?;
+                write!(self.writer, "]")?;
+            } else {
+                write!(self.writer, "[?]")?;
+            }
+        }
+
+        // Name resolution decorator
+        if SHOW_NAME_RESOLUTION {
+            if let Expression::Identifier {
+                resolved_declarations,
+                ..
+            } = expr
+            {
+                if !resolved_declarations.is_empty() {
+                    write!(self.writer, "[")?;
+                    for (i, res) in resolved_declarations.iter().enumerate() {
+                        if i > 0 {
+                            write!(self.writer, ",")?;
+                        }
+                        self.write_resolution_simple(res)?;
+                    }
+                    write!(self.writer, "]")?;
+                }
+            }
+
+            // For binary operations, show callable resolution
+            if let Expression::Binary {
+                resolved_callables, ..
+            } = expr
+            {
+                if !resolved_callables.is_empty() {
+                    write!(self.writer, "[calls:")?;
+                    for (i, id) in resolved_callables.iter().enumerate() {
+                        if i > 0 {
+                            write!(self.writer, ",")?;
+                        }
+                        write!(self.writer, "{}", id.index())?;
+                    }
+                    write!(self.writer, "]")?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Write type information in simple format
+    fn write_type_simple(&mut self, ty: &ResolvedType) -> io::Result<()> {
+        match ty {
+            ResolvedType::Primitive { type_id, .. } => {
+                // Get the actual type name if possible
+                write!(self.writer, "t{}", type_id.index())
+            }
+            ResolvedType::Table { table_id } => write!(self.writer, "table{}", table_id.index()),
+            ResolvedType::TypeVariable { name, .. } => {
+                write!(self.writer, "{}", name)
+            }
+            ResolvedType::Void => write!(self.writer, "void"),
+            ResolvedType::Unknown => write!(self.writer, "?"),
+            ResolvedType::Unresolved(ast_type_id) => {
+                write!(self.writer, "unresolved#{}", ast_type_id.index())
+            }
+            _ => write!(self.writer, "complex"), // For more complex types
+        }
+    }
+
+    /// Write resolution information in simple format
+    fn write_resolution_simple(&mut self, res: &IdentifierResolution) -> io::Result<()> {
+        match res {
+            IdentifierResolution::Var(id) => write!(self.writer, "v{}", id.index()),
+            IdentifierResolution::Param(id) => write!(self.writer, "p{}", id.index()),
+            IdentifierResolution::Const(id) => write!(self.writer, "c{}", id.index()),
+            IdentifierResolution::Function(id) => write!(self.writer, "f{}", id.index()),
+            IdentifierResolution::Type(id) => write!(self.writer, "t{}", id.index()),
+            IdentifierResolution::Table(id) => write!(self.writer, "tab{}", id.index()),
+            IdentifierResolution::GenericParam(id) => write!(self.writer, "g{}", id.index()),
+        }
+    }
 }
 
 impl PrettyPrint for Program {
     fn pretty_print(&self, writer: &mut impl Write) -> io::Result<()> {
+        let mut printer = AstPrinter::new(writer);
+        printer.print_program(self)
+    }
+}
+
+impl Program {
+    /// Pretty print with debug information
+    pub fn pretty_print_with_debug(&self, writer: &mut impl Write) -> io::Result<()> {
         let mut printer = AstPrinter::new(writer);
         printer.print_program(self)
     }
