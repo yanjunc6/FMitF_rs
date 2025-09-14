@@ -47,6 +47,23 @@ impl TypeResolver {
         }
     }
 
+    /// Find a primitive type by name in the program's type declarations
+    fn find_primitive_type(&self, prog: &Program, type_name: &str) -> Option<TypeDeclId> {
+        for (type_id, type_decl) in prog.type_decls.iter() {
+            if type_decl.name.name == type_name {
+                // Check if it's an intrinsic type (has @intrinsic decorator)
+                if type_decl
+                    .decorators
+                    .iter()
+                    .any(|d| d.name.name == "intrinsic")
+                {
+                    return Some(type_id);
+                }
+            }
+        }
+        None
+    }
+
     /// Stage 1: Resolve all function signatures and explicit types first.
     fn resolve_signatures(&mut self, program: &mut Program) -> Result<(), Vec<CompilerError>> {
         let function_ids: Vec<FunctionId> = program
@@ -115,10 +132,19 @@ impl TypeResolver {
                 // Here, we'll just handle primitives by name as a simplification.
                 match name.name.as_str() {
                     "int" | "float" | "string" | "bool" => {
-                        // For primitive types, we just create a simple type var with meaningful name
-                        ResolvedType::TypeVariable {
-                            var_id: self.type_vars,
-                            name: name.name.clone(),
+                        // For primitive types, find the actual type declaration and create a Primitive type
+                        if let Some(primitive_type_id) = self.find_primitive_type(prog, &name.name)
+                        {
+                            ResolvedType::Primitive {
+                                type_id: primitive_type_id,
+                                type_args: vec![],
+                            }
+                        } else {
+                            // Fallback to type variable if primitive not found
+                            ResolvedType::TypeVariable {
+                                var_id: self.type_vars,
+                                name: name.name.clone(),
+                            }
                         }
                     }
                     _ => self.new_type_var(), // For generic parameters or user-defined types
@@ -259,6 +285,36 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
         Ok(())
     }
 
+    fn visit_var_decl(&mut self, prog: &mut Program, id: VarId) -> Result<(), ()> {
+        // Collect the data we need first to avoid borrowing issues
+        let ty = prog.var_decls[id].ty;
+        let init = prog.var_decls[id].init;
+
+        // If the variable has an explicit type, resolve it
+        if let Some(ast_type_id) = ty {
+            let resolved_type = self.resolve_ast_type(prog, ast_type_id);
+            prog.var_decls[id].resolved_type = Some(resolved_type);
+        } else if let Some(init_expr_id) = init {
+            // If no explicit type but has initializer, resolve the initializer first
+            self.visit_expr(prog, init_expr_id)?;
+            let init_type = prog.expressions[init_expr_id]
+                .resolved_type()
+                .cloned()
+                .unwrap_or_else(|| self.new_type_var());
+            prog.var_decls[id].resolved_type = Some(init_type);
+        } else {
+            // No type or initializer, create a type variable
+            prog.var_decls[id].resolved_type = Some(self.new_type_var());
+        }
+
+        // Visit the initializer expression if present
+        if let Some(init_expr_id) = init {
+            self.visit_expr(prog, init_expr_id)?;
+        }
+
+        Ok(())
+    }
+
     fn visit_expr(&mut self, prog: &mut Program, id: ExprId) -> Result<(), ()> {
         let mut expr = prog.expressions[id].clone();
         let span = expr.span().unwrap_or_else(|| Span::new(0, 0, "unknown"));
@@ -270,22 +326,62 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
                 ..
             } => {
                 let literal_type = match value {
-                    Literal::Integer(_) => ResolvedType::TypeVariable {
-                        var_id: self.type_vars,
-                        name: "int".to_string(),
-                    },
-                    Literal::Float(_) => ResolvedType::TypeVariable {
-                        var_id: self.type_vars,
-                        name: "float".to_string(),
-                    },
-                    Literal::String(_) => ResolvedType::TypeVariable {
-                        var_id: self.type_vars,
-                        name: "string".to_string(),
-                    },
-                    Literal::Bool(_) => ResolvedType::TypeVariable {
-                        var_id: self.type_vars,
-                        name: "bool".to_string(),
-                    },
+                    Literal::Integer(_) => {
+                        // Find the int primitive type
+                        if let Some(int_type_id) = self.find_primitive_type(prog, "int") {
+                            ResolvedType::Primitive {
+                                type_id: int_type_id,
+                                type_args: vec![],
+                            }
+                        } else {
+                            ResolvedType::TypeVariable {
+                                var_id: self.type_vars,
+                                name: "int".to_string(),
+                            }
+                        }
+                    }
+                    Literal::Float(_) => {
+                        // Find the float primitive type
+                        if let Some(float_type_id) = self.find_primitive_type(prog, "float") {
+                            ResolvedType::Primitive {
+                                type_id: float_type_id,
+                                type_args: vec![],
+                            }
+                        } else {
+                            ResolvedType::TypeVariable {
+                                var_id: self.type_vars,
+                                name: "float".to_string(),
+                            }
+                        }
+                    }
+                    Literal::String(_) => {
+                        // Find the string primitive type
+                        if let Some(string_type_id) = self.find_primitive_type(prog, "string") {
+                            ResolvedType::Primitive {
+                                type_id: string_type_id,
+                                type_args: vec![],
+                            }
+                        } else {
+                            ResolvedType::TypeVariable {
+                                var_id: self.type_vars,
+                                name: "string".to_string(),
+                            }
+                        }
+                    }
+                    Literal::Bool(_) => {
+                        // Find the bool primitive type
+                        if let Some(bool_type_id) = self.find_primitive_type(prog, "bool") {
+                            ResolvedType::Primitive {
+                                type_id: bool_type_id,
+                                type_args: vec![],
+                            }
+                        } else {
+                            ResolvedType::TypeVariable {
+                                var_id: self.type_vars,
+                                name: "bool".to_string(),
+                            }
+                        }
+                    }
                     Literal::List(items) => {
                         let element_type = self.new_type_var();
                         for item_id in items {
@@ -424,6 +520,118 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
                 self.unify(&callee_type, &func_type, span);
                 *resolved_type = Some(return_type.clone());
                 return_type
+            }
+            Expression::MemberAccess {
+                object,
+                member,
+                resolved_table,
+                resolved_field,
+                resolved_type,
+                ..
+            } => {
+                // First resolve the object type
+                self.visit_expr(prog, *object)?;
+                let object_type = prog.expressions[*object]
+                    .resolved_type()
+                    .cloned()
+                    .unwrap_or_else(|| self.new_type_var());
+
+                // Try to resolve based on the object type
+                if let ResolvedType::Table { table_id } = &object_type {
+                    // Get the field type from the table declaration
+                    if let Some(table_decl) = prog.table_decls.get(*table_id) {
+                        for element in &table_decl.elements {
+                            if let TableElement::Field(table_field) = element {
+                                if table_field.name.name == member.name {
+                                    let field_type = self.resolve_ast_type(prog, table_field.ty);
+                                    *resolved_type = Some(field_type.clone());
+                                    *resolved_table = Some(*table_id);
+                                    // TODO: Store field reference if needed
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // If we know the table and field from name resolution, use that
+                if let (Some(table_id), Some(_field)) = (resolved_table, resolved_field) {
+                    // Get the field type from the table declaration
+                    if let Some(table_decl) = prog.table_decls.get(*table_id) {
+                        for element in &table_decl.elements {
+                            if let TableElement::Field(table_field) = element {
+                                if table_field.name.name == member.name {
+                                    let field_type = self.resolve_ast_type(prog, table_field.ty);
+                                    *resolved_type = Some(field_type.clone());
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Fallback: create a type variable
+                let ty = self.new_type_var();
+                *resolved_type = Some(ty.clone());
+                ty
+            }
+            Expression::Assignment {
+                lhs,
+                rhs,
+                resolved_type,
+                ..
+            } => {
+                // Visit both sides
+                self.visit_expr(prog, *lhs)?;
+                self.visit_expr(prog, *rhs)?;
+
+                // Assignment returns the type of the RHS
+                let rhs_type = prog.expressions[*rhs]
+                    .resolved_type()
+                    .cloned()
+                    .unwrap_or_else(|| self.new_type_var());
+
+                *resolved_type = Some(rhs_type.clone());
+                rhs_type
+            }
+            Expression::Unary {
+                expr,
+                resolved_type,
+                ..
+            } => {
+                // Visit the operand
+                self.visit_expr(prog, *expr)?;
+
+                // For now, just create a type variable
+                // TODO: Implement proper unary operator resolution
+                let ty = self.new_type_var();
+                *resolved_type = Some(ty.clone());
+                ty
+            }
+            Expression::TableRowAccess {
+                key_values,
+                resolved_table,
+                resolved_type,
+                ..
+            } => {
+                // Visit all key expressions first
+                for key_value in key_values {
+                    self.visit_expr(prog, key_value.value)?;
+                }
+
+                // If we know which table this accesses, create the table type
+                if let Some(table_id) = resolved_table {
+                    let table_type = ResolvedType::Table {
+                        table_id: *table_id,
+                    };
+                    *resolved_type = Some(table_type.clone());
+                    table_type
+                } else {
+                    // Fallback: create a type variable
+                    let ty = self.new_type_var();
+                    *resolved_type = Some(ty.clone());
+                    ty
+                }
             }
             _ => self.new_type_var(),
         };

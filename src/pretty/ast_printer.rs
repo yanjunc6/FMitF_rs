@@ -4,7 +4,7 @@ use crate::pretty::PrettyPrint;
 use std::io::{self, Write};
 
 // Debug options - simple constants for development
-const SHOW_IDS: bool = false;
+const SHOW_IDS: bool = true;
 const SHOW_NAME_RESOLUTION: bool = false;
 const SHOW_TYPE_RESOLUTION: bool = false;
 
@@ -119,7 +119,7 @@ impl<W: Write> Visitor<'_, (), io::Error> for AstPrinter<W> {
     fn visit_callable_decl(
         &mut self,
         prog: &Program,
-        _id: FunctionId,
+        id: FunctionId,
         decl: &CallableDecl,
     ) -> Result<(), io::Error> {
         // Print decorators
@@ -138,6 +138,11 @@ impl<W: Write> Visitor<'_, (), io::Error> for AstPrinter<W> {
         }
 
         write!(self.writer, " {}", decl.name.name)?;
+
+        // Add declaration ID if debug is enabled
+        if SHOW_IDS {
+            write!(self.writer, "[d{}]", id.index())?;
+        }
 
         // Generic parameters
         if !decl.generic_params.is_empty() {
@@ -194,7 +199,7 @@ impl<W: Write> Visitor<'_, (), io::Error> for AstPrinter<W> {
     fn visit_type_decl(
         &mut self,
         prog: &Program,
-        _id: TypeDeclId,
+        id: TypeDeclId,
         decl: &TypeDecl,
     ) -> Result<(), io::Error> {
         // Print decorators
@@ -206,6 +211,11 @@ impl<W: Write> Visitor<'_, (), io::Error> for AstPrinter<W> {
 
         self.write_indent()?;
         write!(self.writer, "type {}", decl.name.name)?;
+
+        // Add declaration ID if debug is enabled
+        if SHOW_IDS {
+            write!(self.writer, "[d{}]", id.index())?;
+        }
 
         // Generic parameters
         if !decl.generic_params.is_empty() {
@@ -227,11 +237,18 @@ impl<W: Write> Visitor<'_, (), io::Error> for AstPrinter<W> {
     fn visit_const_decl(
         &mut self,
         prog: &Program,
-        _id: ConstId,
+        id: ConstId,
         decl: &ConstDecl,
     ) -> Result<(), io::Error> {
         self.write_indent()?;
-        write!(self.writer, "const {}: ", decl.name.name)?;
+        write!(self.writer, "const {}", decl.name.name)?;
+
+        // Add declaration ID if debug is enabled
+        if SHOW_IDS {
+            write!(self.writer, "[d{}]", id.index())?;
+        }
+
+        write!(self.writer, ": ")?;
         self.print_ast_type_inline(prog, decl.ty)?;
         write!(self.writer, " = ")?;
         self.print_expression_inline(prog, decl.value)?;
@@ -242,11 +259,18 @@ impl<W: Write> Visitor<'_, (), io::Error> for AstPrinter<W> {
     fn visit_table_decl(
         &mut self,
         prog: &Program,
-        _id: TableId,
+        id: TableId,
         decl: &TableDecl,
     ) -> Result<(), io::Error> {
         self.write_indent()?;
-        writeln!(self.writer, "table {} {{", decl.name.name)?;
+        write!(self.writer, "table {}", decl.name.name)?;
+
+        // Add declaration ID if debug is enabled
+        if SHOW_IDS {
+            write!(self.writer, "[d{}]", id.index())?;
+        }
+
+        writeln!(self.writer, " {{")?;
         self.indent();
 
         for element in &decl.elements {
