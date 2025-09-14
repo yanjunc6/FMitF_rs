@@ -4,9 +4,9 @@ use crate::pretty::PrettyPrint;
 use std::io::{self, Write};
 
 // Debug options - simple constants for development
-const SHOW_IDS: bool = true;
-const SHOW_NAME_RESOLUTION: bool = false;
-const SHOW_TYPE_RESOLUTION: bool = false;
+const SHOW_IDS: bool = false;
+const SHOW_NAME_RESOLUTION: bool = true;
+const SHOW_TYPE_RESOLUTION: bool = true;
 
 /// A pretty printer that uses the visitor pattern to traverse and format AST nodes.
 pub struct AstPrinter<W: Write> {

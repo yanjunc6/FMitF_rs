@@ -541,6 +541,7 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
                     .unwrap_or_else(|| self.new_type_var());
 
                 // Try to resolve based on the object type
+                let mut resolved_field_type = None;
                 if let ResolvedType::Table { table_id } = &object_type {
                     // Get the field type from the table declaration
                     if let Some(table_decl) = prog.table_decls.get(*table_id) {
@@ -551,33 +552,44 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
                                     *resolved_type = Some(field_type.clone());
                                     *resolved_table = Some(*table_id);
                                     *resolved_field = Some(table_field.clone());
-                                    return Ok(());
+                                    resolved_field_type = Some(field_type);
+                                    break;
                                 }
                             }
                         }
                     }
                 }
 
-                // If we know the table and field from name resolution, use that
-                if let (Some(table_id), Some(_field)) = (resolved_table, resolved_field) {
-                    // Get the field type from the table declaration
-                    if let Some(table_decl) = prog.table_decls.get(*table_id) {
-                        for element in &table_decl.elements {
-                            if let TableElement::Field(table_field) = element {
-                                if table_field.name.name == member.name {
-                                    let field_type = self.resolve_ast_type(prog, table_field.ty);
-                                    *resolved_type = Some(field_type.clone());
-                                    return Ok(());
+                if let Some(field_type) = resolved_field_type {
+                    field_type
+                } else {
+                    // If we know the table and field from name resolution, use that
+                    if let (Some(table_id), Some(_field)) = (resolved_table, resolved_field) {
+                        // Get the field type from the table declaration
+                        if let Some(table_decl) = prog.table_decls.get(*table_id) {
+                            for element in &table_decl.elements {
+                                if let TableElement::Field(table_field) = element {
+                                    if table_field.name.name == member.name {
+                                        let field_type =
+                                            self.resolve_ast_type(prog, table_field.ty);
+                                        *resolved_type = Some(field_type.clone());
+                                        resolved_field_type = Some(field_type);
+                                        break;
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                // Fallback: create a type variable
-                let ty = self.new_type_var();
-                *resolved_type = Some(ty.clone());
-                ty
+                    if let Some(field_type) = resolved_field_type {
+                        field_type
+                    } else {
+                        // Fallback: create a type variable
+                        let ty = self.new_type_var();
+                        *resolved_type = Some(ty.clone());
+                        ty
+                    }
+                }
             }
             Expression::Assignment {
                 lhs,
