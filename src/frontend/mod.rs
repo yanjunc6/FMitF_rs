@@ -12,21 +12,40 @@ pub fn parse_and_analyze_program(
     source: &str,
     filename: &'static str,
 ) -> Result<Program, Vec<CompilerError>> {
+    // A vector to accumulate errors from all stages
+    let mut all_errors = Vec::new();
+
     // Stage 1: Basic AST parsing with prelude
-    let mut program = ast_builder::parse_program(program, source, filename)?;
+    let mut program = match ast_builder::parse_program(program, source, filename) {
+        Ok(p) => p,
+        Err(e) => return Err(e),
+    };
 
     // Stage 2: Name resolution
-    let _ = name_resolver::resolve_names(&mut program)?;
+    if let Err(errors) = name_resolver::resolve_names(&mut program) {
+        all_errors.extend(errors);
+    }
 
     // Stage 3: Type checking
-    let _ = type_resolver::resolve_types(&mut program)?;
+    if let Err(errors) = type_resolver::resolve_types(&mut program) {
+        all_errors.extend(errors);
+    }
 
-    // Stage 4: Semantic analysis (disabled for now)
-    // if let Err(errors) = semantic_analyzer::analyze_semantics(&program) {
-    //     return Err(errors);
-    // }
+    // If there are errors from critical early stages, we might not want to proceed.
+    if !all_errors.is_empty() {
+        return Err(all_errors);
+    }
 
-    Ok(program)
+    // Stage 4: Semantic analysis
+    if let Err(errors) = semantics_analyzer::analyze_semantics(&program) {
+        all_errors.extend(errors);
+    }
+
+    if !all_errors.is_empty() {
+        Err(all_errors)
+    } else {
+        Ok(program)
+    }
 }
 
 // ============================================================================
@@ -36,11 +55,11 @@ pub fn parse_and_analyze_program(
 pub mod ast_builder;
 pub mod errors;
 pub mod name_resolver;
+pub mod semantics_analyzer; // Add the new module
 pub mod type_resolver;
 pub mod util;
 pub use errors::FrontEndErrorKind;
 // pub mod type_checker;
-// pub mod semantic_analyzer;
 // Complex modules with legacy issues:
 // pub mod constant_checker;
 // pub mod ast_debug;
