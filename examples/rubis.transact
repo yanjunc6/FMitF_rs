@@ -1,0 +1,296 @@
+partition f(int x) = 10 * x;
+partition g(int x, int y) = 10 * x + y;
+partition h(int x, int y); // implementation of partition is optional. It is 10 * x + y % 10;
+
+
+table Users {
+    primary UUID id;
+    node f(id);
+
+    string firstname;
+    string lastname;
+    string nickname;
+    string password;
+    string email;
+    int rating;
+    float balance;
+    int creation_date;
+    int region;
+}
+
+table Usernames {
+    primary string nickname;
+    node g(nickname);
+
+    UUID id;
+    string password;
+    int counter;
+}
+
+table Items {
+    primary UUID id;
+    node f(id);
+
+    string name;
+    string description;
+    float initial_price;
+    int quantity;
+    float reserve_price;
+    float buy_now;
+    int nb_of_bids;
+    float max_bid;
+    int start_date;
+    int end_date;
+    UUID seller;
+    int region;
+    int category;
+}
+
+table Bids {
+    primary UUID id;
+    node f(id);
+
+    UUID user_id;
+    UUID item_id;
+    int qty;
+    float bid;
+    float max_bid;
+    int date;
+}
+
+table Comments {
+    primary UUID id;
+    node f(id);
+
+    UUID from_user_id;
+    UUID to_user_id;
+    UUID item_id;
+    int rating;
+    string comment;
+    int date;
+}
+
+table Buy_now {
+    primary int id;
+    node f(id);
+
+    int buyer_id;
+    int item_id;
+    int qty;
+    int date;
+}
+
+bool userAuth(string nickname, string password) {
+    hop {
+        string pwd = Usernames[nickname: nickname].password;
+        if pwd == password {
+            return true;
+        } else {
+            return false;
+        }
+    }
+}
+
+void registerUser(string nickname, string password, string firstname, string lastname, string email) {
+    UUID uid = genUUID();
+
+    hop {
+        if (Usernames[nickname: nickname].counter > 0) {
+            return;
+        }
+        Usernames[nickname: nickname].counter += 1;
+        Usernames[nickname: nickname].password = password;
+        Usernames[nickname: nickname].id = uid;
+    }
+
+    hop {
+        Users[id: uid] = {
+            nickname: nickname,
+            password: password,
+            firstname: firstname,
+            lastname: lastname,
+            email: email
+        };
+    }
+}
+
+string viewUser(UUID uid) {
+    hop {
+        string info = Users[id: uid].nickname + Users[id: uid].firstname + Users[id: uid].lastname + Users[id: uid].rating;
+
+        return info;
+    }
+}
+
+void makeComment(UUID from_uid, UUID to_uid, UUID iid, string comment, int rating) {
+    UUID id = genUUID();
+
+    hop {
+        Users[id: to_uid].rating += rating;
+    }
+
+    hop {
+        Comments[id: id] = {
+            from_user_id: from_uid,
+            to_user_id: to_uid,
+            item_id: iid,
+            comment: comment,
+            rating: rating
+        };
+    }
+}
+
+string[] getCommentsByToUID(UUID to_id) {
+    string[] commentList;
+
+    hops for all {
+        for Comments c in Comments.scan() {
+            if c.to_user_id == to_id {
+                commentList.insert(c.comment);
+            }
+        }
+    }
+
+    return commentList;
+}
+
+string[] getCommentsByToIID(UUID iid) {
+    string[] commentList;
+
+    hops for all{
+        for Comments c in Comments.scan() {
+            if c.item_id == iid {
+                commentList.insert(c.comment);
+            }
+        }
+    }
+
+    return commentList;
+}
+
+Items[] getItemsByRegion(int region) {
+    Items[] itemList;
+
+    hops for all{
+        for Items i in Items.scan() {
+            if i.region == region {
+                itemList.insert(i);
+            }
+        }
+    }
+
+    return itemList;
+}
+
+Items[] getItemsByCategory(int category) {
+    Items[] itemList;
+
+    hops for all{
+        for Items i in Items.scan() {
+            if i.category == category {
+                itemList.insert(i);
+            }
+        }
+    }
+
+    return itemList;
+}
+
+void registerItem(string name, string description, float initial_price, int quantity, float reserve_price,
+    float buy_now, int date, UUID seller, int region, int category) {
+    UUID iid = genUUID();
+    hop {
+        Items[id: iid] = {
+            name: name,
+            description: description,
+            initial_price: initial_price,
+            quantity: quantity,
+            reserve_price: reserve_price,
+            buy_now: buy_now,
+            nb_of_bids: 0,
+            max_bid: 0,
+            start_date: date,
+            seller: seller,
+            region: region,
+            category: category
+        };
+    }
+}
+
+void putBid(UUID iid, float max_bid, UUID uid, int quantity, float bid, int date) {
+    UUID bid = genUUID();
+    hop {
+        float cur_max = Items[id: iid].max_bid;
+        if max_bid > cur_max {
+            Items[id: iid].max_bid = max_bid;
+            Items[id: iid].nb_of_bids += 1;
+        } else {
+            return;
+        }
+    }
+
+    hop {
+        Bids[id: bid] = {
+            user_id: uid,
+            item_id: iid,
+            qty: quantity,
+            bid: bid,
+            max_bid: max_bid,
+            date: date
+        };
+    }
+}
+
+Bids[] getBidsByItem(UUID iid) {
+    Bids[] bidList;
+
+    hops for all{
+        for Bids b in Bidss.scan() {
+            if b.item_id == iid {
+                bidList.insert(b);
+            }
+        }
+    }
+
+    return bidList;
+}
+
+Bids[] getBidsByUser(UUID uid) {
+    Bids[] bidList;
+
+    hops for all{
+        for Bids b in Bidss.scan() {
+            if b.user_id == uid {
+                bidList.insert(b);
+            }
+        }
+    }
+
+    return bidList;
+}
+
+void buyNow(UUID iid, UUID uid, int quantity, int date) {
+    UUID bnid = genUUID();
+    hop {
+        int cur_qty = Items[id: iid].quantity;
+        if quantity > cur_qty {
+            return;
+        }
+
+        cur_qty = cur_qty - quantity;
+        Items[id: iid].quantity = cur_qty;
+        if cur_qty == 0 {
+            Items[id: iid].end_date = date;
+        }
+    }
+
+    hop {
+        Buy_now[id: bnid] = {
+            buyer_id: uid,
+            item_id: iid,
+            qty: quantity,
+            date: date
+        };
+    }
+}
+
