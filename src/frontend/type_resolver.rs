@@ -5,6 +5,7 @@
 //! statements, and declarations. It also handles overload resolution for
 //! functions and operators.
 
+use crate::ast::item::ConstId;
 use crate::ast::visit_mut::VisitorMut;
 use crate::ast::*;
 use crate::frontend::errors::FrontEndErrorKind;
@@ -169,6 +170,21 @@ impl TypeResolver {
         for id in function_ids {
             self.visit_callable_decl(program, id).unwrap();
         }
+
+        // Also resolve const declarations in the first pass
+        let const_ids: Vec<ConstId> = program
+            .declarations
+            .iter()
+            .filter_map(|item| match item {
+                Item::Const(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+
+        for id in const_ids {
+            self.visit_const_decl(program, id).unwrap();
+        }
+
         if !self.errors.is_empty() {
             return Err(std::mem::take(&mut self.errors));
         }
@@ -401,6 +417,29 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
         // Visit the initializer expression if present
         if let Some(init_expr_id) = init {
             self.visit_expr(prog, init_expr_id)?;
+        }
+
+        Ok(())
+    }
+
+    fn visit_const_decl(&mut self, prog: &mut Program, id: ConstId) -> Result<(), ()> {
+        // Get the const declaration info
+        let ast_type_id = prog.const_decls[id].ty;
+        let value_expr_id = prog.const_decls[id].value;
+
+        // Resolve the explicit type
+        let resolved_type = self.resolve_ast_type(prog, ast_type_id);
+        prog.const_decls[id].resolved_type = Some(resolved_type.clone());
+
+        // Visit the value expression to type check it
+        self.visit_expr(prog, value_expr_id)?;
+
+        // Ensure the value expression type matches the declared type
+        if let Some(value_type) = prog.expressions[value_expr_id].resolved_type() {
+            let span = prog.const_decls[id]
+                .span
+                .unwrap_or_else(|| Span::new(0, 0, "unknown"));
+            self.unify(&resolved_type, value_type, span);
         }
 
         Ok(())
