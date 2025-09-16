@@ -88,11 +88,8 @@ impl TypeResolver {
             Literal::String(_) => self.resolve_primitive_type(prog, "string"),
             Literal::Bool(_) => self.resolve_primitive_type(prog, "bool"),
             Literal::List(_items) => {
-                let element_type = self.new_type_var();
-                // Note: item processing would be done by caller
-                ResolvedType::List {
-                    element_type: Box::new(element_type),
-                }
+                // For now, treat as a type variable since we don't have the List type declaration here
+                self.new_type_var()
             }
             Literal::RowLiteral(_) => self.new_type_var(),
         }
@@ -257,18 +254,22 @@ impl TypeResolver {
                     _ => self.new_type_var(), // For generic parameters or user-defined types
                 }
             }
-            AstType::Generic { args, .. } => {
+            AstType::Generic { base, args, .. } => {
                 let arg_types: Vec<ResolvedType> = args
                     .iter()
                     .map(|arg_id| self.resolve_ast_type(prog, *arg_id))
                     .collect();
-                // This is a simplification. A full implementation would use the resolved base type.
-                ResolvedType::List {
-                    element_type: arg_types
-                        .get(0)
-                        .cloned()
-                        .map(Box::new)
-                        .unwrap_or(Box::new(self.new_type_var())),
+
+                // Handle generic types as primitive types with type arguments
+                // Find the type declaration for the base type
+                if let Some(type_id) = self.find_primitive_type(prog, &base.name) {
+                    ResolvedType::Primitive {
+                        type_id,
+                        type_args: arg_types,
+                    }
+                } else {
+                    // Unknown generic type, use type variable
+                    self.new_type_var()
                 }
             }
             AstType::Function {
@@ -337,9 +338,6 @@ impl TypeResolver {
                     self.unify(p1, p2, span);
                 }
                 self.unify(&ret1, &ret2, span);
-            }
-            (ResolvedType::List { element_type: e1 }, ResolvedType::List { element_type: e2 }) => {
-                self.unify(&e1, &e2, span);
             }
             (ResolvedType::Void, ResolvedType::Void) => {}
             (ResolvedType::Unknown, _) | (_, ResolvedType::Unknown) => {}
@@ -464,9 +462,9 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
                             self.unify(&element_type, item_type, span);
                         }
                     }
-                    ResolvedType::List {
-                        element_type: Box::new(element_type),
-                    }
+                    // For now, treat list literals as type variables
+                    // In a full implementation, this would be a List<T> primitive type
+                    self.new_type_var()
                 } else {
                     self.resolve_literal_type(prog, value)
                 };
@@ -787,7 +785,6 @@ impl TypeResolver {
                     ..
                 },
             ) => params1.len() == params2.len(),
-            (ResolvedType::List { .. }, ResolvedType::List { .. }) => true,
             (t1, t2) => t1 == t2,
         }
     }

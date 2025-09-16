@@ -79,10 +79,7 @@ pub enum Type {
     /// A list containing elements of a specific type.
     List(TypeId),
     /// A user-defined structure with type arguments.
-    Declared {
-        name: String,
-        args: Vec<TypeId>,
-    },
+    Declared { name: String, args: Vec<TypeId> },
     /// A type representing a the whole table.
     Table(TableId),
     /// A type representing a single row in a table.

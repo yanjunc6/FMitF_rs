@@ -20,6 +20,7 @@ struct SemanticAnalyzer<'a> {
     program: &'a Program,
     errors: Vec<CompilerError>,
     current_callable_kind: Option<CallableKind>,
+    in_global_hop: bool,
 }
 
 impl<'a> SemanticAnalyzer<'a> {
@@ -28,6 +29,7 @@ impl<'a> SemanticAnalyzer<'a> {
             program,
             errors: Vec::new(),
             current_callable_kind: None,
+            in_global_hop: false,
         }
     }
 
@@ -129,6 +131,21 @@ impl<'a> SemanticAnalyzer<'a> {
             _ => false,
         }
     }
+
+    /// Checks if a function is marked with the @global decorator.
+    fn is_global_function(&self, function_id: FunctionId) -> bool {
+        let decl = &self.program.functions[function_id];
+        decl.decorators
+            .iter()
+            .any(|decorator| decorator.name.name == "global")
+    }
+
+    /// Checks if a hop block has the @global decorator.
+    fn is_global_hop(&self, decorators: &[Decorator]) -> bool {
+        decorators
+            .iter()
+            .any(|decorator| decorator.name.name == "global")
+    }
 }
 
 // Implement the Visitor trait for the SemanticAnalyzer
@@ -204,38 +221,99 @@ impl<'ast> Visitor<'ast, (), ()> for SemanticAnalyzer<'ast> {
     fn visit_stmt(&mut self, prog: &'ast Program, id: StmtId) -> Result<(), ()> {
         let stmt = &prog.statements[id];
 
-        // Rule 5: `hops_for` start and end must be constant integers.
-        if let Statement::HopsFor { start, end, .. } = stmt {
-            // Check start expression
-            if !self.is_const_integer(*start) {
-                if let Some(span) = self.get_expression_span(&prog.expressions[*start]) {
-                    self.add_error(
-                        FrontEndErrorKind::HopsForNonConstant {
-                            context: "start expression".to_string(),
-                        },
-                        span,
-                    );
-                }
-            }
+        // Handle hop blocks and track @global decorator
+        match stmt {
+            Statement::Hop {
+                decorators, body, ..
+            } => {
+                let was_in_global_hop = self.in_global_hop;
+                self.in_global_hop = self.is_global_hop(decorators);
 
-            // Check end expression
-            if !self.is_const_integer(*end) {
-                if let Some(span) = self.get_expression_span(&prog.expressions[*end]) {
-                    self.add_error(
-                        FrontEndErrorKind::HopsForNonConstant {
-                            context: "end expression".to_string(),
-                        },
-                        span,
-                    );
-                }
+                // Visit the hop body
+                self.visit_block(prog, *body)?;
+
+                // Restore previous state
+                self.in_global_hop = was_in_global_hop;
+                return Ok(());
             }
+            Statement::HopsFor {
+                decorators,
+                start,
+                end,
+                body,
+                ..
+            } => {
+                // Rule 5: `hops_for` start and end must be constant integers.
+                // Check start expression
+                if !self.is_const_integer(*start) {
+                    if let Some(span) = self.get_expression_span(&prog.expressions[*start]) {
+                        self.add_error(
+                            FrontEndErrorKind::HopsForNonConstant {
+                                context: "start expression".to_string(),
+                            },
+                            span,
+                        );
+                    }
+                }
+
+                // Check end expression
+                if !self.is_const_integer(*end) {
+                    if let Some(span) = self.get_expression_span(&prog.expressions[*end]) {
+                        self.add_error(
+                            FrontEndErrorKind::HopsForNonConstant {
+                                context: "end expression".to_string(),
+                            },
+                            span,
+                        );
+                    }
+                }
+
+                let was_in_global_hop = self.in_global_hop;
+                self.in_global_hop = self.is_global_hop(decorators);
+
+                // Visit the hops_for body
+                self.visit_block(prog, *body)?;
+
+                // Restore previous state
+                self.in_global_hop = was_in_global_hop;
+                return Ok(());
+            }
+            _ => {}
         }
+
         walk_stmt(self, prog, id)
     }
 
     /// Visit an expression.
     fn visit_expr(&mut self, prog: &'ast Program, id: ExprId) -> Result<(), ()> {
         let expr = &prog.expressions[id];
+
+        // Check for function calls to @global functions
+        if let Expression::Call { callee, span, .. } = expr {
+            if let Expression::Identifier {
+                name,
+                resolved_declarations,
+                ..
+            } = &prog.expressions[*callee]
+            {
+                // Check if this is a call to a @global function
+                for resolution in resolved_declarations {
+                    if let IdentifierResolution::Function(function_id) = resolution {
+                        if self.is_global_function(*function_id) && !self.in_global_hop {
+                            if let Some(s) = span {
+                                self.add_error(
+                                    FrontEndErrorKind::GlobalFunctionInNonGlobalHop {
+                                        function_name: name.name.clone(),
+                                    },
+                                    *s,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Rule 4: Check for unresolved identifiers (should have been caught earlier).
         if let Expression::Identifier {
             name,
@@ -256,6 +334,8 @@ impl<'ast> Visitor<'ast, (), ()> for SemanticAnalyzer<'ast> {
                 }
             }
         }
+
+        // Continue visiting child expressions
         Ok(())
     }
 

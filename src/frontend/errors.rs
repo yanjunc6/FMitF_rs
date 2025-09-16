@@ -35,6 +35,7 @@ pub enum FrontEndErrorKind {
     InvalidTableGenericArgument { found_type: String },
     HopsForNonConstant { context: String },
     HopsForNonInteger { context: String, found_type: String },
+    GlobalFunctionInNonGlobalHop { function_name: String },
 
     // General errors
     InvalidInput { message: String },
@@ -101,6 +102,13 @@ impl fmt::Display for FrontEndErrorKind {
                     context, found_type
                 )
             }
+            FrontEndErrorKind::GlobalFunctionInNonGlobalHop { function_name } => {
+                write!(
+                    f,
+                    "Function '{}' is marked as @global and can only be called within @global hop blocks.",
+                    function_name
+                )
+            }
             FrontEndErrorKind::InvalidInput { message } => {
                 write!(f, "Invalid input: {}", message)
             }
@@ -131,6 +139,7 @@ impl CompilerErrorKind for FrontEndErrorKind {
             FrontEndErrorKind::InvalidTableGenericArgument { .. } => "A018",
             FrontEndErrorKind::HopsForNonConstant { .. } => "A019",
             FrontEndErrorKind::HopsForNonInteger { .. } => "A020",
+            FrontEndErrorKind::GlobalFunctionInNonGlobalHop { .. } => "A021",
         }
     }
 
@@ -168,6 +177,9 @@ impl CompilerErrorKind for FrontEndErrorKind {
             }
             FrontEndErrorKind::HopsForNonInteger { .. } => {
                 Some("The bounds of a 'hops_for' loop must be an integer to define the iteration range.")
+            }
+            FrontEndErrorKind::GlobalFunctionInNonGlobalHop { .. } => {
+                Some("Use @global decorator on the hop block to call global functions, or call a non-global function instead.")
             }
             _ => None,
         }
