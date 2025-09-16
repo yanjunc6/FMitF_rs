@@ -64,9 +64,6 @@ pub enum ResolvedType {
         param_types: Vec<ResolvedType>,
         return_type: Box<ResolvedType>,
     },
-    List {
-        element_type: Box<ResolvedType>,
-    },
     Void,
     Unknown,
     /// A type that has not yet been resolved.
@@ -113,9 +110,6 @@ impl Substitution {
             } => ResolvedType::Function {
                 param_types: param_types.iter().map(|t| self.apply(t)).collect(),
                 return_type: Box::new(self.apply(return_type)),
-            },
-            ResolvedType::List { element_type } => ResolvedType::List {
-                element_type: Box::new(self.apply(element_type)),
             },
             _ => ty.clone(),
         }

@@ -94,7 +94,7 @@
 
 @intrinsic function genUUID() -> UUID;
 
-@intrinsic function scan<T>(t: Table<T>) -> List<Row<T>>;
+@intrinsic @global function scan<T>(t: Table<T>) -> List<Row<T>>;
 
 // ===========================================
 // Generated Functions for Row

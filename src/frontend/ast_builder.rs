@@ -480,7 +480,7 @@ impl AstBuilder {
             Rule::hop_block => {
                 let mut p = pair.into_inner();
                 // The grammar pattern is "decorator* ~ "hop" ~ block"
-                // But in practice, we only get the block token
+                let decorators = self.build_decorators(&mut p)?;
                 let body = self.build_block(p.next().ok_or_else(|| {
                     CompilerError::new(
                         FrontEndErrorKind::MissingField("hop body".to_string()),
@@ -488,13 +488,16 @@ impl AstBuilder {
                     )
                 })?)?;
                 Statement::Hop {
-                    decorators: vec![], // No decorators in this case
+                    decorators,
                     body,
                     span: Some(span),
                 }
             }
             Rule::hops_for_loop => {
                 let mut p = pair.into_inner();
+
+                // Parse decorators first
+                let decorators = self.build_decorators(&mut p)?;
 
                 // The keywords "hops", "for", and "to" are consumed by the grammar pattern
                 let var_name = self.build_identifier(p.next().ok_or_else(|| {
@@ -538,7 +541,7 @@ impl AstBuilder {
                 let var = self.program.var_decls.alloc(var_decl);
 
                 Statement::HopsFor {
-                    decorators: vec![], // No decorators since they're consumed by grammar
+                    decorators,
                     var,
                     start,
                     end,
