@@ -18,6 +18,7 @@
 @intrinsic type float;
 @intrinsic type UUID;
 @intrinsic type List<T>;
+@intrinsic type Row<T>; // A row Activity is of type Row<Activity>
 @intrinsic type Table<T>; // A table Activity as var is of type Table<Activity>
 
 // ===========================================
@@ -93,4 +94,17 @@
 
 @intrinsic function genUUID() -> UUID;
 
-@intrinsic function scan<T>(t: Table<T>) -> List<T>;
+@intrinsic function scan<T>(t: Table<T>) -> List<Row<T>>;
+
+// ===========================================
+// Generated Functions for Row
+// ===========================================
+// For a table Activity with schema (id: int, name: string, active: bool), where primary key is id,
+// the following functions are automatically generated:
+// @generated function get_name(t: Row<Activity>) -> string;
+// @generated function get_id(t: Row<Activity>) -> int;
+// @generated function get_active(t: Row<Activity>) -> bool;
+// @generated function set_name(t: Row<Activity>, v: string) -> Row<Activity>
+// @generated function set_id(t: Row<Activity>, v: int) -> Row<Activity>;
+// @generated function set_active(t: Row<Activity>, v: bool) -> Row<Activity>
+// ===========================================

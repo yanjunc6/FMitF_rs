@@ -55,11 +55,6 @@ pub fn parse_and_analyze_program(
 pub mod ast_builder;
 pub mod errors;
 pub mod name_resolver;
-pub mod semantics_analyzer; // Add the new module
+pub mod semantics_analyzer;
 pub mod type_resolver;
-pub mod util;
 pub use errors::FrontEndErrorKind;
-// pub mod type_checker;
-// Complex modules with legacy issues:
-// pub mod constant_checker;
-// pub mod ast_debug;

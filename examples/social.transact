@@ -113,10 +113,10 @@ function readFriends(uid: int) -> List<int> {
         Graph
         .scan()
         .filter(
-            (g: Graph) -> bool { return g.UID1 == uid && g.Counter > 0; }
+            (g: Row<Graph>) -> bool { return g.get_UID1() == uid && g.get_Counter() > 0; }
         )
         .map(
-            (g: Graph) -> int { return g.UID2; }
+            (g: Row<Graph>) -> int { return g.get_UID2(); }
         );
         return uids;
     }
@@ -125,12 +125,12 @@ function readFriends(uid: int) -> List<int> {
 function readActivities(uid: int) -> List<string> {
     hop {
         // Using filter and map pattern
-        var allActivities: List<Activity> = scan(Activity);
-        var userActivities: List<Activity> = filter(allActivities,
-            (a: Activity) -> bool { return a.UID == uid; }
+        var allActivities: List<Row<Activity>> = scan(Activity);
+        var userActivities: List<Row<Activity>> = filter(allActivities,
+            (a: Row<Activity>) -> bool { return a.get_UID() == uid; }
         );
         var logs: List<string> = map(userActivities,
-            (a: Activity) -> string { return a.Log; }
+            (a: Row<Activity>) -> string { return a.get_Log(); }
         );
         return logs;
     }

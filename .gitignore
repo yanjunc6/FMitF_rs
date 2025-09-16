@@ -22,6 +22,7 @@ target/
 
 tmp/
 tmp*
+doc/prpt/
 
 .github/
 .vscode/
