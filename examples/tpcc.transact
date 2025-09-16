@@ -184,23 +184,22 @@ transaction newOrder(
         var qty: int = orderQuantities.get(ol_number);
 
         // Read and update stock
-        var s: Stock = Stock[S_W_ID: sup_w_id, S_I_ID: i_id];
+        var s: Row<Stock> = Stock[S_W_ID: sup_w_id, S_I_ID: i_id];
 
-        if s.S_QUANTITY - qty >= 10 {
-            s.S_QUANTITY = s.S_QUANTITY - qty;
+        if s.get_S_QUANTITY() - qty >= 10 {
+            s.set_S_QUANTITY(s.get_S_QUANTITY() - qty);
         } else {
-            s.S_QUANTITY = s.S_QUANTITY + 91 - qty;
+            s.set_S_QUANTITY(s.get_S_QUANTITY() + 91 - qty);
         }
 
-        // assert s.S_QUANTITY >= 0;
+        // assert s.get_S_QUANTITY() >= 0;
 
         if sup_w_id != w_id {
-            s.S_REMOTE_CNT = s.S_REMOTE_CNT + 1;
+            s.set_S_REMOTE_CNT(s.get_S_REMOTE_CNT() + 1);
         }
 
-        s.S_ORDER_CNT = s.S_ORDER_CNT + 1;
-        s.S_YTD = s.S_YTD + qty;
-
+        s.set_S_ORDER_CNT(s.get_S_ORDER_CNT() + 1);
+        s.set_S_YTD(s.get_S_YTD() + qty);
         Stock[S_W_ID: sup_w_id, S_I_ID: i_id] = s;
     }
 
