@@ -1,227 +1,326 @@
+//! cfg/mod.rs
+//!
+//! Defines the Control Flow Graph (CFG) Intermediate Representation.
+//!
+//! The CFG is a low-level, explicit representation of the program, designed for
+//! optimization and code generation. It is completely decoupled from the AST.
+//!
+//! Key Characteristics:
+//! - **AST Independent**: No references to `ast` nodes or types.
+//! - **Unique Naming**: All functions, tables, and user-defined types have unique names.
+//!   Overloaded functions from the AST are resolved into unique variants (e.g., `foo#1`, `foo#2`).
+//! - **Explicit Operations**: Arithmetic and logical operators are converted into explicit
+//!   `BinaryOp` or `UnaryOp` instructions, with distinct versions for different types (e.g., `AddInt`, `AddFloat`).
+//! - **Structured Control Flow**: Code is organized into `BasicBlock`s. Each block contains a
+//!   linear sequence of `Instruction`s and ends with a `Terminator` that dictates all control flow.
+//! - **Self-Contained Type System**: A comprehensive type system to describe all values,
+//!   including structs, tables, and lists, without referencing the AST.
+//! - **Hoisted Lambdas**: Lambda expressions are transformed into unique, named functions.
+
 use id_arena::{Arena, Id};
+use std::collections::HashMap;
 
-pub use crate::ast::{BinaryOp, ReturnType, Span, TypeName, UnaryOp};
+// ============================================================================
+// --- Core ID Types
+// ============================================================================
 
-mod cfg_builder;
-pub use cfg_builder::CfgBuilder;
-
-mod cfg_api;
-pub use cfg_api::*;
-
-// Core ID types
-pub type TableId = Id<TableInfo>;
-pub type FieldId = Id<FieldInfo>;
-pub type FunctionId = Id<FunctionCfg>;
-pub type HopId = Id<HopCfg>;
+pub type FunctionId = Id<Function>;
 pub type BasicBlockId = Id<BasicBlock>;
-pub type VarId = Id<Variable>;
+pub type VariableId = Id<Variable>;
+pub type TypeId = Id<Type>;
+pub type TableId = Id<Table>;
+pub type FieldId = Id<TableField>;
 
-/// Core CFG Program structure, never clone this structure
-#[derive(Debug)]
-pub struct CfgProgram {
-    // Arena for storing various components
-    pub tables: Arena<TableInfo>, // Never iterate this, use root_tables
-    pub fields: Arena<FieldInfo>, // Never iterate this
-    pub functions: Arena<FunctionCfg>, // Never iterate this, use root_functions
-    pub variables: Arena<Variable>, // Unified: global constants, parameters, locals
-    pub hops: Arena<HopCfg>,      // Never iterate this
-    pub blocks: Arena<BasicBlock>, // Never iterate this
+// ============================================================================
+// --- Program Root
+// ============================================================================
 
-    // Root collections - public for iteration
-    pub root_tables: Vec<TableId>,
-    pub root_functions: Vec<FunctionId>, // Contains both partitions and transactions
-    pub root_variables: Vec<VarId>,      // Global constants/variables
+/// The root structure for the entire CFG.
+/// It owns all the arenas for CFG components and provides maps for name-based lookups.
+#[derive(Debug, Default)]
+pub struct Program {
+    // --- Arenas for all CFG nodes ---
+    pub functions: Arena<Function>,
+    pub basic_blocks: Arena<BasicBlock>,
+    pub variables: Arena<Variable>,
+    pub types: Arena<Type>,
+    pub tables: Arena<Table>,
+    pub table_fields: Arena<TableField>,
+
+    // --- Name-to-ID Mappings for unique items ---
+    /// Maps unique function names to their `FunctionId`.
+    pub functions_map: HashMap<String, FunctionId>,
+    /// Maps unique user-defined type names to their `TypeId`.
+    pub types_map: HashMap<String, TypeId>,
+    /// Maps unique table names to their `TableId`.
+    pub tables_map: HashMap<String, TableId>,
+
+    // --- Root Collections ---
+    /// A collection of all defined tables, for easy iteration.
+    pub all_tables: Vec<TableId>,
+    /// A list of all functions marked as transactions, serving as program entry points.
+    pub all_transactions: Vec<FunctionId>,
 }
 
-impl Default for CfgProgram {
-    fn default() -> Self {
-        Self {
-            tables: Arena::new(),
-            fields: Arena::new(),
-            functions: Arena::new(),
-            variables: Arena::new(),
-            hops: Arena::new(),
-            blocks: Arena::new(),
-            root_tables: Vec::new(),
-            root_functions: Vec::new(),
-            root_variables: Vec::new(),
-        }
-    }
+// ============================================================================
+// --- Type System
+// ============================================================================
+
+/// Represents a resolved type in the CFG.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Type {
+    /// A primitive type like `int`, `float`, or `bool`.
+    Primitive(PrimitiveType),
+    /// A function signature, detailing parameter and return types.
+    Function {
+        param_types: Vec<TypeId>,
+        return_type: TypeId,
+    },
+    /// A list containing elements of a specific type.
+    List(TypeId),
+    /// A user-defined structure with type arguments.
+    Declared {
+        name: String,
+        args: Vec<TypeId>,
+    },
+    /// A type representing a the whole table.
+    Table(TableId),
+    /// A type representing a single row in a table.
+    Row(TableId),
+    /// The `void` type, representing the absence of a value.
+    Void,
 }
 
-/// Function type distinguishing partitions from transactions
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FunctionType {
-    Partition,   // Partition functions (always return int)
-    Transaction, // Regular transaction functions
-    Function,    // Regular function (can return any type)
+/// The set of primitive types supported by the CFG.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PrimitiveType {
+    Int,
+    Float,
+    Bool,
+    String,
 }
 
-/// Function implementation status
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FunctionImplementation {
-    Abstract, // Abstract/virtual function (no implementation)
-    Concrete, // Has actual implementation
-    BuiltIn, // Built-in function (no implementation, special handling)
-}
+// ============================================================================
+// --- Functions and Variables
+// ============================================================================
 
+/// Represents a callable unit in the CFG.
 #[derive(Debug, Clone)]
-pub struct TableInfo {
+pub struct Function {
+    /// The unique name of the function (e.g., "my_func#1", "#lambda_1").
     pub name: String,
-    pub fields: Vec<FieldId>,
-    pub primary_keys: Vec<FieldId>, // Changed from single primary_key to multiple primary_keys
-    pub partition_function: FunctionId, // Partition function for this table
-    pub partition_fields: Vec<FieldId>, // Fields used as partition parameters
+    /// The `TypeId` pointing to the function's signature (`Type::Function`).
+    pub signature: TypeId,
+    /// The kind of the function, distinguishing its origin and purpose.
+    pub kind: FunctionKind,
+    /// The parameters of the function.
+    pub params: Vec<VariableId>,
+    /// A list of boolean-returning functions representing preconditions (`assume`).
+    pub assumptions: Vec<FunctionId>,
+    /// The entry point to the function's control flow graph. `None` for abstract/builtin functions.
+    pub entry_block: Option<BasicBlockId>,
+    /// A list of all basic blocks that constitute this function's body.
+    pub blocks: Vec<BasicBlockId>,
 }
 
-#[derive(Debug, Clone)]
-pub struct FieldInfo {
-    pub name: String,
-    pub ty: TypeName,
-    pub table_id: Option<TableId>, // Can be None during initial CFG construction, set later
-    pub is_primary: bool,
+/// Distinguishes the origin and purpose of a function.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FunctionKind {
+    /// A standard, user-defined function.
+    Function,
+    /// A top-level transaction, serving as an entry point.
+    Transaction,
+    /// A function used to determine data placement for a table.
+    Partition,
+    /// A function generated from a lambda expression.
+    Lambda,
+    /// A function generated from an `assume` clause.
+    Assumption,
+    /// A function generated from a table `invariant`.
+    Invariant,
+    /// A built-in function provided by the language (e.g., for list operations, row get/set).
+    Builtin,
 }
 
+/// Represents a variable in the CFG, which can be a parameter, a local, or a temporary.
 #[derive(Debug, Clone)]
 pub struct Variable {
+    /// The `TypeId` of the value this variable holds.
+    pub var_type: TypeId,
+    /// The kind of the variable.
+    pub kind: VariableKind,
+    /// The name of the variable (e.g., "x", "_t1"). Guaranteed to be present.
     pub name: String,
-    pub ty: TypeName,
-    pub kind: VariableKind,      // all variables are immutable once assigned
-    pub value: Option<Constant>, // For constants with known values (including computed from expressions)
-    pub span: Span,
 }
 
+/// The kind of a variable, indicating its scope and origin.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VariableKind {
-    Global,    // Global constant (from AST constants)
-    Parameter, // Function parameter
-    Local,     // Local variable
-    Temporary, // Temporary variable from expressions
+    Parameter,
+    Local,
+    Temporary,
 }
 
-/// Function CFG, never clone it
-#[derive(Debug)]
-pub struct FunctionCfg {
-    pub name: String,
-    pub function_type: FunctionType, // Whether this is a partition or transaction
-    pub implementation: FunctionImplementation, // Whether this is abstract or concrete
-    pub return_type: ReturnType,
-    pub span: Span,
+// ============================================================================
+// --- Basic Blocks, Instructions, and Terminators
+// ============================================================================
 
-    pub parameters: Vec<VarId>, // Parameters (stored in program.variables)
-    pub local_variables: Vec<VarId>, // Local variables (stored in program.variables)
-
-    pub hops: Vec<HopId>, // Vector of hop IDs (hops stored in program.hops)
-    pub blocks: Vec<BasicBlockId>, // Vector of block IDs (blocks stored in program.blocks)
-
-    pub entry_hop: Option<HopId>, // Set after all hops are allocated, None for abstract functions
-    pub hop_order: Vec<HopId>,    // Empty for abstract functions
-}
-
-/// Hop - execution on a specific node
-#[derive(Debug)]
-pub struct HopCfg {
-    pub function_id: FunctionId, // Reference to the function this hop belongs to
-    pub entry_block: Option<BasicBlockId>, // Set after its basic block is created
-    pub blocks: Vec<BasicBlockId>, // Vector of block IDs (blocks stored in program.blocks)
-    pub span: Span,
-}
-
-/// Basic block with unified control flow representation
-#[derive(Debug)]
-pub struct BasicBlock {
-    pub hop_id: HopId,
-    pub statements: Vec<Statement>,
-    pub span: Span,
-    pub predecessors: Vec<ControlFlowEdge>, // Incoming edges
-    pub successors: Vec<ControlFlowEdge>,   // Outgoing edges
-}
-
-/// Represents a control flow edge between basic blocks
+/// A sequence of instructions that executes linearly, ending with a single control-flow `Terminator`.
 #[derive(Debug, Clone)]
-pub struct ControlFlowEdge {
-    pub from: BasicBlockId,
-    pub to: BasicBlockId,
-    pub edge_type: EdgeType,
+pub struct BasicBlock {
+    /// The ID of the function this block belongs to.
+    pub function_id: FunctionId,
+    /// The list of basic blocks that can jump to this one.
+    pub predecessors: Vec<BasicBlockId>,
+    /// The list of non-control-flow instructions in this block.
+    pub instructions: Vec<Instruction>,
+    /// The control-flow instruction that ends this block.
+    pub terminator: Terminator,
 }
 
-/// Type of control flow edge, unified representation for all control flow
+/// A single, non-control-flow operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EdgeType {
-    /// Unconditional jump (goto, hop exit to next hop)
-    Unconditional,
-    /// Conditional jump taken when condition is true
-    ConditionalTrue { condition: Operand },
-    /// Conditional jump taken when condition is false  
-    ConditionalFalse { condition: Operand },
-    /// Return from function with optional value
-    Return { value: Option<Operand> },
-    /// Abort execution (no successor)
-    Abort,
-    /// Exit current hop and jump to next hop
-    HopExit { next_hop: Option<HopId> },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Statement {
-    Assign {
-        lvalue: LValue,
-        rvalue: RValue,
-        span: Span,
-    },
-}
-
-/// Left-hand side values for assignments - unified representation
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum LValue {
-    /// Variable assignment: var = value
-    Variable { var: VarId },
-    /// Array element assignment: array[index] = value  
-    ArrayElement { array: VarId, index: Operand },
-    /// Table field assignment: table[pk_values].field = value
-    TableField {
-        table: TableId,
-        pk_fields: Vec<FieldId>,
-        pk_values: Vec<Operand>,
-        field: FieldId,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum RValue {
-    Use(Operand),
-    TableAccess {
-        table: TableId,
-        pk_fields: Vec<FieldId>,
-        pk_values: Vec<Operand>,
-        field: FieldId,
-    },
-    ArrayAccess {
-        array: Operand,
-        index: Operand,
-    },
-    UnaryOp {
-        op: UnaryOp,
-        operand: Operand,
-    },
+pub enum Instruction {
+    /// A binary operation (e.g., `a + b`).
     BinaryOp {
+        dest: VariableId,
         op: BinaryOp,
         left: Operand,
         right: Operand,
     },
+    /// A unary operation (e.g., `-x`).
+    UnaryOp {
+        dest: VariableId,
+        op: UnaryOp,
+        operand: Operand,
+    },
+    /// A function call. All non-primitive operations are handled by this.
+    Call {
+        dest: Option<VariableId>,
+        func: FunctionId,
+        args: Vec<Operand>,
+    },
+    /// Reads a field from a table row identified by its primary key(s).
+    TableGet {
+        dest: VariableId,
+        table: TableId,
+        keys: Vec<Operand>,     // ordered by primary key fields
+        field: Option<FieldId>, // None means get the whole row
+    },
+    /// Writes to a field in a table row identified by its primary key(s).
+    TableSet {
+        table: TableId,
+        keys: Vec<Operand>,     // ordered by primary key fields
+        field: Option<FieldId>, // None means set the whole row
+        value: Operand,
+    },
+    /// Halts execution if the condition is false.
+    Assert { condition: Operand, message: String },
 }
 
+/// A control-flow instruction that terminates a `BasicBlock`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Terminator {
+    /// Unconditionally jump to another basic block.
+    Jump(BasicBlockId),
+    /// Conditionally branch to one of two basic blocks based on an operand.
+    Branch {
+        condition: Operand,
+        if_true: BasicBlockId,
+        if_false: BasicBlockId,
+    },
+    /// Return from the current function, optionally with a value.
+    Return(Option<Operand>),
+    /// Exit the current execution "hop" and jump to the entry block of the next one.
+    HopExit { next_block: BasicBlockId },
+    /// Abort the entire transaction.
+    Abort,
+}
+
+// ============================================================================
+// --- Operations, Operands, and Constants
+// ============================================================================
+
+/// An operand to an instruction, which can be a variable or a compile-time constant.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Operand {
-    Var(VarId),
-    Const(Constant),
+    Variable(VariableId),
+    Constant(ConstantValue),
 }
 
+/// A compile-time constant value.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Constant {
+pub enum ConstantValue {
     Int(i64),
     Float(ordered_float::OrderedFloat<f64>),
     Bool(bool),
     String(String),
-    List(Vec<Constant>), // Support for list literals
+    Void,
+}
+
+/// Explicit binary operators, distinguishing between integer and float versions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BinaryOp {
+    AddInt,
+    SubInt,
+    MulInt,
+    DivInt,
+    ModInt,
+    AddFloat,
+    SubFloat,
+    MulFloat,
+    DivFloat,
+    EqInt,
+    EqFloat,
+    Eq,
+    NeqInt,
+    NeqFloat,
+    Neq,
+    LtInt,
+    LeqInt,
+    GtInt,
+    GeqInt,
+    LtFloat,
+    LeqFloat,
+    GtFloat,
+    GeqFloat,
+    And,
+    Or,
+}
+
+/// Explicit unary operators.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnaryOp {
+    NegInt,
+    NegFloat,
+    NotBool,
+}
+
+// ============================================================================
+// --- Tables and Fields
+// ============================================================================
+
+/// Represents a table definition in the CFG.
+#[derive(Debug, Clone)]
+pub struct Table {
+    /// The unique name of the table.
+    pub name: String,
+    /// An ordered list of fields that constitute the primary key.
+    pub primary_key_fields: Vec<FieldId>,
+    /// A list of all non-primary-key fields in the table.
+    pub other_fields: Vec<FieldId>,
+    /// A function that determines the physical placement of a row.
+    pub node_partition: FunctionId,
+    /// A list of boolean-returning functions representing data integrity constraints.
+    pub invariants: Vec<FunctionId>,
+}
+
+/// Represents a single field (column) within a table.
+#[derive(Debug, Clone)]
+pub struct TableField {
+    pub name: String,
+    /// The `TypeId` of the data stored in this field.
+    pub field_type: TypeId,
+    /// The `TableId` of the table this field belongs to.
+    pub table_id: TableId,
 }
