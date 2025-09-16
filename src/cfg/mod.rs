@@ -54,6 +54,7 @@ impl Default for CfgProgram {
 pub enum FunctionType {
     Partition,   // Partition functions (always return int)
     Transaction, // Regular transaction functions
+    Function,    // Regular function (can return any type)
 }
 
 /// Function implementation status
@@ -61,6 +62,7 @@ pub enum FunctionType {
 pub enum FunctionImplementation {
     Abstract, // Abstract/virtual function (no implementation)
     Concrete, // Has actual implementation
+    BuiltIn, // Built-in function (no implementation, special handling)
 }
 
 #[derive(Debug, Clone)]
@@ -221,5 +223,5 @@ pub enum Constant {
     Float(ordered_float::OrderedFloat<f64>),
     Bool(bool),
     String(String),
-    Array(Vec<Constant>), // Support for array literals
+    List(Vec<Constant>), // Support for list literals
 }

@@ -4,7 +4,8 @@
 
 use super::errors::FrontEndErrorKind;
 use crate::ast::common::IdentifierResolution;
-use crate::ast::visit::{walk_callable_decl, walk_stmt, walk_table_decl, Visitor};
+use crate::ast::item::ConstId;
+use crate::ast::visit::{walk_callable_decl, walk_const_decl, walk_stmt, walk_table_decl, Visitor};
 use crate::ast::*;
 use crate::util::{CompilerError, Span};
 
@@ -36,7 +37,7 @@ impl<'a> SemanticAnalyzer<'a> {
         if self.errors.is_empty() {
             Ok(())
         } else {
-            Err(self.errors.clone())
+            Err(std::mem::take(&mut self.errors))
         }
     }
 
@@ -45,23 +46,74 @@ impl<'a> SemanticAnalyzer<'a> {
         self.errors.push(CompilerError::new(kind, span));
     }
 
+    /// Gets the span from a statement.
+    fn get_statement_span(&self, stmt: &Statement) -> Option<Span> {
+        match stmt {
+            Statement::VarDecl(_) => None, // VarDecl span is in the arena
+            Statement::If { span, .. } => *span,
+            Statement::For { span, .. } => *span,
+            Statement::Return { span, .. } => *span,
+            Statement::Assert { span, .. } => *span,
+            Statement::Hop { span, .. } => *span,
+            Statement::HopsFor { span, .. } => *span,
+            Statement::Expression { span, .. } => *span,
+            Statement::Block(_) => None, // Block span is in the arena
+        }
+    }
+
+    /// Gets the human-readable name of a statement type.
+    fn get_statement_type_name(&self, stmt: &Statement) -> &str {
+        match stmt {
+            Statement::VarDecl(_) => "Variable Declaration",
+            Statement::If { .. } => "If Statement",
+            Statement::For { .. } => "For Loop",
+            Statement::Return { .. } => "Return Statement",
+            Statement::Assert { .. } => "Assert Statement",
+            Statement::Hop { .. } => "Hop Block",
+            Statement::HopsFor { .. } => "Hops-For Loop",
+            Statement::Expression { .. } => "Expression Statement",
+            Statement::Block(_) => "Block Statement",
+        }
+    }
+
+    /// Gets the span from an expression.
+    fn get_expression_span(&self, expr: &Expression) -> Option<Span> {
+        match expr {
+            Expression::Literal { span, .. } => *span,
+            Expression::Identifier { span, .. } => *span,
+            Expression::Binary { span, .. } => *span,
+            Expression::Unary { span, .. } => *span,
+            Expression::Assignment { span, .. } => *span,
+            Expression::Call { span, .. } => *span,
+            Expression::MemberAccess { span, .. } => *span,
+            Expression::TableRowAccess { span, .. } => *span,
+            Expression::Grouped { span, .. } => *span,
+            Expression::Lambda { span, .. } => *span,
+        }
+    }
+
     /// Checks if an expression is a compile-time constant integer.
+    /// Only allows: 1) Literal integers, 2) Global const variables that are integers
+    /// Operations like 2 + C are NOT allowed.
     fn is_const_integer(&self, expr_id: ExprId) -> bool {
         let expr = &self.program.expressions[expr_id];
         match expr {
+            // Allow literal integers: `2`, `42`, etc.
             Expression::Literal { value, .. } => matches!(value, Literal::Integer(_)),
+
+            // Allow const variables that are integers, but only if they are global consts
             Expression::Identifier {
                 resolved_declarations,
                 ..
             } => {
                 resolved_declarations.iter().any(|res| {
                     if let IdentifierResolution::Const(const_id) = res {
-                        // Further check if the const is of integer type
+                        // Check if the const is of integer type
                         let const_decl = &self.program.const_decls[*const_id];
                         if let Some(ResolvedType::Primitive { type_id, .. }) =
                             &const_decl.resolved_type
                         {
-                            // Assuming 'int' is a known primitive type name
+                            // Verify it's an 'int' type
                             self.program.type_decls[*type_id].name.name == "int"
                         } else {
                             false
@@ -71,6 +123,9 @@ impl<'a> SemanticAnalyzer<'a> {
                     }
                 })
             }
+
+            // Reject all operations, function calls, etc.
+            // This includes Binary, Unary, Call, etc.
             _ => false,
         }
     }
@@ -98,10 +153,12 @@ impl<'ast> Visitor<'ast, (), ()> for SemanticAnalyzer<'ast> {
                         matches!(statement, Statement::Hop { .. } | Statement::HopsFor { .. });
 
                     if !is_allowed {
-                        if let Some(span) = statement.span {
+                        if let Some(span) = self.get_statement_span(statement) {
                             self.add_error(
                                 FrontEndErrorKind::InvalidTransactionStatement {
-                                    statement_type: statement.name().to_string(),
+                                    statement_type: self
+                                        .get_statement_type_name(statement)
+                                        .to_string(),
                                 },
                                 span,
                             );
@@ -148,13 +205,10 @@ impl<'ast> Visitor<'ast, (), ()> for SemanticAnalyzer<'ast> {
         let stmt = &prog.statements[id];
 
         // Rule 5: `hops_for` start and end must be constant integers.
-        if let Statement::HopsFor {
-            start, end, span, ..
-        } = stmt
-        {
+        if let Statement::HopsFor { start, end, .. } = stmt {
             // Check start expression
             if !self.is_const_integer(*start) {
-                if let Some(span) = prog.expressions[*start].span {
+                if let Some(span) = self.get_expression_span(&prog.expressions[*start]) {
                     self.add_error(
                         FrontEndErrorKind::HopsForNonConstant {
                             context: "start expression".to_string(),
@@ -166,7 +220,7 @@ impl<'ast> Visitor<'ast, (), ()> for SemanticAnalyzer<'ast> {
 
             // Check end expression
             if !self.is_const_integer(*end) {
-                if let Some(span) = prog.expressions[*end].span {
+                if let Some(span) = self.get_expression_span(&prog.expressions[*end]) {
                     self.add_error(
                         FrontEndErrorKind::HopsForNonConstant {
                             context: "end expression".to_string(),
@@ -204,35 +258,29 @@ impl<'ast> Visitor<'ast, (), ()> for SemanticAnalyzer<'ast> {
         }
         Ok(())
     }
-}
 
-// Helper to get a human-readable name for a Statement variant.
-impl Statement {
-    pub fn name(&self) -> &str {
-        match self {
-            Statement::VarDecl(_) => "Variable Declaration",
-            Statement::If { .. } => "If Statement",
-            Statement::For { .. } => "For Loop",
-            Statement::Return { .. } => "Return Statement",
-            Statement::Assert { .. } => "Assert Statement",
-            Statement::Hop { .. } => "Hop Block",
-            Statement::HopsFor { .. } => "Hops-For Loop",
-            Statement::Expression { .. } => "Expression Statement",
-            Statement::Block(_) => "Block Statement",
-        }
-    }
+    /// Visit a const declaration to validate const constraints.
+    fn visit_const_decl(
+        &mut self,
+        prog: &'ast Program,
+        _id: ConstId,
+        decl: &'ast crate::ast::item::ConstDecl,
+    ) -> Result<(), ()> {
+        // Rule: Const declarations must only contain literal values
+        let value_expr = &prog.expressions[decl.value];
 
-    pub fn span(&self) -> Option<Span> {
-        match self {
-            Statement::VarDecl(_) => None, // VarDecl span is in the arena
-            Statement::If { span, .. } => *span,
-            Statement::For { span, .. } => *span,
-            Statement::Return { span, .. } => *span,
-            Statement::Assert { span, .. } => *span,
-            Statement::Hop { span, .. } => *span,
-            Statement::HopsFor { span, .. } => *span,
-            Statement::Expression { span, .. } => *span,
-            Statement::Block(_) => None, // Block span is in the arena
+        if !matches!(value_expr, Expression::Literal { .. }) {
+            if let Some(span) = self.get_expression_span(value_expr) {
+                self.add_error(
+                    FrontEndErrorKind::InvalidInput {
+                        message: "Const declarations must only contain literal values. Operations on constants are not allowed.".to_string(),
+                    },
+                    span,
+                );
+            }
         }
+
+        // Continue with default walking behavior
+        walk_const_decl(self, prog, _id, decl)
     }
 }

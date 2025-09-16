@@ -1,5 +1,6 @@
 use crate::ast::common::IdentifierResolution;
 use crate::ast::expr::{Expression, KeyValue};
+use crate::ast::item::ConstId;
 use crate::ast::item::{Item, TableElement};
 use crate::ast::stmt::{ForInit, Statement};
 use crate::ast::visit_mut::{self, VisitorMut};
@@ -331,6 +332,15 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
             |name| name.span,
         );
 
+        Ok(())
+    }
+
+    fn visit_const_decl(&mut self, prog: &mut Program, id: ConstId) -> Result<(), ()> {
+        // First, visit the value expression to resolve its identifiers
+        let value_expr_id = prog.const_decls[id].value;
+        self.visit_expr(prog, value_expr_id)?;
+
+        // Note: The const is already defined in the symbol table during the first pass
         Ok(())
     }
 
@@ -711,26 +721,53 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
                         {
                             // Look for this identifier as a field in the current table
                             let table = &prog.table_decls[id];
-                            let mut found_field = false;
+                            let mut found_field = None;
 
                             for element in &table.elements {
                                 if let TableElement::Field(field) = element {
                                     if field.name.name == arg_name.name {
-                                        found_field = true;
+                                        found_field = Some(field.clone());
                                         break;
                                     }
                                 }
                             }
 
-                            if !found_field {
+                            if found_field.is_some() {
+                                // Set the resolved table field information
+                                if let Expression::Identifier {
+                                    resolved_declarations,
+                                    ..
+                                } = &mut prog.expressions[*arg_id]
+                                {
+                                    // For table field references, we create a special resolution
+                                    // that indicates this is a table field, not a regular identifier
+                                    resolved_declarations.clear();
+                                    // We use IdentifierResolution::Table to indicate table context,
+                                    // though ideally we'd have a TableField variant
+                                    resolved_declarations.push(IdentifierResolution::Table(id));
+                                }
+                            } else {
                                 // This identifier is not a field in this table
-                                let err = FrontEndErrorKind::UndefinedIdentifier {
-                                    name: arg_name.name.clone(),
-                                };
-                                let default_span = arg_name
-                                    .span
-                                    .unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
-                                self.errors.push(CompilerError::new(err, default_span));
+                                // Try regular identifier resolution as fallback
+                                let resolutions = self.symbols.resolve(&arg_name.name);
+                                if resolutions.is_empty() {
+                                    let err = FrontEndErrorKind::UndefinedIdentifier {
+                                        name: arg_name.name.clone(),
+                                    };
+                                    let default_span = arg_name.span.unwrap_or_else(|| {
+                                        crate::util::Span::new(0, 0, "<unknown>")
+                                    });
+                                    self.errors.push(CompilerError::new(err, default_span));
+                                } else {
+                                    // Set the regular resolutions
+                                    if let Expression::Identifier {
+                                        resolved_declarations,
+                                        ..
+                                    } = &mut prog.expressions[*arg_id]
+                                    {
+                                        *resolved_declarations = resolutions;
+                                    }
+                                }
                             }
                         } else {
                             // For other expression types, use regular resolution

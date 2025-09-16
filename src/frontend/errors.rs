@@ -163,7 +163,7 @@ impl CompilerErrorKind for FrontEndErrorKind {
             FrontEndErrorKind::InvalidTableGenericArgument { .. } => {
                 Some("The generic argument for a Table type, like in `Table<MyTable>`, must itself be a table.")
             }
-            FrontEndErrorKind::HopsForNonConstant { context } => {
+            FrontEndErrorKind::HopsForNonConstant { .. } => {
                 Some("The expression in a 'hops_for' loop is evaluated at compile-time to determine the loop bounds.")
             }
             FrontEndErrorKind::HopsForNonInteger { .. } => {
