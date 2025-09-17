@@ -108,6 +108,8 @@ pub struct Function {
     pub name: String,
     /// The `TypeId` pointing to the function's signature (`Type::Function`).
     pub signature: TypeId,
+    /// The decorators applied to the function (e.g., `global`).
+    pub decorators: Vec<Decorator>,
     /// The kind of the function, distinguishing its origin and purpose.
     pub kind: FunctionKind,
     /// The parameters of the function.
@@ -137,6 +139,12 @@ pub enum FunctionKind {
     Invariant,
     /// A built-in function provided by the language (e.g., for list operations, row get/set).
     Builtin,
+}
+
+/// Decorators that can be applied to functions to tag their behavior.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum Decorator {
+    Global,
 }
 
 /// Represents a variable in the CFG, which can be a parameter, a local, or a temporary.
