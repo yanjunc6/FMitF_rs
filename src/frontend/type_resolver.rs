@@ -206,6 +206,20 @@ impl TypeResolver {
             self.visit_const_decl(program, id).unwrap();
         }
 
+        // Also resolve table declarations to handle field types
+        let table_ids: Vec<TableId> = program
+            .declarations
+            .iter()
+            .filter_map(|item| match item {
+                Item::Table(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+
+        for id in table_ids {
+            self.visit_table_decl(program, id).unwrap();
+        }
+
         if !self.errors.is_empty() {
             return Err(std::mem::take(&mut self.errors));
         }
@@ -257,48 +271,35 @@ impl TypeResolver {
         let ast_type = &prog.types[id];
         let resolved_type = match ast_type {
             AstType::Named { name, .. } => {
-                // In a real compiler, this would look up the type declaration.
-                // Here, we'll just handle primitives by name as a simplification.
-                match name.name.as_str() {
-                    "int" | "float" | "string" | "bool" => {
-                        // For primitive types, find the actual type declaration and create a Primitive type
-                        if let Some(primitive_type_id) = self.find_primitive_type(prog, &name.name)
-                        {
-                            ResolvedType::Primitive {
-                                type_id: primitive_type_id,
-                                type_args: vec![],
-                                bound_vars: vec![],
-                            }
-                        } else {
-                            // Fallback to type variable if primitive not found
-                            self.new_type_var()
-                        }
+                // First, try to find a primitive/intrinsic type declaration
+                if let Some(primitive_type_id) = self.find_primitive_type(prog, &name.name) {
+                    ResolvedType::Primitive {
+                        type_id: primitive_type_id,
+                        type_args: vec![],
+                        bound_vars: vec![],
                     }
-                    _ => {
-                        // Check if this is a table name
-                        if let Some(table_id) = self.find_table_by_name(prog, &name.name) {
-                            ResolvedType::Table { table_id }
+                }
+                // Check if this is a table name
+                else if let Some(table_id) = self.find_table_by_name(prog, &name.name) {
+                    ResolvedType::Table { table_id }
+                }
+                // Check if this is a generic parameter name
+                else if let Some(generic_param_id) =
+                    self.find_generic_param_in_scope(prog, &name.name)
+                {
+                    if let Some(&type_var_id) = self.generic_bindings.get(&generic_param_id) {
+                        ResolvedType::TypeVariable {
+                            var_id: type_var_id,
+                            name: name.name.clone(),
+                            bound_to: Some(generic_param_id),
                         }
-                        // Check if this is a generic parameter name
-                        else if let Some(generic_param_id) =
-                            self.find_generic_param_in_scope(prog, &name.name)
-                        {
-                            if let Some(&type_var_id) = self.generic_bindings.get(&generic_param_id)
-                            {
-                                ResolvedType::TypeVariable {
-                                    var_id: type_var_id,
-                                    name: name.name.clone(),
-                                    bound_to: Some(generic_param_id),
-                                }
-                            } else {
-                                // Generic parameter not in current scope, create unbound type variable
-                                self.new_type_var()
-                            }
-                        } else {
-                            // For user-defined types or unknown identifiers
-                            self.new_type_var()
-                        }
+                    } else {
+                        // Generic parameter not in current scope, create unbound type variable
+                        self.new_type_var()
                     }
+                } else {
+                    // For user-defined types or unknown identifiers
+                    self.new_type_var()
                 }
             }
             AstType::Generic { base, args, .. } => {
@@ -521,71 +522,44 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
         Ok(())
     }
 
+    fn visit_table_decl(&mut self, prog: &mut Program, id: TableId) -> Result<(), ()> {
+        // Resolve types for all table fields
+        for element in &prog.table_decls[id].elements.clone() {
+            if let TableElement::Field(table_field) = element {
+                // Resolve the field type
+                let resolved_type = self.resolve_ast_type(prog, table_field.ty);
+
+                // Find and update the field in the table declaration
+                for element_mut in &mut prog.table_decls[id].elements {
+                    if let TableElement::Field(field_mut) = element_mut {
+                        if field_mut.name.name == table_field.name.name {
+                            field_mut.resolved_type = Some(resolved_type.clone());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn visit_expr(&mut self, prog: &mut Program, id: ExprId) -> Result<(), ()> {
         let mut expr = prog.expressions[id].clone();
         let span = expr.span().unwrap_or_else(|| Span::new(0, 0, "unknown"));
 
-        let new_type = match &mut expr {
+        // Resolve the type of this expression based on its kind
+        let _resolved_type = match &mut expr {
             Expression::Literal {
                 value,
                 resolved_type,
                 ..
-            } => {
-                let literal_type = if let Literal::List(items) = value {
-                    let element_type = self.new_type_var();
-                    for item_id in items {
-                        self.visit_expr(prog, *item_id)?;
-                        let item_expr = &prog.expressions[*item_id];
-                        if let Some(item_type) = item_expr.resolved_type() {
-                            self.unify(&element_type, item_type, span);
-                        }
-                    }
-                    // For now, treat list literals as type variables
-                    // In a full implementation, this would be a List<T> primitive type
-                    self.new_type_var()
-                } else {
-                    self.resolve_literal_type(prog, value)
-                };
-                *resolved_type = Some(literal_type.clone());
-                literal_type
-            }
+            } => self.resolve_literal_expression(prog, value, resolved_type, span),
             Expression::Identifier {
                 resolved_declarations,
                 resolved_type,
                 ..
-            } => {
-                if resolved_declarations.len() == 1 {
-                    let decl = resolved_declarations[0];
-                    let ty = match decl {
-                        IdentifierResolution::Var(id) => prog.var_decls[id].resolved_type.clone(),
-                        IdentifierResolution::Param(id) => prog.params[id].resolved_type.clone(),
-                        IdentifierResolution::Const(id) => {
-                            prog.const_decls[id].resolved_type.clone()
-                        }
-                        IdentifierResolution::Table(table_id) => {
-                            // Table names have type Table<TableName> = t7<tab_id>
-                            // Find the Table primitive type (should be t7)
-                            if let Some(table_type_id) = self.find_primitive_type(prog, "Table") {
-                                Some(ResolvedType::Primitive {
-                                    type_id: table_type_id,
-                                    type_args: vec![ResolvedType::Table { table_id }],
-                                    bound_vars: vec![],
-                                })
-                            } else {
-                                Some(self.new_type_var())
-                            }
-                        }
-                        _ => Some(self.new_type_var()),
-                    };
-                    let ty = ty.unwrap_or_else(|| self.new_type_var());
-                    *resolved_type = Some(ty.clone());
-                    ty
-                } else {
-                    let ty = self.new_type_var();
-                    *resolved_type = Some(ty.clone());
-                    ty
-                }
-            }
+            } => self.resolve_identifier_expression(prog, resolved_declarations, resolved_type),
             Expression::Binary {
                 left,
                 right,
@@ -593,67 +567,21 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
                 resolved_callables,
                 resolved_type,
                 ..
-            } => {
-                self.visit_expr(prog, *left)?;
-                self.visit_expr(prog, *right)?;
-
-                let left_type = prog.expressions[*left]
-                    .resolved_type()
-                    .cloned()
-                    .unwrap_or(ResolvedType::Unknown);
-                let right_type = prog.expressions[*right]
-                    .resolved_type()
-                    .cloned()
-                    .unwrap_or(ResolvedType::Unknown);
-
-                let operand_types = vec![left_type, right_type];
-                match self.resolve_operator_overloads(
-                    prog,
-                    &op.name,
-                    &operand_types,
-                    resolved_callables,
-                    span,
-                ) {
-                    Ok(return_type) => {
-                        *resolved_type = Some(return_type.clone());
-                        return_type
-                    }
-                    Err(fallback_type) => fallback_type,
-                }
-            }
+            } => self.resolve_binary_expression(
+                prog,
+                *left,
+                *right,
+                op,
+                resolved_callables,
+                resolved_type,
+                span,
+            )?,
             Expression::Call {
                 callee,
                 args,
                 resolved_type,
                 ..
-            } => {
-                self.visit_expr(prog, *callee)?;
-                let callee_type = prog.expressions[*callee]
-                    .resolved_type()
-                    .cloned()
-                    .unwrap_or_else(|| self.new_type_var());
-
-                let mut arg_types = Vec::new();
-                for arg_id in args.iter() {
-                    self.visit_expr(prog, *arg_id)?;
-                    let arg_type = prog.expressions[*arg_id]
-                        .resolved_type()
-                        .cloned()
-                        .unwrap_or_else(|| self.new_type_var());
-                    arg_types.push(arg_type);
-                }
-
-                let return_type = self.new_type_var();
-                let func_type = ResolvedType::Function {
-                    param_types: arg_types,
-                    return_type: Box::new(return_type.clone()),
-                    bound_vars: vec![],
-                };
-
-                self.unify(&callee_type, &func_type, span);
-                *resolved_type = Some(return_type.clone());
-                return_type
-            }
+            } => self.resolve_call_expression(prog, *callee, args, resolved_type, span)?,
             Expression::MemberAccess {
                 object,
                 member,
@@ -661,152 +589,411 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
                 resolved_field,
                 resolved_type,
                 ..
-            } => {
-                // First resolve the object type
-                self.visit_expr(prog, *object)?;
-                let object_type = prog.expressions[*object]
-                    .resolved_type()
-                    .cloned()
-                    .unwrap_or_else(|| self.new_type_var());
-
-                // Try to resolve based on the object type
-                let mut resolved_field_type = None;
-                if let ResolvedType::Table { table_id } = &object_type {
-                    // Get the field type from the table declaration
-                    if let Some(table_decl) = prog.table_decls.get(*table_id) {
-                        for element in &table_decl.elements {
-                            if let TableElement::Field(table_field) = element {
-                                if table_field.name.name == member.name {
-                                    let field_type = self.resolve_ast_type(prog, table_field.ty);
-                                    *resolved_type = Some(field_type.clone());
-                                    *resolved_table = Some(*table_id);
-                                    *resolved_field = Some(table_field.clone());
-                                    resolved_field_type = Some(field_type);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if let Some(field_type) = resolved_field_type {
-                    field_type
-                } else {
-                    // If we know the table and field from name resolution, use that
-                    if let (Some(table_id), Some(_field)) = (resolved_table, resolved_field) {
-                        // Get the field type from the table declaration
-                        if let Some(table_decl) = prog.table_decls.get(*table_id) {
-                            for element in &table_decl.elements {
-                                if let TableElement::Field(table_field) = element {
-                                    if table_field.name.name == member.name {
-                                        let field_type =
-                                            self.resolve_ast_type(prog, table_field.ty);
-                                        *resolved_type = Some(field_type.clone());
-                                        resolved_field_type = Some(field_type);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if let Some(field_type) = resolved_field_type {
-                        field_type
-                    } else {
-                        // Fallback: create a type variable
-                        let ty = self.new_type_var();
-                        *resolved_type = Some(ty.clone());
-                        ty
-                    }
-                }
-            }
+            } => self.resolve_member_access_expression(
+                prog,
+                *object,
+                member,
+                resolved_table,
+                resolved_field,
+                resolved_type,
+            )?,
             Expression::Assignment {
                 lhs,
                 rhs,
                 resolved_type,
                 ..
-            } => {
-                // Visit both sides
-                self.visit_expr(prog, *lhs)?;
-                self.visit_expr(prog, *rhs)?;
-
-                // Assignment returns the type of the RHS
-                let rhs_type = prog.expressions[*rhs]
-                    .resolved_type()
-                    .cloned()
-                    .unwrap_or_else(|| self.new_type_var());
-
-                *resolved_type = Some(rhs_type.clone());
-                rhs_type
-            }
+            } => self.resolve_assignment_expression(prog, *lhs, *rhs, resolved_type)?,
             Expression::Unary {
-                expr,
+                expr: inner_expr,
                 op,
                 resolved_callables,
                 resolved_type,
                 ..
-            } => {
-                self.visit_expr(prog, *expr)?;
-
-                let operand_type = prog.expressions[*expr]
-                    .resolved_type()
-                    .cloned()
-                    .unwrap_or(ResolvedType::Unknown);
-
-                let operand_types = vec![operand_type];
-                match self.resolve_operator_overloads(
-                    prog,
-                    &op.name,
-                    &operand_types,
-                    resolved_callables,
-                    prog.expressions[*expr]
-                        .span()
-                        .unwrap_or_else(|| Span::new(0, 0, "unknown")),
-                ) {
-                    Ok(return_type) => {
-                        *resolved_type = Some(return_type.clone());
-                        return_type
-                    }
-                    Err(fallback_type) => fallback_type,
-                }
-            }
+            } => self.resolve_unary_expression(
+                prog,
+                *inner_expr,
+                op,
+                resolved_callables,
+                resolved_type,
+                span,
+            )?,
             Expression::TableRowAccess {
                 key_values,
                 resolved_table,
                 resolved_type,
                 ..
-            } => {
-                // Visit all key expressions first
-                for key_value in key_values {
-                    self.visit_expr(prog, key_value.value)?;
+            } => self.resolve_table_row_access_expression(
+                prog,
+                key_values,
+                resolved_table,
+                resolved_type,
+            )?,
+            Expression::Lambda {
+                params,
+                body,
+                resolved_type,
+                ..
+            } => self.resolve_lambda_expression(prog, params, *body, resolved_type)?,
+            _ => {
+                // Handle other expression types with a type variable
+                let ty = self.new_type_var();
+                match &mut expr {
+                    Expression::Literal { resolved_type, .. } => *resolved_type = Some(ty.clone()),
+                    Expression::Identifier { resolved_type, .. } => {
+                        *resolved_type = Some(ty.clone())
+                    }
+                    Expression::Binary { resolved_type, .. } => *resolved_type = Some(ty.clone()),
+                    Expression::Unary { resolved_type, .. } => *resolved_type = Some(ty.clone()),
+                    Expression::Assignment { resolved_type, .. } => {
+                        *resolved_type = Some(ty.clone())
+                    }
+                    Expression::Call { resolved_type, .. } => *resolved_type = Some(ty.clone()),
+                    Expression::MemberAccess { resolved_type, .. } => {
+                        *resolved_type = Some(ty.clone())
+                    }
+                    Expression::TableRowAccess { resolved_type, .. } => {
+                        *resolved_type = Some(ty.clone())
+                    }
+                    Expression::Grouped { resolved_type, .. } => *resolved_type = Some(ty.clone()),
+                    Expression::Lambda { resolved_type, .. } => *resolved_type = Some(ty.clone()),
                 }
+                ty
+            }
+        };
 
-                // If we know which table this accesses, create the table type
-                if let Some(table_id) = resolved_table {
-                    let table_type = ResolvedType::Table {
-                        table_id: *table_id,
-                    };
-                    *resolved_type = Some(table_type.clone());
-                    table_type
-                } else {
-                    // Fallback: create a type variable
-                    let ty = self.new_type_var();
-                    *resolved_type = Some(ty.clone());
-                    ty
+        // Update the expression in the program
+        prog.expressions[id] = expr;
+        Ok(())
+    }
+}
+
+impl TypeResolver {
+    fn resolve_literal_expression(
+        &mut self,
+        prog: &mut Program,
+        value: &Literal,
+        resolved_type: &mut Option<ResolvedType>,
+        span: Span,
+    ) -> ResolvedType {
+        let literal_type = if let Literal::List(items) = value {
+            let element_type = self.new_type_var();
+            for item_id in items {
+                if let Err(_) = self.visit_expr(prog, *item_id) {
+                    continue;
+                }
+                let item_expr = &prog.expressions[*item_id];
+                if let Some(item_type) = item_expr.resolved_type() {
+                    self.unify(&element_type, item_type, span);
                 }
             }
-            _ => self.new_type_var(),
+            // For now, treat list literals as type variables
+            // In a full implementation, this would be a List<T> primitive type
+            self.new_type_var()
+        } else {
+            self.resolve_literal_type(prog, value)
         };
-        // Update the entire expression to preserve resolved_callables changes
-        prog.expressions[id] = expr;
+        *resolved_type = Some(literal_type.clone());
+        literal_type
+    }
 
-        Ok(())
+    fn resolve_identifier_expression(
+        &mut self,
+        prog: &Program,
+        resolved_declarations: &[IdentifierResolution],
+        resolved_type: &mut Option<ResolvedType>,
+    ) -> ResolvedType {
+        if resolved_declarations.len() == 1 {
+            let decl = resolved_declarations[0];
+            let ty = match decl {
+                IdentifierResolution::Var(id) => prog.var_decls[id].resolved_type.clone(),
+                IdentifierResolution::Param(id) => prog.params[id].resolved_type.clone(),
+                IdentifierResolution::Const(id) => prog.const_decls[id].resolved_type.clone(),
+                IdentifierResolution::Function(function_id) => {
+                    // Functions have function types based on their signatures
+                    let function = &prog.functions[function_id];
+
+                    // Get parameter types
+                    let param_types: Vec<ResolvedType> = function
+                        .params
+                        .iter()
+                        .map(|&param_id| {
+                            prog.params[param_id]
+                                .resolved_type
+                                .clone()
+                                .unwrap_or_else(|| self.new_type_var())
+                        })
+                        .collect();
+
+                    // Get return type
+                    let return_type = function
+                        .resolved_return_type
+                        .clone()
+                        .unwrap_or_else(|| ResolvedType::Void);
+
+                    Some(ResolvedType::Function {
+                        param_types,
+                        return_type: Box::new(return_type),
+                        bound_vars: vec![],
+                    })
+                }
+                IdentifierResolution::Table(table_id) => {
+                    // Table names have type Table<TableName>
+                    if let Some(table_type_id) = self.find_primitive_type(prog, "Table") {
+                        Some(ResolvedType::Primitive {
+                            type_id: table_type_id,
+                            type_args: vec![ResolvedType::Table { table_id }],
+                            bound_vars: vec![],
+                        })
+                    } else {
+                        Some(self.new_type_var())
+                    }
+                }
+                _ => Some(self.new_type_var()),
+            };
+            let ty = ty.unwrap_or_else(|| self.new_type_var());
+            *resolved_type = Some(ty.clone());
+            ty
+        } else {
+            let ty = self.new_type_var();
+            *resolved_type = Some(ty.clone());
+            ty
+        }
+    }
+
+    fn resolve_binary_expression(
+        &mut self,
+        prog: &mut Program,
+        left: ExprId,
+        right: ExprId,
+        op: &Identifier,
+        resolved_callables: &mut Vec<FunctionId>,
+        resolved_type: &mut Option<ResolvedType>,
+        span: Span,
+    ) -> Result<ResolvedType, ()> {
+        self.visit_expr(prog, left)?;
+        self.visit_expr(prog, right)?;
+
+        let left_type = prog.expressions[left]
+            .resolved_type()
+            .cloned()
+            .unwrap_or(ResolvedType::Unknown);
+        let right_type = prog.expressions[right]
+            .resolved_type()
+            .cloned()
+            .unwrap_or(ResolvedType::Unknown);
+
+        let operand_types = vec![left_type, right_type];
+        let result_type = match self.resolve_operator_overloads(
+            prog,
+            &op.name,
+            &operand_types,
+            resolved_callables,
+            span,
+        ) {
+            Ok(return_type) => return_type,
+            Err(fallback_type) => fallback_type,
+        };
+
+        *resolved_type = Some(result_type.clone());
+        Ok(result_type)
+    }
+
+    fn resolve_call_expression(
+        &mut self,
+        prog: &mut Program,
+        callee: ExprId,
+        args: &[ExprId],
+        resolved_type: &mut Option<ResolvedType>,
+        span: Span,
+    ) -> Result<ResolvedType, ()> {
+        self.visit_expr(prog, callee)?;
+        let callee_type = prog.expressions[callee]
+            .resolved_type()
+            .cloned()
+            .unwrap_or_else(|| self.new_type_var());
+
+        let mut arg_types = Vec::new();
+        for &arg_id in args {
+            self.visit_expr(prog, arg_id)?;
+            let arg_type = prog.expressions[arg_id]
+                .resolved_type()
+                .cloned()
+                .unwrap_or_else(|| self.new_type_var());
+            arg_types.push(arg_type);
+        }
+
+        // If the callee is already a function type, extract its return type
+        let return_type = match &callee_type {
+            ResolvedType::Function {
+                return_type: ret_type,
+                param_types,
+                ..
+            } => {
+                // Verify parameter count matches
+                if param_types.len() == arg_types.len() {
+                    // Unify argument types with parameter types
+                    for (arg_type, param_type) in arg_types.iter().zip(param_types.iter()) {
+                        self.unify(arg_type, param_type, span);
+                    }
+                    *ret_type.clone()
+                } else {
+                    // Parameter count mismatch, create type variable
+                    self.new_type_var()
+                }
+            }
+            _ => {
+                // Unknown callee type, create expected function type and unify
+                let return_type = self.new_type_var();
+                let func_type = ResolvedType::Function {
+                    param_types: arg_types,
+                    return_type: Box::new(return_type.clone()),
+                    bound_vars: vec![],
+                };
+                self.unify(&callee_type, &func_type, span);
+                return_type
+            }
+        };
+
+        *resolved_type = Some(return_type.clone());
+        Ok(return_type)
+    }
+
+    fn resolve_member_access_expression(
+        &mut self,
+        prog: &mut Program,
+        object: ExprId,
+        member: &Identifier,
+        resolved_table: &mut Option<TableId>,
+        resolved_field: &mut Option<TableField>,
+        resolved_type: &mut Option<ResolvedType>,
+    ) -> Result<ResolvedType, ()> {
+        // First resolve the object type
+        self.visit_expr(prog, object)?;
+        let object_type = prog.expressions[object]
+            .resolved_type()
+            .cloned()
+            .unwrap_or_else(|| self.new_type_var());
+
+        // Try to resolve based on the object type
+        if let ResolvedType::Table { table_id } = &object_type {
+            if let Some(table_decl) = prog.table_decls.get(*table_id) {
+                for element in &table_decl.elements {
+                    if let TableElement::Field(table_field) = element {
+                        if table_field.name.name == member.name {
+                            let field_type = self.resolve_ast_type(prog, table_field.ty);
+                            *resolved_type = Some(field_type.clone());
+                            *resolved_table = Some(*table_id);
+                            *resolved_field = Some(table_field.clone());
+                            return Ok(field_type);
+                        }
+                    }
+                }
+            }
+        }
+
+        // If we know the table and field from name resolution, use that
+        if let (Some(table_id), Some(_field)) = (resolved_table, resolved_field) {
+            if let Some(table_decl) = prog.table_decls.get(*table_id) {
+                for element in &table_decl.elements {
+                    if let TableElement::Field(table_field) = element {
+                        if table_field.name.name == member.name {
+                            let field_type = self.resolve_ast_type(prog, table_field.ty);
+                            *resolved_type = Some(field_type.clone());
+                            return Ok(field_type);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback: create a type variable
+        let ty = self.new_type_var();
+        *resolved_type = Some(ty.clone());
+        Ok(ty)
+    }
+
+    fn resolve_assignment_expression(
+        &mut self,
+        prog: &mut Program,
+        lhs: ExprId,
+        rhs: ExprId,
+        resolved_type: &mut Option<ResolvedType>,
+    ) -> Result<ResolvedType, ()> {
+        self.visit_expr(prog, lhs)?;
+        self.visit_expr(prog, rhs)?;
+
+        // Assignment returns the type of the RHS
+        let rhs_type = prog.expressions[rhs]
+            .resolved_type()
+            .cloned()
+            .unwrap_or_else(|| self.new_type_var());
+
+        *resolved_type = Some(rhs_type.clone());
+        Ok(rhs_type)
+    }
+
+    fn resolve_unary_expression(
+        &mut self,
+        prog: &mut Program,
+        inner_expr: ExprId,
+        op: &Identifier,
+        resolved_callables: &mut Vec<FunctionId>,
+        resolved_type: &mut Option<ResolvedType>,
+        span: Span,
+    ) -> Result<ResolvedType, ()> {
+        self.visit_expr(prog, inner_expr)?;
+
+        let operand_type = prog.expressions[inner_expr]
+            .resolved_type()
+            .cloned()
+            .unwrap_or(ResolvedType::Unknown);
+
+        let operand_types = vec![operand_type];
+        let result_type = match self.resolve_operator_overloads(
+            prog,
+            &op.name,
+            &operand_types,
+            resolved_callables,
+            span,
+        ) {
+            Ok(return_type) => return_type,
+            Err(fallback_type) => fallback_type,
+        };
+
+        *resolved_type = Some(result_type.clone());
+        Ok(result_type)
+    }
+
+    fn resolve_table_row_access_expression(
+        &mut self,
+        prog: &mut Program,
+        key_values: &[KeyValue],
+        resolved_table: &Option<TableId>,
+        resolved_type: &mut Option<ResolvedType>,
+    ) -> Result<ResolvedType, ()> {
+        // Visit all key expressions first
+        for key_value in key_values {
+            self.visit_expr(prog, key_value.value)?;
+        }
+
+        // If we know which table this accesses, create the table row type
+        if let Some(table_id) = resolved_table {
+            let table_type = ResolvedType::Table {
+                table_id: *table_id,
+            };
+            *resolved_type = Some(table_type.clone());
+            Ok(table_type)
+        } else {
+            // Fallback: create a type variable
+            let ty = self.new_type_var();
+            *resolved_type = Some(ty.clone());
+            Ok(ty)
+        }
     }
 }
 
 trait ExpressionExt {
     fn resolved_type(&self) -> Option<&ResolvedType>;
-    fn set_resolved_type(&mut self, ty: ResolvedType);
     fn span(&self) -> Option<Span>;
 }
 
@@ -823,21 +1010,6 @@ impl ExpressionExt for Expression {
             Expression::TableRowAccess { resolved_type, .. } => resolved_type.as_ref(),
             Expression::Grouped { resolved_type, .. } => resolved_type.as_ref(),
             Expression::Lambda { resolved_type, .. } => resolved_type.as_ref(),
-        }
-    }
-
-    fn set_resolved_type(&mut self, ty: ResolvedType) {
-        match self {
-            Expression::Literal { resolved_type, .. } => *resolved_type = Some(ty),
-            Expression::Identifier { resolved_type, .. } => *resolved_type = Some(ty),
-            Expression::Binary { resolved_type, .. } => *resolved_type = Some(ty),
-            Expression::Unary { resolved_type, .. } => *resolved_type = Some(ty),
-            Expression::Assignment { resolved_type, .. } => *resolved_type = Some(ty),
-            Expression::Call { resolved_type, .. } => *resolved_type = Some(ty),
-            Expression::MemberAccess { resolved_type, .. } => *resolved_type = Some(ty),
-            Expression::TableRowAccess { resolved_type, .. } => *resolved_type = Some(ty),
-            Expression::Grouped { resolved_type, .. } => *resolved_type = Some(ty),
-            Expression::Lambda { resolved_type, .. } => *resolved_type = Some(ty),
         }
     }
 
@@ -858,6 +1030,47 @@ impl ExpressionExt for Expression {
 }
 
 impl TypeResolver {
+    fn resolve_lambda_expression(
+        &mut self,
+        prog: &mut Program,
+        params: &[ParamId],
+        body: BlockId,
+        resolved_type: &mut Option<ResolvedType>,
+    ) -> Result<ResolvedType, ()> {
+        // First resolve parameter types
+        for &param_id in params {
+            let ast_type_id = prog.params[param_id].ty;
+            let resolved_param_type = self.resolve_ast_type(prog, ast_type_id);
+            prog.params[param_id].resolved_type = Some(resolved_param_type);
+        }
+
+        // Then resolve the body
+        self.visit_block(prog, body)?;
+
+        // For lambdas, we'll use a type variable for the return type for now
+        let return_type = self.new_type_var();
+
+        // Build the lambda function type
+        let param_types: Vec<ResolvedType> = params
+            .iter()
+            .map(|&param_id| {
+                prog.params[param_id]
+                    .resolved_type
+                    .clone()
+                    .unwrap_or_else(|| self.new_type_var())
+            })
+            .collect();
+
+        let lambda_type = ResolvedType::Function {
+            param_types,
+            return_type: Box::new(return_type),
+            bound_vars: vec![],
+        };
+
+        *resolved_type = Some(lambda_type.clone());
+        Ok(lambda_type)
+    }
+
     fn try_unify(&self, t1: &ResolvedType, t2: &ResolvedType) -> bool {
         let t1 = self.substitution.apply(t1);
         let t2 = self.substitution.apply(t2);
