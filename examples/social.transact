@@ -1,8 +1,5 @@
-// social.transact - Rewritten for new grammar
-
-
 // Partition function declaration
-function f(x: int);
+function f(x: int) -> int;
 
 // ===========================================
 // Table Declarations

@@ -1,88 +1,102 @@
-partition f(int x) = 10 * x;
-partition g(int x, int y) = 10 * x + y;
-partition h(int x, int y); // implementation of partition is optional. It is 10 * x + y % 10;
+// ===========================================
+// Partition function declarations
+// ===========================================
+function f(x: int) -> int {
+    return 10 * x;
+};
+function g(x: int, y: int) -> int {
+    return 10 * x + y;
+};
+function h(x: int, y: int) -> int;
 
+// ===========================================
+// Table Declarations
+// ===========================================
 
 table Users {
-    primary UUID id;
+    primary id: UUID;
     node f(id);
 
-    string firstname;
-    string lastname;
-    string nickname;
-    string password;
-    string email;
-    int rating;
-    float balance;
-    int creation_date;
-    int region;
+    firstname: string;
+    lastname: string;
+    nickname: string;
+    password: string;
+    email: string;
+    rating: int;
+    balance: float;
+    creation_date: int;
+    region: int;
 }
 
 table Usernames {
-    primary string nickname;
-    node g(nickname);
+    primary nickname: string;
+    node g(nickname, 0); // TODO: why 2 params here?
 
-    UUID id;
-    string password;
-    int counter;
+    id: UUID;
+    password: string;
+    counter: int;
 }
 
 table Items {
-    primary UUID id;
+    primary id: UUID;
     node f(id);
 
-    string name;
-    string description;
-    float initial_price;
-    int quantity;
-    float reserve_price;
-    float buy_now;
-    int nb_of_bids;
-    float max_bid;
-    int start_date;
-    int end_date;
-    UUID seller;
-    int region;
-    int category;
+    name: string;
+    description: string;
+    initial_price: float;
+    quantity: int;
+    reserve_price: float;
+    buy_now: float;
+    nb_of_bids: int;
+    max_bid: float;
+    start_date: int;
+    end_date: int;
+    seller: UUID;
+    region: int;
+    category: int;
 }
 
 table Bids {
-    primary UUID id;
+    primary id: UUID;
     node f(id);
 
-    UUID user_id;
-    UUID item_id;
-    int qty;
-    float bid;
-    float max_bid;
-    int date;
+    user_id: UUID;
+    item_id: UUID;
+    qty: int;
+    bid: float;
+    max_bid: float;
+    date: int;
 }
 
 table Comments {
-    primary UUID id;
+    primary id: UUID;
     node f(id);
 
-    UUID from_user_id;
-    UUID to_user_id;
-    UUID item_id;
-    int rating;
-    string comment;
-    int date;
+    from_user_id: UUID;
+    to_user_id: UUID;
+    item_id: UUID;
+    rating: int;
+    comment: string;
+    date: int;
 }
 
 table Buy_now {
-    primary int id;
+    primary id: int;
     node f(id);
 
-    int buyer_id;
-    int item_id;
-    int qty;
-    int date;
+    buyer_id: int;
+    item_id: int;
+    qty: int;
+    date: int;
 }
 
-bool userAuth(string nickname, string password) {
+// ===========================================
+// Transaction and Function Definitions
+// ===========================================
+
+transaction userAuth(nickname: string, password: string) -> bool {
     hop {
-        string pwd = Usernames[nickname: nickname].password;
+        var pwd: string = Usernames[nickname: nickname].password;
         if pwd == password {
             return true;
         } else {
@@ -91,14 +105,13 @@ bool userAuth(string nickname, string password) {
     }
 }
 
-void registerUser(string nickname, string password, string firstname, string lastname, string email) {
-    UUID uid = genUUID();
-
+transaction registerUser(nickname: string, password: string, firstname: string, lastname: string, email: string) {
     hop {
+        var uid: UUID = genUUID();
         if (Usernames[nickname: nickname].counter > 0) {
             return;
         }
-        Usernames[nickname: nickname].counter += 1;
+        Usernames[nickname: nickname].counter = Usernames[nickname: nickname].counter + 1;
         Usernames[nickname: nickname].password = password;
         Usernames[nickname: nickname].id = uid;
     }
@@ -114,18 +127,16 @@ void registerUser(string nickname, string password, string firstname, string las
     }
 }
 
-string viewUser(UUID uid) {
+function viewUser(uid: UUID) -> string {
     hop {
-        string info = Users[id: uid].nickname + Users[id: uid].firstname + Users[id: uid].lastname + Users[id: uid].rating;
-
+        var info: string = Users[id: uid].nickname + Users[id: uid].firstname + Users[id: uid].lastname + Users[id: uid].rating;
         return info;
     }
 }
 
-void makeComment(UUID from_uid, UUID to_uid, UUID iid, string comment, int rating) {
-    UUID id = genUUID();
-
+transaction makeComment(from_uid: UUID, to_uid: UUID, iid: UUID, comment: string, rating: int) {
     hop {
+        var id: UUID = genUUID();
         Users[id: to_uid].rating += rating;
     }
 
@@ -140,66 +151,69 @@ void makeComment(UUID from_uid, UUID to_uid, UUID iid, string comment, int ratin
     }
 }
 
-string[] getCommentsByToUID(UUID to_id) {
-    string[] commentList;
-
-    hops for all {
-        for Comments c in Comments.scan() {
-            if c.to_user_id == to_id {
-                commentList.insert(c.comment);
-            }
-        }
+function getCommentsByToUID(to_id: UUID) -> List<string> {
+    @global hop {
+        var commentList: List<string> =
+        Comments
+        .scan()
+        .filter(
+            (c: Row<Comments>) -> bool { return c.get_to_user_id() == to_id; }
+        )
+        .map(
+            (c: Row<Comments>) -> string { return c.get_comment(); }
+        );
+        return commentList;
     }
-
-    return commentList;
 }
 
-string[] getCommentsByToIID(UUID iid) {
-    string[] commentList;
-
-    hops for all{
-        for Comments c in Comments.scan() {
-            if c.item_id == iid {
-                commentList.insert(c.comment);
-            }
-        }
+function getCommentsByIID(iid: UUID) -> List<string> {
+    @global hop {
+        var commentList: List<string> =
+        Comments
+        .scan()
+        .filter(
+            (c: Row<Comments>) -> bool { return c.get_item_id() == iid; }
+        )
+        .map(
+            (c: Row<Comments>) -> string { return c.get_comment(); }
+        );
+        return commentList;
     }
-
-    return commentList;
 }
 
-Items[] getItemsByRegion(int region) {
-    Items[] itemList;
-
-    hops for all{
-        for Items i in Items.scan() {
-            if i.region == region {
-                itemList.insert(i);
-            }
-        }
+function getItemsByRegion(region_id: int) -> List<Row<Items>> {
+    @global hop {
+        var itemList: List<Row<Items>> =
+        Items
+        .scan()
+        .filter(
+            (i: Row<Items>) -> bool { return i.get_region() == region_id; }
+        )
+        .map(
+            (i: Row<Items>) -> Row<Items> { return i; }
+        );
+        return itemList;
     }
-
-    return itemList;
 }
 
-Items[] getItemsByCategory(int category) {
-    Items[] itemList;
-
-    hops for all{
-        for Items i in Items.scan() {
-            if i.category == category {
-                itemList.insert(i);
-            }
-        }
+function getItemsByCategory(category_id: int) -> List<Row<Items>> {
+    @global hop {
+        var itemList: List<Row<Items>> =
+        Items
+        .scan()
+        .filter(
+            (i: Row<Items>) -> bool { return i.get_category() == category_id; }
+        )
+        .map(
+            (i: Row<Items>) -> Row<Items> { return i; }
+        );
+        return itemList;
     }
-
-    return itemList;
 }
 
-void registerItem(string name, string description, float initial_price, int quantity, float reserve_price,
-    float buy_now, int date, UUID seller, int region, int category) {
-    UUID iid = genUUID();
+transaction registerItem(name: string, description: string, initial_price: float, quantity: int, reserve_price: float, buy_now: float, date: int, seller: UUID, region: int, category: int) {
     hop {
+        var iid: UUID = genUUID();
         Items[id: iid] = {
             name: name,
             description: description,
@@ -217,12 +231,12 @@ void registerItem(string name, string description, float initial_price, int quan
     }
 }
 
-void putBid(UUID iid, float max_bid, UUID uid, int quantity, float bid, int date) {
-    UUID bid = genUUID();
+transaction putBid(iid: UUID, max_bid_val: float, uid: UUID, quantity: int, bid_val: float, date: int) {
     hop {
-        float cur_max = Items[id: iid].max_bid;
-        if max_bid > cur_max {
-            Items[id: iid].max_bid = max_bid;
+        var bid_id: UUID = genUUID();
+        var cur_max: float = Items[id: iid].max_bid;
+        if max_bid_val > cur_max {
+            Items[id: iid].max_bid = max_bid_val;
             Items[id: iid].nb_of_bids += 1;
         } else {
             return;
@@ -230,49 +244,51 @@ void putBid(UUID iid, float max_bid, UUID uid, int quantity, float bid, int date
     }
 
     hop {
-        Bids[id: bid] = {
+        Bids[id: bid_id] = {
             user_id: uid,
             item_id: iid,
             qty: quantity,
-            bid: bid,
-            max_bid: max_bid,
+            bid: bid_val,
+            max_bid: max_bid_val,
             date: date
         };
     }
 }
 
-Bids[] getBidsByItem(UUID iid) {
-    Bids[] bidList;
-
-    hops for all{
-        for Bids b in Bidss.scan() {
-            if b.item_id == iid {
-                bidList.insert(b);
-            }
-        }
+function getBidsByItem(iid: UUID) -> List<Row<Bids>> {
+    @global hop {
+        var bidList: List<Row<Bids>> =
+        Bids
+        .scan()
+        .filter(
+            (b: Row<Bids>) -> bool { return b.get_item_id() == iid; }
+        )
+        .map(
+            (b: Row<Bids>) -> Row<Bids> { return b; }
+        );
+        return bidList;
     }
-
-    return bidList;
 }
 
-Bids[] getBidsByUser(UUID uid) {
-    Bids[] bidList;
-
-    hops for all{
-        for Bids b in Bidss.scan() {
-            if b.user_id == uid {
-                bidList.insert(b);
-            }
-        }
+function getBidsByUser(uid: UUID) -> List<Row<Bids>> {
+    @global hop {
+        var bidList: List<Row<Bids>> =
+        Bids
+        .scan()
+        .filter(
+            (b: Row<Bids>) -> bool { return b.get_user_id() == uid; }
+        )
+        .map(
+            (b: Row<Bids>) -> Row<Bids> { return b; }
+        );
+        return bidList;
     }
-
-    return bidList;
 }
 
-void buyNow(UUID iid, UUID uid, int quantity, int date) {
-    UUID bnid = genUUID();
+transaction buyNow(iid: UUID, uid: UUID, quantity: int, date: int) {
+    var bnid: UUID = genUUID();
     hop {
-        int cur_qty = Items[id: iid].quantity;
+        var cur_qty: int = Items[id: iid].quantity;
         if quantity > cur_qty {
             return;
         }
@@ -293,4 +309,3 @@ void buyNow(UUID iid, UUID uid, int quantity, int date) {
         };
     }
 }
-
