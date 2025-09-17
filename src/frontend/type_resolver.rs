@@ -36,6 +36,8 @@ struct TypeResolver {
     substitution: Substitution,
     // A cache for resolved AST types to avoid re-computation.
     ast_type_cache: HashMap<AstTypeId, ResolvedType>,
+    // Current generic parameter bindings (GenericParamId -> TypeVarId)
+    generic_bindings: HashMap<GenericParamId, TypeVarId>,
 }
 
 impl TypeResolver {
@@ -45,6 +47,7 @@ impl TypeResolver {
             type_vars: 0,
             substitution: Substitution::new(),
             ast_type_cache: HashMap::new(),
+            generic_bindings: HashMap::new(),
         }
     }
 
@@ -65,18 +68,39 @@ impl TypeResolver {
         None
     }
 
+    /// Find generic parameter by name in the current function's scope
+    fn find_generic_param_in_scope(&self, prog: &Program, name: &str) -> Option<GenericParamId> {
+        // Only look at generic parameters that are in our current bindings
+        for (&generic_param_id, _) in &self.generic_bindings {
+            if let Some(generic_param) = prog.generic_params.get(generic_param_id) {
+                if generic_param.name.name == name {
+                    return Some(generic_param_id);
+                }
+            }
+        }
+        None
+    }
+
+    /// Find table by name
+    fn find_table_by_name(&self, prog: &Program, name: &str) -> Option<TableId> {
+        for (table_id, table_decl) in prog.table_decls.iter() {
+            if table_decl.name.name == name {
+                return Some(table_id);
+            }
+        }
+        None
+    }
+
     /// Create a primitive type with fallback to type variable
     fn resolve_primitive_type(&mut self, prog: &Program, type_name: &str) -> ResolvedType {
         if let Some(type_id) = self.find_primitive_type(prog, type_name) {
             ResolvedType::Primitive {
                 type_id,
                 type_args: vec![],
+                bound_vars: vec![],
             }
         } else {
-            ResolvedType::TypeVariable {
-                var_id: self.type_vars,
-                name: type_name.to_string(),
-            }
+            self.new_type_var()
         }
     }
 
@@ -220,6 +244,7 @@ impl TypeResolver {
         ResolvedType::TypeVariable {
             var_id,
             name: format!("T{}", var_id),
+            bound_to: None,
         }
     }
 
@@ -242,16 +267,38 @@ impl TypeResolver {
                             ResolvedType::Primitive {
                                 type_id: primitive_type_id,
                                 type_args: vec![],
+                                bound_vars: vec![],
                             }
                         } else {
                             // Fallback to type variable if primitive not found
-                            ResolvedType::TypeVariable {
-                                var_id: self.type_vars,
-                                name: name.name.clone(),
-                            }
+                            self.new_type_var()
                         }
                     }
-                    _ => self.new_type_var(), // For generic parameters or user-defined types
+                    _ => {
+                        // Check if this is a table name
+                        if let Some(table_id) = self.find_table_by_name(prog, &name.name) {
+                            ResolvedType::Table { table_id }
+                        }
+                        // Check if this is a generic parameter name
+                        else if let Some(generic_param_id) =
+                            self.find_generic_param_in_scope(prog, &name.name)
+                        {
+                            if let Some(&type_var_id) = self.generic_bindings.get(&generic_param_id)
+                            {
+                                ResolvedType::TypeVariable {
+                                    var_id: type_var_id,
+                                    name: name.name.clone(),
+                                    bound_to: Some(generic_param_id),
+                                }
+                            } else {
+                                // Generic parameter not in current scope, create unbound type variable
+                                self.new_type_var()
+                            }
+                        } else {
+                            // For user-defined types or unknown identifiers
+                            self.new_type_var()
+                        }
+                    }
                 }
             }
             AstType::Generic { base, args, .. } => {
@@ -263,9 +310,17 @@ impl TypeResolver {
                 // Handle generic types as primitive types with type arguments
                 // Find the type declaration for the base type
                 if let Some(type_id) = self.find_primitive_type(prog, &base.name) {
+                    // Check if any type arguments are type variables to determine bound_vars
+                    let mut bound_vars = vec![];
+                    for arg_type in arg_types.iter() {
+                        if let ResolvedType::TypeVariable { var_id, .. } = arg_type {
+                            bound_vars.push(*var_id);
+                        }
+                    }
                     ResolvedType::Primitive {
                         type_id,
                         type_args: arg_types,
+                        bound_vars,
                     }
                 } else {
                     // Unknown generic type, use type variable
@@ -285,6 +340,7 @@ impl TypeResolver {
                 ResolvedType::Function {
                     param_types,
                     return_type: Box::new(ret_type),
+                    bound_vars: vec![],
                 }
             }
         };
@@ -314,10 +370,12 @@ impl TypeResolver {
                 ResolvedType::Primitive {
                     type_id: id1,
                     type_args: args1,
+                    ..
                 },
                 ResolvedType::Primitive {
                     type_id: id2,
                     type_args: args2,
+                    ..
                 },
             ) if id1 == id2 && args1.len() == args2.len() => {
                 for (a1, a2) in args1.iter().zip(args2.iter()) {
@@ -328,10 +386,12 @@ impl TypeResolver {
                 ResolvedType::Function {
                     param_types: params1,
                     return_type: ret1,
+                    ..
                 },
                 ResolvedType::Function {
                     param_types: params2,
                     return_type: ret2,
+                    ..
                 },
             ) if params1.len() == params2.len() => {
                 for (p1, p2) in params1.iter().zip(params2.iter()) {
@@ -365,6 +425,17 @@ impl TypeResolver {
 
 impl<'ast> VisitorMut<'ast> for TypeResolver {
     fn visit_callable_decl(&mut self, prog: &mut Program, id: FunctionId) -> Result<(), ()> {
+        // Save the current generic bindings to restore later
+        let saved_bindings = self.generic_bindings.clone();
+
+        // Create type variables for this function's generic parameters
+        let generic_param_ids = prog.functions[id].generic_params.clone();
+        for generic_param_id in generic_param_ids {
+            let type_var_id = self.type_vars;
+            self.type_vars += 1;
+            self.generic_bindings.insert(generic_param_id, type_var_id);
+        }
+
         // First, collect the type info we need
         let params_info: Vec<(ParamId, AstTypeId)> = prog.functions[id]
             .params
@@ -386,7 +457,14 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
         } else {
             ResolvedType::Void
         };
+
+        // Collect bound type variables for this function
+        let _bound_vars: Vec<TypeVarId> = self.generic_bindings.values().cloned().collect();
+
         prog.functions[id].resolved_return_type = Some(resolved_return_type);
+
+        // Restore previous generic bindings
+        self.generic_bindings = saved_bindings;
         Ok(())
     }
 
@@ -484,6 +562,19 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
                         IdentifierResolution::Const(id) => {
                             prog.const_decls[id].resolved_type.clone()
                         }
+                        IdentifierResolution::Table(table_id) => {
+                            // Table names have type Table<TableName> = t7<tab_id>
+                            // Find the Table primitive type (should be t7)
+                            if let Some(table_type_id) = self.find_primitive_type(prog, "Table") {
+                                Some(ResolvedType::Primitive {
+                                    type_id: table_type_id,
+                                    type_args: vec![ResolvedType::Table { table_id }],
+                                    bound_vars: vec![],
+                                })
+                            } else {
+                                Some(self.new_type_var())
+                            }
+                        }
                         _ => Some(self.new_type_var()),
                     };
                     let ty = ty.unwrap_or_else(|| self.new_type_var());
@@ -556,6 +647,7 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
                 let func_type = ResolvedType::Function {
                     param_types: arg_types,
                     return_type: Box::new(return_type.clone()),
+                    bound_vars: vec![],
                 };
 
                 self.unify(&callee_type, &func_type, span);
@@ -705,7 +797,8 @@ impl<'ast> VisitorMut<'ast> for TypeResolver {
             }
             _ => self.new_type_var(),
         };
-        prog.expressions[id].set_resolved_type(new_type);
+        // Update the entire expression to preserve resolved_callables changes
+        prog.expressions[id] = expr;
 
         Ok(())
     }

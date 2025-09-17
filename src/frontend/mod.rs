@@ -18,8 +18,14 @@ pub fn parse_and_analyze_program(
     // Stage 1: Basic AST parsing with prelude
     let mut program = match ast_builder::parse_program(program, source, filename) {
         Ok(p) => p,
-        Err(e) => return Err(e),
+        Err(errors) => {
+            all_errors.extend(errors);
+            return Err(all_errors);
+        }
     };
+
+    // Stage 1.5: Generate accessor functions for table Row<T> types
+    generated_functions::generate_table_accessors(&mut program);
 
     // Stage 2: Name resolution
     if let Err(errors) = name_resolver::resolve_names(&mut program) {
@@ -54,6 +60,7 @@ pub fn parse_and_analyze_program(
 
 pub mod ast_builder;
 pub mod errors;
+pub mod generated_functions;
 pub mod name_resolver;
 pub mod semantics_analyzer;
 pub mod type_resolver;
