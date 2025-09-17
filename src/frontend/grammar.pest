@@ -190,12 +190,15 @@ op3         = @{ & ("*" | "/" | "%") ~ operator_symbol }
 prefix = { (prefix_op ~ prefix) | postfix }
 prefix_op = @{ & ("!" | "-") ~ operator_symbol }
 
-// Precedence 1 (highest): Postfix operators (call, member access, table access)
-// -- NOTE: Method calls like `a.b(c)` are parsed as a `member_access` followed by a `call`.
-//    The semantic transformation to `b(a, c)` happens in a later compiler stage.
-postfix = { primary ~ (call | member_access | table_row_access)* }
+// Precedence 1 (highest): Postfix operators (function call, method call, field access, table access)
+// -- NOTE: Method calls like `a.b(c)` are parsed directly as function call `b(a, c)`.
+//    Regular calls like `f(a)` are parsed as function call `f(a)`.
+//    Field access like `a.b` (without parentheses) remains as member access.
+//    Table access like `a[key: value]` is for table row access.
+postfix = { primary ~ (call | method_call | field_access | table_row_access)* }
 call             = { "(" ~ expression_list? ~ ")" }
-member_access    = { "." ~ identifier }
+method_call      = { "." ~ identifier ~ "(" ~ expression_list? ~ ")" }
+field_access     = { "." ~ identifier }
 table_row_access = { "[" ~ (key_value_pair ~ ("," ~ key_value_pair)*)? ~ "]" }
 
 // ----------------------------------------------------------------------------

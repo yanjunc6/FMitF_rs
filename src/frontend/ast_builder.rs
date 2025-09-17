@@ -923,7 +923,7 @@ impl AstBuilder {
                 }
             }
             Rule::postfix => {
-                // postfix = { primary ~ (call | member_access | table_row_access)* }
+                // postfix = { primary ~ (method_call | field_access | table_row_access)* }
                 let mut pairs = pair.into_inner();
                 let mut expr = self.build_expression_recursive(pairs.next().unwrap())?;
 
@@ -947,8 +947,37 @@ impl AstBuilder {
                             };
                             expr = self.program.expressions.alloc(call_expr);
                         }
-                        Rule::member_access => {
-                            // member_access = { "." ~ identifier }
+                        Rule::method_call => {
+                            // method_call = { "." ~ identifier ~ "(" ~ expression_list? ~ ")" }
+                            let mut call_pairs = postfix_op.into_inner();
+                            let method_name = self.build_identifier(call_pairs.next().unwrap())?;
+
+                            let mut args = vec![expr]; // First argument is the object
+                            if let Some(expr_list) = call_pairs.next() {
+                                args.extend(self.build_expression_list(expr_list)?);
+                            }
+
+                            // Create identifier expression for the method name
+                            let method_ident_expr = Expression::Identifier {
+                                name: method_name,
+                                resolved_declarations: Vec::new(),
+                                resolved_type: None,
+                                span: Some(span),
+                            };
+                            let method_callee = self.program.expressions.alloc(method_ident_expr);
+
+                            // Create function call: method_name(object, args...)
+                            let call_expr = Expression::Call {
+                                callee: method_callee,
+                                args,
+                                resolved_callables: Vec::new(),
+                                resolved_type: None,
+                                span: Some(span),
+                            };
+                            expr = self.program.expressions.alloc(call_expr);
+                        }
+                        Rule::field_access => {
+                            // field_access = { "." ~ identifier }
                             let member_name =
                                 self.build_identifier(postfix_op.into_inner().next().unwrap())?;
 

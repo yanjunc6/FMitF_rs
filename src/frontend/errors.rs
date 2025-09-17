@@ -28,6 +28,7 @@ pub enum FrontEndErrorKind {
 
     // Semantic errors
     TypeMismatch { expected: String, found: String },
+    ArgumentCountMismatch { expected: usize, found: usize },
     InvalidOperation { op: String, details: String },
     CircularDependency { names: Vec<String> },
     InvalidTransactionStatement { statement_type: String },
@@ -69,6 +70,13 @@ impl fmt::Display for FrontEndErrorKind {
             }
             FrontEndErrorKind::TypeMismatch { expected, found } => {
                 write!(f, "Type mismatch: expected {}, found {}", expected, found)
+            }
+            FrontEndErrorKind::ArgumentCountMismatch { expected, found } => {
+                write!(
+                    f,
+                    "Argument count mismatch: expected {}, found {}",
+                    expected, found
+                )
             }
             FrontEndErrorKind::InvalidOperation { op, details } => {
                 write!(f, "Invalid operation {}: {}", op, details)
@@ -130,16 +138,17 @@ impl CompilerErrorKind for FrontEndErrorKind {
             FrontEndErrorKind::InvalidScope { .. } => "A009",
             FrontEndErrorKind::ReturnOutsideFunction => "A010",
             FrontEndErrorKind::TypeMismatch { .. } => "A011",
-            FrontEndErrorKind::InvalidOperation { .. } => "A012",
-            FrontEndErrorKind::CircularDependency { .. } => "A013",
-            FrontEndErrorKind::InvalidInput { .. } => "A014",
-            FrontEndErrorKind::UnresolvedReference { .. } => "A015",
-            FrontEndErrorKind::InvalidTransactionStatement { .. } => "A016",
-            FrontEndErrorKind::MultipleTableNodes { .. } => "A017",
-            FrontEndErrorKind::InvalidTableGenericArgument { .. } => "A018",
-            FrontEndErrorKind::HopsForNonConstant { .. } => "A019",
-            FrontEndErrorKind::HopsForNonInteger { .. } => "A020",
-            FrontEndErrorKind::GlobalFunctionInNonGlobalHop { .. } => "A021",
+            FrontEndErrorKind::ArgumentCountMismatch { .. } => "A012",
+            FrontEndErrorKind::InvalidOperation { .. } => "A013",
+            FrontEndErrorKind::CircularDependency { .. } => "A014",
+            FrontEndErrorKind::InvalidInput { .. } => "A015",
+            FrontEndErrorKind::UnresolvedReference { .. } => "A016",
+            FrontEndErrorKind::InvalidTransactionStatement { .. } => "A017",
+            FrontEndErrorKind::MultipleTableNodes { .. } => "A018",
+            FrontEndErrorKind::InvalidTableGenericArgument { .. } => "A019",
+            FrontEndErrorKind::HopsForNonConstant { .. } => "A020",
+            FrontEndErrorKind::HopsForNonInteger { .. } => "A021",
+            FrontEndErrorKind::GlobalFunctionInNonGlobalHop { .. } => "A022",
         }
     }
 
