@@ -129,7 +129,7 @@ impl<W: Write> AstPrinter<W> {
                 }
                 self.collect_type_variables(return_type, vars);
             }
-            _ => {} // Table, Void, Unknown, Unresolved don't contain type variables
+            _ => {} // Table, Void, Unknown, Unresolved, TypeVariable don't contain type variables
         }
     }
 

@@ -95,7 +95,7 @@ impl ResolvedType {
                 return_type,
                 ..
             } => param_types.iter().any(|t| t.has_unbound_vars()) || return_type.has_unbound_vars(),
-            _ => false,
+            _ => false, // Table, Void, Unknown, Unresolved don't contain unbound variables
         }
     }
 
