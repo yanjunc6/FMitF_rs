@@ -5,7 +5,7 @@
 use super::common::{Decorator, Identifier};
 use super::expr::ExprId;
 use super::stmt::BlockId;
-use super::ty::{AstTypeId, ResolvedType};
+use super::ty::{AstTypeId, ResolvedType, TypeScheme};
 use crate::util::Span;
 use id_arena::Id;
 
@@ -40,7 +40,7 @@ pub struct CallableDecl {
     pub body: Option<BlockId>, // None if no implementation
     pub resolved_param_types: Option<Vec<ResolvedType>>,
     pub resolved_return_type: Option<ResolvedType>,
-    pub resolved_function_type: Option<ResolvedType>,
+    pub resolved_function_type: Option<TypeScheme>,
     pub span: Option<Span>,
 }
 
