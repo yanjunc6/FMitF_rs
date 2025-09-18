@@ -12,34 +12,87 @@ use std::fmt;
 #[derive(Debug, Clone)]
 pub enum FrontEndErrorKind {
     // Parse errors
-    SyntaxError { message: String },
-    UnexpectedToken { expected: String, found: String },
+    SyntaxError {
+        message: String,
+    },
+    UnexpectedToken {
+        expected: String,
+        found: String,
+    },
     UnexpectedEof,
     ParseError(String),     // For pest parsing errors
     UnexpectedRule(String), // For unexpected grammar rules
     MissingField(String),   // For missing required fields
 
     // Name resolution errors
-    UndefinedIdentifier { name: String },
-    DuplicateDefinition { name: String },
-    InvalidScope { name: String, details: String },
+    UndefinedIdentifier {
+        name: String,
+    },
+    DuplicateDefinition {
+        name: String,
+    },
+    InvalidScope {
+        name: String,
+        details: String,
+    },
     ReturnOutsideFunction,
-    UnresolvedReference { name: String, category: String },
+    UnresolvedReference {
+        name: String,
+        category: String,
+    },
 
     // Semantic errors
-    TypeMismatch { expected: String, found: String },
-    ArgumentCountMismatch { expected: usize, found: usize },
-    InvalidOperation { op: String, details: String },
-    CircularDependency { names: Vec<String> },
-    InvalidTransactionStatement { statement_type: String },
-    MultipleTableNodes { table_name: String },
-    InvalidTableGenericArgument { found_type: String },
-    HopsForNonConstant { context: String },
-    HopsForNonInteger { context: String, found_type: String },
-    GlobalFunctionInNonGlobalHop { function_name: String },
+    TypeMismatch {
+        expected: String,
+        found: String,
+        context: String,
+    },
+    CannotInferType {
+        item: String,
+    },
+    ArgumentCountMismatch {
+        expected: usize,
+        found: usize,
+    },
+    InvalidOperation {
+        op: String,
+        details: String,
+    },
+    CircularDependency {
+        names: Vec<String>,
+    },
+    InvalidTransactionStatement {
+        statement_type: String,
+    },
+    MultipleTableNodes {
+        table_name: String,
+    },
+    InvalidTableGenericArgument {
+        found_type: String,
+    },
+    HopsForNonConstant {
+        context: String,
+    },
+    HopsForNonInteger {
+        context: String,
+        found_type: String,
+    },
+    GlobalFunctionInNonGlobalHop {
+        function_name: String,
+    },
+    MemberNotFound {
+        member_name: String,
+        type_name: String,
+    },
+    NotAFunction {
+        name: String,
+    },
 
     // General errors
-    InvalidInput { message: String },
+    InvalidInput {
+        message: String,
+    },
+    NotYetImplemented(String),
 }
 
 impl fmt::Display for FrontEndErrorKind {
@@ -68,8 +121,19 @@ impl fmt::Display for FrontEndErrorKind {
             FrontEndErrorKind::UnresolvedReference { name, category } => {
                 write!(f, "Unresolved {} reference: {}", category, name)
             }
-            FrontEndErrorKind::TypeMismatch { expected, found } => {
-                write!(f, "Type mismatch: expected {}, found {}", expected, found)
+            FrontEndErrorKind::TypeMismatch {
+                expected,
+                found,
+                context,
+            } => {
+                write!(
+                    f,
+                    "Type mismatch in {}: expected `{}`, found `{}`",
+                    context, expected, found
+                )
+            }
+            FrontEndErrorKind::CannotInferType { item } => {
+                write!(f, "Cannot infer type for '{}'", item)
             }
             FrontEndErrorKind::ArgumentCountMismatch { expected, found } => {
                 write!(
@@ -117,8 +181,22 @@ impl fmt::Display for FrontEndErrorKind {
                     function_name
                 )
             }
+            FrontEndErrorKind::MemberNotFound {
+                member_name,
+                type_name,
+            } => write!(
+                f,
+                "Member '{}' not found on type '{}'",
+                member_name, type_name
+            ),
+            FrontEndErrorKind::NotAFunction { name } => {
+                write!(f, "'{}' is not a function and cannot be called", name)
+            }
             FrontEndErrorKind::InvalidInput { message } => {
                 write!(f, "Invalid input: {}", message)
+            }
+            FrontEndErrorKind::NotYetImplemented(feature) => {
+                write!(f, "Feature not yet implemented: {}", feature)
             }
         }
     }
@@ -143,12 +221,16 @@ impl CompilerErrorKind for FrontEndErrorKind {
             FrontEndErrorKind::CircularDependency { .. } => "A014",
             FrontEndErrorKind::InvalidInput { .. } => "A015",
             FrontEndErrorKind::UnresolvedReference { .. } => "A016",
-            FrontEndErrorKind::InvalidTransactionStatement { .. } => "A017",
-            FrontEndErrorKind::MultipleTableNodes { .. } => "A018",
-            FrontEndErrorKind::InvalidTableGenericArgument { .. } => "A019",
-            FrontEndErrorKind::HopsForNonConstant { .. } => "A020",
-            FrontEndErrorKind::HopsForNonInteger { .. } => "A021",
-            FrontEndErrorKind::GlobalFunctionInNonGlobalHop { .. } => "A022",
+            FrontEndErrorKind::CannotInferType { .. } => "A018",
+            FrontEndErrorKind::InvalidTransactionStatement { .. } => "A019",
+            FrontEndErrorKind::MultipleTableNodes { .. } => "A020",
+            FrontEndErrorKind::InvalidTableGenericArgument { .. } => "A021",
+            FrontEndErrorKind::HopsForNonConstant { .. } => "A022",
+            FrontEndErrorKind::HopsForNonInteger { .. } => "A023",
+            FrontEndErrorKind::GlobalFunctionInNonGlobalHop { .. } => "A024",
+            FrontEndErrorKind::MemberNotFound { .. } => "A025",
+            FrontEndErrorKind::NotAFunction { .. } => "A026",
+            FrontEndErrorKind::NotYetImplemented(..) => "A999",
         }
     }
 
@@ -171,6 +253,9 @@ impl CompilerErrorKind for FrontEndErrorKind {
             }
             FrontEndErrorKind::UnresolvedReference { .. } => {
                 Some("This is likely an internal compiler error, as name resolution should have caught this.")
+            }
+            FrontEndErrorKind::CannotInferType { .. } => {
+                Some("Try adding an explicit type annotation, for example: `let x: int = ...`")
             }
             FrontEndErrorKind::InvalidTransactionStatement { .. } => {
                 Some("Wrap your logic inside a 'hop' block if it needs to execute within a single partition.")

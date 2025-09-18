@@ -38,6 +38,7 @@ pub struct CallableDecl {
     pub return_type: Option<AstTypeId>,
     pub assumptions: Vec<ExprId>,
     pub body: Option<BlockId>, // None if no implementation
+    pub resolved_param_types: Option<Vec<ResolvedType>>,
     pub resolved_return_type: Option<ResolvedType>,
     pub resolved_function_type: Option<ResolvedType>,
     pub span: Option<Span>,

@@ -205,6 +205,7 @@ impl AstBuilder {
             return_type,
             assumptions,
             body,
+            resolved_param_types: None,
             resolved_return_type: None,
             resolved_function_type: None,
             span: Some(span),
