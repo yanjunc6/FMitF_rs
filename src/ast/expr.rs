@@ -115,4 +115,20 @@ impl Expression {
             | Expression::Lambda { span, .. } => *span,
         }
     }
+
+    /// Get the resolved type of this expression
+    pub fn resolved_type(&self) -> Option<&ResolvedType> {
+        match self {
+            Expression::Literal { resolved_type, .. }
+            | Expression::Identifier { resolved_type, .. }
+            | Expression::Binary { resolved_type, .. }
+            | Expression::Unary { resolved_type, .. }
+            | Expression::Assignment { resolved_type, .. }
+            | Expression::Call { resolved_type, .. }
+            | Expression::MemberAccess { resolved_type, .. }
+            | Expression::TableRowAccess { resolved_type, .. }
+            | Expression::Grouped { resolved_type, .. }
+            | Expression::Lambda { resolved_type, .. } => resolved_type.as_ref(),
+        }
+    }
 }

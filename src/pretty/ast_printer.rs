@@ -4,7 +4,7 @@ use crate::pretty::PrettyPrint;
 use std::io::{self, Write};
 
 // Debug options - simple constants for development
-const SHOW_IDS: bool = true;
+const SHOW_IDS: bool = false;
 const SHOW_NAME_RESOLUTION: bool = true;
 const SHOW_TYPE_RESOLUTION: bool = true;
 

@@ -97,38 +97,33 @@ impl<'a> SemanticAnalyzer<'a> {
     /// Checks if an expression is a compile-time constant integer.
     /// Only allows: 1) Literal integers, 2) Global const variables that are integers
     /// Operations like 2 + C are NOT allowed.
-    fn is_const_integer(&self, expr_id: ExprId) -> bool {
+    fn is_const_integer(&self, expr_id: ExprId) -> (bool, Option<i64>) {
         let expr = &self.program.expressions[expr_id];
         match expr {
-            // Allow literal integers: `2`, `42`, etc.
-            Expression::Literal { value, .. } => matches!(value, Literal::Integer(_)),
-
-            // Allow const variables that are integers, but only if they are global consts
+            Expression::Literal { value, .. } => {
+                if let Literal::Integer(val_str) = value {
+                    (true, val_str.parse().ok())
+                } else {
+                    (false, None)
+                }
+            }
             Expression::Identifier {
                 resolved_declarations,
                 ..
             } => {
-                resolved_declarations.iter().any(|res| {
-                    if let IdentifierResolution::Const(const_id) = res {
-                        // Check if the const is of integer type
-                        let const_decl = &self.program.const_decls[*const_id];
-                        if let Some(ResolvedType::Primitive { type_id, .. }) =
-                            &const_decl.resolved_type
-                        {
-                            // Verify it's an 'int' type
-                            self.program.type_decls[*type_id].name.name == "int"
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
+                if let Some(IdentifierResolution::Const(const_id)) = resolved_declarations.get(0) {
+                    let const_decl = &self.program.const_decls[*const_id];
+                    if let Expression::Literal {
+                        value: Literal::Integer(val_str),
+                        ..
+                    } = &self.program.expressions[const_decl.value]
+                    {
+                        return (true, val_str.parse().ok());
                     }
-                })
+                }
+                (false, None)
             }
-
-            // Reject all operations, function calls, etc.
-            // This includes Binary, Unary, Call, etc.
-            _ => false,
+            _ => (false, None),
         }
     }
 
@@ -245,7 +240,8 @@ impl<'ast> Visitor<'ast, (), ()> for SemanticAnalyzer<'ast> {
             } => {
                 // Rule 5: `hops_for` start and end must be constant integers.
                 // Check start expression
-                if !self.is_const_integer(*start) {
+                let (is_const_start, _) = self.is_const_integer(*start);
+                if !is_const_start {
                     if let Some(span) = self.get_expression_span(&prog.expressions[*start]) {
                         self.add_error(
                             FrontEndErrorKind::HopsForNonConstant {
@@ -257,7 +253,8 @@ impl<'ast> Visitor<'ast, (), ()> for SemanticAnalyzer<'ast> {
                 }
 
                 // Check end expression
-                if !self.is_const_integer(*end) {
+                let (is_const_end, _) = self.is_const_integer(*end);
+                if !is_const_end {
                     if let Some(span) = self.get_expression_span(&prog.expressions[*end]) {
                         self.add_error(
                             FrontEndErrorKind::HopsForNonConstant {

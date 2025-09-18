@@ -199,7 +199,7 @@ transaction newOrder(
         }
 
         s.set_S_ORDER_CNT(s.get_S_ORDER_CNT() + 1);
-        s.set_S_YTD(s.get_S_YTD() + qty);
+        s.set_S_YTD(s.get_S_YTD() + float(qty));
         Stock[S_W_ID: sup_w_id, S_I_ID: i_id] = s;
     }
 
@@ -234,7 +234,7 @@ transaction newOrder(
                 OL_I_ID: i_id,
                 OL_SUPPLY_W_ID: sup_w_id,
                 OL_QUANTITY: qty,
-                OL_AMOUNT: price * qty
+                OL_AMOUNT: int(price * float(qty))
             };
         }
     }
@@ -282,15 +282,15 @@ transaction Payment(w_id: int, d_id: int, c_w_id: int, c_d_id: int, c_id: int, a
 
     // Update customer
     hop {
-        var c: Customer = Customer[C_W_ID: c_w_id, C_D_ID: c_d_id, C_ID: c_id];
-        c.C_BALANCE = c.C_BALANCE - amount;
-        c.C_YTD_PAYMENT = c.C_YTD_PAYMENT + amount;
-        c.C_PAYMENT_CNT = c.C_PAYMENT_CNT + 1.0;
+        var c: Row<Customer> = Customer[C_W_ID: c_w_id, C_D_ID: c_d_id, C_ID: c_id];
+        c.set_C_BALANCE(c.get_C_BALANCE() - amount);
+        c.set_C_YTD_PAYMENT(c.get_C_YTD_PAYMENT() + amount);
+        c.set_C_PAYMENT_CNT(c.get_C_PAYMENT_CNT() + 1.0);
 
-        if c.C_CREDIT == "BC" {
+        if c.get_C_CREDIT() == "BC" {
             // Replace legacy "~" concatenation with string "+" and explicit str() conversion
-            c.C_DATA = str(c.C_ID) + " " + str(c.C_D_ID) + " " + str(c.C_W_ID) + " " + str(d_id) + " " + str(w_id)
-                + " " + str(amount) + " | " + c.C_DATA;
+            c.set_C_DATA(str(c.get_C_ID()) + " " + str(c.get_C_D_ID()) + " " + str(c.get_C_W_ID()) + " " + str(d_id) + " " + str(w_id)
+                + " " + str(amount) + " | " + c.get_C_DATA());
         }
 
         Customer[C_W_ID: c_w_id, C_D_ID: c_d_id, C_ID: c_id] = c;
