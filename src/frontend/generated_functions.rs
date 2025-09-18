@@ -107,6 +107,7 @@ fn generate_getter_function(
         params: vec![param_id],
         return_type: Some(return_type),
         body: None, // Intrinsic functions have no body
+        resolved_param_types: None,
         resolved_return_type: None,
         resolved_function_type: None,
         assumptions: Vec::new(),
@@ -193,6 +194,7 @@ fn generate_setter_function(
         params: vec![row_param_id, value_param_id],
         return_type: Some(return_row_type),
         body: None, // Intrinsic functions have no body
+        resolved_param_types: None,
         resolved_return_type: None,
         resolved_function_type: None,
         assumptions: Vec::new(),

@@ -99,3 +99,20 @@ pub struct KeyValue {
     pub resolved_field: Option<TableField>,
     pub span: Option<Span>,
 }
+
+impl Expression {
+    pub fn span(&self) -> Option<Span> {
+        match self {
+            Expression::Literal { span, .. }
+            | Expression::Identifier { span, .. }
+            | Expression::Binary { span, .. }
+            | Expression::Unary { span, .. }
+            | Expression::Assignment { span, .. }
+            | Expression::Call { span, .. }
+            | Expression::MemberAccess { span, .. }
+            | Expression::TableRowAccess { span, .. }
+            | Expression::Grouped { span, .. }
+            | Expression::Lambda { span, .. } => *span,
+        }
+    }
+}
