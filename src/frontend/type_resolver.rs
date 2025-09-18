@@ -299,6 +299,56 @@ impl TypeChecker {
         self.subst_generic_params(&scheme.ty, &generic_subst)
     }
 
+    /// Resolve function overloading by checking argument types against candidates
+    /// Returns the best matching function ID and its instantiated type
+    fn resolve_overloading(
+        &mut self,
+        candidates: &[FunctionId],
+        arg_types: &[ResolvedType],
+        expr_span: Span,
+    ) -> Option<(FunctionId, ResolvedType)> {
+        for &func_id in candidates {
+            if let Some(scheme) = self.env.functions.get(&func_id).cloned() {
+                let func_type = self.instantiate(&scheme);
+
+                if let ResolvedType::Function {
+                    param_types,
+                    return_type,
+                } = func_type
+                {
+                    // Check if parameter count matches
+                    if param_types.len() == arg_types.len() {
+                        // Check if all argument types can unify with parameter types
+                        let mut can_unify = true;
+                        let old_substitution = self.substitution.clone();
+                        let old_error_count = self.errors.len();
+
+                        for (param_ty, arg_ty) in param_types.iter().zip(arg_types.iter()) {
+                            self.unify(param_ty, arg_ty, expr_span);
+                        }
+
+                        // Check if unification introduced new errors
+                        if self.errors.len() > old_error_count {
+                            can_unify = false;
+                            // Remove the errors we just added for this tentative unification
+                            self.errors.truncate(old_error_count);
+                            // Restore substitution
+                            self.substitution = old_substitution;
+                        }
+
+                        if can_unify {
+                            // We found a match - return the function and its return type
+                            let instantiated_return_type = self.apply_substitution(&return_type);
+                            return Some((func_id, instantiated_return_type));
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
     /// Find a type declaration by name, returning a ResolvedType or an error
     fn find_type_by_name(
         &mut self,
@@ -523,6 +573,7 @@ impl TypeChecker {
                         args: vec![],
                     }
                 } else if let Some(&table_id) = self.env.table_name_to_id.get(&name.name) {
+                    // When a table name is used as a type, it should be a Table type
                     ResolvedType::Table { table_id }
                 } else {
                     // Generate error for unresolved type
@@ -644,6 +695,15 @@ impl TypeChecker {
                             self.fresh_infer_var()
                         }
                     }
+                    Some(IdentifierResolution::Table(table_id)) => {
+                        // Table identifiers have type Table<table_name>
+                        self.find_generic_type_by_name(
+                            prog,
+                            "Table",
+                            vec![ResolvedType::Table { table_id }],
+                            expr_span,
+                        )?
+                    }
                     _ => self.fresh_infer_var(), // Other cases not handled yet
                 }
             }
@@ -654,72 +714,181 @@ impl TypeChecker {
                     .map(|arg_id| self.infer_expr_type(prog, *arg_id))
                     .collect::<Result<_, _>>()?;
 
-                let return_type = self.fresh_infer_var();
-                let expected_func_type = ResolvedType::Function {
-                    param_types: arg_types,
-                    return_type: Box::new(return_type.clone()),
-                };
+                // Check if this is a direct function call with resolved_callables
+                if let Expression::Identifier {
+                    resolved_declarations,
+                    ..
+                } = &prog.expressions[callee]
+                {
+                    if let Some(IdentifierResolution::Function(_)) = resolved_declarations.get(0) {
+                        // This is a direct function call, use standard function type checking
+                        let return_type = self.fresh_infer_var();
+                        let expected_func_type = ResolvedType::Function {
+                            param_types: arg_types,
+                            return_type: Box::new(return_type.clone()),
+                        };
 
-                self.unify(&callee_type, &expected_func_type, expr_span);
-                return_type
+                        self.unify(&callee_type, &expected_func_type, expr_span);
+                        return_type
+                    } else {
+                        // Fallback to standard call handling
+                        let return_type = self.fresh_infer_var();
+                        let expected_func_type = ResolvedType::Function {
+                            param_types: arg_types,
+                            return_type: Box::new(return_type.clone()),
+                        };
+
+                        self.unify(&callee_type, &expected_func_type, expr_span);
+                        return_type
+                    }
+                } else {
+                    // Fallback to standard call handling for complex callees
+                    let return_type = self.fresh_infer_var();
+                    let expected_func_type = ResolvedType::Function {
+                        param_types: arg_types,
+                        return_type: Box::new(return_type.clone()),
+                    };
+
+                    self.unify(&callee_type, &expected_func_type, expr_span);
+                    return_type
+                }
             }
             Expression::Binary {
-                op, left, right, ..
+                op,
+                left,
+                right,
+                resolved_callables,
+                ..
             } => {
                 let left_type = self.infer_expr_type(prog, left)?;
                 let right_type = self.infer_expr_type(prog, right)?;
+                let arg_types = vec![left_type.clone(), right_type.clone()];
 
-                self.unify(&left_type, &right_type, expr_span);
-
-                // For comparison ops, return proper bool type
-                if op.name == "=="
-                    || op.name == "!="
-                    || op.name == "<"
-                    || op.name == "<="
-                    || op.name == ">"
-                    || op.name == ">="
-                {
-                    self.find_type_by_name(prog, "bool", expr_span)?
+                // Handle operator overloading
+                if !resolved_callables.is_empty() {
+                    if let Some((resolved_func, return_type)) =
+                        self.resolve_overloading(&resolved_callables, &arg_types, expr_span)
+                    {
+                        // Update the resolved_callables to contain only the selected function
+                        if let Expression::Binary {
+                            resolved_callables: ref mut callables,
+                            ..
+                        } = &mut prog.expressions[id]
+                        {
+                            *callables = vec![resolved_func];
+                        }
+                        return_type
+                    } else {
+                        // No suitable overload found, generate error
+                        self.errors.push(CompilerError::new(
+                            FrontEndErrorKind::TypeMismatch {
+                                expected: format!(
+                                    "function taking ({}, {})",
+                                    left_type, right_type
+                                ),
+                                found: format!("operator {}", op.name),
+                                context: "operator overloading".to_string(),
+                            },
+                            expr_span,
+                        ));
+                        self.fresh_infer_var()
+                    }
                 } else {
-                    left_type
+                    // No overloading candidates, use default behavior
+                    self.unify(&left_type, &right_type, expr_span);
+
+                    // For comparison ops, return proper bool type
+                    if op.name == "=="
+                        || op.name == "!="
+                        || op.name == "<"
+                        || op.name == "<="
+                        || op.name == ">"
+                        || op.name == ">="
+                    {
+                        self.find_type_by_name(prog, "bool", expr_span)?
+                    } else {
+                        left_type
+                    }
                 }
             }
-            Expression::Unary { expr: operand, .. } => self.infer_expr_type(prog, operand)?,
+            Expression::Unary {
+                expr: operand,
+                resolved_callables,
+                ..
+            } => {
+                let operand_type = self.infer_expr_type(prog, operand)?;
+                let arg_types = vec![operand_type.clone()];
+
+                // Handle operator overloading
+                if !resolved_callables.is_empty() {
+                    if let Some((resolved_func, return_type)) =
+                        self.resolve_overloading(&resolved_callables, &arg_types, expr_span)
+                    {
+                        // Update the resolved_callables to contain only the selected function
+                        if let Expression::Unary {
+                            resolved_callables: ref mut callables,
+                            ..
+                        } = &mut prog.expressions[id]
+                        {
+                            *callables = vec![resolved_func];
+                        }
+                        return_type
+                    } else {
+                        // No suitable overload found, generate error
+                        self.errors.push(CompilerError::new(
+                            FrontEndErrorKind::TypeMismatch {
+                                expected: format!("unary function taking {}", operand_type),
+                                found: "unary operator".to_string(),
+                                context: "operator overloading".to_string(),
+                            },
+                            expr_span,
+                        ));
+                        self.fresh_infer_var()
+                    }
+                } else {
+                    // No overloading candidates, return operand type
+                    operand_type
+                }
+            }
             Expression::MemberAccess { .. } => {
                 // Member access is not supported/illegal for now, return fresh inference variable
                 self.fresh_infer_var()
             }
-            Expression::TableRowAccess { table, key_values, .. } => {
+            Expression::TableRowAccess {
+                table,
+                key_values,
+                resolved_table,
+                ..
+            } => {
                 // First, infer the table type to ensure it's valid
                 let table_type = self.infer_expr_type(prog, table)?;
-                
+
                 // Also infer the key value expression types
                 for key_value in &key_values {
                     let _value_type = self.infer_expr_type(prog, key_value.value)?;
                 }
-                
-                // Table row access returns a Row<T> where T is the table's row type
-                // For now, we'll get the table type and extract its row type
-                match &table_type {
-                    ResolvedType::Table { table_id: _ } => {
-                        // Create a Row type for this table's row structure
-                        // For now, use a fresh type variable as the row content type
-                        let row_content_type = self.fresh_infer_var();
-                        self.find_generic_type_by_name(prog, "Row", vec![row_content_type], expr_span)?
-                    }
-                    _ => {
-                        // If it's not a table type, this is an error, but continue with fresh var
-                        self.fresh_infer_var()
-                    }
+
+                // Table row access returns a Row<Table<table_name>>
+                if let Some(table_id) = resolved_table {
+                    // Create a Row type with the specific table type as the content
+                    let table_content_type = ResolvedType::Table { table_id };
+                    self.find_generic_type_by_name(
+                        prog,
+                        "Row",
+                        vec![table_content_type],
+                        expr_span,
+                    )?
+                } else {
+                    self.fresh_infer_var()
                 }
             }
             Expression::Assignment { lhs, rhs, .. } => {
                 // Assignment expressions: infer both sides and unify them
                 let left_type = self.infer_expr_type(prog, lhs)?;
                 let right_type = self.infer_expr_type(prog, rhs)?;
-                
+
                 self.unify(&left_type, &right_type, expr_span);
-                
+
                 // Assignment expression returns void/unit type
                 ResolvedType::Void
             }
@@ -738,7 +907,7 @@ impl TypeChecker {
                         self.ast_to_resolved(prog, param.ty, expr_span)
                     })
                     .collect();
-                
+
                 // Infer the body type (return type of the lambda)
                 // Lambda body is a block, so we need to visit it and infer its return type
                 let return_type = {
@@ -748,7 +917,7 @@ impl TypeChecker {
                     // would require analyzing the last expression in the block
                     ResolvedType::Void
                 };
-                
+
                 // Lambda type is a function type
                 ResolvedType::Function {
                     param_types,
