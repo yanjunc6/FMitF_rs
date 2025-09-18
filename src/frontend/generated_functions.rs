@@ -52,15 +52,6 @@ fn generate_getter_function(
     table_name: &str,
     field: &TableField,
 ) -> FunctionId {
-    // Create the generic parameter T for the table type
-    let generic_param_id = program.generic_params.alloc(GenericParam {
-        name: Identifier {
-            name: table_name.to_string(),
-            span: None,
-        },
-        span: None,
-    });
-
     // Create Row<T> type for parameter
     let row_base_type = create_identifier_type(program, "Row");
     let table_arg_type = create_identifier_type(program, table_name);
@@ -103,7 +94,7 @@ fn generate_getter_function(
                 span: None,
             },
         ],
-        generic_params: vec![generic_param_id],
+        generic_params: vec![],
         params: vec![param_id],
         return_type: Some(return_type),
         body: None, // Intrinsic functions have no body
@@ -127,15 +118,6 @@ fn generate_setter_function(
     table_name: &str,
     field: &TableField,
 ) -> FunctionId {
-    // Create the generic parameter T for the table type
-    let generic_param_id = program.generic_params.alloc(GenericParam {
-        name: Identifier {
-            name: table_name.to_string(),
-            span: None,
-        },
-        span: None,
-    });
-
     // Create Row<T> type for both parameter and return type
     let row_base_type = create_identifier_type(program, "Row");
     let table_arg_type = create_identifier_type(program, table_name);
@@ -190,7 +172,7 @@ fn generate_setter_function(
                 span: None,
             },
         ],
-        generic_params: vec![generic_param_id],
+        generic_params: vec![],
         params: vec![row_param_id, value_param_id],
         return_type: Some(return_row_type),
         body: None, // Intrinsic functions have no body
