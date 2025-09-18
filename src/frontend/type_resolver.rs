@@ -302,7 +302,7 @@ impl TypeChecker {
     /// Find a type declaration by name, returning a ResolvedType or an error
     fn find_type_by_name(
         &mut self,
-        prog: &Program,
+        _prog: &Program,
         type_name: &str,
         span: Span,
     ) -> Result<ResolvedType, CompilerError> {
@@ -326,7 +326,7 @@ impl TypeChecker {
     /// Find a type declaration by name for generic types like List<T>
     fn find_generic_type_by_name(
         &mut self,
-        prog: &Program,
+        _prog: &Program,
         type_name: &str,
         args: Vec<ResolvedType>,
         span: Span,
@@ -685,8 +685,76 @@ impl TypeChecker {
                 }
             }
             Expression::Unary { expr: operand, .. } => self.infer_expr_type(prog, operand)?,
-            Expression::MemberAccess { object, .. } => self.infer_expr_type(prog, object)?,
-            _ => self.fresh_infer_var(),
+            Expression::MemberAccess { .. } => {
+                // Member access is not supported/illegal for now, return fresh inference variable
+                self.fresh_infer_var()
+            }
+            Expression::TableRowAccess { table, key_values, .. } => {
+                // First, infer the table type to ensure it's valid
+                let table_type = self.infer_expr_type(prog, table)?;
+                
+                // Also infer the key value expression types
+                for key_value in &key_values {
+                    let _value_type = self.infer_expr_type(prog, key_value.value)?;
+                }
+                
+                // Table row access returns a Row<T> where T is the table's row type
+                // For now, we'll get the table type and extract its row type
+                match &table_type {
+                    ResolvedType::Table { table_id: _ } => {
+                        // Create a Row type for this table's row structure
+                        // For now, use a fresh type variable as the row content type
+                        let row_content_type = self.fresh_infer_var();
+                        self.find_generic_type_by_name(prog, "Row", vec![row_content_type], expr_span)?
+                    }
+                    _ => {
+                        // If it's not a table type, this is an error, but continue with fresh var
+                        self.fresh_infer_var()
+                    }
+                }
+            }
+            Expression::Assignment { lhs, rhs, .. } => {
+                // Assignment expressions: infer both sides and unify them
+                let left_type = self.infer_expr_type(prog, lhs)?;
+                let right_type = self.infer_expr_type(prog, rhs)?;
+                
+                self.unify(&left_type, &right_type, expr_span);
+                
+                // Assignment expression returns void/unit type
+                ResolvedType::Void
+            }
+            Expression::Grouped { expr, .. } => {
+                // Grouped expressions have the same type as the inner expression
+                self.infer_expr_type(prog, expr)?
+            }
+            Expression::Lambda { params, body, .. } => {
+                // Lambda expressions are function types
+                // Infer parameter types (they might have type annotations)
+                let param_types: Vec<ResolvedType> = params
+                    .iter()
+                    .map(|&param_id| {
+                        let param = &prog.params[param_id];
+                        // Parameters always have type annotations in the AST
+                        self.ast_to_resolved(prog, param.ty, expr_span)
+                    })
+                    .collect();
+                
+                // Infer the body type (return type of the lambda)
+                // Lambda body is a block, so we need to visit it and infer its return type
+                let return_type = {
+                    // Visit the lambda body block
+                    self.visit_block(prog, body)?;
+                    // For now, assume void return type - proper lambda return type inference
+                    // would require analyzing the last expression in the block
+                    ResolvedType::Void
+                };
+                
+                // Lambda type is a function type
+                ResolvedType::Function {
+                    param_types,
+                    return_type: Box::new(return_type),
+                }
+            }
         };
 
         let final_type = self.apply_substitution(&ty);
