@@ -79,7 +79,7 @@ pub enum ResolvedType {
         param_types: Vec<ResolvedType>,
         return_type: Box<ResolvedType>,
     },
-    
+
     Void, // Represents the absence of a value, e.g., from a procedure.
 }
 
@@ -91,7 +91,45 @@ pub struct TypeScheme {
     /// The list of generic parameters that are quantified over.
     /// For `∀T, U. ...`, this would contain the `GenericParamId`s for T and U.
     pub quantified_params: Vec<GenericParamId>,
-    
+
     /// The underlying monotype.
     pub ty: ResolvedType,
+}
+
+impl std::fmt::Display for ResolvedType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResolvedType::Declared { decl_id, args } => {
+                write!(f, "Declared({:?}", decl_id)?;
+                if !args.is_empty() {
+                    write!(f, "<")?;
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", arg)?;
+                    }
+                    write!(f, ">")?;
+                }
+                write!(f, ")")
+            }
+            ResolvedType::Table { table_id } => write!(f, "Table({:?})", table_id),
+            ResolvedType::InferVar(id) => write!(f, "'{}", id),
+            ResolvedType::GenericParam(id) => write!(f, "GenericParam({:?})", id),
+            ResolvedType::Function {
+                param_types,
+                return_type,
+            } => {
+                write!(f, "(")?;
+                for (i, param) in param_types.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", param)?;
+                }
+                write!(f, ") -> {}", return_type)
+            }
+            ResolvedType::Void => write!(f, "void"),
+        }
+    }
 }
