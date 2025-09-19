@@ -12,6 +12,7 @@
 // Built-in Types
 // ===========================================
 
+@intrinsic type void;
 @intrinsic type int;
 @intrinsic type bool;
 @intrinsic type string;
@@ -104,7 +105,7 @@
 // @generated function get_name(t: Row<Activity>) -> string;
 // @generated function get_id(t: Row<Activity>) -> int;
 // @generated function get_active(t: Row<Activity>) -> bool;
-// @generated function set_name(t: Row<Activity>, v: string) -> Row<Activity>
-// @generated function set_id(t: Row<Activity>, v: int) -> Row<Activity>;
-// @generated function set_active(t: Row<Activity>, v: bool) -> Row<Activity>
+// @generated function set_name(t: Row<Activity>, v: string) -> void;
+// @generated function set_id(t: Row<Activity>, v: int) -> void;
+// @generated function set_active(t: Row<Activity>, v: bool) -> void;
 // ===========================================

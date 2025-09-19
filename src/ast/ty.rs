@@ -6,7 +6,6 @@ use super::common::Identifier;
 use super::item::{GenericParamId, TableId, TypeDeclId};
 use crate::util::Span;
 use id_arena::Id;
-use std::collections::HashMap;
 
 // ============================================================================
 // --- Syntactic Types (from source)
@@ -61,9 +60,7 @@ pub enum ResolvedType {
 
     /// A specific table type. This could be a special case of `Declared`,
     /// but keeping it separate can be convenient.
-    Table {
-        table_id: TableId,
-    },
+    Table { table_id: TableId },
 
     /// An unsolved inference variable. This is a placeholder that the
     /// type checker will attempt to solve during unification.
@@ -79,8 +76,6 @@ pub enum ResolvedType {
         param_types: Vec<ResolvedType>,
         return_type: Box<ResolvedType>,
     },
-
-    Void, // Represents the absence of a value, e.g., from a procedure.
 }
 
 /// Represents a polytype, i.e., a type scheme with "forall" quantifiers.
@@ -129,7 +124,6 @@ impl std::fmt::Display for ResolvedType {
                 }
                 write!(f, ") -> {}", return_type)
             }
-            ResolvedType::Void => write!(f, "void"),
         }
     }
 }
