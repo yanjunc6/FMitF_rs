@@ -1063,11 +1063,11 @@ impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
                     }
                 }
             }
-            Expression::Call { callee, args, .. } => {
-                let callee_type = prog.expressions[callee]
-                    .resolved_type()
-                    .cloned()
-                    .unwrap_or_else(|| self.fresh_infer_var());
+            Expression::Call {
+                args,
+                resolved_callables,
+                ..
+            } => {
                 let arg_types: Vec<ResolvedType> = args
                     .iter()
                     .map(|&arg_id| {
@@ -1078,47 +1078,45 @@ impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
                     })
                     .collect();
 
-                // Check if this is a direct function call with resolved_callables
-                if let Expression::Identifier {
-                    resolved_declarations,
-                    ..
-                } = &prog.expressions[callee]
-                {
-                    if let Some(IdentifierResolution::Function(_)) = resolved_declarations.get(0) {
-                        // This is a direct function call, use standard function type checking
-                        let return_type = self.fresh_infer_var();
-                        let expected_func_type = ResolvedType::Function {
-                            param_types: arg_types,
-                            return_type: Box::new(return_type.clone()),
-                        };
-
-                        self.unify(&callee_type, &expected_func_type, expr_span);
+                // Only check resolved_callables
+                if !resolved_callables.is_empty() {
+                    if let Some((resolved_func, return_type)) =
+                        self.resolve_overloading(&resolved_callables, &arg_types, expr_span)
+                    {
+                        // Update the resolved_callables to contain only the selected function
+                        if let Expression::Call {
+                            resolved_callables: ref mut callables,
+                            ..
+                        } = &mut prog.expressions[id]
+                        {
+                            *callables = vec![resolved_func];
+                        }
                         return_type
                     } else {
-                        // Fallback to standard call handling
-                        let return_type = self.fresh_infer_var();
-                        let expected_func_type = ResolvedType::Function {
-                            param_types: arg_types,
-                            return_type: Box::new(return_type.clone()),
-                        };
-
-                        self.unify(&callee_type, &expected_func_type, expr_span);
-                        return_type
+                        // No suitable overload found
+                        self.errors.push(CompilerError::new(
+                            FrontEndErrorKind::TypeMismatch {
+                                expected: format!("function taking arguments"),
+                                found: "call expression".to_string(),
+                                context: "function call".to_string(),
+                            },
+                            expr_span,
+                        ));
+                        self.fresh_infer_var()
                     }
                 } else {
-                    // Fallback to standard call handling for complex callees
-                    let return_type = self.fresh_infer_var();
-                    let expected_func_type = ResolvedType::Function {
-                        param_types: arg_types,
-                        return_type: Box::new(return_type.clone()),
-                    };
-
-                    self.unify(&callee_type, &expected_func_type, expr_span);
-                    return_type
+                    // No resolved callables - report error
+                    self.errors.push(CompilerError::new(
+                        FrontEndErrorKind::InvalidOperation {
+                            op: "function call".to_string(),
+                            details: "no candidates found for function call".to_string(),
+                        },
+                        expr_span,
+                    ));
+                    self.fresh_infer_var()
                 }
             }
             Expression::Binary {
-                op,
                 left,
                 right,
                 resolved_callables,
@@ -1132,9 +1130,9 @@ impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
                     .resolved_type()
                     .cloned()
                     .unwrap_or_else(|| self.fresh_infer_var());
-                let arg_types = vec![left_type.clone(), right_type.clone()];
+                let arg_types = vec![left_type, right_type];
 
-                // Handle operator overloading
+                // Only check resolved_callables
                 if !resolved_callables.is_empty() {
                     if let Some((resolved_func, return_type)) =
                         self.resolve_overloading(&resolved_callables, &arg_types, expr_span)
@@ -1149,14 +1147,11 @@ impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
                         }
                         return_type
                     } else {
-                        // No suitable overload found, generate error
+                        // No suitable overload found
                         self.errors.push(CompilerError::new(
                             FrontEndErrorKind::TypeMismatch {
-                                expected: format!(
-                                    "function taking ({}, {})",
-                                    left_type, right_type
-                                ),
-                                found: format!("operator {}", op.name),
+                                expected: "binary operator overload".to_string(),
+                                found: "binary expression".to_string(),
                                 context: "operator overloading".to_string(),
                             },
                             expr_span,
@@ -1164,21 +1159,15 @@ impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
                         self.fresh_infer_var()
                     }
                 } else {
-                    // No overloading candidates, use default behavior
-                    self.unify(&left_type, &right_type, expr_span);
-
-                    // For comparison ops, return proper bool type
-                    if op.name == "=="
-                        || op.name == "!="
-                        || op.name == "<"
-                        || op.name == "<="
-                        || op.name == ">"
-                        || op.name == ">="
-                    {
-                        self.find_type_by_name(prog, "bool", expr_span)?
-                    } else {
-                        left_type
-                    }
+                    // No resolved callables - report error
+                    self.errors.push(CompilerError::new(
+                        FrontEndErrorKind::InvalidOperation {
+                            op: "binary operator".to_string(),
+                            details: "no candidates found for binary operator".to_string(),
+                        },
+                        expr_span,
+                    ));
+                    self.fresh_infer_var()
                 }
             }
             Expression::Unary {
@@ -1190,9 +1179,9 @@ impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
                     .resolved_type()
                     .cloned()
                     .unwrap_or_else(|| self.fresh_infer_var());
-                let arg_types = vec![operand_type.clone()];
+                let arg_types = vec![operand_type];
 
-                // Handle operator overloading
+                // Only check resolved_callables
                 if !resolved_callables.is_empty() {
                     if let Some((resolved_func, return_type)) =
                         self.resolve_overloading(&resolved_callables, &arg_types, expr_span)
@@ -1207,11 +1196,11 @@ impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
                         }
                         return_type
                     } else {
-                        // No suitable overload found, generate error
+                        // No suitable overload found
                         self.errors.push(CompilerError::new(
                             FrontEndErrorKind::TypeMismatch {
-                                expected: format!("unary function taking {}", operand_type),
-                                found: "unary operator".to_string(),
+                                expected: "unary operator overload".to_string(),
+                                found: "unary expression".to_string(),
                                 context: "operator overloading".to_string(),
                             },
                             expr_span,
@@ -1219,8 +1208,15 @@ impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
                         self.fresh_infer_var()
                     }
                 } else {
-                    // No overloading candidates, return operand type
-                    operand_type
+                    // No resolved callables - report error
+                    self.errors.push(CompilerError::new(
+                        FrontEndErrorKind::InvalidOperation {
+                            op: "unary operator".to_string(),
+                            details: "no candidates found for unary operator".to_string(),
+                        },
+                        expr_span,
+                    ));
+                    self.fresh_infer_var()
                 }
             }
             Expression::MemberAccess { .. } => {
