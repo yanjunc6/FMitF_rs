@@ -77,6 +77,15 @@
 // ===========================================
 
 @intrinsic @infix operator +(a: string, b: string) -> string;
+@intrinsic @infix operator ==(a: string, b: string) -> bool;
+@intrinsic @infix operator !=(a: string, b: string) -> bool;
+
+// ===========================================
+// UUID Operators
+// ===========================================
+
+@intrinsic @infix operator ==(a: UUID, b: UUID) -> bool;
+@intrinsic @infix operator !=(a: UUID, b: UUID) -> bool;
 
 // ===========================================
 // Built-in Functions

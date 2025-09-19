@@ -607,6 +607,20 @@ impl TypeChecker {
         }
     }
 
+    /// Find which table a field belongs to by searching through all table declarations
+    fn find_table_for_field(&self, prog: &Program, field_id: FieldId) -> Option<TableId> {
+        for (table_id, table_decl) in &prog.table_decls {
+            for element in &table_decl.elements {
+                if let TableElement::Field(table_field_id) = element {
+                    if *table_field_id == field_id {
+                        return Some(table_id);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     fn ast_to_resolved(
         &mut self,
         program: &Program,
@@ -1349,16 +1363,101 @@ impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
                     self.fresh_infer_var()
                 }
             }
-            Expression::MemberAccess { .. } => {
-                // Member access is not supported yet - report error
-                // self.errors.push(CompilerError::new(
-                //     FrontEndErrorKind::InvalidOperation {
-                //         op: "member access".to_string(),
-                //         details: "member access is not yet implemented".to_string(),
-                //     },
-                //     expr_span,
-                // ));
-                self.fresh_infer_var()
+            Expression::MemberAccess {
+                object,
+                member,
+                resolved_fields,
+                ..
+            } => {
+                // Get the type of the object being accessed
+                let object_type = prog.expressions[object]
+                    .resolved_type()
+                    .cloned()
+                    .unwrap_or_else(|| self.fresh_infer_var());
+
+                // Apply substitution to get the concrete type
+                let object_type = self.apply_substitution(&object_type);
+
+                // The object should have type Row<Table<table_id>>
+                // We need to extract the table_id to determine which field to use
+                let table_id = match &object_type {
+                    ResolvedType::Declared { decl_id, args } => {
+                        // Check if this is a Row<Table<...>> type
+                        if let Some(&row_type_id) = self.env.type_name_to_id.get("Row") {
+                            if *decl_id == row_type_id && args.len() == 1 {
+                                // Extract the table type from Row<Table<table_id>>
+                                match &args[0] {
+                                    ResolvedType::Table { table_id } => Some(*table_id),
+                                    _ => None,
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+
+                // Find the appropriate field based on the table_id
+                if let Some(table_id) = table_id {
+                    // Look through resolved_fields to find the field that belongs to this table
+                    let mut found_field = None;
+                    for resolution in &resolved_fields {
+                        if let IdentifierResolution::Field(field_id) = resolution {
+                            // Check if this field belongs to the table
+                            let field = &prog.fields[*field_id];
+
+                            // Find which table this field belongs to
+                            let field_table_id = self.find_table_for_field(prog, *field_id);
+
+                            if field_table_id == Some(table_id) {
+                                // Found the correct field
+                                found_field = Some((
+                                    *field_id,
+                                    field
+                                        .resolved_type
+                                        .clone()
+                                        .unwrap_or_else(|| self.fresh_infer_var()),
+                                ));
+                                break;
+                            }
+                        }
+                    }
+
+                    if let Some((resolved_field_id, field_type)) = found_field {
+                        // Update the resolved_fields to contain only the selected field
+                        if let Expression::MemberAccess {
+                            resolved_fields: ref mut fields,
+                            ..
+                        } = &mut prog.expressions[id]
+                        {
+                            *fields = vec![IdentifierResolution::Field(resolved_field_id)];
+                        }
+                        field_type
+                    } else {
+                        // If we couldn't find a matching field, report an error
+                        self.errors.push(CompilerError::new(
+                            FrontEndErrorKind::UndefinedIdentifier {
+                                name: format!("field '{}' not found in table", member.name),
+                            },
+                            expr_span,
+                        ));
+                        self.fresh_infer_var()
+                    }
+                } else {
+                    // Object is not a Row<Table<...>> type - report error
+                    self.errors.push(CompilerError::new(
+                        FrontEndErrorKind::TypeMismatch {
+                            expected: "Row<Table<...>>".to_string(),
+                            found: object_type.to_string(),
+                            context: "member access".to_string(),
+                        },
+                        expr_span,
+                    ));
+                    self.fresh_infer_var()
+                }
             }
             Expression::TableRowAccess {
                 table,

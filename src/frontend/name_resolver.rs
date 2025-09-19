@@ -365,7 +365,7 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
         match stmt {
             // `hop` does not create a new scope.
             Statement::Hop { body, .. } => {
-                let _ = self.visit_block(prog, body);
+                let _ = visit_mut::walk_block_mut(self, prog, body);
             }
             // `HopsFor` creates a new scope for its loop variable.
             Statement::HopsFor {
@@ -465,7 +465,19 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
                         }
                     }
                 }
-                // TODO: return error if no fields found
+                // If no fields were found for this member name, emit an error.
+                else {
+                    // Construct an appropriate error. We don't know the object's type here,
+                    // so use a placeholder for type_name. Use the member span if available.
+                    let span = member
+                        .span
+                        .unwrap_or_else(|| crate::util::Span::new(0, 0, "<unknown>"));
+                    let err = FrontEndErrorKind::MemberNotFound {
+                        member_name: member_name.clone(),
+                        type_name: "<unknown>".to_string(),
+                    };
+                    self.errors.push(crate::util::CompilerError::new(err, span));
+                }
             }
             Expression::TableRowAccess { table, .. } => {
                 let table_id = *table;
