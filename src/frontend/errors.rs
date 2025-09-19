@@ -100,6 +100,12 @@ pub enum FrontEndErrorKind {
     InferTypeFound {
         context: String,
     },
+    LambdaCaptureNotSupported {
+        variable_name: String,
+    },
+    LambdaParameterTypeInference {
+        parameter_name: String,
+    },
 
     // General errors
     InvalidInput {
@@ -236,6 +242,20 @@ impl fmt::Display for FrontEndErrorKind {
                     context
                 )
             }
+            FrontEndErrorKind::LambdaCaptureNotSupported { variable_name } => {
+                write!(
+                    f,
+                    "Lambda closure captures are not supported. Variable '{}' cannot be accessed from within the lambda.",
+                    variable_name
+                )
+            }
+            FrontEndErrorKind::LambdaParameterTypeInference { parameter_name } => {
+                write!(
+                    f,
+                    "Lambda parameter '{}' type cannot be inferred. Please provide explicit type annotation.",
+                    parameter_name
+                )
+            }
             FrontEndErrorKind::InvalidInput { message } => {
                 write!(f, "Invalid input: {}", message)
             }
@@ -278,6 +298,8 @@ impl CompilerErrorKind for FrontEndErrorKind {
             FrontEndErrorKind::TransactionWithGenerics { .. } => "A028",
             FrontEndErrorKind::PartitionMustReturnInt { .. } => "A029",
             FrontEndErrorKind::InferTypeFound { .. } => "A030",
+            FrontEndErrorKind::LambdaCaptureNotSupported { .. } => "A031",
+            FrontEndErrorKind::LambdaParameterTypeInference { .. } => "A032",
             FrontEndErrorKind::NotYetImplemented(..) => "A999",
         }
     }
@@ -334,6 +356,12 @@ impl CompilerErrorKind for FrontEndErrorKind {
             }
             FrontEndErrorKind::InferTypeFound { .. } => {
                 Some("This indicates a type inference failure. All types should be fully resolved after type checking.")
+            }
+            FrontEndErrorKind::LambdaCaptureNotSupported { .. } => {
+                Some("Lambda expressions currently don't support capturing variables from the outer scope. Pass required values as parameters instead.")
+            }
+            FrontEndErrorKind::LambdaParameterTypeInference { .. } => {
+                Some("Lambda parameters must have explicit type annotations, e.g., (x: int) -> bool instead of (x) -> bool.")
             }
             _ => None,
         }
