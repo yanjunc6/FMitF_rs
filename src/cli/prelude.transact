@@ -92,6 +92,7 @@
 // Type conversion functions
 @intrinsic function float(x: int) -> float;
 @intrinsic function str<T>(x: T) -> string;
+@intrinsic function int(x: float) -> int; // truncating conversion
 
 @intrinsic function genUUID() -> UUID;
 

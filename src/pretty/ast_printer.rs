@@ -358,7 +358,7 @@ impl<W: Write> Visitor<'_, (), io::Error> for AstPrinter<W> {
         writeln!(self.writer, " {{")?;
         self.indent();
 
-        for (field_index, element) in decl.elements.iter().enumerate() {
+        for element in decl.elements.iter() {
             match element {
                 TableElement::Field(field_id) => {
                     let field = &prog.fields[*field_id];
@@ -367,7 +367,7 @@ impl<W: Write> Visitor<'_, (), io::Error> for AstPrinter<W> {
                         write!(self.writer, "primary ")?;
                     }
                     write!(self.writer, "{}", field.name.name)?;
-                    self.print_declaration_info(field_index, "field")?;
+                    self.print_declaration_info(field_id.index(), "field")?;
                     write!(self.writer, ": ")?;
                     self.print_ast_type_with_info(prog, field.ty)?;
                     self.print_resolved_type_info(prog, &field.resolved_type)?;
@@ -375,7 +375,9 @@ impl<W: Write> Visitor<'_, (), io::Error> for AstPrinter<W> {
                 }
                 TableElement::Node(node) => {
                     self.write_indent()?;
-                    write!(self.writer, "node {}(", node.name.name)?;
+                    write!(self.writer, "node {}", node.name.name)?;
+                    self.print_callable_resolution_info(&node.resolved_partitions)?;
+                    write!(self.writer, "(")?;
                     for (i, arg) in node.args.iter().enumerate() {
                         if i > 0 {
                             write!(self.writer, ", ")?;
@@ -782,15 +784,20 @@ impl<W: Write> AstPrinter<W> {
 
     /// Print callable resolution for binary/unary operators and function calls
     fn print_callable_resolution_info(&mut self, callables: &[FunctionId]) -> io::Result<()> {
-        if SHOW_NAME_RESOLUTION && !callables.is_empty() {
-            write!(self.writer, "[")?;
-            for (i, callable_id) in callables.iter().enumerate() {
-                if i > 0 {
-                    write!(self.writer, ", ")?;
+        if SHOW_NAME_RESOLUTION {
+            if !callables.is_empty() {
+                write!(self.writer, "[")?;
+                for (i, callable_id) in callables.iter().enumerate() {
+                    if i > 0 {
+                        write!(self.writer, ", ")?;
+                    }
+                    write!(self.writer, "f{}", callable_id.index())?;
                 }
-                write!(self.writer, "f{}", callable_id.index())?;
+                write!(self.writer, "]")?;
+            } else {
+                // No callables resolved
+                write!(self.writer, "[f empty]")?;
             }
-            write!(self.writer, "]")?;
         }
         Ok(())
     }

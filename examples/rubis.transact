@@ -3,10 +3,10 @@
 // ===========================================
 function f(x: int) -> int {
     return 10 * x;
-};
+}
 function g(x: int, y: int) -> int {
     return 10 * x + y;
-};
+}
 function h(x: int, y: int) -> int;
 
 // ===========================================
