@@ -24,6 +24,7 @@ struct SemanticAnalyzer<'a> {
     errors: Vec<CompilerError>,
     current_callable_kind: Option<CallableKind>,
     in_global_hop: bool,
+    lambda_depth: usize,             // Track nesting depth of lambdas
 }
 
 impl<'a> SemanticAnalyzer<'a> {
@@ -33,6 +34,7 @@ impl<'a> SemanticAnalyzer<'a> {
             errors: Vec::new(),
             current_callable_kind: None,
             in_global_hop: false,
+            lambda_depth: 0,
         }
     }
 
@@ -461,6 +463,57 @@ impl<'ast> Visitor<'ast, (), ()> for SemanticAnalyzer<'ast> {
                         FrontEndErrorKind::UnresolvedReference {
                             name: name.name.clone(),
                             category: "identifier".to_string(),
+                        },
+                        *s,
+                    );
+                }
+            }
+        }
+
+        // Lambda-specific checks
+        if let Expression::Lambda { params, body, .. } = expr {
+            // Check lambda in context
+            self.lambda_depth += 1;
+
+            // Check lambda parameters for proper type annotations
+            for param_id in params {
+                let param = &prog.params[*param_id];
+                if let Some(param_type) = &param.resolved_type {
+                    if self.contains_infer_types(param_type) {
+                        if let Some(span) = param.span {
+                            self.add_error(
+                                FrontEndErrorKind::LambdaParameterTypeInference {
+                                    parameter_name: param.name.name.clone(),
+                                },
+                                span,
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Visit the lambda body to check for closures
+            self.visit_block(prog, *body)?;
+
+            self.lambda_depth -= 1;
+
+            return Ok(());
+        }
+
+        // Check for potential closure captures in identifier references within lambdas
+        if let Expression::Identifier {
+            name,
+            resolved_declarations,
+            span,
+            ..
+        } = expr
+        {
+            if self.lambda_depth > 0 && resolved_declarations.is_empty() {
+                // This could be a closure capture attempt
+                if let Some(s) = span {
+                    self.add_error(
+                        FrontEndErrorKind::LambdaCaptureNotSupported {
+                            variable_name: name.name.clone(),
                         },
                         *s,
                     );

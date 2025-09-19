@@ -1566,7 +1566,7 @@ impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
                 // Apply substitution to get the concrete type
                 let object_type = self.apply_substitution(&object_type);
 
-                // The object should have type Row<Table<table_id>>
+                // The object should have type Row<table_id>
                 // We need to extract the table_id to determine which field to use
                 let table_id = match &object_type {
                     ResolvedType::Declared { decl_id, args } => {
