@@ -87,6 +87,19 @@ pub enum FrontEndErrorKind {
     NotAFunction {
         name: String,
     },
+    HopInFunction {
+        function_name: String,
+    },
+    TransactionWithGenerics {
+        transaction_name: String,
+    },
+    PartitionMustReturnInt {
+        function_name: String,
+        found_type: String,
+    },
+    InferTypeFound {
+        context: String,
+    },
 
     // General errors
     InvalidInput {
@@ -192,6 +205,37 @@ impl fmt::Display for FrontEndErrorKind {
             FrontEndErrorKind::NotAFunction { name } => {
                 write!(f, "'{}' is not a function and cannot be called", name)
             }
+            FrontEndErrorKind::HopInFunction { function_name } => {
+                write!(
+                    f,
+                    "Hop blocks are not allowed in function '{}'. Use hop blocks only in transactions.",
+                    function_name
+                )
+            }
+            FrontEndErrorKind::TransactionWithGenerics { transaction_name } => {
+                write!(
+                    f,
+                    "Transaction '{}' cannot have generic parameters. Transactions must be concrete.",
+                    transaction_name
+                )
+            }
+            FrontEndErrorKind::PartitionMustReturnInt {
+                function_name,
+                found_type,
+            } => {
+                write!(
+                    f,
+                    "Partition function '{}' must return int, but found type '{}'.",
+                    function_name, found_type
+                )
+            }
+            FrontEndErrorKind::InferTypeFound { context } => {
+                write!(
+                    f,
+                    "Inference type found in {}: all types must be fully resolved",
+                    context
+                )
+            }
             FrontEndErrorKind::InvalidInput { message } => {
                 write!(f, "Invalid input: {}", message)
             }
@@ -230,6 +274,10 @@ impl CompilerErrorKind for FrontEndErrorKind {
             FrontEndErrorKind::GlobalFunctionInNonGlobalHop { .. } => "A024",
             FrontEndErrorKind::MemberNotFound { .. } => "A025",
             FrontEndErrorKind::NotAFunction { .. } => "A026",
+            FrontEndErrorKind::HopInFunction { .. } => "A027",
+            FrontEndErrorKind::TransactionWithGenerics { .. } => "A028",
+            FrontEndErrorKind::PartitionMustReturnInt { .. } => "A029",
+            FrontEndErrorKind::InferTypeFound { .. } => "A030",
             FrontEndErrorKind::NotYetImplemented(..) => "A999",
         }
     }
@@ -274,6 +322,18 @@ impl CompilerErrorKind for FrontEndErrorKind {
             }
             FrontEndErrorKind::GlobalFunctionInNonGlobalHop { .. } => {
                 Some("Use @global decorator on the hop block to call global functions, or call a non-global function instead.")
+            }
+            FrontEndErrorKind::HopInFunction { .. } => {
+                Some("Functions should contain regular logic without hop blocks. Move partition-specific logic to transactions.")
+            }
+            FrontEndErrorKind::TransactionWithGenerics { .. } => {
+                Some("Transactions operate on concrete data partitions and cannot be generic. Use concrete types for all parameters.")
+            }
+            FrontEndErrorKind::PartitionMustReturnInt { .. } => {
+                Some("Partition functions determine how data is distributed across nodes and must return an integer partition ID.")
+            }
+            FrontEndErrorKind::InferTypeFound { .. } => {
+                Some("This indicates a type inference failure. All types should be fully resolved after type checking.")
             }
             _ => None,
         }
