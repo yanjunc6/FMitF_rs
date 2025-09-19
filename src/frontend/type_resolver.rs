@@ -60,6 +60,7 @@ pub fn resolve_types(program: &mut Program) -> Result<(), Vec<CompilerError>> {
     }
 
     // Pass 2: Type check (including table field types resolution, then function bodies).
+    // This now also applies final substitutions to resolve all inference variables.
     let mut type_checker = TypeChecker::new(environment);
     let result = type_checker.visit_program(program);
     let mut checker_errors = type_checker.into_errors();
@@ -68,10 +69,10 @@ pub fn resolve_types(program: &mut Program) -> Result<(), Vec<CompilerError>> {
         checker_errors.push(e);
     }
     if !checker_errors.is_empty() {
-        Err(checker_errors)
-    } else {
-        Ok(())
+        return Err(checker_errors);
     }
+
+    Ok(())
 }
 
 // ============================================================================
@@ -621,6 +622,182 @@ impl TypeChecker {
         None
     }
 
+    /// Apply final substitutions to all expressions in a block recursively
+    fn apply_substitutions_to_block(&mut self, prog: &mut Program, block_id: BlockId) {
+        let block = prog.blocks[block_id].clone();
+        for stmt_id in &block.statements {
+            self.apply_substitutions_to_stmt(prog, *stmt_id);
+        }
+    }
+
+    /// Apply final substitutions to all expressions in a statement recursively
+    fn apply_substitutions_to_stmt(&mut self, prog: &mut Program, stmt_id: StmtId) {
+        let stmt = prog.statements[stmt_id].clone();
+        match stmt {
+            Statement::VarDecl(var_id) => {
+                if let Some(ref mut ty) = prog.var_decls[var_id].resolved_type {
+                    *ty = self.apply_substitution(ty);
+                }
+                if let Some(init_expr) = prog.var_decls[var_id].init {
+                    self.apply_substitutions_to_expr(prog, init_expr);
+                }
+            }
+            Statement::Expression { expr, .. } => {
+                self.apply_substitutions_to_expr(prog, expr);
+            }
+            Statement::Return { value, .. } => {
+                if let Some(expr_id) = value {
+                    self.apply_substitutions_to_expr(prog, expr_id);
+                }
+            }
+            Statement::If {
+                condition,
+                then_block,
+                else_block,
+                ..
+            } => {
+                self.apply_substitutions_to_expr(prog, condition);
+                self.apply_substitutions_to_block(prog, then_block);
+                if let Some(else_block) = else_block {
+                    self.apply_substitutions_to_block(prog, else_block);
+                }
+            }
+            Statement::For {
+                init,
+                condition,
+                update,
+                body,
+                ..
+            } => {
+                if let Some(for_init) = init {
+                    match for_init {
+                        ForInit::VarDecl(var_id) => {
+                            if let Some(ref mut ty) = prog.var_decls[var_id].resolved_type {
+                                *ty = self.apply_substitution(ty);
+                            }
+                            if let Some(init_expr) = prog.var_decls[var_id].init {
+                                self.apply_substitutions_to_expr(prog, init_expr);
+                            }
+                        }
+                        ForInit::Expression(expr_id) => {
+                            self.apply_substitutions_to_expr(prog, expr_id);
+                        }
+                    }
+                }
+                if let Some(cond_id) = condition {
+                    self.apply_substitutions_to_expr(prog, cond_id);
+                }
+                if let Some(update_id) = update {
+                    self.apply_substitutions_to_expr(prog, update_id);
+                }
+                self.apply_substitutions_to_block(prog, body);
+            }
+            Statement::Assert { expr, .. } => {
+                self.apply_substitutions_to_expr(prog, expr);
+            }
+            Statement::Hop { body, .. } => {
+                self.apply_substitutions_to_block(prog, body);
+            }
+            Statement::HopsFor {
+                var,
+                start,
+                end,
+                body,
+                ..
+            } => {
+                if let Some(ref mut ty) = prog.var_decls[var].resolved_type {
+                    *ty = self.apply_substitution(ty);
+                }
+                if let Some(init_expr) = prog.var_decls[var].init {
+                    self.apply_substitutions_to_expr(prog, init_expr);
+                }
+                self.apply_substitutions_to_expr(prog, start);
+                self.apply_substitutions_to_expr(prog, end);
+                self.apply_substitutions_to_block(prog, body);
+            }
+            Statement::Block(block_id) => {
+                self.apply_substitutions_to_block(prog, block_id);
+            }
+        }
+    }
+
+    /// Apply final substitutions to an expression and all its sub-expressions recursively
+    fn apply_substitutions_to_expr(&mut self, prog: &mut Program, expr_id: ExprId) {
+        // First, recursively apply to all sub-expressions
+        let expr = prog.expressions[expr_id].clone();
+        match expr {
+            Expression::Literal {
+                value: Literal::List(elements),
+                ..
+            } => {
+                for element_id in elements {
+                    self.apply_substitutions_to_expr(prog, element_id);
+                }
+            }
+            Expression::Literal {
+                value: Literal::RowLiteral(key_values),
+                ..
+            } => {
+                for key_value in key_values {
+                    self.apply_substitutions_to_expr(prog, key_value.value);
+                }
+            }
+            Expression::Binary { left, right, .. } => {
+                self.apply_substitutions_to_expr(prog, left);
+                self.apply_substitutions_to_expr(prog, right);
+            }
+            Expression::Unary { expr, .. } => {
+                self.apply_substitutions_to_expr(prog, expr);
+            }
+            Expression::Assignment { lhs, rhs, .. } => {
+                self.apply_substitutions_to_expr(prog, lhs);
+                self.apply_substitutions_to_expr(prog, rhs);
+            }
+            Expression::Call { callee, args, .. } => {
+                self.apply_substitutions_to_expr(prog, callee);
+                for arg_id in args {
+                    self.apply_substitutions_to_expr(prog, arg_id);
+                }
+            }
+            Expression::MemberAccess { object, .. } => {
+                self.apply_substitutions_to_expr(prog, object);
+            }
+            Expression::TableRowAccess {
+                table, key_values, ..
+            } => {
+                self.apply_substitutions_to_expr(prog, table);
+                for key_value in key_values {
+                    self.apply_substitutions_to_expr(prog, key_value.value);
+                }
+            }
+            Expression::Grouped { expr, .. } => {
+                self.apply_substitutions_to_expr(prog, expr);
+            }
+            Expression::Lambda { body, .. } => {
+                self.apply_substitutions_to_block(prog, body);
+            }
+            _ => {} // Literal primitives and identifiers have no sub-expressions
+        }
+
+        // Now apply substitution to this expression's type
+        match &mut prog.expressions[expr_id] {
+            Expression::Literal { resolved_type, .. }
+            | Expression::Identifier { resolved_type, .. }
+            | Expression::Binary { resolved_type, .. }
+            | Expression::Unary { resolved_type, .. }
+            | Expression::Assignment { resolved_type, .. }
+            | Expression::Call { resolved_type, .. }
+            | Expression::MemberAccess { resolved_type, .. }
+            | Expression::TableRowAccess { resolved_type, .. }
+            | Expression::Grouped { resolved_type, .. }
+            | Expression::Lambda { resolved_type, .. } => {
+                if let Some(ref mut ty) = resolved_type {
+                    *ty = self.apply_substitution(ty);
+                }
+            }
+        }
+    }
+
     fn ast_to_resolved(
         &mut self,
         program: &Program,
@@ -906,6 +1083,17 @@ impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
             }
             if let Some(ref mut ty) = prog.functions[id].resolved_return_type {
                 *ty = self.apply_substitution(ty);
+            }
+
+            // Apply final substitutions to all expressions in the function body
+            if let Some(body_id) = decl_body {
+                self.apply_substitutions_to_block(prog, body_id);
+            }
+
+            // Apply final substitutions to assumptions (preconditions)
+            let assumptions = prog.functions[id].assumptions.clone();
+            for assumption_id in assumptions {
+                self.apply_substitutions_to_expr(prog, assumption_id);
             }
         }
 
@@ -1571,3 +1759,6 @@ impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
         Ok(())
     }
 }
+
+// ============================================================================
+// --- Pass 3: Apply Final Substitutions
