@@ -1,11 +1,14 @@
 // ===========================================
 // Partition function declarations
 // ===========================================
+function f(x: UUID) -> int {
+    return x;
+}
 function f(x: int) -> int {
     return 10 * x;
 }
-function g(x: int, y: int) -> int {
-    return 10 * x + y;
+function g(x: string, y: int) -> int {
+    return y;
 }
 function h(x: int, y: int) -> int;
 
@@ -129,7 +132,7 @@ transaction registerUser(nickname: string, password: string, firstname: string, 
 
 function viewUser(uid: UUID) -> string {
     hop {
-        var info: string = Users[id: uid].nickname + Users[id: uid].firstname + Users[id: uid].lastname + Users[id: uid].rating;
+        var info: string = Users[id: uid].nickname + Users[id: uid].firstname + Users[id: uid].lastname + str(Users[id: uid].rating);
         return info;
     }
 }
@@ -137,7 +140,7 @@ function viewUser(uid: UUID) -> string {
 transaction makeComment(from_uid: UUID, to_uid: UUID, iid: UUID, comment: string, rating: int) {
     hop {
         var id: UUID = genUUID();
-        Users[id: to_uid].rating += rating;
+        Users[id: to_uid].rating = Users[id: to_uid].rating + rating;
     }
 
     hop {
@@ -237,7 +240,7 @@ transaction putBid(iid: UUID, max_bid_val: float, uid: UUID, quantity: int, bid_
         var cur_max: float = Items[id: iid].max_bid;
         if max_bid_val > cur_max {
             Items[id: iid].max_bid = max_bid_val;
-            Items[id: iid].nb_of_bids += 1;
+            Items[id: iid].nb_of_bids = Items[id: iid].nb_of_bids + 1;
         } else {
             return;
         }

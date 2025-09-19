@@ -361,7 +361,6 @@ impl<'ast> Visitor<'ast, (), ()> for SemanticAnalyzer<'ast> {
         walk_const_decl(self, prog, _id, decl)
     }
 }
-// node's function should return int
 // no hop in function, only in transaction
 // transaction's top level only hop and hops_for
 // partition must return int
