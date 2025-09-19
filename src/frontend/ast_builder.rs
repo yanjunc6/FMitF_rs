@@ -341,7 +341,8 @@ impl AstBuilder {
                     resolved_type: None,
                     span: Some(span),
                 };
-                Ok(TableElement::Field(field))
+                let field_id = self.program.fields.alloc(field);
+                Ok(TableElement::Field(field_id))
             }
             Rule::node_declaration => {
                 let mut p_inner = actual_element.into_inner();
@@ -985,8 +986,7 @@ impl AstBuilder {
                             let member_expr = Expression::MemberAccess {
                                 object: expr,
                                 member: member_name,
-                                resolved_table: None,
-                                resolved_field: None,
+                                resolved_fields: Vec::new(),
                                 resolved_type: None,
                                 span: Some(span),
                             };

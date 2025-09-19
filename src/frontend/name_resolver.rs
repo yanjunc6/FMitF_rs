@@ -42,7 +42,8 @@ impl Scope {
             IdentifierResolution::Var(_)
             | IdentifierResolution::Param(_)
             | IdentifierResolution::GenericParam(_)
-            | IdentifierResolution::Const(_) => {
+            | IdentifierResolution::Const(_)
+            | IdentifierResolution::Field(_) => {
                 // Variables, parameters, generic params, and constants cannot be overloaded within same scope
                 // but they can shadow functions and each other
                 let existing = self.values.entry(name.clone()).or_default();
@@ -464,12 +465,13 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
                         self.errors.push(CompilerError::new(err, default_span));
                     } else if let Some(&table_id) = table_resolutions.first() {
                         // Look up the field in the table
-                        let mut resolved_field = None;
+                        let mut resolved_field_id = None;
                         if let Some(table_item) = prog.table_decls.get(table_id) {
                             for element in &table_item.elements {
-                                if let TableElement::Field(field) = element {
+                                if let TableElement::Field(field_id) = element {
+                                    let field = &prog.fields[*field_id];
                                     if field.name.name == member_name {
-                                        resolved_field = Some(field.clone());
+                                        resolved_field_id = Some(*field_id);
                                         break;
                                     }
                                 }
@@ -478,13 +480,12 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
 
                         // Now update the expression
                         if let Expression::MemberAccess {
-                            resolved_table,
-                            resolved_field: rf,
-                            ..
+                            resolved_fields, ..
                         } = &mut prog.expressions[id]
                         {
-                            *resolved_table = Some(table_id);
-                            *rf = resolved_field;
+                            if let Some(field_id) = resolved_field_id {
+                                resolved_fields.push(IdentifierResolution::Field(field_id));
+                            }
                         }
                     }
                 }
@@ -724,7 +725,8 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
                             let mut found_field = None;
 
                             for element in &table.elements {
-                                if let TableElement::Field(field) = element {
+                                if let TableElement::Field(field_id) = element {
+                                    let field = &prog.fields[*field_id];
                                     if field.name.name == arg_name.name {
                                         found_field = Some(field.clone());
                                         break;

@@ -2,7 +2,9 @@
 //!
 //! Common, reusable data structures for the AST like identifiers and spans.
 
-use super::item::{ConstId, FunctionId, GenericParamId, ParamId, TableId, TypeDeclId, VarId};
+use super::item::{
+    ConstId, FieldId, FunctionId, GenericParamId, ParamId, TableId, TypeDeclId, VarId,
+};
 use crate::util::Span;
 
 /// An identifier - just a name and location
@@ -23,6 +25,7 @@ pub enum IdentifierResolution {
     Var(VarId),
     Param(ParamId),
     GenericParam(GenericParamId),
+    Field(FieldId),
 }
 
 /// Represents a decorator like `@hop`.

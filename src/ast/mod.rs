@@ -43,6 +43,7 @@ pub struct Program {
     pub var_decls: Arena<VarDecl>,
     pub params: Arena<Parameter>,
     pub generic_params: Arena<GenericParam>,
+    pub fields: Arena<TableField>,
 
     // Structure arenas
     pub types: Arena<AstType>,
