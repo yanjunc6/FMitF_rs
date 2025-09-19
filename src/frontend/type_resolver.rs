@@ -1270,6 +1270,72 @@ impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
     }
 
     fn visit_expr(&mut self, prog: &mut Program, id: ExprId) -> Result<(), CompilerError> {
+        // Handle lambda expressions specially - set up parameter types BEFORE visiting body
+        let is_lambda = matches!(prog.expressions[id], Expression::Lambda { .. });
+        
+        if is_lambda {
+            // For lambdas: Set up parameter types FIRST, then visit body manually
+            let expr_span = prog.expressions[id]
+                .span()
+                .unwrap_or(Span::new(0, 0, "<type_resolver>"));
+
+            if let Expression::Lambda { params, body, return_type, .. } = &prog.expressions[id] {
+                let params = params.clone();
+                let body = *body;
+                let return_type = *return_type;
+
+                // FIRST: Resolve parameter types from AST annotations and store them immediately
+                let param_types: Vec<ResolvedType> = params
+                    .iter()
+                    .map(|&param_id| {
+                        let param = &prog.params[param_id];
+                        let span = param.name.span.unwrap_or(expr_span);
+                        // Parameters always have type annotations in the AST
+                        let resolved_type = self.ast_to_resolved(prog, param.ty, span);
+                        
+                        // Store the resolved type immediately in the parameter
+                        prog.params[param_id].resolved_type = Some(resolved_type.clone());
+                        
+                        resolved_type
+                    })
+                    .collect();
+
+                // SECOND: Visit the lambda body with parameters properly typed
+                self.visit_block(prog, body)?;
+
+                // THIRD: Process the lambda expression type inference
+                // Apply final substitutions to parameter types after body processing
+                for (param_id, param_type) in params.iter().zip(param_types.iter()) {
+                    let final_param_type = self.apply_substitution(param_type);
+                    prog.params[*param_id].resolved_type = Some(final_param_type);
+                }
+
+                // FOURTH: Resolve return type
+                let return_type = self.ast_to_resolved(prog, return_type, expr_span);
+
+                // Lambda type is a function type using the final parameter types
+                let final_param_types: Vec<ResolvedType> = param_types
+                    .iter()
+                    .map(|ty| self.apply_substitution(ty))
+                    .collect();
+
+                let lambda_type = ResolvedType::Function {
+                    param_types: final_param_types,
+                    return_type: Box::new(return_type),
+                };
+
+                let final_type = self.apply_substitution(&lambda_type);
+
+                // Update the lambda expression's resolved type
+                if let Expression::Lambda { resolved_type, .. } = &mut prog.expressions[id] {
+                    *resolved_type = Some(final_type);
+                }
+            }
+
+            return Ok(());
+        }
+
+        // For all other expressions: use normal processing
         // First, visit children expressions using the visitor pattern
         visit_mut::walk_expr_mut(self, prog, id)?;
 
@@ -1709,32 +1775,9 @@ impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
                     .cloned()
                     .unwrap_or_else(|| self.fresh_infer_var())
             }
-            Expression::Lambda {
-                params,
-                return_type,
-                body,
-                ..
-            } => {
-                // Lambda expressions are function types
-                // Infer parameter types (they might have type annotations)
-                let param_types: Vec<ResolvedType> = params
-                    .iter()
-                    .map(|&param_id| {
-                        let param = &prog.params[param_id];
-                        // Parameters always have type annotations in the AST
-                        self.ast_to_resolved(prog, param.ty, expr_span)
-                    })
-                    .collect();
-                self.visit_block(prog, body)?;
-
-                // Infer the return type by analyzing all return statements in the lambda body
-                let return_type = self.ast_to_resolved(prog, return_type, expr_span);
-
-                // Lambda type is a function type
-                ResolvedType::Function {
-                    param_types,
-                    return_type: Box::new(return_type),
-                }
+            Expression::Lambda { .. } => {
+                // Lambda expressions are handled above, this should never be reached
+                unreachable!("Lambda expressions should be handled before the match statement")
             }
         };
 
