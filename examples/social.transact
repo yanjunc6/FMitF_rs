@@ -103,7 +103,7 @@ transaction unFriend(uid1: int, uid2: int, time: int) {
 }
 
 // Using map/filter/reduce pattern for table scanning
-function readFriends(uid: int) -> List<int> {
+transaction readFriends(uid: int) -> List<int> {
     @global hop {
         // Using filter and map pattern
         var uids: List<int> =
@@ -119,7 +119,7 @@ function readFriends(uid: int) -> List<int> {
     }
 }
 
-function readActivities(uid: int) -> List<string> {
+transaction readActivities(uid: int) -> List<string> {
     @global hop {
         // Using filter and map pattern
         var allActivities: List<Row<Activity>> = scan(Activity);

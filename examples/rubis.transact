@@ -130,7 +130,7 @@ transaction registerUser(nickname: string, password: string, firstname: string, 
     }
 }
 
-function viewUser(uid: UUID) -> string {
+transaction viewUser(uid: UUID) -> string {
     hop {
         var info: string = Users[id: uid].nickname + Users[id: uid].firstname + Users[id: uid].lastname + str(Users[id: uid].rating);
         return info;
@@ -154,7 +154,7 @@ transaction makeComment(from_uid: UUID, to_uid: UUID, iid: UUID, comment: string
     }
 }
 
-function getCommentsByToUID(to_id: UUID) -> List<string> {
+transaction getCommentsByToUID(to_id: UUID) -> List<string> {
     @global hop {
         var commentList: List<string> =
         Comments
@@ -169,7 +169,7 @@ function getCommentsByToUID(to_id: UUID) -> List<string> {
     }
 }
 
-function getCommentsByIID(iid: UUID) -> List<string> {
+transaction getCommentsByIID(iid: UUID) -> List<string> {
     @global hop {
         var commentList: List<string> =
         Comments
@@ -184,7 +184,7 @@ function getCommentsByIID(iid: UUID) -> List<string> {
     }
 }
 
-function getItemsByRegion(region_id: int) -> List<Row<Items>> {
+transaction getItemsByRegion(region_id: int) -> List<Row<Items>> {
     @global hop {
         var itemList: List<Row<Items>> =
         Items
@@ -199,7 +199,7 @@ function getItemsByRegion(region_id: int) -> List<Row<Items>> {
     }
 }
 
-function getItemsByCategory(category_id: int) -> List<Row<Items>> {
+transaction getItemsByCategory(category_id: int) -> List<Row<Items>> {
     @global hop {
         var itemList: List<Row<Items>> =
         Items
@@ -258,7 +258,7 @@ transaction putBid(iid: UUID, max_bid_val: float, uid: UUID, quantity: int, bid_
     }
 }
 
-function getBidsByItem(iid: UUID) -> List<Row<Bids>> {
+transaction getBidsByItem(iid: UUID) -> List<Row<Bids>> {
     @global hop {
         var bidList: List<Row<Bids>> =
         Bids
@@ -273,7 +273,7 @@ function getBidsByItem(iid: UUID) -> List<Row<Bids>> {
     }
 }
 
-function getBidsByUser(uid: UUID) -> List<Row<Bids>> {
+transaction getBidsByUser(uid: UUID) -> List<Row<Bids>> {
     @global hop {
         var bidList: List<Row<Bids>> =
         Bids
