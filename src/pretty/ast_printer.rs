@@ -113,7 +113,6 @@ impl<W: Write> AstPrinter<W> {
             ResolvedType::GenericParam(id) => {
                 write!(self.writer, "gp{}", id.index())
             }
-            ResolvedType::Void => write!(self.writer, "void"),
             ResolvedType::Function {
                 param_types,
                 return_type,
@@ -753,7 +752,7 @@ impl<W: Write> AstPrinter<W> {
     fn print_expression_decorators(
         &mut self,
         prog: &Program,
-        expr_id: ExprId,
+        _expr_id: ExprId,
         resolved_type: &Option<ResolvedType>,
         resolutions: &[IdentifierResolution],
     ) -> io::Result<()> {
