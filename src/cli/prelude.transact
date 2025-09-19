@@ -108,7 +108,7 @@
 @intrinsic @global function scan<T>(t: Table<T>) -> List<Row<T>>;
 
 // ===========================================
-// Generated Functions for Row
+// (deprecated) Generated Functions for Row
 // ===========================================
 // For a table Activity with schema (id: int, name: string, active: bool), where primary key is id,
 // the following functions are automatically generated:

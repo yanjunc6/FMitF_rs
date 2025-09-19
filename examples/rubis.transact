@@ -160,10 +160,10 @@ transaction getCommentsByToUID(to_id: UUID) -> List<string> {
         Comments
         .scan()
         .filter(
-            (c: Row<Comments>) -> bool { return c.get_to_user_id() == to_id; }
+            (c: Row<Comments>) -> bool { return c.to_user_id == to_id; }
         )
         .map(
-            (c: Row<Comments>) -> string { return c.get_comment(); }
+            (c: Row<Comments>) -> string { return c.comment; }
         );
         return commentList;
     }
@@ -175,10 +175,10 @@ transaction getCommentsByIID(iid: UUID) -> List<string> {
         Comments
         .scan()
         .filter(
-            (c: Row<Comments>) -> bool { return c.get_item_id() == iid; }
+            (c: Row<Comments>) -> bool { return c.item_id == iid; }
         )
         .map(
-            (c: Row<Comments>) -> string { return c.get_comment(); }
+            (c: Row<Comments>) -> string { return c.comment; }
         );
         return commentList;
     }
@@ -190,7 +190,7 @@ transaction getItemsByRegion(region_id: int) -> List<Row<Items>> {
         Items
         .scan()
         .filter(
-            (i: Row<Items>) -> bool { return i.get_region() == region_id; }
+            (i: Row<Items>) -> bool { return i.region == region_id; }
         )
         .map(
             (i: Row<Items>) -> Row<Items> { return i; }
@@ -205,7 +205,7 @@ transaction getItemsByCategory(category_id: int) -> List<Row<Items>> {
         Items
         .scan()
         .filter(
-            (i: Row<Items>) -> bool { return i.get_category() == category_id; }
+            (i: Row<Items>) -> bool { return i.category == category_id; }
         )
         .map(
             (i: Row<Items>) -> Row<Items> { return i; }
@@ -264,7 +264,7 @@ transaction getBidsByItem(iid: UUID) -> List<Row<Bids>> {
         Bids
         .scan()
         .filter(
-            (b: Row<Bids>) -> bool { return b.get_item_id() == iid; }
+            (b: Row<Bids>) -> bool { return b.item_id == iid; }
         )
         .map(
             (b: Row<Bids>) -> Row<Bids> { return b; }
@@ -279,7 +279,7 @@ transaction getBidsByUser(uid: UUID) -> List<Row<Bids>> {
         Bids
         .scan()
         .filter(
-            (b: Row<Bids>) -> bool { return b.get_user_id() == uid; }
+            (b: Row<Bids>) -> bool { return b.user_id == uid; }
         )
         .map(
             (b: Row<Bids>) -> Row<Bids> { return b; }

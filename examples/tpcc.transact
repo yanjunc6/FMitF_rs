@@ -186,20 +186,20 @@ transaction newOrder(
         // Read and update stock
         var s: Row<Stock> = Stock[S_W_ID: sup_w_id, S_I_ID: i_id];
 
-        if s.get_S_QUANTITY() - qty >= 10 {
-            s.set_S_QUANTITY(s.get_S_QUANTITY() - qty);
+        if s.S_QUANTITY - qty >= 10 {
+            s.S_QUANTITY = s.S_QUANTITY - qty;
         } else {
-            s.set_S_QUANTITY(s.get_S_QUANTITY() + 91 - qty);
+            s.S_QUANTITY = s.S_QUANTITY + 91 - qty;
         }
 
-        // assert s.get_S_QUANTITY() >= 0;
+        // assert s.S_QUANTITY >= 0;
 
         if sup_w_id != w_id {
-            s.set_S_REMOTE_CNT(s.get_S_REMOTE_CNT() + 1);
+            s.S_REMOTE_CNT = s.S_REMOTE_CNT + 1;
         }
 
-        s.set_S_ORDER_CNT(s.get_S_ORDER_CNT() + 1);
-        s.set_S_YTD(s.get_S_YTD() + float(qty));
+        s.S_ORDER_CNT = s.S_ORDER_CNT + 1;
+        s.S_YTD = s.S_YTD + float(qty);
         Stock[S_W_ID: sup_w_id, S_I_ID: i_id] = s;
     }
 
@@ -283,14 +283,14 @@ transaction Payment(w_id: int, d_id: int, c_w_id: int, c_d_id: int, c_id: int, a
     // Update customer
     hop {
         var c: Row<Customer> = Customer[C_W_ID: c_w_id, C_D_ID: c_d_id, C_ID: c_id];
-        c.set_C_BALANCE(c.get_C_BALANCE() - amount);
-        c.set_C_YTD_PAYMENT(c.get_C_YTD_PAYMENT() + amount);
-        c.set_C_PAYMENT_CNT(c.get_C_PAYMENT_CNT() + 1.0);
+        c.C_BALANCE = c.C_BALANCE - amount;
+        c.C_YTD_PAYMENT = c.C_YTD_PAYMENT + amount;
+        c.C_PAYMENT_CNT = c.C_PAYMENT_CNT + 1.0;
 
-        if c.get_C_CREDIT() == "BC" {
+        if c.C_CREDIT == "BC" {
             // Replace legacy "~" concatenation with string "+" and explicit str() conversion
-            c.set_C_DATA(str(c.get_C_ID()) + " " + str(c.get_C_D_ID()) + " " + str(c.get_C_W_ID()) + " " + str(d_id) + " " + str(w_id)
-                + " " + str(amount) + " | " + c.get_C_DATA());
+            c.C_DATA = str(c.C_ID) + " " + str(c.C_D_ID) + " " + str(c.C_W_ID) + " " + str(d_id) + " " + str(w_id)
+                + " " + str(amount) + " | " + c.C_DATA;
         }
 
         Customer[C_W_ID: c_w_id, C_D_ID: c_d_id, C_ID: c_id] = c;
