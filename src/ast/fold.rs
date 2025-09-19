@@ -146,7 +146,8 @@ pub fn foldwalk_table_decl<F: Fold>(
 ) -> TableDecl {
     for element in &decl.elements.clone() {
         match element {
-            TableElement::Field(field) => {
+            TableElement::Field(field_id) => {
+                let field = &prog.fields[*field_id];
                 let ast_type = prog.types[field.ty].clone();
                 folder.fold_ast_type(prog, field.ty, ast_type);
             }
@@ -481,8 +482,7 @@ pub fn foldwalk_expr<F: Fold>(
         Expression::MemberAccess {
             object,
             member,
-            resolved_table,
-            resolved_field,
+            resolved_fields,
             resolved_type,
             span,
         } => {
@@ -491,8 +491,7 @@ pub fn foldwalk_expr<F: Fold>(
             Expression::MemberAccess {
                 object,
                 member,
-                resolved_table,
-                resolved_field,
+                resolved_fields,
                 resolved_type,
                 span,
             }

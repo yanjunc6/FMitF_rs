@@ -142,7 +142,8 @@ pub fn walk_table_decl_mut<'ast, R: Default, E, V: VisitorMut<'ast, R, E>>(
     let decl = prog.table_decls[id].clone();
     for element in &decl.elements {
         match element {
-            TableElement::Field(field) => {
+            TableElement::Field(field_id) => {
+                let field = &prog.fields[*field_id];
                 let _ = visitor.visit_ast_type(prog, field.ty)?;
             }
             TableElement::Node(node) => {

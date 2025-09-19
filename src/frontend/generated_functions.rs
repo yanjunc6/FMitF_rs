@@ -21,11 +21,22 @@ fn generate_accessors_for_table(program: &mut Program, table_id: TableId) {
     let table_decl = program.table_decls[table_id].clone();
     let table_name = table_decl.name.name.clone();
 
+    // Collect field information first to avoid borrow checker issues
+    let field_info: Vec<_> = table_decl
+        .elements
+        .iter()
+        .filter_map(|element| {
+            if let TableElement::Field(field_id) = element {
+                Some(program.fields[*field_id].clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
     // Generate functions for each field
-    for element in &table_decl.elements {
-        if let TableElement::Field(field) = element {
-            generate_field_accessors(program, &table_name, field);
-        }
+    for field in field_info {
+        generate_field_accessors(program, &table_name, &field);
     }
 }
 

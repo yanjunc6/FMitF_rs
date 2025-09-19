@@ -140,6 +140,7 @@ impl<W: Write> AstPrinter<W> {
             IdentifierResolution::Type(id) => write!(self.writer, "it{}", id.index())?,
             IdentifierResolution::Table(id) => write!(self.writer, "itab{}", id.index())?,
             IdentifierResolution::GenericParam(id) => write!(self.writer, "igp{}", id.index())?,
+            IdentifierResolution::Field(id) => write!(self.writer, "field{}", id.index())?,
         }
         Ok(())
     }
@@ -359,7 +360,8 @@ impl<W: Write> Visitor<'_, (), io::Error> for AstPrinter<W> {
 
         for (field_index, element) in decl.elements.iter().enumerate() {
             match element {
-                TableElement::Field(field) => {
+                TableElement::Field(field_id) => {
+                    let field = &prog.fields[*field_id];
                     self.write_indent()?;
                     if field.is_primary {
                         write!(self.writer, "primary ")?;
@@ -641,18 +643,23 @@ impl<W: Write> AstPrinter<W> {
                 object,
                 member,
                 resolved_type,
-                resolved_table,
-                resolved_field,
+                resolved_fields,
                 ..
             } => {
                 self.print_expression_inline(prog, *object)?;
                 write!(self.writer, ".{}", member.name)?;
-                if let Some(table_id) = resolved_table {
-                    self.print_declaration_info(table_id.index(), "tab")?;
-                }
-                if let Some(_field) = resolved_field {
-                    // TableField is a struct, not an enum, so just print the field info
-                    write!(self.writer, "[field]")?;
+                for resolution in resolved_fields {
+                    match resolution {
+                        IdentifierResolution::Field(field_id) => {
+                            self.print_declaration_info(field_id.index(), "field")?;
+                        }
+                        IdentifierResolution::Table(table_id) => {
+                            self.print_declaration_info(table_id.index(), "tab")?;
+                        }
+                        _ => {
+                            // Handle other resolution types if needed
+                        }
+                    }
                 }
                 self.print_expression_decorators(prog, expr_id, resolved_type, &[])?;
             }

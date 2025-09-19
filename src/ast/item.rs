@@ -17,6 +17,7 @@ pub type TableId = Id<TableDecl>;
 pub type VarId = Id<VarDecl>; // Technically a statement-level decl, but ID is needed here
 pub type ParamId = Id<Parameter>;
 pub type GenericParamId = Id<GenericParam>;
+pub type FieldId = Id<TableField>;
 
 /// A top-level declaration in a file.
 #[derive(Debug, Clone)]
@@ -78,7 +79,7 @@ pub struct TableDecl {
 
 #[derive(Debug, Clone)]
 pub enum TableElement {
-    Field(TableField),
+    Field(FieldId),
     Node(TableNode),
     Invariant(ExprId),
 }

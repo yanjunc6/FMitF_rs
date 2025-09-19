@@ -3,7 +3,7 @@
 //! Expression AST nodes, representing constructs that evaluate to a value.
 
 use super::common::{Identifier, IdentifierResolution};
-use super::item::{FunctionId, ParamId, TableField, TableId};
+use super::item::{FunctionId, ParamId, TableId};
 use super::stmt::BlockId;
 use super::ty::{AstTypeId, ResolvedType};
 use crate::util::Span;
@@ -55,8 +55,7 @@ pub enum Expression {
     MemberAccess {
         object: ExprId,
         member: Identifier,
-        resolved_table: Option<TableId>,
-        resolved_field: Option<TableField>,
+        resolved_fields: Vec<IdentifierResolution>,
         resolved_type: Option<ResolvedType>,
         span: Option<Span>,
     },
@@ -96,7 +95,7 @@ pub struct KeyValue {
     pub key: Identifier,
     pub value: ExprId,
     pub resolved_table: Option<TableId>,
-    pub resolved_field: Option<TableField>,
+    pub resolved_field: Option<IdentifierResolution>,
     pub span: Option<Span>,
 }
 

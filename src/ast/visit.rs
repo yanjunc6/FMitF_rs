@@ -176,7 +176,8 @@ pub fn walk_table_decl<'ast, R: Default, E, V: Visitor<'ast, R, E>>(
 ) -> Result<R, E> {
     for element in &decl.elements {
         match element {
-            TableElement::Field(field) => {
+            TableElement::Field(field_id) => {
+                let field = &prog.fields[*field_id];
                 let _ = visitor.visit_ast_type(prog, field.ty)?;
             }
             TableElement::Node(node) => {
