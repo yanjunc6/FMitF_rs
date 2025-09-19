@@ -234,7 +234,7 @@ transaction newOrder(
                 OL_I_ID: i_id,
                 OL_SUPPLY_W_ID: sup_w_id,
                 OL_QUANTITY: qty,
-                OL_AMOUNT: int(price * float(qty))
+                OL_AMOUNT: int(price * float(qty)) // TODO: rounding
             };
         }
     }

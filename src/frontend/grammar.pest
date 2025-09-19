@@ -16,7 +16,7 @@ KEYWORD = @{
     ("assert" | "assume" | "const" | "else" | "false" | "for" | "function" |
      "hop" | "hops" | "if" | "in" | "invariant" | "node" | "operator" |
      "partition" | "primary" | "return" | "table" | "transaction" |
-     "true" | "type" | "var" | "to") ~ !ASCII_ALPHANUMERIC
+     "true" | "type" | "var" | "to") ~ !(ASCII_ALPHANUMERIC | "_")
 }
 
 word = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }

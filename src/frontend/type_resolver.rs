@@ -59,7 +59,7 @@ pub fn resolve_types(program: &mut Program) -> Result<(), Vec<CompilerError>> {
         return Err(errors);
     }
 
-    // Pass 2: Type check function bodies.
+    // Pass 2: Type check (including table field types resolution, then function bodies).
     let mut type_checker = TypeChecker::new(environment);
     let result = type_checker.visit_program(program);
     let mut checker_errors = type_checker.into_errors();
@@ -677,9 +677,128 @@ impl TypeChecker {
     }
 }
 
+// ============================================================================
+// --- Pass 2: Type Checking with Unification
+// ============================================================================
+
 impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
     fn visit_program(&mut self, prog: &mut Program) -> Result<(), CompilerError> {
         visit_mut::walk_program_mut(self, prog)
+    }
+
+    fn visit_table_decl(&mut self, prog: &mut Program, id: TableId) -> Result<(), CompilerError> {
+        let table_decl = prog.table_decls[id].clone();
+
+        // First pass: Resolve types for all fields in this table
+        for element in &table_decl.elements {
+            if let TableElement::Field(field_id) = element {
+                let field = prog.fields[*field_id].clone();
+                let field_span = field.span.unwrap_or(Span::new(0, 0, "<field>"));
+
+                // Resolve the field's type
+                let resolved_type = self.ast_to_resolved(prog, field.ty, field_span);
+
+                // Update the field's resolved type
+                prog.fields[*field_id].resolved_type = Some(resolved_type);
+            }
+        }
+
+        // Second pass: Process nodes and invariants with fields in scope
+        for element in &table_decl.elements {
+            match element {
+                TableElement::Node(node) => {
+                    let node_span = node.name.span.unwrap_or(Span::new(0, 0, "<table_node>"));
+
+                    // Type check all arguments in the node first
+                    for &arg_expr_id in &node.args {
+                        self.visit_expr(prog, arg_expr_id)?;
+                    }
+
+                    // Collect argument types for overloading resolution
+                    let arg_types: Vec<ResolvedType> = node
+                        .args
+                        .iter()
+                        .map(|&arg_id| {
+                            prog.expressions[arg_id]
+                                .resolved_type()
+                                .cloned()
+                                .unwrap_or_else(|| self.fresh_infer_var())
+                        })
+                        .collect();
+
+                    // Resolve function overloading for the partition function
+                    if !node.resolved_partitions.is_empty() {
+                        if let Some((resolved_func, return_type)) = self.resolve_overloading(
+                            &node.resolved_partitions,
+                            &arg_types,
+                            node_span,
+                        ) {
+                            // Update the table element to contain only the selected partition function
+                            // We need to find the correct element in the table to update
+                            let table_decl = &mut prog.table_decls[id];
+                            for element in &mut table_decl.elements {
+                                if let TableElement::Node(ref mut node_mut) = element {
+                                    if node_mut.name.name == node.name.name
+                                        && node_mut.args.len() == node.args.len()
+                                    {
+                                        node_mut.resolved_partitions = vec![resolved_func];
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // Enforce that partition function returns int
+                            let int_type = self.find_type_by_name(prog, "int", node_span)?;
+                            self.unify(&return_type, &int_type, node_span);
+                        } else {
+                            // No suitable overload found for partition function
+                            self.errors.push(CompilerError::new(
+                                FrontEndErrorKind::TypeMismatch {
+                                    expected: format!(
+                                        "partition function with {} arguments",
+                                        arg_types.len()
+                                    ),
+                                    found: "no matching overload".to_string(),
+                                    context: "table node partition function".to_string(),
+                                },
+                                node_span,
+                            ));
+                        }
+                    } else {
+                        // No partition functions resolved by name resolver
+                        self.errors.push(CompilerError::new(
+                            FrontEndErrorKind::UndefinedIdentifier {
+                                name: node.name.name.clone(),
+                            },
+                            node_span,
+                        ));
+                    }
+                }
+                TableElement::Invariant(expr_id) => {
+                    let expr_span = prog.expressions[*expr_id].span().unwrap_or(Span::new(
+                        0,
+                        0,
+                        "<table_invariant>",
+                    ));
+
+                    // Type check the invariant expression
+                    self.visit_expr(prog, *expr_id)?;
+
+                    // Enforce that invariant returns bool
+                    let expr_type = prog.expressions[*expr_id]
+                        .resolved_type()
+                        .cloned()
+                        .unwrap_or_else(|| self.fresh_infer_var());
+                    let bool_type = self.find_type_by_name(prog, "bool", expr_span)?;
+                    self.unify(&expr_type, &bool_type, expr_span);
+                }
+                TableElement::Field(_) => {
+                    // Already handled in first pass
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn visit_callable_decl(
@@ -1040,22 +1159,33 @@ impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
                             expr_span,
                         )?
                     }
-                    None => {
-                        // No resolution found for identifier - this should not happen after name resolution
+                    Some(IdentifierResolution::Field(field_id)) => {
+                        // Field identifiers have the type of the field
+                        prog.fields[field_id]
+                            .resolved_type
+                            .clone()
+                            .unwrap_or_else(|| self.fresh_infer_var())
+                    }
+                    Some(IdentifierResolution::Type(_)) => {
+                        // Type identifiers should not appear in expression context
                         self.errors.push(CompilerError::new(
-                            FrontEndErrorKind::UndefinedIdentifier {
-                                name: "unresolved identifier".to_string(),
+                            FrontEndErrorKind::InvalidOperation {
+                                op: "type resolution".to_string(),
+                                details: "type identifier in expression context".to_string(),
                             },
                             expr_span,
                         ));
                         self.fresh_infer_var()
                     }
-                    _ => {
-                        // Other resolution types not yet handled
+                    Some(IdentifierResolution::GenericParam(param_id)) => {
+                        // Generic parameters in expression context
+                        ResolvedType::GenericParam(param_id)
+                    }
+                    None => {
+                        // No resolution found for identifier - this should not happen after name resolution
                         self.errors.push(CompilerError::new(
-                            FrontEndErrorKind::InvalidOperation {
-                                op: "type resolution".to_string(),
-                                details: "unsupported identifier resolution type".to_string(),
+                            FrontEndErrorKind::UndefinedIdentifier {
+                                name: "unresolved identifier".to_string(),
                             },
                             expr_span,
                         ));
@@ -1221,13 +1351,13 @@ impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
             }
             Expression::MemberAccess { .. } => {
                 // Member access is not supported yet - report error
-                self.errors.push(CompilerError::new(
-                    FrontEndErrorKind::InvalidOperation {
-                        op: "member access".to_string(),
-                        details: "member access is not yet implemented".to_string(),
-                    },
-                    expr_span,
-                ));
+                // self.errors.push(CompilerError::new(
+                //     FrontEndErrorKind::InvalidOperation {
+                //         op: "member access".to_string(),
+                //         details: "member access is not yet implemented".to_string(),
+                //     },
+                //     expr_span,
+                // ));
                 self.fresh_infer_var()
             }
             Expression::TableRowAccess {

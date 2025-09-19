@@ -170,6 +170,8 @@ pub struct NameResolver {
     errors: Vec<CompilerError>,
     // This tracks if we are inside a loop, useful for `break` or `continue` validation later.
     loop_depth: u32,
+    // Global mapping from field names to all field IDs with that name
+    field_name_map: HashMap<String, Vec<crate::ast::item::FieldId>>,
 }
 
 /// Public function to start the name resolution process.
@@ -178,9 +180,10 @@ pub fn resolve_names(prog: &mut Program) -> Result<(), Vec<CompilerError>> {
         symbols: SymbolTable::new(),
         errors: Vec::new(),
         loop_depth: 0,
+        field_name_map: HashMap::new(),
     };
 
-    // First Pass: Collect all top-level (global) declarations.
+    // First Pass: Collect all top-level (global) declarations and build field name map.
     // This allows functions/types to be used before they are declared in the source file.
     for item in &prog.declarations {
         match item {
@@ -219,6 +222,18 @@ pub fn resolve_names(prog: &mut Program) -> Result<(), Vec<CompilerError>> {
                     &decl.name,
                     |name| name.span,
                 );
+
+                // Build field name mapping for this table
+                for element in &decl.elements {
+                    if let TableElement::Field(field_id) = element {
+                        let field = &prog.fields[*field_id];
+                        resolver
+                            .field_name_map
+                            .entry(field.name.name.clone())
+                            .or_default()
+                            .push(*field_id);
+                    }
+                }
             }
         }
     }
@@ -432,63 +447,25 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
                     self.errors.push(CompilerError::new(err, default_span));
                 }
             }
-            Expression::MemberAccess { object, member, .. } => {
-                // Collect information before modifying
-                let object_id = *object;
+            Expression::MemberAccess { member, .. } => {
+                // For member access (both Table.field and expression.field),
+                // resolve all possible fields with the given name across all tables.
+                // The type resolver will handle disambiguation later.
                 let member_name = member.name.clone();
 
-                // Check if object is an identifier
-                if let Expression::Identifier {
-                    name: table_name, ..
-                } = &prog.expressions[object_id]
-                {
-                    let table_name_str = table_name.name.clone();
-                    let resolutions = self.symbols.resolve(&table_name_str);
-
-                    // Find table resolution specifically
-                    let table_resolutions: Vec<_> = resolutions
-                        .iter()
-                        .filter_map(|r| {
-                            if let IdentifierResolution::Table(table_id) = r {
-                                Some(*table_id)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-
-                    if table_resolutions.len() > 1 {
-                        let err = FrontEndErrorKind::DuplicateDefinition {
-                            name: format!("Ambiguous table name: {}", table_name_str),
-                        };
-                        let default_span = crate::util::Span::new(0, 0, "<unknown>");
-                        self.errors.push(CompilerError::new(err, default_span));
-                    } else if let Some(&table_id) = table_resolutions.first() {
-                        // Look up the field in the table
-                        let mut resolved_field_id = None;
-                        if let Some(table_item) = prog.table_decls.get(table_id) {
-                            for element in &table_item.elements {
-                                if let TableElement::Field(field_id) = element {
-                                    let field = &prog.fields[*field_id];
-                                    if field.name.name == member_name {
-                                        resolved_field_id = Some(*field_id);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-
-                        // Now update the expression
-                        if let Expression::MemberAccess {
-                            resolved_fields, ..
-                        } = &mut prog.expressions[id]
-                        {
-                            if let Some(field_id) = resolved_field_id {
-                                resolved_fields.push(IdentifierResolution::Field(field_id));
-                            }
+                // Look up all fields with this name
+                if let Some(field_ids) = self.field_name_map.get(&member_name) {
+                    if let Expression::MemberAccess {
+                        resolved_fields, ..
+                    } = &mut prog.expressions[id]
+                    {
+                        // Add all possible field resolutions
+                        for &field_id in field_ids {
+                            resolved_fields.push(IdentifierResolution::Field(field_id));
                         }
                     }
                 }
+                // TODO: return error if no fields found
             }
             Expression::TableRowAccess { table, .. } => {
                 let table_id = *table;
@@ -519,12 +496,34 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
                         };
                         let default_span = crate::util::Span::new(0, 0, "<unknown>");
                         self.errors.push(CompilerError::new(err, default_span));
-                    } else if let Some(&table_id) = table_resolutions.first() {
+                    } else if let Some(&resolved_table_id) = table_resolutions.first() {
                         // Update the expression
-                        if let Expression::TableRowAccess { resolved_table, .. } =
-                            &mut prog.expressions[id]
+                        if let Expression::TableRowAccess {
+                            resolved_table,
+                            key_values: kv_vec,
+                            ..
+                        } = &mut prog.expressions[id]
                         {
-                            *resolved_table = Some(table_id);
+                            *resolved_table = Some(resolved_table_id);
+
+                            // Now resolve each key_value field to the specific field in this table
+                            for kv in kv_vec {
+                                let key_name = &kv.key.name;
+                                // Find the field in this specific table
+                                if let Some(table_decl) = prog.table_decls.get(resolved_table_id) {
+                                    for element in &table_decl.elements {
+                                        if let TableElement::Field(field_id) = element {
+                                            let field = &prog.fields[*field_id];
+                                            if field.name.name == *key_name {
+                                                kv.resolved_field =
+                                                    Some(IdentifierResolution::Field(*field_id));
+                                                kv.resolved_table = Some(resolved_table_id);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -661,10 +660,11 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
         // First visit the value expression
         self.visit_expr(prog, kv.value)?;
 
-        // The KeyValue key might need resolution in table contexts
-        // The resolved_table and resolved_field will be set by the containing expression
-        // (like TableRowAccess or RowLiteral when used in table contexts)
-
+        // KeyValue resolution depends on context:
+        // - In TableRowAccess: resolve to field in the specific table
+        // - In RowLiteral: may need to be resolved later by type checker
+        // For now, we'll resolve it in the context of the containing expression
+        // it is resolved in visit_expr when handling TableRowAccess and RowLiteral.
         Ok(())
     }
 
@@ -673,11 +673,26 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
         prog: &mut Program,
         id: crate::ast::item::TableId,
     ) -> Result<(), ()> {
-        // Visit table elements to resolve partition references
         let table = &prog.table_decls[id];
-        let mut elements_to_visit = Vec::new();
+
+        // First, add all table fields to the symbol table for this scope
+        self.symbols.enter_scope();
+
+        // Collect field names and IDs for the symbol table
+        for element in &table.elements {
+            if let TableElement::Field(field_id) = element {
+                let field = &prog.fields[*field_id];
+                if let Err(_) = self.symbols.define(
+                    field.name.name.clone(),
+                    IdentifierResolution::Field(*field_id),
+                ) {
+                    // Field name conflicts are allowed in tables - just ignore the error
+                }
+            }
+        }
 
         // Collect elements that need visiting to avoid borrowing issues
+        let mut elements_to_visit = Vec::new();
         for (idx, element) in table.elements.iter().enumerate() {
             match element {
                 TableElement::Node(node) => {
@@ -722,31 +737,28 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
                         {
                             // Look for this identifier as a field in the current table
                             let table = &prog.table_decls[id];
-                            let mut found_field = None;
+                            let mut found_field_id = None;
 
                             for element in &table.elements {
                                 if let TableElement::Field(field_id) = element {
                                     let field = &prog.fields[*field_id];
                                     if field.name.name == arg_name.name {
-                                        found_field = Some(field.clone());
+                                        found_field_id = Some(*field_id);
                                         break;
                                     }
                                 }
                             }
 
-                            if found_field.is_some() {
-                                // Set the resolved table field information
+                            if let Some(field_id) = found_field_id {
+                                // Set the resolved field information
                                 if let Expression::Identifier {
                                     resolved_declarations,
                                     ..
                                 } = &mut prog.expressions[*arg_id]
                                 {
-                                    // For table field references, we create a special resolution
-                                    // that indicates this is a table field, not a regular identifier
                                     resolved_declarations.clear();
-                                    // We use IdentifierResolution::Table to indicate table context,
-                                    // though ideally we'd have a TableField variant
-                                    resolved_declarations.push(IdentifierResolution::Table(id));
+                                    resolved_declarations
+                                        .push(IdentifierResolution::Field(field_id));
                                 }
                             } else {
                                 // This identifier is not a field in this table
@@ -786,6 +798,9 @@ impl<'ast> VisitorMut<'ast, (), ()> for NameResolver {
                 _ => {}
             }
         }
+
+        // Exit the table field scope
+        self.symbols.exit_scope();
 
         Ok(())
     }

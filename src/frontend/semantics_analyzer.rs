@@ -366,3 +366,4 @@ impl<'ast> Visitor<'ast, (), ()> for SemanticAnalyzer<'ast> {
 // transaction's top level only hop and hops_for
 // partition must return int
 // transaction should not have <T> generic
+// each table must have exactly one node

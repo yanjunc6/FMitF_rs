@@ -82,9 +82,6 @@ pub fn walk_item_mut<'ast, R: Default, E, V: VisitorMut<'ast, R, E>>(
     item: Item,
 ) -> Result<R, E> {
     match item {
-        Item::Callable(id) => {
-            let _ = visitor.visit_callable_decl(prog, id)?;
-        }
         Item::Type(id) => {
             let _ = visitor.visit_type_decl(prog, id)?;
         }
@@ -93,6 +90,9 @@ pub fn walk_item_mut<'ast, R: Default, E, V: VisitorMut<'ast, R, E>>(
         }
         Item::Table(id) => {
             let _ = visitor.visit_table_decl(prog, id)?;
+        }
+        Item::Callable(id) => {
+            let _ = visitor.visit_callable_decl(prog, id)?;
         }
     }
     Ok(R::default())
