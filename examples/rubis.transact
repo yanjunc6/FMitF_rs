@@ -100,7 +100,7 @@ table Buy_now {
 transaction userAuth(nickname: string, password: string) -> bool {
     hop {
         var pwd: string = Usernames[nickname: nickname].password;
-        if pwd == password {
+        if pwd === password {
             return true;
         } else {
             return false;
@@ -160,7 +160,7 @@ transaction getCommentsByToUID(to_id: UUID) -> List<string> {
         Comments
         .scan()
         .filter(
-            (c: Row<Comments>) -> bool { return c.to_user_id == to_id; }
+            (c: Row<Comments>) -> bool { return c.to_user_id === to_id; }
         )
         .map(
             (c: Row<Comments>) -> string { return c.comment; }
@@ -175,7 +175,7 @@ transaction getCommentsByIID(iid: UUID) -> List<string> {
         Comments
         .scan()
         .filter(
-            (c: Row<Comments>) -> bool { return c.item_id == iid; }
+            (c: Row<Comments>) -> bool { return c.item_id === iid; }
         )
         .map(
             (c: Row<Comments>) -> string { return c.comment; }
@@ -264,7 +264,7 @@ transaction getBidsByItem(iid: UUID) -> List<Row<Bids>> {
         Bids
         .scan()
         .filter(
-            (b: Row<Bids>) -> bool { return b.item_id == iid; }
+            (b: Row<Bids>) -> bool { return b.item_id === iid; }
         )
         .map(
             (b: Row<Bids>) -> Row<Bids> { return b; }
@@ -279,7 +279,7 @@ transaction getBidsByUser(uid: UUID) -> List<Row<Bids>> {
         Bids
         .scan()
         .filter(
-            (b: Row<Bids>) -> bool { return b.user_id == uid; }
+            (b: Row<Bids>) -> bool { return b.user_id === uid; }
         )
         .map(
             (b: Row<Bids>) -> Row<Bids> { return b; }

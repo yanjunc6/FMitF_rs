@@ -12,80 +12,75 @@
 // Built-in Types
 // ===========================================
 
-@intrinsic type void;
-@intrinsic type int;
-@intrinsic type bool;
-@intrinsic type string;
-@intrinsic type float;
-@intrinsic type UUID;
-@intrinsic type List<T>;
-@intrinsic type Row<T>; // A row Activity is of type Row<Activity>
-@intrinsic type Table<T>; // A table Activity as var is of type Table<Activity>
+@intrinsic @builtin type void;
+@intrinsic @builtin type int;
+@intrinsic @builtin type bool;
+@intrinsic @builtin type string;
+@intrinsic @builtin type float;
+@intrinsic @builtin type List<T>;
+@intrinsic @builtin type Row<T>; // A row Activity is of type Row<Activity>
+@intrinsic @builtin type Table<T>; // A table Activity as var is of type Table<Activity>
 
+@intrinsic type UUID;
 // ===========================================
 // Arithmetic Operators
 // ===========================================
 
-@intrinsic @infix operator +(a: int, b: int) -> int;
-@intrinsic @infix operator -(a: int, b: int) -> int;
-@intrinsic @infix operator *(a: int, b: int) -> int;
-@intrinsic @infix operator /(a: int, b: int) -> int;
-@intrinsic @infix operator %(a: int, b: int) -> int;
+@intrinsic @infix @builtin operator +(a: int, b: int) -> int;
+@intrinsic @infix @builtin operator -(a: int, b: int) -> int;
+@intrinsic @infix @builtin operator *(a: int, b: int) -> int;
+@intrinsic @infix @builtin operator /(a: int, b: int) -> int;
+@intrinsic @infix @builtin operator %(a: int, b: int) -> int;
 
-@intrinsic @infix operator +(a: float, b: float) -> float;
-@intrinsic @infix operator -(a: float, b: float) -> float;
-@intrinsic @infix operator *(a: float, b: float) -> float;
-@intrinsic @infix operator /(a: float, b: float) -> float;
+@intrinsic @infix @builtin operator +(a: float, b: float) -> float;
+@intrinsic @infix @builtin operator -(a: float, b: float) -> float;
+@intrinsic @infix @builtin operator *(a: float, b: float) -> float;
+@intrinsic @infix @builtin operator /(a: float, b: float) -> float;
 
-@intrinsic @prefix operator -(a: int) -> int;
-@intrinsic @prefix operator -(a: float) -> float;
+@intrinsic @prefix @builtin operator -(a: int) -> int;
+@intrinsic @prefix @builtin operator -(a: float) -> float;
 
 // ===========================================
 // Comparison Operators
 // ===========================================
 
-@intrinsic @infix operator ==(a: int, b: int) -> bool;
-@intrinsic @infix operator !=(a: int, b: int) -> bool;
-@intrinsic @infix operator <(a: int, b: int) -> bool;
-@intrinsic @infix operator <=(a: int, b: int) -> bool;
-@intrinsic @infix operator >(a: int, b: int) -> bool;
-@intrinsic @infix operator >=(a: int, b: int) -> bool;
+@intrinsic @infix @builtin operator ==(a: int, b: int) -> bool;
+@intrinsic @infix @builtin operator !=(a: int, b: int) -> bool;
+@intrinsic @infix @builtin operator <(a: int, b: int) -> bool;
+@intrinsic @infix @builtin operator <=(a: int, b: int) -> bool;
+@intrinsic @infix @builtin operator >(a: int, b: int) -> bool;
+@intrinsic @infix @builtin operator >=(a: int, b: int) -> bool;
 
-@intrinsic @infix operator ==(a: bool, b: bool) -> bool;
-@intrinsic @infix operator !=(a: bool, b: bool) -> bool;
+@intrinsic @infix @builtin operator ==(a: bool, b: bool) -> bool;
+@intrinsic @infix @builtin operator !=(a: bool, b: bool) -> bool;
 
-@intrinsic @infix operator ==(a: string, b: string) -> bool;
-@intrinsic @infix operator !=(a: string, b: string) -> bool;
-
-@intrinsic @infix operator ==(a: float, b: float) -> bool;
-@intrinsic @infix operator !=(a: float, b: float) -> bool;
-@intrinsic @infix operator <(a: float, b: float) -> bool;
-@intrinsic @infix operator <=(a: float, b: float) -> bool;
-@intrinsic @infix operator >(a: float, b: float) -> bool;
-@intrinsic @infix operator >=(a: float, b: float) -> bool;
+@intrinsic @infix @builtin operator ==(a: float, b: float) -> bool;
+@intrinsic @infix @builtin operator !=(a: float, b: float) -> bool;
+@intrinsic @infix @builtin operator <(a: float, b: float) -> bool;
+@intrinsic @infix @builtin operator <=(a: float, b: float) -> bool;
+@intrinsic @infix @builtin operator >(a: float, b: float) -> bool;
+@intrinsic @infix @builtin operator >=(a: float, b: float) -> bool;
 
 // ===========================================
 // Logical Operators
 // ===========================================
 
-@intrinsic @infix operator &&(a: bool, b: bool) -> bool;
-@intrinsic @infix operator ||(a: bool, b: bool) -> bool;
-@intrinsic @prefix operator !(a: bool) -> bool;
+@intrinsic @infix @builtin operator &&(a: bool, b: bool) -> bool;
+@intrinsic @infix @builtin operator ||(a: bool, b: bool) -> bool;
+@intrinsic @prefix @builtin operator !(a: bool) -> bool;
 
 // ===========================================
 // String Operators
 // ===========================================
 
 @intrinsic @infix operator +(a: string, b: string) -> string;
-@intrinsic @infix operator ==(a: string, b: string) -> bool;
-@intrinsic @infix operator !=(a: string, b: string) -> bool;
 
 // ===========================================
-// UUID Operators
+// General Operators
 // ===========================================
 
-@intrinsic @infix operator ==(a: UUID, b: UUID) -> bool;
-@intrinsic @infix operator !=(a: UUID, b: UUID) -> bool;
+@intrinsic @infix @builtin operator === <T>(a: T, b: T) -> bool;
+@intrinsic @infix @builtin operator !== <T>(a: T, b: T) -> bool;
 
 // ===========================================
 // Built-in Functions
@@ -99,7 +94,7 @@
 @intrinsic function get<T>(list: List<T>, idx: int) -> T;
 
 // Type conversion functions
-@intrinsic function float(x: int) -> float;
+@intrinsic @builtin function float(x: int) -> float;
 @intrinsic function str<T>(x: T) -> string;
 @intrinsic function int(x: float) -> int; // truncating conversion
 

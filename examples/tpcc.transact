@@ -287,7 +287,7 @@ transaction Payment(w_id: int, d_id: int, c_w_id: int, c_d_id: int, c_id: int, a
         c.C_YTD_PAYMENT = c.C_YTD_PAYMENT + amount;
         c.C_PAYMENT_CNT = c.C_PAYMENT_CNT + 1.0;
 
-        if c.C_CREDIT == "BC" {
+        if c.C_CREDIT === "BC" {
             // Replace legacy "~" concatenation with string "+" and explicit str() conversion
             c.C_DATA = str(c.C_ID) + " " + str(c.C_D_ID) + " " + str(c.C_W_ID) + " " + str(d_id) + " " + str(w_id)
                 + " " + str(amount) + " | " + c.C_DATA;
