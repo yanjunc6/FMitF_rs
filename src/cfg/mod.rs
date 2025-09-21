@@ -14,6 +14,7 @@ use std::collections::HashMap;
 // ============================================================================
 
 pub type FunctionId = Id<Function>;
+pub type HopId = Id<Hop>;
 pub type BasicBlockId = Id<BasicBlock>;
 pub type VariableId = Id<Variable>;
 pub type GlobalConstId = Id<GlobalConst>;
@@ -42,7 +43,6 @@ pub struct Program {
     pub generic_params: Arena<GenericParam>,
 
     // --- Name-to-ID Mappings for unique items ---
-    pub functions_map: HashMap<String, FunctionId>,
     pub types_map: HashMap<String, UserDefinedTypeId>,
     pub tables_map: HashMap<String, TableId>,
     pub global_consts_map: HashMap<String, GlobalConstId>,
@@ -50,6 +50,7 @@ pub struct Program {
     // --- Root Collections ---
     pub all_tables: Vec<TableId>,
     pub all_transactions: Vec<FunctionId>,
+    pub all_functions: Vec<FunctionId>,
 }
 
 // ============================================================================
@@ -90,7 +91,9 @@ pub enum Type {
         args: Vec<TypeId>,
     },
     Table(TableId),
-    Row { table_id: TableId },
+    Row {
+        table_id: TableId,
+    },
     GenericParam(GenericParamId),
     Void,
 }
@@ -100,6 +103,7 @@ pub enum Type {
 pub struct UserDefinedType {
     pub name: String,
     pub generic_params: Vec<GenericParamId>,
+    pub decorators: Vec<Decorator>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -120,8 +124,14 @@ pub struct Function {
     pub signature: TypeScheme,
     pub kind: FunctionKind,
     pub params: Vec<VariableId>,
+    pub assumptions: Vec<FunctionId>,
     pub entry_block: Option<BasicBlockId>,
-    pub blocks: Vec<BasicBlockId>,
+    pub all_blocks: Vec<BasicBlockId>,
+    pub decorators: Vec<Decorator>,
+
+    // transaction only
+    pub entry_hop: Option<HopId>,
+    pub hops: Vec<HopId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,7 +141,7 @@ pub enum FunctionKind {
     Partition,
     Lambda,
     Invariant,
-    Builtin,
+    Assumption,
 }
 
 #[derive(Debug, Clone)]
@@ -154,11 +164,19 @@ pub struct GenericParam {
 }
 
 // ============================================================================
-// --- Basic Blocks, Instructions, and Terminators
+// --- Hops, Basic Blocks, Instructions, and Terminators
 // ============================================================================
+#[derive(Debug, Clone)]
+pub struct Hop {
+    pub function_id: FunctionId,
+    pub entry_block: BasicBlockId,
+    pub blocks: Vec<BasicBlockId>,
+    pub decorators: Vec<Decorator>,
+}
 
 #[derive(Debug, Clone)]
 pub struct BasicBlock {
+    pub hop_id: HopId,
     pub function_id: FunctionId,
     pub predecessors: Vec<BasicBlockId>,
     pub instructions: Vec<Instruction>,
@@ -167,7 +185,10 @@ pub struct BasicBlock {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Instruction {
-    Assign { dest: VariableId, src: Operand },
+    Assign {
+        dest: VariableId,
+        src: Operand,
+    },
     BinaryOp {
         dest: VariableId,
         op: BinaryOp,
@@ -196,7 +217,10 @@ pub enum Instruction {
         field: Option<FieldId>,
         value: Operand,
     },
-    Assert { condition: Operand, message: String },
+    Assert {
+        condition: Operand,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,7 +233,9 @@ pub enum Terminator {
     },
     Return(Option<Operand>),
     /// Exit the current execution "hop" and jump to the entry block of the next one.
-    HopExit { next_block: BasicBlockId },
+    HopExit {
+        next_block: BasicBlockId,
+    },
     Abort,
 }
 
@@ -234,12 +260,31 @@ pub enum ConstantValue {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BinaryOp {
-    AddInt, SubInt, MulInt, DivInt, ModInt,
-    AddFloat, SubFloat, MulFloat, DivFloat,
-    EqInt, NeqInt, LtInt, LeqInt, GtInt, GeqInt,
-    EqFloat, NeqFloat, LtFloat, LeqFloat, GtFloat, GeqFloat,
-    And, Or,
-    Eq, Neq,
+    AddInt,
+    SubInt,
+    MulInt,
+    DivInt,
+    ModInt,
+    AddFloat,
+    SubFloat,
+    MulFloat,
+    DivFloat,
+    EqInt,
+    NeqInt,
+    LtInt,
+    LeqInt,
+    GtInt,
+    GeqInt,
+    EqFloat,
+    NeqFloat,
+    LtFloat,
+    LeqFloat,
+    GtFloat,
+    GeqFloat,
+    And,
+    Or,
+    Eq,
+    Neq,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -259,6 +304,7 @@ pub struct Table {
     pub primary_key_fields: Vec<FieldId>,
     pub other_fields: Vec<FieldId>,
     pub node_partition: FunctionId,
+    pub node_partition_args: Vec<FieldId>,
     pub invariants: Vec<FunctionId>,
 }
 
@@ -267,4 +313,13 @@ pub struct TableField {
     pub name: String,
     pub field_type: TypeId,
     pub table_id: TableId,
+}
+
+// ============================================================================
+// --- Others
+// ============================================================================
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Decorator {
+    pub name: String,
 }

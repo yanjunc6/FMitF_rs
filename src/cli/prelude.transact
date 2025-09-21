@@ -26,48 +26,48 @@
 // Arithmetic Operators
 // ===========================================
 
-@intrinsic @infix @builtin operator +(a: int, b: int) -> int;
-@intrinsic @infix @builtin operator -(a: int, b: int) -> int;
-@intrinsic @infix @builtin operator *(a: int, b: int) -> int;
-@intrinsic @infix @builtin operator /(a: int, b: int) -> int;
-@intrinsic @infix @builtin operator %(a: int, b: int) -> int;
+@intrinsic @infix @builtinop operator +(a: int, b: int) -> int;
+@intrinsic @infix @builtinop operator -(a: int, b: int) -> int;
+@intrinsic @infix @builtinop operator *(a: int, b: int) -> int;
+@intrinsic @infix @builtinop operator /(a: int, b: int) -> int;
+@intrinsic @infix @builtinop operator %(a: int, b: int) -> int;
 
-@intrinsic @infix @builtin operator +(a: float, b: float) -> float;
-@intrinsic @infix @builtin operator -(a: float, b: float) -> float;
-@intrinsic @infix @builtin operator *(a: float, b: float) -> float;
-@intrinsic @infix @builtin operator /(a: float, b: float) -> float;
+@intrinsic @infix @builtinop operator +(a: float, b: float) -> float;
+@intrinsic @infix @builtinop operator -(a: float, b: float) -> float;
+@intrinsic @infix @builtinop operator *(a: float, b: float) -> float;
+@intrinsic @infix @builtinop operator /(a: float, b: float) -> float;
 
-@intrinsic @prefix @builtin operator -(a: int) -> int;
-@intrinsic @prefix @builtin operator -(a: float) -> float;
+@intrinsic @prefix @builtinop operator -(a: int) -> int;
+@intrinsic @prefix @builtinop operator -(a: float) -> float;
 
 // ===========================================
 // Comparison Operators
 // ===========================================
 
-@intrinsic @infix @builtin operator ==(a: int, b: int) -> bool;
-@intrinsic @infix @builtin operator !=(a: int, b: int) -> bool;
-@intrinsic @infix @builtin operator <(a: int, b: int) -> bool;
-@intrinsic @infix @builtin operator <=(a: int, b: int) -> bool;
-@intrinsic @infix @builtin operator >(a: int, b: int) -> bool;
-@intrinsic @infix @builtin operator >=(a: int, b: int) -> bool;
+@intrinsic @infix @builtinop operator ==(a: int, b: int) -> bool;
+@intrinsic @infix @builtinop operator !=(a: int, b: int) -> bool;
+@intrinsic @infix @builtinop operator <(a: int, b: int) -> bool;
+@intrinsic @infix @builtinop operator <=(a: int, b: int) -> bool;
+@intrinsic @infix @builtinop operator >(a: int, b: int) -> bool;
+@intrinsic @infix @builtinop operator >=(a: int, b: int) -> bool;
 
-@intrinsic @infix @builtin operator ==(a: bool, b: bool) -> bool;
-@intrinsic @infix @builtin operator !=(a: bool, b: bool) -> bool;
+@intrinsic @infix @builtinop operator ==(a: bool, b: bool) -> bool;
+@intrinsic @infix @builtinop operator !=(a: bool, b: bool) -> bool;
 
-@intrinsic @infix @builtin operator ==(a: float, b: float) -> bool;
-@intrinsic @infix @builtin operator !=(a: float, b: float) -> bool;
-@intrinsic @infix @builtin operator <(a: float, b: float) -> bool;
-@intrinsic @infix @builtin operator <=(a: float, b: float) -> bool;
-@intrinsic @infix @builtin operator >(a: float, b: float) -> bool;
-@intrinsic @infix @builtin operator >=(a: float, b: float) -> bool;
+@intrinsic @infix @builtinop operator ==(a: float, b: float) -> bool;
+@intrinsic @infix @builtinop operator !=(a: float, b: float) -> bool;
+@intrinsic @infix @builtinop operator <(a: float, b: float) -> bool;
+@intrinsic @infix @builtinop operator <=(a: float, b: float) -> bool;
+@intrinsic @infix @builtinop operator >(a: float, b: float) -> bool;
+@intrinsic @infix @builtinop operator >=(a: float, b: float) -> bool;
 
 // ===========================================
 // Logical Operators
 // ===========================================
 
-@intrinsic @infix @builtin operator &&(a: bool, b: bool) -> bool;
-@intrinsic @infix @builtin operator ||(a: bool, b: bool) -> bool;
-@intrinsic @prefix @builtin operator !(a: bool) -> bool;
+@intrinsic @infix @builtinop operator &&(a: bool, b: bool) -> bool;
+@intrinsic @infix @builtinop operator ||(a: bool, b: bool) -> bool;
+@intrinsic @prefix @builtinop operator !(a: bool) -> bool;
 
 // ===========================================
 // String Operators
@@ -79,8 +79,8 @@
 // General Operators
 // ===========================================
 
-@intrinsic @infix @builtin operator === <T>(a: T, b: T) -> bool;
-@intrinsic @infix @builtin operator !== <T>(a: T, b: T) -> bool;
+@intrinsic @infix @builtinop operator === <T>(a: T, b: T) -> bool;
+@intrinsic @infix @builtinop operator !== <T>(a: T, b: T) -> bool;
 
 // ===========================================
 // Built-in Functions
@@ -94,7 +94,7 @@
 @intrinsic function get<T>(list: List<T>, idx: int) -> T;
 
 // Type conversion functions
-@intrinsic @builtin function float(x: int) -> float;
+@intrinsic function float(x: int) -> float;
 @intrinsic function str<T>(x: T) -> string;
 @intrinsic function int(x: float) -> int; // truncating conversion
 

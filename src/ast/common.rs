@@ -28,7 +28,7 @@ pub enum IdentifierResolution {
     Field(FieldId),
 }
 
-/// Represents a decorator like `@hop`.
+/// Represents a decorator like `@global`.
 #[derive(Debug, Clone)]
 pub struct Decorator {
     pub name: Identifier,
