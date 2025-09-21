@@ -202,7 +202,7 @@ impl<W: Write> CfgPrinter<W> {
             FunctionKind::Invariant => write!(self.writer, "invariant")?,
             FunctionKind::Assumption => write!(self.writer, "assumption")?,
         }
-        write!(self.writer, " {}(", function.name)?;
+        write!(self.writer, " {}", function.name)?;
         if SHOW_VAR_IDS {
             write!(self.writer, "[fn{}]", id.index())?;
         }
