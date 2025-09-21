@@ -9,6 +9,9 @@
 use id_arena::{Arena, Id};
 use std::collections::HashMap;
 
+// pub mod cfg_api;  // Disabled for now due to compilation errors
+pub mod cfg_builder;
+
 // ============================================================================
 // --- Core ID Types
 // ============================================================================

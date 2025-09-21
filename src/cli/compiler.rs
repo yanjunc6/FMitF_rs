@@ -4,6 +4,7 @@
 
 use super::stage::execute_stage; // Import the new helper
 use crate::ast::Program;
+use crate::cfg;
 use crate::frontend::parse_and_analyze_program;
 use crate::util::{CompilerError, DiagnosticReporter};
 use colored::*;
@@ -86,7 +87,7 @@ impl Compiler {
 
         // Stage 1: Frontend (Parsing)
         current_stage += 1;
-        let _program = execute_stage(
+        let program = execute_stage(
             "Frontend",
             current_stage,
             TOTAL_STAGES,
@@ -127,6 +128,23 @@ impl Compiler {
             },
         )?;
 
+        // Stage 2: CFG Generation
+        current_stage += 1;
+        let _cfg_program = execute_stage(
+            "CFG Generation",
+            current_stage,
+            TOTAL_STAGES,
+            || -> Result<cfg::Program, Box<dyn std::error::Error>> {
+                // Generate CFG from AST using cfg_builder
+                let cfg_program: cfg::Program = cfg::cfg_builder::build(&program);
+
+                // Write CFG pretty print
+                self.write_cfg_pretty(&cfg_program, output_dir)?;
+
+                Ok(cfg_program)
+            },
+        )?;
+
         // TODO: Stage 2: CFG Generation
         // let cfg_program = cfg::build_cfg(program)?;
 
@@ -158,6 +176,24 @@ impl Compiler {
         program.pretty_print_with_debug(&mut file)?;
 
         println!("📄 AST file written to: {}", ast_file.display());
+        Ok(())
+    }
+
+    /// Write CFG pretty print to file
+    fn write_cfg_pretty(
+        &self,
+        program: &cfg::Program,
+        output_dir: &PathBuf,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Create output directory if it doesn't exist
+        fs::create_dir_all(output_dir)?;
+
+        // Write CFG with debug information (includes IDs and type information)
+        let cfg_file = output_dir.join("cfg_pretty.txt");
+        let mut file = fs::File::create(&cfg_file)?;
+        program.pretty_print_with_debug(&mut file)?;
+
+        println!("📄 CFG file written to: {}", cfg_file.display());
         Ok(())
     }
 }

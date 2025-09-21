@@ -49,7 +49,7 @@ pub type InferVarId = u32;
 /// Represents a monotype in the type system.
 /// This is the primary structure that the unification algorithm operates on.
 /// It contains no "forall" quantifiers.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ResolvedType {
     /// A declared type constructor, like `int`, `bool`, `List`, or `Row`.
     /// For `List<int>`, `decl_id` is `List` and `args` is `[Type::Int]`.
