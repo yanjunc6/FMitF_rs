@@ -225,6 +225,11 @@ impl CfgBuilder {
             .map(|(id, f)| (id, f.clone()))
             .collect();
         for (id, ast_func) in functions {
+            // Skip built-in operators - they should not be added as functions
+            if self.is_builtin_op(&ast_func.decorators) {
+                continue;
+            }
+
             let signature =
                 self.convert_type_scheme(ast_func.resolved_function_type.as_ref().unwrap());
 
@@ -673,8 +678,20 @@ impl<'a> FunctionContext<'a> {
                         self.build_block(body);
                     }
                 }
+                // Handle regular statements in transactions too (like variable declarations)
                 _ => {
-                    panic!("All top-level statements in a transaction must be `hop` or `hopsfor`.")
+                    // For non-hop statements, create a default hop if needed
+                    if self.builder.cfg.functions[self.func_id].entry_hop.is_none() {
+                        let hop_id = self.new_hop(Vec::new()); // No decorators for default hop
+                        self.builder.cfg.functions[self.func_id].entry_hop = Some(hop_id);
+
+                        let entry_block = self.new_basic_block(hop_id);
+                        self.builder.cfg.hops[hop_id].entry_block = Some(entry_block);
+                        self.current_block = Some(entry_block);
+                    }
+
+                    // Process the statement using the regular statement handler
+                    self.build_statement(stmt_id);
                 }
             }
         }
@@ -878,42 +895,100 @@ impl<'a> FunctionContext<'a> {
                 });
                 cfg::Operand::Variable(dest_var)
             }
-            ast::Expression::Call {
-                args,
-                resolved_callables,
+            ast::Expression::Unary {
+                op,
+                expr,
                 resolved_type,
                 ..
             } => {
-                let func_id = self.builder.func_map[&resolved_callables[0]];
-                let args_ops = args
+                let operand = self.build_expression(expr);
+
+                let unary_op = match op.name.as_str() {
+                    "-" => cfg::UnaryOp::NegInt, // Should check type to determine NegInt vs NegFloat
+                    "!" => cfg::UnaryOp::NotBool,
+                    _ => cfg_unimplemented!("Unary operator {}", op.name),
+                };
+
+                let dest_ty = self
+                    .builder
+                    .convert_resolved_type(resolved_type.as_ref().unwrap())
+                    .unwrap();
+                let dest_var = self.new_temporary(dest_ty);
+                self.add_instruction(cfg::Instruction::UnaryOp {
+                    dest: dest_var,
+                    op: unary_op,
+                    operand,
+                });
+                cfg::Operand::Variable(dest_var)
+            }
+            ast::Expression::Call {
+                callee,
+                args,
+                resolved_type,
+                ..
+            } => {
+                // Get the function ID from the callee expression
+                let func_id = match &self.builder.ast.expressions[callee] {
+                    ast::Expression::Identifier {
+                        name,
+                        resolved_declarations,
+                        ..
+                    } => {
+                        // Find the function in resolved declarations
+                        let mut found_func = None;
+                        for resolution in resolved_declarations {
+                            if let ast::IdentifierResolution::Function(id) = resolution {
+                                if let Some(cfg_id) = self.builder.func_map.get(id) {
+                                    found_func = Some(*cfg_id);
+                                    break;
+                                } else {
+                                    // This might be a built-in function that was filtered out
+                                    return cfg_unimplemented!(
+                                        "Built-in function call: {}",
+                                        name.name
+                                    );
+                                }
+                            }
+                        }
+                        if let Some(id) = found_func {
+                            id
+                        } else {
+                            return cfg_unimplemented!("Could not resolve function: {}", name.name);
+                        }
+                    }
+                    _ => return cfg_unimplemented!("Dynamic callee"),
+                };
+
+                let arg_operands: Vec<_> = args
                     .iter()
-                    .map(|arg_id| self.build_expression(*arg_id))
+                    .map(|arg_expr_id| self.build_expression(*arg_expr_id))
                     .collect();
 
                 let return_type = self
                     .builder
                     .convert_resolved_type(resolved_type.as_ref().unwrap())
                     .unwrap();
+
                 let is_void = matches!(self.builder.cfg.types[return_type], cfg::Type::Void);
 
                 if is_void {
-                    self.add_instruction(cfg::Instruction::Call {
+                    let instr = cfg::Instruction::Call {
                         dest: None,
                         func: func_id,
-                        args: args_ops,
-                    });
-                    // For a void call used as an expression, what should it evaluate to?
-                    // This might be an invalid AST, but we need to produce something.
-                    // Let's produce a dummy constant. The verifier should catch misuse.
-                    cfg::Operand::Constant(cfg::ConstantValue::Bool(true))
+                        args: arg_operands,
+                    };
+                    self.add_instruction(instr);
+                    // For void functions, we need to return something
+                    cfg_unimplemented!("Void function call result")
                 } else {
-                    let dest_var = self.new_temporary(return_type);
-                    self.add_instruction(cfg::Instruction::Call {
-                        dest: Some(dest_var),
+                    let temp_var = self.new_temporary(return_type);
+                    let instr = cfg::Instruction::Call {
+                        dest: Some(temp_var),
                         func: func_id,
-                        args: args_ops,
-                    });
-                    cfg::Operand::Variable(dest_var)
+                        args: arg_operands,
+                    };
+                    self.add_instruction(instr);
+                    cfg::Operand::Variable(temp_var)
                 }
             }
             ast::Expression::Assignment { lhs, rhs, .. } => {
