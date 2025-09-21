@@ -1272,14 +1272,21 @@ impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
     fn visit_expr(&mut self, prog: &mut Program, id: ExprId) -> Result<(), CompilerError> {
         // Handle lambda expressions specially - set up parameter types BEFORE visiting body
         let is_lambda = matches!(prog.expressions[id], Expression::Lambda { .. });
-        
+
         if is_lambda {
             // For lambdas: Set up parameter types FIRST, then visit body manually
-            let expr_span = prog.expressions[id]
-                .span()
-                .unwrap_or(Span::new(0, 0, "<type_resolver>"));
+            let expr_span =
+                prog.expressions[id]
+                    .span()
+                    .unwrap_or(Span::new(0, 0, "<type_resolver>"));
 
-            if let Expression::Lambda { params, body, return_type, .. } = &prog.expressions[id] {
+            if let Expression::Lambda {
+                params,
+                body,
+                return_type,
+                ..
+            } = &prog.expressions[id]
+            {
                 let params = params.clone();
                 let body = *body;
                 let return_type = *return_type;
@@ -1292,10 +1299,10 @@ impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
                         let span = param.name.span.unwrap_or(expr_span);
                         // Parameters always have type annotations in the AST
                         let resolved_type = self.ast_to_resolved(prog, param.ty, span);
-                        
+
                         // Store the resolved type immediately in the parameter
                         prog.params[param_id].resolved_type = Some(resolved_type.clone());
-                        
+
                         resolved_type
                     })
                     .collect();

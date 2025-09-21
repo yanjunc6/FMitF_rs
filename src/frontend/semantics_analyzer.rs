@@ -24,7 +24,7 @@ struct SemanticAnalyzer<'a> {
     errors: Vec<CompilerError>,
     current_callable_kind: Option<CallableKind>,
     in_global_hop: bool,
-    lambda_depth: usize,             // Track nesting depth of lambdas
+    lambda_depth: usize, // Track nesting depth of lambdas
 }
 
 impl<'a> SemanticAnalyzer<'a> {
@@ -630,3 +630,5 @@ impl<'ast> Visitor<'ast, (), ()> for SemanticAnalyzer<'ast> {
 // ✅ 8. Transactions should not have generic parameters
 // ✅ 9. Partition functions must return int
 // ✅ 10. No inference types should remain after type checking (comprehensive check across all AST nodes)
+
+// do not allow arg other than table field in node partition function
