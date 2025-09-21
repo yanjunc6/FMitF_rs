@@ -36,6 +36,7 @@ pub type GenericParamId = Id<GenericParam>;
 pub struct Program {
     // --- Arenas for all CFG nodes ---
     pub functions: Arena<Function>,
+    pub hops: Arena<Hop>,
     pub basic_blocks: Arena<BasicBlock>,
     pub variables: Arena<Variable>,
     pub global_consts: Arena<GlobalConst>,
@@ -85,7 +86,7 @@ pub enum Type {
     Primitive(PrimitiveType),
     Function {
         param_types: Vec<TypeId>,
-        return_type: TypeId,
+        return_type: Box<TypeId>,
     },
     List(TypeId),
     /// An instantiation of a user-defined type (e.g., a struct).
@@ -143,6 +144,7 @@ pub enum FunctionKind {
     Transaction,
     Partition,
     Lambda,
+    Operator,
     Invariant,
     Assumption,
 }
@@ -172,7 +174,7 @@ pub struct GenericParam {
 #[derive(Debug, Clone)]
 pub struct Hop {
     pub function_id: FunctionId,
-    pub entry_block: BasicBlockId,
+    pub entry_block: Option<BasicBlockId>,
     pub blocks: Vec<BasicBlockId>,
     pub decorators: Vec<Decorator>,
 }
@@ -261,6 +263,15 @@ pub enum ConstantValue {
     String(String),
 }
 
+impl ConstantValue {
+    pub fn as_int(&self) -> Option<i64> {
+        match self {
+            ConstantValue::Int(i) => Some(*i),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BinaryOp {
     AddInt,
@@ -306,7 +317,7 @@ pub struct Table {
     pub name: String,
     pub primary_key_fields: Vec<FieldId>,
     pub other_fields: Vec<FieldId>,
-    pub node_partition: FunctionId,
+    pub node_partition: Option<FunctionId>,
     pub node_partition_args: Vec<FieldId>,
     pub invariants: Vec<FunctionId>,
 }

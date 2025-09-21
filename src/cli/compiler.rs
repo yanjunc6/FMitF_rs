@@ -136,7 +136,7 @@ impl Compiler {
             TOTAL_STAGES,
             || -> Result<cfg::Program, Box<dyn std::error::Error>> {
                 // Generate CFG from AST using cfg_builder
-                let cfg_program: cfg::Program = cfg::cfg_builder::build(&program);
+                let cfg_program: cfg::Program = cfg::cfg_builder::build(program);
 
                 // Write CFG pretty print
                 self.write_cfg_pretty(&cfg_program, output_dir)?;
