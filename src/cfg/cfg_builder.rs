@@ -233,11 +233,35 @@ impl CfgBuilder {
             let signature =
                 self.convert_type_scheme(ast_func.resolved_function_type.as_ref().unwrap());
 
+            // Process parameters for all functions (not just those with bodies)
+            let param_data: Vec<_> = ast_func
+                .params
+                .iter()
+                .map(|param_id| {
+                    let param = &self.ast.params[*param_id];
+                    (
+                        param.name.name.clone(),
+                        param.resolved_type.clone().unwrap(),
+                    )
+                })
+                .collect();
+
+            let mut params = Vec::new();
+            for (name, resolved_type) in param_data {
+                let var = cfg::Variable {
+                    name,
+                    ty: self.convert_resolved_type(&resolved_type).unwrap(),
+                    kind: cfg::VariableKind::Parameter,
+                };
+                let var_id = self.cfg.variables.alloc(var);
+                params.push(var_id);
+            }
+
             let cfg_func = cfg::Function {
                 name: ast_func.name.name.clone(),
                 signature,
                 kind: self.convert_callable_kind(&ast_func),
-                params: Vec::new(),      // populated in body-building pass
+                params,                  // parameters processed here for all functions
                 assumptions: Vec::new(), // populated in synthesize pass
                 entry_block: None,
                 all_blocks: Vec::new(),
@@ -312,37 +336,18 @@ impl CfgBuilder {
 
             let cfg_func_id = self.func_map[&ast_func_id];
 
-            // Clone necessary data before creating the context
-            let params_with_types: Vec<_> = ast_func
-                .params
-                .iter()
-                .map(|p_id| {
-                    let param = &self.ast.params[*p_id];
-                    (
-                        *p_id,
-                        param.name.name.clone(),
-                        param.resolved_type.clone().unwrap(),
-                    )
-                })
-                .collect();
+            // Get the parameters before creating the context
+            let cfg_params = self.cfg.functions[cfg_func_id].params.clone();
 
             let mut context = FunctionContext::new(self, cfg_func_id);
 
-            // Create and map parameters to CFG variables
-            for (ast_param_id, name, resolved_type) in params_with_types {
-                let var = cfg::Variable {
-                    name,
-                    ty: context
-                        .builder
-                        .convert_resolved_type(&resolved_type)
-                        .unwrap(),
-                    kind: cfg::VariableKind::Parameter,
-                };
-                let var_id = context.builder.cfg.variables.alloc(var);
-                context.builder.cfg.functions[cfg_func_id]
-                    .params
-                    .push(var_id);
-                context.param_map.insert(ast_param_id, var_id);
+            // Map existing parameters to CFG variables for functions with bodies
+            // (Parameters were already created in build_function_shells)
+            for (i, ast_param_id) in ast_func.params.iter().enumerate() {
+                // Map the AST parameter to the corresponding CFG variable
+                if let Some(&cfg_var_id) = cfg_params.get(i) {
+                    context.param_map.insert(*ast_param_id, cfg_var_id);
+                }
             }
 
             // Delegate to the context to build the body
