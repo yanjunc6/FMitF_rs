@@ -198,11 +198,11 @@ impl<W: Write> CfgPrinter<W> {
             FunctionKind::Transaction => write!(self.writer, "transaction")?,
             FunctionKind::Partition => write!(self.writer, "partition")?,
             FunctionKind::Lambda => write!(self.writer, "lambda")?,
+            FunctionKind::Operator => write!(self.writer, "operator")?,
             FunctionKind::Invariant => write!(self.writer, "invariant")?,
             FunctionKind::Assumption => write!(self.writer, "assumption")?,
         }
-
-        write!(self.writer, " {}", function.name)?;
+        write!(self.writer, " {}(", function.name)?;
         if SHOW_VAR_IDS {
             write!(self.writer, "[fn{}]", id.index())?;
         }
@@ -508,13 +508,13 @@ impl<W: Write> CfgPrinter<W> {
             } => {
                 write!(self.writer, "(")?;
                 for (i, param_type) in param_types.iter().enumerate() {
-                    if i > 0 {
+                    self.print_type_info(program, *param_type)?;
+                    if i < param_types.len() - 1 {
                         write!(self.writer, ", ")?;
                     }
-                    self.print_type_info(program, *param_type)?;
                 }
                 write!(self.writer, ") -> ")?;
-                self.print_type_info(program, *return_type)?;
+                self.print_type_info(program, **return_type)?;
             }
             Type::List(element_type) => {
                 write!(self.writer, "[")?;

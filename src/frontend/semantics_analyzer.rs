@@ -327,10 +327,12 @@ impl<'ast> Visitor<'ast, (), ()> for SemanticAnalyzer<'ast> {
             Statement::Hop {
                 decorators,
                 body,
-                span,
+                span: _span,
                 ..
             } => {
                 // Rule: No hop blocks in functions
+                /*
+
                 if let Some(current_kind) = self.current_callable_kind {
                     if current_kind == CallableKind::Function {
                         if let Some(s) = span {
@@ -343,6 +345,7 @@ impl<'ast> Visitor<'ast, (), ()> for SemanticAnalyzer<'ast> {
                         }
                     }
                 }
+                */
 
                 let was_in_global_hop = self.in_global_hop;
                 self.in_global_hop = self.is_global_hop(decorators);
@@ -359,10 +362,12 @@ impl<'ast> Visitor<'ast, (), ()> for SemanticAnalyzer<'ast> {
                 start,
                 end,
                 body,
-                span,
+                span: _span,
                 ..
             } => {
                 // Rule: No hop blocks in functions
+                /*
+
                 if let Some(current_kind) = self.current_callable_kind {
                     if current_kind == CallableKind::Function {
                         if let Some(s) = span {
@@ -375,6 +380,7 @@ impl<'ast> Visitor<'ast, (), ()> for SemanticAnalyzer<'ast> {
                         }
                     }
                 }
+                */
 
                 // Rule 5: `hops_for` start and end must be constant integers.
                 // Check start expression
