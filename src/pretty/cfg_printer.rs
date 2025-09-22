@@ -8,7 +8,7 @@ use std::io::{self, Write};
 
 // Debug options - simple constants for development
 const SHOW_VAR_IDS: bool = true;
-const SHOW_TYPE_INFO: bool = true;
+const SHOW_TYPE_INFO: bool = false;
 
 /// A pretty printer for CFG nodes.
 pub struct CfgPrinter<W: Write> {
@@ -277,19 +277,41 @@ impl<W: Write> CfgPrinter<W> {
         Ok(())
     }
 
-    fn print_hop(&mut self, _program: &Program, id: HopId) -> io::Result<()> {
+    fn print_hop(&mut self, program: &Program, id: HopId) -> io::Result<()> {
+        let hop = &program.hops[id];
+
         self.write_indent()?;
         write!(self.writer, "hop{}", id.index())?;
+
+        // Print decorators if any
+        if !hop.decorators.is_empty() {
+            write!(self.writer, " @")?;
+            for (i, decorator) in hop.decorators.iter().enumerate() {
+                if i > 0 {
+                    write!(self.writer, " @")?;
+                }
+                write!(self.writer, "{}", decorator.name)?;
+            }
+        }
+
         writeln!(self.writer, " {{")?;
         self.indent();
 
-        // This is a placeholder - the current CFG structure doesn't have a proper hops arena
-        self.write_indent()?;
-        writeln!(self.writer, "// Hop blocks would be printed here")?;
+        // Print entry block information
+        if let Some(entry_block) = hop.entry_block {
+            self.write_indent()?;
+            writeln!(self.writer, "entry_block: bb{}", entry_block.index())?;
+        }
+
+        // Print all blocks in this hop
+        for block_id in &hop.blocks {
+            self.print_basic_block(program, *block_id)?;
+        }
 
         self.dedent();
         self.write_indent()?;
         writeln!(self.writer, "}}")?;
+        writeln!(self.writer)?;
         Ok(())
     }
 
