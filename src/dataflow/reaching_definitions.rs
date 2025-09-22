@@ -2,12 +2,12 @@ use super::{
     AnalysisKind, AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
     StmtLoc, TransferFunction,
 };
-use crate::cfg::{BasicBlock, ControlFlowEdge, FunctionCfg, Statement, VarId};
+use crate::cfg::{BasicBlock, BasicBlockId, Function, Instruction, Terminator, VariableId};
 
 /// Definition point for a variable (simplified)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Definition {
-    pub var: VarId,
+    pub var: VariableId,
     pub loc: StmtLoc,
 }
 
@@ -15,10 +15,10 @@ pub struct Definition {
 pub struct ReachingDefTransfer;
 
 impl TransferFunction<SetLattice<Definition>> for ReachingDefTransfer {
-    /// For each statement, add definitions and kill previous definitions of same variable
-    fn transfer_statement(
+    /// For each instruction, add definitions and kill previous definitions of same variable
+    fn transfer_instruction(
         &self,
-        stmt: &Statement,
+        inst: &Instruction,
         stmt_loc: StmtLoc,
         state: &SetLattice<Definition>,
     ) -> SetLattice<Definition> {
@@ -28,40 +28,69 @@ impl TransferFunction<SetLattice<Definition>> for ReachingDefTransfer {
 
         let mut result_set = state.as_set().unwrap().clone();
 
-        match stmt {
-            Statement::Assign { lvalue, .. } => {
-                match lvalue {
-                    crate::cfg::LValue::Variable { var } => {
-                        // Kill all previous definitions of this variable
-                        result_set.retain(|def| def.var != *var);
-                        // Gen: Add new definition (block and stmt_index would be set by caller)
-                        result_set.insert(Definition {
-                            var: *var,
-                            loc: stmt_loc,
-                        });
-                    }
-                    crate::cfg::LValue::ArrayElement { array, .. } => {
-                        result_set.retain(|def| def.var != *array);
-                        result_set.insert(Definition {
-                            var: *array,
-                            loc: stmt_loc,
-                        });
-                    }
-                    crate::cfg::LValue::TableField { .. } => {
-                        // Table fields don't define local variables
-                    }
+        match inst {
+            Instruction::Assign { dest, .. } => {
+                // Kill all previous definitions of this variable
+                result_set.retain(|def| def.var != *dest);
+                // Gen: Add new definition
+                result_set.insert(Definition {
+                    var: *dest,
+                    loc: stmt_loc,
+                });
+            }
+            Instruction::BinaryOp { dest, .. } => {
+                // Kill all previous definitions of this variable
+                result_set.retain(|def| def.var != *dest);
+                // Gen: Add new definition
+                result_set.insert(Definition {
+                    var: *dest,
+                    loc: stmt_loc,
+                });
+            }
+            Instruction::UnaryOp { dest, .. } => {
+                // Kill all previous definitions of this variable
+                result_set.retain(|def| def.var != *dest);
+                // Gen: Add new definition
+                result_set.insert(Definition {
+                    var: *dest,
+                    loc: stmt_loc,
+                });
+            }
+            Instruction::Call { dest, .. } => {
+                // Kill all previous definitions of this variable (if any)
+                if let Some(dest_var) = dest {
+                    result_set.retain(|def| def.var != *dest_var);
+                    // Gen: Add new definition
+                    result_set.insert(Definition {
+                        var: *dest_var,
+                        loc: stmt_loc,
+                    });
                 }
+            }
+            Instruction::TableGet { dest, .. } => {
+                // Kill all previous definitions of this variable
+                result_set.retain(|def| def.var != *dest);
+                // Gen: Add new definition
+                result_set.insert(Definition {
+                    var: *dest,
+                    loc: stmt_loc,
+                });
+            }
+            Instruction::TableSet { .. } | Instruction::Assert { .. } => {
+                // These instructions don't define any variables
             }
         }
 
         SetLattice::new(result_set)
     }
 
-    fn transfer_edge(
+    fn transfer_terminator(
         &self,
-        _edge: &ControlFlowEdge,
+        _term: &Terminator,
+        _block_id: BasicBlockId,
         state: &SetLattice<Definition>,
     ) -> SetLattice<Definition> {
+        // Terminators don't define variables
         state.clone()
     }
 
@@ -69,8 +98,8 @@ impl TransferFunction<SetLattice<Definition>> for ReachingDefTransfer {
         SetLattice::bottom().unwrap()
     }
 
-    fn boundary_value(&self, _func: &FunctionCfg, _block: &BasicBlock) -> SetLattice<Definition> {
-        // At function entry, parameters are defined, but we don't know its definition
+    fn boundary_value(&self, _func: &Function, _block: &BasicBlock) -> SetLattice<Definition> {
+        // At function entry, parameters are defined, but we don't model their definition points here
         SetLattice::bottom().unwrap()
     }
 }
@@ -78,8 +107,8 @@ impl TransferFunction<SetLattice<Definition>> for ReachingDefTransfer {
 /// Analyze reaching definitions in a function (forward, function-level)
 /// Which assignments could possibly supply the current value of this variable?
 pub fn analyze_reaching_definitions(
-    func: &FunctionCfg,
-    cfg_program: &crate::cfg::CfgProgram,
+    func: &Function,
+    program: &crate::cfg::Program,
 ) -> DataflowResults<SetLattice<Definition>> {
     let analysis = DataflowAnalysis::new(
         AnalysisLevel::Function,
@@ -87,5 +116,5 @@ pub fn analyze_reaching_definitions(
         AnalysisKind::May,
         ReachingDefTransfer,
     );
-    analysis.analyze(func, cfg_program)
+    analysis.analyze(func, program)
 }

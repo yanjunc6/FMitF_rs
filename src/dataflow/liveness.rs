@@ -3,21 +3,21 @@ use super::{
     StmtLoc, TransferFunction,
 };
 use crate::cfg::{
-    BasicBlock, ControlFlowEdge, EdgeType, FunctionCfg, Operand, RValue, Statement, VarId,
+    BasicBlock, BasicBlockId, Function, Instruction, Operand, Terminator, VariableId,
 };
 
 /// Variable identifier for liveness analysis
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct LiveVar(pub VarId);
+pub struct LiveVar(pub VariableId);
 
 /// Transfer function for live variables analysis
 pub struct LivenessTransfer;
 
 impl TransferFunction<SetLattice<LiveVar>> for LivenessTransfer {
-    /// For each statement, remove defined variables and add used variables
-    fn transfer_statement(
+    /// For each instruction, remove defined variables and add used variables
+    fn transfer_instruction(
         &self,
-        stmt: &Statement,
+        inst: &Instruction,
         _stmt_loc: StmtLoc,
         state: &SetLattice<LiveVar>,
     ) -> SetLattice<LiveVar> {
@@ -27,113 +27,122 @@ impl TransferFunction<SetLattice<LiveVar>> for LivenessTransfer {
 
         let mut result_set = state.as_set().unwrap().clone();
 
-        match stmt {
-            Statement::Assign { lvalue, rvalue, .. } => {
+        match inst {
+            Instruction::Assign { dest, src } => {
                 // Add used variables (gen)
-                self.add_rvalue_vars(&mut result_set, rvalue);
-
-                // Remove defined variables (kill)
-                match lvalue {
-                    crate::cfg::LValue::Variable { var } => {
-                        result_set.remove(&LiveVar(*var));
-                    }
-                    crate::cfg::LValue::ArrayElement { array, index } => {
-                        result_set.insert(LiveVar(*array));
-                        self.add_operand_vars(&mut result_set, index);
-                    }
-                    crate::cfg::LValue::TableField { pk_values, .. } => {
-                        for pk_val in pk_values {
-                            self.add_operand_vars(&mut result_set, pk_val);
-                        }
-                    }
+                self.add_operand_vars(&mut result_set, src);
+                // Remove defined variable (kill)
+                result_set.remove(&LiveVar(*dest));
+            }
+            Instruction::BinaryOp {
+                dest, left, right, ..
+            } => {
+                // Add used variables (gen)
+                self.add_operand_vars(&mut result_set, left);
+                self.add_operand_vars(&mut result_set, right);
+                // Remove defined variable (kill)
+                result_set.remove(&LiveVar(*dest));
+            }
+            Instruction::UnaryOp { dest, operand, .. } => {
+                // Add used variables (gen)
+                self.add_operand_vars(&mut result_set, operand);
+                // Remove defined variable (kill)
+                result_set.remove(&LiveVar(*dest));
+            }
+            Instruction::Call { dest, args, .. } => {
+                // Add used variables (gen)
+                for arg in args {
+                    self.add_operand_vars(&mut result_set, arg);
                 }
+                // Remove defined variable (kill)
+                if let Some(dest_var) = dest {
+                    result_set.remove(&LiveVar(*dest_var));
+                }
+            }
+            Instruction::TableGet { dest, keys, .. } => {
+                // Add used variables (gen)
+                for key in keys {
+                    self.add_operand_vars(&mut result_set, key);
+                }
+                // Remove defined variable (kill)
+                result_set.remove(&LiveVar(*dest));
+            }
+            Instruction::TableSet { keys, value, .. } => {
+                // Add used variables (gen)
+                for key in keys {
+                    self.add_operand_vars(&mut result_set, key);
+                }
+                self.add_operand_vars(&mut result_set, value);
+                // No variable is defined by TableSet
+            }
+            Instruction::Assert { condition, .. } => {
+                // Add used variables (gen)
+                self.add_operand_vars(&mut result_set, condition);
+                // No variable is defined by Assert
             }
         }
 
         SetLattice::new(result_set)
     }
 
-    fn transfer_edge(
+    fn transfer_terminator(
         &self,
-        edge: &ControlFlowEdge,
+        term: &Terminator,
+        _block_id: BasicBlockId,
         state: &SetLattice<LiveVar>,
     ) -> SetLattice<LiveVar> {
-        match &edge.edge_type {
-            EdgeType::ConditionalTrue { condition } => {
-                let mut result_set = state.as_set().unwrap().clone();
-                self.add_operand_vars(&mut result_set, &condition);
-                SetLattice::new(result_set)
-            }
-            EdgeType::ConditionalFalse { condition } => {
-                let mut result_set = state.as_set().unwrap().clone();
-                self.add_operand_vars(&mut result_set, &condition);
-                SetLattice::new(result_set)
-            }
-            EdgeType::Return {
-                value: Some(return_val),
-            } => {
-                let mut result_set = state.as_set().unwrap().clone();
-                self.add_operand_vars(&mut result_set, &return_val);
-                SetLattice::new(result_set)
-            }
-            _ => state.clone(),
+        if state.is_top() {
+            return SetLattice::top_element();
         }
+
+        let mut result_set = state.as_set().unwrap().clone();
+
+        match term {
+            Terminator::Branch { condition, .. } => {
+                self.add_operand_vars(&mut result_set, condition);
+            }
+            Terminator::Return(Some(return_val)) => {
+                self.add_operand_vars(&mut result_set, return_val);
+            }
+            _ => {
+                // Jump, Return(None), HopExit, Abort don't use any variables
+            }
+        }
+
+        SetLattice::new(result_set)
     }
 
     fn initial_value(&self) -> SetLattice<LiveVar> {
         SetLattice::bottom().unwrap()
     }
 
-    fn boundary_value(&self, _func: &FunctionCfg, block: &BasicBlock) -> SetLattice<LiveVar> {
+    fn boundary_value(&self, _func: &Function, block: &BasicBlock) -> SetLattice<LiveVar> {
         let mut live_vars = std::collections::HashSet::new();
-        for edge in &block.successors {
-            if let EdgeType::Return {
-                value: Some(return_val),
-            } = &edge.edge_type
-            {
-                self.add_operand_vars(&mut live_vars, return_val);
-            }
+        // For backward analysis, boundary is at return/abort blocks
+        if let Terminator::Return(Some(return_val)) = &block.terminator {
+            self.add_operand_vars(&mut live_vars, return_val);
         }
         SetLattice::new(live_vars)
     }
 }
 
 impl LivenessTransfer {
-    fn add_rvalue_vars(&self, vars: &mut std::collections::HashSet<LiveVar>, rvalue: &RValue) {
-        match rvalue {
-            RValue::Use(operand) => {
-                self.add_operand_vars(vars, operand);
-            }
-            RValue::TableAccess { pk_values, .. } => {
-                for pk_val in pk_values {
-                    self.add_operand_vars(vars, pk_val);
-                }
-            }
-            RValue::ArrayAccess { array, index } => {
-                self.add_operand_vars(vars, array);
-                self.add_operand_vars(vars, index);
-            }
-            RValue::UnaryOp { operand, .. } => {
-                self.add_operand_vars(vars, operand);
-            }
-            RValue::BinaryOp { left, right, .. } => {
-                self.add_operand_vars(vars, left);
-                self.add_operand_vars(vars, right);
-            }
-        }
-    }
-
     fn add_operand_vars(&self, vars: &mut std::collections::HashSet<LiveVar>, operand: &Operand) {
-        if let Operand::Var(var_id) = operand {
-            vars.insert(LiveVar(*var_id));
+        match operand {
+            Operand::Variable(var_id) => {
+                vars.insert(LiveVar(*var_id));
+            }
+            Operand::Constant(_) | Operand::Global(_) => {
+                // Constants and globals don't contribute to liveness
+            }
         }
     }
 }
 
 /// Analyze live variables in a function (backward, function-level)
 pub fn analyze_live_variables(
-    func: &FunctionCfg,
-    cfg_program: &crate::cfg::CfgProgram,
+    func: &Function,
+    program: &crate::cfg::Program,
 ) -> DataflowResults<SetLattice<LiveVar>> {
     let analysis = DataflowAnalysis::new(
         AnalysisLevel::Function,
@@ -141,5 +150,5 @@ pub fn analyze_live_variables(
         AnalysisKind::May,
         LivenessTransfer,
     );
-    analysis.analyze(func, cfg_program)
+    analysis.analyze(func, program)
 }

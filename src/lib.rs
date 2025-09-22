@@ -3,7 +3,9 @@
 pub mod ast;
 pub mod cfg;
 pub mod cli;
+pub mod dataflow;
 pub mod frontend;
+pub mod optimization;
 pub mod pretty;
 pub mod util;
 // Re-export main functionality

@@ -13,8 +13,8 @@
 //  A typical analysis will implement *either* trait or both, depending on scope.
 
 use super::{
-    BasicBlock, BasicBlockId, CfgProgram, Constant, FunctionCfg, FunctionId, HopCfg, HopId, LValue,
-    Operand, RValue, Statement, VarId, Variable,
+    BasicBlock, BasicBlockId, ConstantValue, Function, FunctionId, GlobalConst, GlobalConstId, Hop,
+    HopId, Instruction, Operand, Program, Terminator, Variable,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -22,29 +22,27 @@ use super::{
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub trait CfgVisitor<T> {
-    fn visit_program(&mut self, program: &CfgProgram) -> T;
+    fn visit_program(&mut self, program: &Program) -> T;
 
-    fn visit_function(&mut self, program: &CfgProgram, id: FunctionId) -> T;
+    fn visit_function(&mut self, program: &Program, id: FunctionId) -> T;
 
-    fn visit_hop(&mut self, program: &CfgProgram, id: HopId) -> T;
+    fn visit_hop(&mut self, program: &Program, id: HopId) -> T;
 
-    fn visit_basic_block(&mut self, program: &CfgProgram, id: BasicBlockId) -> T;
+    fn visit_basic_block(&mut self, program: &Program, id: BasicBlockId) -> T;
 
-    fn visit_global_constants(&mut self, program: &CfgProgram, id: VarId) -> T;
+    fn visit_global_constants(&mut self, program: &Program, id: GlobalConstId) -> T;
 }
 
 pub trait StmtVisitor<T> {
-    fn visit_statement(&mut self, stmt: &Statement) -> T;
+    fn visit_instruction(&mut self, inst: &Instruction) -> T;
 
-    fn visit_lvalue(&mut self, lv: &LValue) -> T;
-
-    fn visit_rvalue(&mut self, rv: &RValue) -> T;
+    fn visit_terminator(&mut self, term: &Terminator) -> T;
 
     fn visit_operand(&mut self, op: &Operand) -> T;
 
-    fn visit_constant(&mut self, _c: &Constant) -> T;
+    fn visit_constant(&mut self, _c: &ConstantValue) -> T;
 
-    fn visit_variable(&mut self, program: &CfgProgram, v: &Variable) -> T;
+    fn visit_variable(&mut self, program: &Program, v: &Variable) -> T;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -52,27 +50,25 @@ pub trait StmtVisitor<T> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub trait CfgFolder {
-    fn fold_program(&mut self, program: &mut CfgProgram) -> &CfgProgram;
+    fn fold_program(&mut self, program: &mut Program) -> &Program;
 
-    fn fold_function(&mut self, program: &mut CfgProgram, id: FunctionId) -> &FunctionCfg;
+    fn fold_function(&mut self, program: &mut Program, id: FunctionId) -> &Function;
 
-    fn fold_hop(&mut self, program: &mut CfgProgram, id: HopId) -> &HopCfg;
+    fn fold_hop(&mut self, program: &mut Program, id: HopId) -> &Hop;
 
-    fn fold_basic_block(&mut self, program: &mut CfgProgram, id: BasicBlockId) -> &BasicBlock;
+    fn fold_basic_block(&mut self, program: &mut Program, id: BasicBlockId) -> &BasicBlock;
 
-    fn fold_global_constants(&mut self, program: &mut CfgProgram, id: VarId) -> &Variable;
+    fn fold_global_constants(&mut self, program: &mut Program, id: GlobalConstId) -> &GlobalConst;
 }
 
 pub trait StmtFolder {
-    fn fold_statement(&mut self, stmt: &mut Statement) -> &mut Statement;
+    fn fold_instruction(&mut self, inst: &mut Instruction) -> &mut Instruction;
 
-    fn fold_lvalue(&mut self, lv: &mut LValue) -> &mut LValue;
-
-    fn fold_rvalue(&mut self, rv: &mut RValue) -> &mut RValue;
+    fn fold_terminator(&mut self, term: &mut Terminator) -> &mut Terminator;
 
     fn fold_operand(&mut self, op: &mut Operand) -> &mut Operand;
 
-    fn fold_constant(&mut self, c: &mut Constant) -> &mut Constant;
+    fn fold_constant(&mut self, c: &mut ConstantValue) -> &mut ConstantValue;
 
-    fn fold_variable(&mut self, program: &mut CfgProgram, v: &mut Variable) -> &mut Variable;
+    fn fold_variable(&mut self, program: &mut Program, v: &mut Variable) -> &mut Variable;
 }

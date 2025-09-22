@@ -2,23 +2,43 @@ use super::{
     AnalysisKind, AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
     StmtLoc, TransferFunction,
 };
-use crate::cfg::{ControlFlowEdge, FunctionCfg, LValue, RValue, Statement, VarId};
+use crate::cfg::{
+    BasicBlockId, BinaryOp, Function, Instruction, Operand, Terminator, UnaryOp, VariableId,
+};
 
 /// Available expression for tracking computations
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AvailExpr {
-    pub lvalue: LValue, // variable being assigned, currently no array element/table field recorded here
-    pub rvalue: RValue, // all possible rvalue is recorded here
+    pub dest: VariableId, // variable being assigned
+    pub op: ExprKind,     // the computation
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ExprKind {
+    BinaryOp {
+        op: BinaryOp,
+        left: Operand,
+        right: Operand,
+    },
+    UnaryOp {
+        op: UnaryOp,
+        operand: Operand,
+    },
+    Use(Operand),
+    Call {
+        func: crate::cfg::FunctionId,
+        args: Vec<Operand>,
+    },
 }
 
 /// Transfer function for available expressions analysis
 pub struct AvailExprTransfer;
 
 impl TransferFunction<SetLattice<AvailExpr>> for AvailExprTransfer {
-    /// For each statement, add generated expressions and kill expressions using redefined variables
-    fn transfer_statement(
+    /// For each instruction, add generated expressions and kill expressions using redefined variables
+    fn transfer_instruction(
         &self,
-        stmt: &Statement,
+        inst: &Instruction,
         _stmt_loc: StmtLoc,
         state: &SetLattice<AvailExpr>,
     ) -> SetLattice<AvailExpr> {
@@ -28,39 +48,84 @@ impl TransferFunction<SetLattice<AvailExpr>> for AvailExprTransfer {
 
         let mut result_set = state.as_set().unwrap().clone();
 
-        match stmt {
-            Statement::Assign { lvalue, rvalue, .. } => {
+        match inst {
+            Instruction::Assign { dest, src } => {
                 // Kill expressions that use the assigned variable
-                match lvalue {
-                    LValue::Variable { var } => {
-                        result_set.retain(|expr| !self.expr_uses_var(expr, *var));
+                result_set.retain(|expr| !self.expr_uses_var(expr, *dest));
 
-                        // Gen: Add expressions from rvalue
-                        result_set.insert(AvailExpr {
-                            lvalue: lvalue.clone(),
-                            rvalue: rvalue.clone(),
-                        });
-                    }
-                    LValue::ArrayElement { array, .. } => {
-                        // Kill all expressions containing the array variable
-                        result_set.retain(|expr| !self.expr_uses_var(expr, *array));
-                    }
-                    LValue::TableField { table, .. } => {
-                        // Kill all expressions containing the table
-                        result_set.retain(|expr| !self.expr_uses_table(expr, *table));
-                    }
+                // Gen: Add new expression
+                result_set.insert(AvailExpr {
+                    dest: *dest,
+                    op: ExprKind::Use(src.clone()),
+                });
+            }
+            Instruction::BinaryOp {
+                dest,
+                op,
+                left,
+                right,
+            } => {
+                // Kill expressions that use the assigned variable
+                result_set.retain(|expr| !self.expr_uses_var(expr, *dest));
+
+                // Gen: Add new expression
+                result_set.insert(AvailExpr {
+                    dest: *dest,
+                    op: ExprKind::BinaryOp {
+                        op: *op,
+                        left: left.clone(),
+                        right: right.clone(),
+                    },
+                });
+            }
+            Instruction::UnaryOp { dest, op, operand } => {
+                // Kill expressions that use the assigned variable
+                result_set.retain(|expr| !self.expr_uses_var(expr, *dest));
+
+                // Gen: Add new expression
+                result_set.insert(AvailExpr {
+                    dest: *dest,
+                    op: ExprKind::UnaryOp {
+                        op: *op,
+                        operand: operand.clone(),
+                    },
+                });
+            }
+            Instruction::Call { dest, func, args } => {
+                if let Some(dest_var) = dest {
+                    // Kill expressions that use the assigned variable
+                    result_set.retain(|expr| !self.expr_uses_var(expr, *dest_var));
+
+                    // Gen: Add new expression
+                    result_set.insert(AvailExpr {
+                        dest: *dest_var,
+                        op: ExprKind::Call {
+                            func: *func,
+                            args: args.clone(),
+                        },
+                    });
                 }
+            }
+            Instruction::TableGet { dest, .. } => {
+                // Kill expressions that use the assigned variable
+                result_set.retain(|expr| !self.expr_uses_var(expr, *dest));
+                // Don't generate expression for table operations (they're not pure)
+            }
+            Instruction::TableSet { .. } | Instruction::Assert { .. } => {
+                // These instructions don't define variables or generate expressions
             }
         }
 
         SetLattice::new(result_set)
     }
 
-    fn transfer_edge(
+    fn transfer_terminator(
         &self,
-        _edge: &ControlFlowEdge,
+        _term: &Terminator,
+        _block_id: BasicBlockId,
         state: &SetLattice<AvailExpr>,
     ) -> SetLattice<AvailExpr> {
+        // Terminators don't generate expressions
         state.clone()
     }
 
@@ -70,7 +135,7 @@ impl TransferFunction<SetLattice<AvailExpr>> for AvailExprTransfer {
 
     fn boundary_value(
         &self,
-        _func: &FunctionCfg,
+        _func: &Function,
         _block: &crate::cfg::BasicBlock,
     ) -> SetLattice<AvailExpr> {
         // At function entry, no expressions are available
@@ -79,60 +144,28 @@ impl TransferFunction<SetLattice<AvailExpr>> for AvailExprTransfer {
 }
 
 impl AvailExprTransfer {
-    fn expr_uses_var(&self, expr: &AvailExpr, var: VarId) -> bool {
-        // Check if the variable is used in either lvalue or rvalue
-        let lvalue_uses_var = match &expr.lvalue {
-            LValue::Variable { var: lvar } => *lvar == var,
-            LValue::ArrayElement { array, index } => {
-                *array == var || self.operand_uses_var(index, var)
-            }
-            LValue::TableField { pk_values, .. } => pk_values
-                .iter()
-                .any(|operand| self.operand_uses_var(operand, var)),
-        };
-
-        let rvalue_uses_var = match &expr.rvalue {
-            RValue::Use(operand) => self.operand_uses_var(operand, var),
-            RValue::ArrayAccess { array, index } => {
-                self.operand_uses_var(array, var) || self.operand_uses_var(index, var)
-            }
-            RValue::TableAccess { pk_values, .. } => pk_values
-                .iter()
-                .any(|operand| self.operand_uses_var(operand, var)),
-            RValue::UnaryOp { operand, .. } => self.operand_uses_var(operand, var),
-            RValue::BinaryOp { left, right, .. } => {
+    fn expr_uses_var(&self, expr: &AvailExpr, var: VariableId) -> bool {
+        // Check if the variable is used in the expression
+        match &expr.op {
+            ExprKind::Use(operand) => self.operand_uses_var(operand, var),
+            ExprKind::BinaryOp { left, right, .. } => {
                 self.operand_uses_var(left, var) || self.operand_uses_var(right, var)
             }
-        };
-
-        lvalue_uses_var || rvalue_uses_var
+            ExprKind::UnaryOp { operand, .. } => self.operand_uses_var(operand, var),
+            ExprKind::Call { args, .. } => args.iter().any(|arg| self.operand_uses_var(arg, var)),
+        }
     }
 
-    fn expr_uses_table(&self, expr: &AvailExpr, table: crate::cfg::TableId) -> bool {
-        // Check if the table is used in either lvalue or rvalue
-        let lvalue_uses_table = match &expr.lvalue {
-            LValue::TableField { table: t, .. } => *t == table,
-            _ => false,
-        };
-
-        let rvalue_uses_table = match &expr.rvalue {
-            RValue::TableAccess { table: t, .. } => *t == table,
-            _ => false,
-        };
-
-        lvalue_uses_table || rvalue_uses_table
-    }
-
-    fn operand_uses_var(&self, operand: &crate::cfg::Operand, var: VarId) -> bool {
-        matches!(operand, crate::cfg::Operand::Var(v) if *v == var)
+    fn operand_uses_var(&self, operand: &Operand, var: VariableId) -> bool {
+        matches!(operand, Operand::Variable(v) if *v == var)
     }
 }
 
 /// Analyze available expressions in a function (forward, function-level)
 /// available expression can be safely re-used (or common-sub-expression–eliminated) without re-computing it.
 pub fn analyze_available_expressions(
-    func: &FunctionCfg,
-    cfg_program: &crate::cfg::CfgProgram,
+    func: &Function,
+    program: &crate::cfg::Program,
 ) -> DataflowResults<SetLattice<AvailExpr>> {
     let analysis = DataflowAnalysis::new(
         AnalysisLevel::Function,
@@ -140,5 +173,5 @@ pub fn analyze_available_expressions(
         AnalysisKind::Must,
         AvailExprTransfer,
     );
-    analysis.analyze(func, cfg_program)
+    analysis.analyze(func, program)
 }

@@ -2,7 +2,28 @@
 //!
 //! This module contains the main compilation orchestration logic.
 
-use super::stage::execute_stage; // Import the new helper
+use super::stage::execute_stage; // Import the         );
+
+        // Stage 3: Optimization (optional)
+        let cfg_program = if enable_optimization {
+            current_stage += 1;
+            execute_stage(
+                "Optimization",
+                current_stage,
+                TOTAL_STAGES,
+                || -> Result<cfg::Program, Box<dyn std::error::Error>> {
+                    let optimizer = CfgOptimizer::default_passes();
+                    let mut optimized_program = cfg_program;
+                    let _results = optimizer.optimize_program(&mut optimized_program);
+                    Ok(optimized_program)
+                },
+            )?
+        } else {
+            cfg_program
+        };
+
+        // TODO: Stage 4: SC-Graph Generation
+        // let sc_graph = sc_graph::build_sc_graph(optimized_cfg, instances)?;
 use crate::ast::Program;
 use crate::cfg;
 use crate::frontend::parse_and_analyze_program;
@@ -132,7 +153,7 @@ impl Compiler {
 
         // Stage 2: CFG Generation
         current_stage += 1;
-        let cfg_program = execute_stage(
+        let _cfg_program = execute_stage(
             "CFG Generation",
             current_stage,
             TOTAL_STAGES,
@@ -146,24 +167,6 @@ impl Compiler {
                 Ok(cfg_program)
             },
         )?;
-
-        // Stage 3: Optimization (optional)
-        let cfg_program = if enable_optimization {
-            current_stage += 1;
-            execute_stage(
-                "Optimization",
-                current_stage,
-                TOTAL_STAGES,
-                || -> Result<cfg::Program, Box<dyn std::error::Error>> {
-                    let optimizer = CfgOptimizer::default_passes();
-                    let mut optimized_program = cfg_program;
-                    let _results = optimizer.optimize_program(&mut optimized_program);
-                    Ok(optimized_program)
-                },
-            )?
-        } else {
-            cfg_program
-        };
 
         // TODO: Stage 2: CFG Generation
         // let cfg_program = cfg::build_cfg(program)?;

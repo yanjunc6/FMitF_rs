@@ -9,7 +9,7 @@
 use id_arena::{Arena, Id};
 use std::collections::HashMap;
 
-// pub mod cfg_api;  // Disabled for now due to compilation errors
+pub mod cfg_api;
 pub mod cfg_builder;
 
 // ============================================================================
@@ -273,7 +273,7 @@ impl ConstantValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinaryOp {
     AddInt,
     SubInt,
@@ -302,7 +302,7 @@ pub enum BinaryOp {
     Neq,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnaryOp {
     NegInt,
     NegFloat,

@@ -43,7 +43,7 @@ struct CfgBuilder {
 
     // Global counter for generating unique lambda names
     lambda_counter: u32,
-    
+
     // Global counter for generating unique temporary variables across all contexts
     temp_counter: u32,
 }

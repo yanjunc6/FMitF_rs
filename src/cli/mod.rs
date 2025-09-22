@@ -54,7 +54,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut compiler = Compiler::new();
     let output_dir = args.output_dir();
 
-    compiler.run_pipeline(&args.input, &output_dir, args.instances)
+    compiler.run_pipeline(&args.input, &output_dir, args.instances, !args.no_optimize)
 }
 
 // ============================================================================

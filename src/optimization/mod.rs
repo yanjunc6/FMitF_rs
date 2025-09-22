@@ -6,7 +6,7 @@
 //! - Copy propagation
 //! - Common subexpression elimination
 
-use crate::cfg::{CfgProgram, FunctionId};
+use crate::cfg::{FunctionId, Program};
 
 mod common_subexpression_elimination;
 mod constant_folding;
@@ -21,7 +21,7 @@ pub use dead_code_elimination::DeadCodeElimination;
 /// Trait for optimization passes
 pub trait OptimizationPass {
     /// Apply the optimization pass to a function
-    fn optimize_function(&self, program: &mut CfgProgram, func_id: FunctionId) -> bool;
+    fn optimize_function(&self, program: &mut Program, func_id: FunctionId) -> bool;
 
     /// Get the name of this optimization pass
     fn name(&self) -> &'static str;
@@ -57,7 +57,7 @@ impl CfgOptimizer {
     }
 
     /// Optimize an entire CFG program
-    pub fn optimize_program(&self, program: &mut CfgProgram) -> OptimizationResults {
+    pub fn optimize_program(&self, program: &mut Program) -> OptimizationResults {
         let mut results = OptimizationResults::new();
         let function_ids: Vec<FunctionId> = program.functions.iter().map(|(id, _)| id).collect();
 
@@ -72,7 +72,7 @@ impl CfgOptimizer {
     /// Optimize a single function by ID with iterative application of passes
     pub fn optimize_function_by_id(
         &self,
-        program: &mut CfgProgram,
+        program: &mut Program,
         func_id: FunctionId,
     ) -> FunctionOptimizationResults {
         let mut results = FunctionOptimizationResults::new();
