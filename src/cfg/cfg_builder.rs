@@ -1210,7 +1210,12 @@ impl<'a> FunctionContext<'a> {
                         }
                         panic!("LHS of assignment is not a variable");
                     }
-                    ast::Expression::MemberAccess { object, member, .. } => {
+                    ast::Expression::MemberAccess {
+                        object,
+                        member,
+                        resolved_fields,
+                        ..
+                    } => {
                         // Handle member assignment: obj.field = value
                         let object_expr = self.builder.ast.expressions[object].clone();
                         let src_op = self.build_expression(rhs);
@@ -1270,14 +1275,15 @@ impl<'a> FunctionContext<'a> {
                                     .map(|key| self.build_expression(key.value))
                                     .collect();
 
-                                // Find the field ID for this field name
-                                if let Some(field_id) =
-                                    self.find_field_by_name(table_id, &member.name)
+                                // Use the resolved field information from AST
+                                if let Some(ast::IdentifierResolution::Field(field_id)) =
+                                    resolved_fields.first()
                                 {
+                                    let cfg_field_id = self.builder.field_map[field_id];
                                     self.add_instruction(cfg::Instruction::TableSet {
                                         table: table_id,
                                         keys: key_operands,
-                                        field: Some(field_id),
+                                        field: Some(cfg_field_id),
                                         value: src_op.clone(),
                                     });
                                 }
@@ -1314,9 +1320,14 @@ impl<'a> FunctionContext<'a> {
                                     if let Some(field_map) = self.row_field_map.get(var_id).cloned()
                                     {
                                         // Decompose: Table[...] = row_var becomes Table[...].field1 = row_var#field1; etc.
+                                        // Get all table fields to map field names to field IDs
+                                        let table_fields = self.get_table_fields(table_id);
+                                        let field_name_to_id: HashMap<String, cfg::FieldId> =
+                                            table_fields.into_iter().collect();
+
                                         for (field_name, field_var_id) in field_map {
-                                            if let Some(field_id) =
-                                                self.find_field_by_name(table_id, &field_name)
+                                            if let Some(&field_id) =
+                                                field_name_to_id.get(&field_name)
                                             {
                                                 self.add_instruction(cfg::Instruction::TableSet {
                                                     table: table_id,
@@ -1344,16 +1355,17 @@ impl<'a> FunctionContext<'a> {
                             } => {
                                 // Handle row literal assignment: Table[...] = { field1: value1, field2: value2 }
                                 for key_value in key_values {
-                                    let field_name = &key_value.key.name;
                                     let field_value_op = self.build_expression(key_value.value);
 
-                                    if let Some(field_id) =
-                                        self.find_field_by_name(table_id, field_name)
+                                    // Use the resolved field information from AST
+                                    if let Some(ast::IdentifierResolution::Field(field_id)) =
+                                        &key_value.resolved_field
                                     {
+                                        let cfg_field_id = self.builder.field_map[field_id];
                                         self.add_instruction(cfg::Instruction::TableSet {
                                             table: table_id,
                                             keys: key_operands.clone(),
-                                            field: Some(field_id),
+                                            field: Some(cfg_field_id),
                                             value: field_value_op,
                                         });
                                     }
@@ -1462,6 +1474,7 @@ impl<'a> FunctionContext<'a> {
             ast::Expression::MemberAccess {
                 object,
                 member,
+                resolved_fields,
                 resolved_type,
                 ..
             } => {
@@ -1525,13 +1538,16 @@ impl<'a> FunctionContext<'a> {
                             .unwrap();
                         let temp_var = self.new_temporary(return_type);
 
-                        // Find the field ID
-                        if let Some(field_id) = self.find_field_by_name(table_id, &member.name) {
+                        // Use the resolved field information from AST
+                        if let Some(ast::IdentifierResolution::Field(field_id)) =
+                            resolved_fields.first()
+                        {
+                            let cfg_field_id = self.builder.field_map[field_id];
                             self.add_instruction(cfg::Instruction::TableGet {
                                 dest: temp_var,
                                 table: table_id,
                                 keys: key_operands,
-                                field: Some(field_id),
+                                field: Some(cfg_field_id),
                             });
                         }
 
@@ -1707,8 +1723,12 @@ impl<'a> FunctionContext<'a> {
                         .map(|&key_expr_id| self.build_expression(key_expr_id))
                         .collect();
 
-                    // Find the field ID for this field name
-                    if let Some(field_id) = self.find_field_by_name(table_id, &field_name) {
+                    // Get field ID from table structure instead of name lookup
+                    let table_fields = self.get_table_fields(table_id);
+                    let field_name_to_id: HashMap<String, cfg::FieldId> =
+                        table_fields.into_iter().collect();
+
+                    if let Some(&field_id) = field_name_to_id.get(field_name) {
                         self.add_instruction(cfg::Instruction::TableGet {
                             dest: field_var_id,
                             table: table_id,
@@ -1742,15 +1762,6 @@ impl<'a> FunctionContext<'a> {
             }
             _ => None,
         }
-    }
-
-    /// Find field ID by name in a table
-    fn find_field_by_name(&self, table_id: cfg::TableId, field_name: &str) -> Option<cfg::FieldId> {
-        let fields = self.get_table_fields(table_id);
-        fields
-            .iter()
-            .find(|(name, _)| name == field_name)
-            .map(|(_, field_id)| *field_id)
     }
 
     fn new_variable(
