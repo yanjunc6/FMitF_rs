@@ -1,0 +1,10 @@
+table Users {
+    id: int;
+    name: string;
+}
+
+function test_param_ref() -> void {
+    var test_lambda = (user: Row<Users>) -> Row<Users> {
+        return user;
+    };
+}

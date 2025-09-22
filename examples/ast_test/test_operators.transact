@@ -1,0 +1,5 @@
+// Test operators with no overloads
+
+function test() -> int {
+    return 1 + 2;
+}

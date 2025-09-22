@@ -1,0 +1,9 @@
+table Stock {
+  primary S_W_ID: int;
+  S_QUANTITY: int;
+}
+
+function test() {
+  var s: Stock = Stock[S_W_ID: 1];
+  return s.S_QUANTITY;
+}

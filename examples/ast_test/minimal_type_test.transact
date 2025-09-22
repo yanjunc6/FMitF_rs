@@ -1,0 +1,7 @@
+// Minimal test for type resolution issues
+
+function simple_test() {
+    var x: int = 5;
+    var y: int = 10;
+    var result: int = x + y;  // Should resolve int + int -> int
+}

@@ -1,0 +1,11 @@
+table Users {
+    id: int;
+    name: string;
+}
+
+function test_member() -> void {
+    var test_lambda = (user: Row<Users>) -> int {
+        var temp = user.id;
+        return 0;
+    };
+}

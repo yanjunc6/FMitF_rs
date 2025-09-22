@@ -1,0 +1,10 @@
+table Order_Line {
+    primary OL_W_ID: int;
+    OL_AMOUNT: int;
+}
+
+function test(w_id: int) {
+    var ol_total: int = 0;
+    var amount: int = Order_Line[OL_W_ID: w_id].OL_AMOUNT;
+    var result: int = ol_total + amount;
+}

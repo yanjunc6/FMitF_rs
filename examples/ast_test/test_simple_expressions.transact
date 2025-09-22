@@ -1,0 +1,8 @@
+// Test simplified expression handling
+
+function test_call() -> int;
+function add(x: int, y: int) -> int;
+
+function test() -> int {
+    return add(1, 2);
+}

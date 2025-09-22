@@ -1,0 +1,10 @@
+// Test for operator overloading
+function test_operators() {
+    var x: int = 5;
+    var y: int = 10;
+    var result: int = x + y;  // Should resolve int + int -> int
+    
+    var f1: float = 1.0;
+    var f2: float = 2.0;
+    var fresult: float = f1 + f2;  // Should resolve float + float -> float
+}

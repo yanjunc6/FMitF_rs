@@ -1,0 +1,15 @@
+// Test operator overloading resolution
+
+function testOperators() {
+    var x: int = 5;
+    var y: int = 10;
+    var result_int: int = x + y;      // Should resolve to +(int,int) -> int [f0]
+
+    var f1: float = 1.5;
+    var f2: float = 2.5;
+    var result_float: float = f1 + f2;  // Should resolve to +(float,float) -> float [f5]
+
+    var s1: string = "hello";
+    var s2: string = " world";
+    var result_string: string = s1 + s2; // Should resolve to +(string,string) -> string [f30]
+}

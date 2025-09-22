@@ -1,0 +1,52 @@
+// Test case for comprehensive function overloading resolution
+// This should test both operator overloading and regular function overloading
+
+// Define overloaded operators for different types
+operator +(a: int, b: int) -> int;      // f0 - int addition
+operator +(a: float, b: float) -> float; // f1 - float addition  
+operator +(a: string, b: string) -> string; // f2 - string concatenation
+
+// Define overloaded regular functions
+function convert(x: int) -> string;     // f3 - int to string
+function convert(x: float) -> string;   // f4 - float to string
+function convert(x: bool) -> string;    // f5 - bool to string
+
+function process(data: List<int>) -> int;      // f6 - process int list
+function process(data: List<string>) -> string; // f7 - process string list
+
+// Define a table for row literal testing
+table TestTable {
+    primary id: int;
+    name: string;
+    value: float;
+}
+
+// Main function to test overload resolution
+function testOverloads() -> bool {
+    // Test operator overloading
+    var intResult: int = 5 + 3;              // Should resolve to f0
+    var floatResult: float = 5.5 + 2.3;      // Should resolve to f1
+    var stringResult: string = "hello" + " world"; // Should resolve to f2
+    
+    // Test function overloading
+    var str1: string = convert(42);          // Should resolve to f3
+    var str2: string = convert(3.14);        // Should resolve to f4
+    var str3: string = convert(true);        // Should resolve to f5
+    
+    // Test with lists
+    var intList: List<int> = [1, 2, 3];
+    var stringList: List<string> = ["a", "b", "c"];
+    
+    var intProcessed: int = process(intList);        // Should resolve to f6
+    var stringProcessed: string = process(stringList); // Should resolve to f7
+    
+    // Test row literal type inference
+    var row1 = {id: 1, name: "test", value: 3.14};  // Should infer Row<TestTable>
+    var row2: Row<TestTable> = {id: 2, name: "test2", value: 2.71}; // Explicit type
+    
+    // Test mixed overloading scenarios
+    var mixedResult1: string = convert(intResult);   // Should use f3 with result of f0
+    var mixedResult2: string = convert(floatResult); // Should use f4 with result of f1
+    
+    return true;
+}

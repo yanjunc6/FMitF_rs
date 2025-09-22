@@ -1,0 +1,10 @@
+table TestTable {
+    primary id: int;
+    name: string;
+}
+
+function test() {
+    var x: Row<TestTable> = {id: 42, name: "test"};
+    var y = {id: 100, name: "hello"};
+    return;
+}

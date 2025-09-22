@@ -1,0 +1,10 @@
+function f<T>(x: T) -> T {
+    return x;
+}
+
+function test() {
+    var a: int = f(42);
+    var b = f<string>("hello");
+    var c = f<bool>(true);
+    return;
+}

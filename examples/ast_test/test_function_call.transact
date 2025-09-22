@@ -1,0 +1,8 @@
+function f<T>(x: T) -> T {
+    return x;
+}
+
+function main() {
+    var a: int = f(42);
+    return;
+}

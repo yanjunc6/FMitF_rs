@@ -1,0 +1,15 @@
+function partition_func(x: int) -> int {
+    return x % 10;
+}
+
+table TestTable {
+    primary id: int;
+    node partition_func(id);
+    name: string;
+}
+
+transaction test_transaction(table_id: int) {
+    hop {
+        var value: int = TestTable[id: table_id].id;
+    }
+}

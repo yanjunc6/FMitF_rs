@@ -1,0 +1,15 @@
+table Test {
+    primary id: int;
+}
+
+table Other {
+    primary x: int;
+}
+
+function test() {
+    @global
+    hop {
+        var x = scan(Test);
+        var y = scan(Other);
+    }
+}
