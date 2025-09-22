@@ -1,6 +1,6 @@
 // dataflow/mod.rs
 // NEVER CHANGE THIS FILE!
-use crate::cfg::{BasicBlock, BasicBlockId, ControlFlowEdge, FunctionCfg, Statement};
+use crate::cfg::{BasicBlock, BasicBlockId, Function, Instruction, Terminator};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -15,7 +15,7 @@ mod reaching_definitions;
 pub use reaching_definitions::{analyze_reaching_definitions, Definition};
 
 mod available_expressions;
-pub use available_expressions::{analyze_available_expressions, AvailExpr};
+pub use available_expressions::{analyze_available_expressions, AvailExpr, ExprKind};
 
 mod constant_analysis;
 pub use constant_analysis::analyze_constants;
@@ -71,17 +71,17 @@ pub trait Lattice: Clone + Eq + Debug {
 /// Trait for transfer functions
 pub trait TransferFunction<L: Lattice> {
     /// Apply transfer function for a statement
-    fn transfer_statement(&self, stmt: &Statement, stmt_loc: StmtLoc, state: &L) -> L;
+    fn transfer_instruction(&self, inst: &Instruction, stmt_loc: StmtLoc, state: &L) -> L;
 
-    /// Apply transfer function for a control flow edge
-    fn transfer_edge(&self, edge: &ControlFlowEdge, state: &L) -> L;
+    /// Apply transfer function for a terminator
+    fn transfer_terminator(&self, term: &Terminator, block_id: BasicBlockId, state: &L) -> L;
 
     /// Get initial value for entry/exit of function
     fn initial_value(&self) -> L;
 
     /// Get boundary value for function parameters (for forward analysis)
     /// or return, abort statements (for backward analysis)
-    fn boundary_value(&self, func: &FunctionCfg, block: &BasicBlock) -> L;
+    fn boundary_value(&self, func: &Function, block: &BasicBlock) -> L;
 }
 
 /// General monotone dataflow analysis framework

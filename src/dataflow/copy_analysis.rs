@@ -3,65 +3,75 @@ use super::{
     MapLattice, StmtLoc, TransferFunction,
 };
 use crate::cfg::{
-    BasicBlock, ControlFlowEdge, FunctionCfg, LValue, Operand, RValue, Statement, VarId,
+    BasicBlock, BasicBlockId, Function, Instruction, Operand, Terminator, VariableId,
 };
 
 /// Transfer function for copy propagation analysis
 pub struct CopyTransfer;
 
-impl TransferFunction<MapLattice<VarId, VarId>> for CopyTransfer {
-    /// For each statement, update copy relations
-    fn transfer_statement(
+impl TransferFunction<MapLattice<VariableId, VariableId>> for CopyTransfer {
+    /// For each instruction, update copy relations
+    fn transfer_instruction(
         &self,
-        stmt: &Statement,
+        inst: &Instruction,
         _stmt_loc: StmtLoc,
-        state: &MapLattice<VarId, VarId>,
-    ) -> MapLattice<VarId, VarId> {
+        state: &MapLattice<VariableId, VariableId>,
+    ) -> MapLattice<VariableId, VariableId> {
         if state.is_top() {
             return Lattice::top().unwrap();
         }
 
         let mut result = state.clone();
 
-        match stmt {
-            Statement::Assign { lvalue, rvalue, .. } => {
-                match lvalue {
-                    LValue::Variable { var } => {
-                        // Kill: remove any copy relation for this variable
-                        result.insert(*var, Flat::Bottom);
+        match inst {
+            Instruction::Assign { dest, src } => {
+                // Kill: remove any copy relation for this variable
+                result.insert(*dest, Flat::Bottom);
 
-                        // Gen: If rvalue is a simple variable use, add copy relation
-                        if let RValue::Use(Operand::Var(source_var)) = rvalue {
-                            result.insert(*var, Flat::Value(*source_var));
-                        }
-                    }
-                    LValue::ArrayElement { array, .. } => {
-                        // Array element assignment kills copy relations involving the array
-                        result.insert(*array, Flat::Bottom);
-                    }
-                    LValue::TableField { .. } => {
-                        // Table field assignments don't affect local copy relations
-                    }
+                // Gen: If src is a simple variable use, add copy relation
+                if let Operand::Variable(source_var) = src {
+                    result.insert(*dest, Flat::Value(*source_var));
                 }
+            }
+            Instruction::BinaryOp { dest, .. }
+            | Instruction::UnaryOp { dest, .. }
+            | Instruction::TableGet { dest, .. } => {
+                // These create new values, not copies
+                result.insert(*dest, Flat::Bottom);
+            }
+            Instruction::Call { dest, .. } => {
+                // Function calls create new values, not copies
+                if let Some(dest_var) = dest {
+                    result.insert(*dest_var, Flat::Bottom);
+                }
+            }
+            Instruction::TableSet { .. } | Instruction::Assert { .. } => {
+                // These instructions don't affect copy relations
             }
         }
 
         result
     }
 
-    fn transfer_edge(
+    fn transfer_terminator(
         &self,
-        _edge: &ControlFlowEdge,
-        state: &MapLattice<VarId, VarId>,
-    ) -> MapLattice<VarId, VarId> {
+        _term: &Terminator,
+        _block_id: BasicBlockId,
+        state: &MapLattice<VariableId, VariableId>,
+    ) -> MapLattice<VariableId, VariableId> {
+        // Terminators don't affect copy relations
         state.clone()
     }
 
-    fn initial_value(&self) -> MapLattice<VarId, VarId> {
+    fn initial_value(&self) -> MapLattice<VariableId, VariableId> {
         Lattice::bottom().unwrap()
     }
 
-    fn boundary_value(&self, _func: &FunctionCfg, _block: &BasicBlock) -> MapLattice<VarId, VarId> {
+    fn boundary_value(
+        &self,
+        _func: &Function,
+        _block: &BasicBlock,
+    ) -> MapLattice<VariableId, VariableId> {
         Lattice::bottom().unwrap()
     }
 }
@@ -69,14 +79,14 @@ impl TransferFunction<MapLattice<VarId, VarId>> for CopyTransfer {
 /// Analyze copy relations in a function (forward, function-level)
 /// Maps each variable to the single variable it copies from (if any)
 pub fn analyze_copies(
-    func: &FunctionCfg,
-    cfg_program: &crate::cfg::CfgProgram,
-) -> DataflowResults<MapLattice<VarId, VarId>> {
+    func: &Function,
+    program: &crate::cfg::Program,
+) -> DataflowResults<MapLattice<VariableId, VariableId>> {
     let analysis = DataflowAnalysis::new(
         AnalysisLevel::Function,
         Direction::Forward,
         AnalysisKind::Must,
         CopyTransfer,
     );
-    analysis.analyze(func, cfg_program)
+    analysis.analyze(func, program)
 }

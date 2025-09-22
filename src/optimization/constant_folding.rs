@@ -4,7 +4,7 @@
 //! replacing them with their computed constant values.
 
 use super::OptimizationPass;
-use crate::cfg::{CfgProgram, Constant, FunctionId, LValue, Operand, RValue, Statement, VarId};
+use crate::cfg::{ConstantValue, FunctionId, Instruction, Operand, Program, VariableId};
 use crate::dataflow::{analyze_constants, Flat, MapLattice, StmtLoc};
 
 pub struct ConstantFoldingPass;
@@ -14,70 +14,62 @@ impl ConstantFoldingPass {
         Self
     }
 
-    fn replace_var_in_lvalue(lvalue: &mut LValue, constants: &MapLattice<VarId, Constant>) -> bool {
-        match lvalue {
-            LValue::Variable { .. } => {
-                // For simple variables, we don't replace them in lvalues as they are assignment targets
-                false
-            }
-            LValue::ArrayElement { index, .. } => {
-                // Replace variables in the index operand
-                Self::replace_var_in_operand(index, constants)
-            }
-            LValue::TableField { pk_values, .. } => {
-                // Replace variables in the primary key values
-                let mut changed = false;
-                for pk_value in pk_values.iter_mut() {
-                    changed |= Self::replace_var_in_operand(pk_value, constants);
-                }
-                changed
-            }
-        }
-    }
-
-    fn replace_var_in_rvalue(rvalue: &mut RValue, constants: &MapLattice<VarId, Constant>) -> bool {
-        match rvalue {
-            RValue::Use(operand) => Self::replace_var_in_operand(operand, constants),
-            RValue::BinaryOp { left, right, .. } => {
-                let mut changed = false;
-                changed |= Self::replace_var_in_operand(left, constants);
-                changed |= Self::replace_var_in_operand(right, constants);
-                changed
-            }
-            RValue::UnaryOp { operand, .. } => Self::replace_var_in_operand(operand, constants),
-            RValue::TableAccess { pk_values, .. } => {
-                let mut changed = false;
-                for pk_value in pk_values.iter_mut() {
-                    changed |= Self::replace_var_in_operand(pk_value, constants);
-                }
-                changed
-            }
-            RValue::ArrayAccess { array, index } => {
-                let mut changed = false;
-                changed |= Self::replace_var_in_operand(array, constants);
-                changed |= Self::replace_var_in_operand(index, constants);
-                changed
-            }
-        }
-    }
-
     fn replace_var_in_operand(
         operand: &mut Operand,
-        constants: &MapLattice<VarId, Constant>,
+        constants: &MapLattice<VariableId, ConstantValue>,
     ) -> bool {
         match operand {
-            Operand::Var(var_id) => {
+            Operand::Variable(var_id) => {
                 // Look for this variable in the constants
                 match constants.get(var_id) {
                     Flat::Value(constant_value) => {
-                        *operand = Operand::Const(constant_value);
+                        *operand = Operand::Constant(constant_value);
                         true
                     }
                     _ => false,
                 }
             }
-            Operand::Const(_) => false, // Already a constant
+            Operand::Constant(_) | Operand::Global(_) => false, // Already a constant
         }
+    }
+
+    fn replace_vars_in_instruction(
+        instruction: &mut Instruction,
+        constants: &MapLattice<VariableId, ConstantValue>,
+    ) -> bool {
+        let mut changed = false;
+        match instruction {
+            Instruction::Assign { src, .. } => {
+                changed |= Self::replace_var_in_operand(src, constants);
+            }
+            Instruction::BinaryOp { left, right, .. } => {
+                changed |= Self::replace_var_in_operand(left, constants);
+                changed |= Self::replace_var_in_operand(right, constants);
+            }
+            Instruction::UnaryOp { operand, .. } => {
+                changed |= Self::replace_var_in_operand(operand, constants);
+            }
+            Instruction::Call { args, .. } => {
+                for arg in args.iter_mut() {
+                    changed |= Self::replace_var_in_operand(arg, constants);
+                }
+            }
+            Instruction::TableGet { keys, .. } => {
+                for key in keys.iter_mut() {
+                    changed |= Self::replace_var_in_operand(key, constants);
+                }
+            }
+            Instruction::TableSet { keys, value, .. } => {
+                for key in keys.iter_mut() {
+                    changed |= Self::replace_var_in_operand(key, constants);
+                }
+                changed |= Self::replace_var_in_operand(value, constants);
+            }
+            Instruction::Assert { condition, .. } => {
+                changed |= Self::replace_var_in_operand(condition, constants);
+            }
+        }
+        changed
     }
 }
 
@@ -86,14 +78,11 @@ impl OptimizationPass for ConstantFoldingPass {
         "Constant Folding"
     }
 
-    fn optimize_function(&self, program: &mut CfgProgram, func_id: FunctionId) -> bool {
+    fn optimize_function(&self, program: &mut Program, func_id: FunctionId) -> bool {
         let function = &program.functions[func_id];
 
-        // Skip abstract functions
-        if matches!(
-            function.implementation,
-            crate::cfg::FunctionImplementation::Abstract
-        ) {
+        // Skip abstract functions (like operators)
+        if matches!(function.kind, crate::cfg::FunctionKind::Operator) {
             return false;
         }
 
@@ -102,12 +91,12 @@ impl OptimizationPass for ConstantFoldingPass {
         let mut changed = false;
 
         // Process each block in the function
-        for &block_id in &function.blocks {
-            let block = &mut program.blocks[block_id];
+        for &block_id in &function.all_blocks {
+            let block = &mut program.basic_blocks[block_id];
 
-            // Process each statement
-            for (idx, stmt) in block.statements.iter_mut().enumerate() {
-                // Get constants analysis result for this statement (use entry state)
+            // Process each instruction
+            for (idx, inst) in block.instructions.iter_mut().enumerate() {
+                // Get constants analysis result for this instruction (use entry state)
                 let stmt_loc = StmtLoc {
                     block: block_id,
                     index: idx,
@@ -118,15 +107,8 @@ impl OptimizationPass for ConstantFoldingPass {
                     None => continue, // Skip if no analysis result
                 };
 
-                match stmt {
-                    Statement::Assign { lvalue, rvalue, .. } => {
-                        // Replace variables in rvalue with constants
-                        changed |= Self::replace_var_in_rvalue(rvalue, constants);
-
-                        // Replace variables in lvalue (for complex lvalues like array indices)
-                        changed |= Self::replace_var_in_lvalue(lvalue, constants);
-                    }
-                }
+                // Replace variables with constants in this instruction
+                changed |= Self::replace_vars_in_instruction(inst, constants);
             }
         }
 

@@ -4,7 +4,7 @@
 //! is known to hold the same value as another variable.
 
 use super::OptimizationPass;
-use crate::cfg::{CfgProgram, FunctionId, LValue, Operand, RValue, Statement, VarId};
+use crate::cfg::{FunctionId, Instruction, Operand, Program, VariableId};
 use crate::dataflow::{analyze_copies, Flat, MapLattice, StmtLoc};
 
 pub struct CopyPropagationPass;
@@ -14,67 +14,62 @@ impl CopyPropagationPass {
         Self
     }
 
-    fn replace_var_in_lvalue(lvalue: &mut LValue, copies: &MapLattice<VarId, VarId>) -> bool {
-        match lvalue {
-            LValue::Variable { .. } => {
-                // For simple variables, we don't replace them in lvalues as they are assignment targets
-                false
-            }
-            LValue::ArrayElement { index, .. } => {
-                // Replace variables in the index operand
-                Self::replace_var_in_operand(index, copies)
-            }
-            LValue::TableField { pk_values, .. } => {
-                // Replace variables in the primary key values
-                let mut changed = false;
-                for pk_value in pk_values.iter_mut() {
-                    changed |= Self::replace_var_in_operand(pk_value, copies);
-                }
-                changed
-            }
-        }
-    }
-
-    fn replace_var_in_rvalue(rvalue: &mut RValue, copies: &MapLattice<VarId, VarId>) -> bool {
-        match rvalue {
-            RValue::Use(operand) => Self::replace_var_in_operand(operand, copies),
-            RValue::BinaryOp { left, right, .. } => {
-                let mut changed = false;
-                changed |= Self::replace_var_in_operand(left, copies);
-                changed |= Self::replace_var_in_operand(right, copies);
-                changed
-            }
-            RValue::UnaryOp { operand, .. } => Self::replace_var_in_operand(operand, copies),
-            RValue::TableAccess { pk_values, .. } => {
-                let mut changed = false;
-                for pk_value in pk_values.iter_mut() {
-                    changed |= Self::replace_var_in_operand(pk_value, copies);
-                }
-                changed
-            }
-            RValue::ArrayAccess { array, index } => {
-                let mut changed = false;
-                changed |= Self::replace_var_in_operand(array, copies);
-                changed |= Self::replace_var_in_operand(index, copies);
-                changed
-            }
-        }
-    }
-
-    fn replace_var_in_operand(operand: &mut Operand, copies: &MapLattice<VarId, VarId>) -> bool {
+    fn replace_var_in_operand(
+        operand: &mut Operand,
+        copies: &MapLattice<VariableId, VariableId>,
+    ) -> bool {
         match operand {
-            Operand::Var(var_id) => {
+            Operand::Variable(var_id) => {
                 // Look for this variable in the copy relations
                 match copies.get(var_id) {
                     Flat::Value(source_var_id) => {
-                        *operand = Operand::Var(source_var_id);
+                        *operand = Operand::Variable(source_var_id);
                         true
                     }
                     _ => false,
                 }
             }
-            Operand::Const(_) => false, // Constants don't need copy propagation
+            Operand::Constant(_) | Operand::Global(_) => false, // Constants don't need copy propagation
         }
+    }
+
+    fn replace_vars_in_instruction(
+        instruction: &mut Instruction,
+        copies: &MapLattice<VariableId, VariableId>,
+    ) -> bool {
+        let mut changed = false;
+        match instruction {
+            Instruction::Assign { src, .. } => {
+                changed |= Self::replace_var_in_operand(src, copies);
+            }
+            Instruction::BinaryOp { left, right, .. } => {
+                changed |= Self::replace_var_in_operand(left, copies);
+                changed |= Self::replace_var_in_operand(right, copies);
+            }
+            Instruction::UnaryOp { operand, .. } => {
+                changed |= Self::replace_var_in_operand(operand, copies);
+            }
+            Instruction::Call { args, .. } => {
+                for arg in args.iter_mut() {
+                    changed |= Self::replace_var_in_operand(arg, copies);
+                }
+            }
+            Instruction::TableGet { keys, .. } => {
+                for key in keys.iter_mut() {
+                    changed |= Self::replace_var_in_operand(key, copies);
+                }
+            }
+            Instruction::TableSet { keys, value, .. } => {
+                for key in keys.iter_mut() {
+                    changed |= Self::replace_var_in_operand(key, copies);
+                }
+                changed |= Self::replace_var_in_operand(value, copies);
+            }
+            Instruction::Assert { condition, .. } => {
+                changed |= Self::replace_var_in_operand(condition, copies);
+            }
+        }
+        changed
     }
 }
 
@@ -83,14 +78,11 @@ impl OptimizationPass for CopyPropagationPass {
         "Copy Propagation"
     }
 
-    fn optimize_function(&self, program: &mut CfgProgram, func_id: FunctionId) -> bool {
+    fn optimize_function(&self, program: &mut Program, func_id: FunctionId) -> bool {
         let function = &program.functions[func_id];
 
-        // Skip abstract functions
-        if matches!(
-            function.implementation,
-            crate::cfg::FunctionImplementation::Abstract
-        ) {
+        // Skip abstract functions (like operators)
+        if matches!(function.kind, crate::cfg::FunctionKind::Operator) {
             return false;
         }
 
@@ -99,12 +91,12 @@ impl OptimizationPass for CopyPropagationPass {
         let mut changed = false;
 
         // Process each block in the function
-        for &block_id in &function.blocks {
-            let block = &mut program.blocks[block_id];
+        for &block_id in &function.all_blocks {
+            let block = &mut program.basic_blocks[block_id];
 
-            // Process each statement
-            for (idx, stmt) in block.statements.iter_mut().enumerate() {
-                // Get copy analysis result for this statement (use entry state)
+            // Process each instruction
+            for (idx, inst) in block.instructions.iter_mut().enumerate() {
+                // Get copy analysis result for this instruction (use entry state)
                 let stmt_loc = StmtLoc {
                     block: block_id,
                     index: idx,
@@ -115,15 +107,8 @@ impl OptimizationPass for CopyPropagationPass {
                     None => continue, // Skip if no analysis result
                 };
 
-                match stmt {
-                    Statement::Assign { lvalue, rvalue, .. } => {
-                        // Replace variables in rvalue with their copies
-                        changed |= Self::replace_var_in_rvalue(rvalue, copies);
-
-                        // Replace variables in lvalue (for complex lvalues like array indices)
-                        changed |= Self::replace_var_in_lvalue(lvalue, copies);
-                    }
-                }
+                // Replace variables with their copies in this instruction
+                changed |= Self::replace_vars_in_instruction(inst, copies);
             }
         }
 

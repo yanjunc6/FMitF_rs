@@ -3,7 +3,7 @@ use super::{
     TransferFunction,
 };
 use crate::cfg::BasicBlock;
-use crate::cfg::{ControlFlowEdge, FieldId, FunctionCfg, LValue, RValue, Statement, TableId};
+use crate::cfg::{BasicBlockId, FieldId, Function, Instruction, TableId, Terminator};
 use crate::dataflow::StmtLoc;
 
 /// Table access tracking
@@ -24,10 +24,10 @@ pub enum AccessType {
 pub struct TableModRefTransfer;
 
 impl TransferFunction<SetLattice<TableAccess>> for TableModRefTransfer {
-    /// For each statement, accumulate table accesses
-    fn transfer_statement(
+    /// For each instruction, accumulate table accesses
+    fn transfer_instruction(
         &self,
-        stmt: &Statement,
+        inst: &Instruction,
         _stmt_loc: StmtLoc,
         state: &SetLattice<TableAccess>,
     ) -> SetLattice<TableAccess> {
@@ -37,56 +37,42 @@ impl TransferFunction<SetLattice<TableAccess>> for TableModRefTransfer {
 
         let mut result_set = state.as_set().unwrap().clone();
 
-        match stmt {
-            Statement::Assign { lvalue, rvalue, .. } => {
-                // Track reads from rvalue
-                match rvalue {
-                    RValue::TableAccess {
-                        table,
-                        field,
-                        pk_values: _,
-                        pk_fields: _,
-                        ..
-                    } => {
-                        // Read from the target field
-                        result_set.insert(TableAccess {
-                            table: *table,
-                            field: *field,
-                            access_type: AccessType::Read,
-                        });
-                    }
-                    _ => {}
+        match inst {
+            Instruction::TableGet { table, field, .. } => {
+                // Read from the table
+                if let Some(field_id) = field {
+                    result_set.insert(TableAccess {
+                        table: *table,
+                        field: *field_id,
+                        access_type: AccessType::Read,
+                    });
                 }
-
-                // Track writes from lvalue
-                match lvalue {
-                    LValue::TableField {
-                        table,
-                        field,
-                        pk_values: _,
-                        pk_fields: _,
-                        ..
-                    } => {
-                        // Write to the target field
-                        result_set.insert(TableAccess {
-                            table: *table,
-                            field: *field,
-                            access_type: AccessType::Write,
-                        });
-                    }
-                    _ => {}
+            }
+            Instruction::TableSet { table, field, .. } => {
+                // Write to the table
+                if let Some(field_id) = field {
+                    result_set.insert(TableAccess {
+                        table: *table,
+                        field: *field_id,
+                        access_type: AccessType::Write,
+                    });
                 }
+            }
+            _ => {
+                // Other instructions don't access tables directly
             }
         }
 
         SetLattice::new(result_set)
     }
 
-    fn transfer_edge(
+    fn transfer_terminator(
         &self,
-        _edge: &ControlFlowEdge,
+        _term: &Terminator,
+        _block_id: BasicBlockId,
         state: &SetLattice<TableAccess>,
     ) -> SetLattice<TableAccess> {
+        // Terminators don't access tables
         state.clone()
     }
 
@@ -94,15 +80,15 @@ impl TransferFunction<SetLattice<TableAccess>> for TableModRefTransfer {
         SetLattice::bottom().unwrap()
     }
 
-    fn boundary_value(&self, _func: &FunctionCfg, _block: &BasicBlock) -> SetLattice<TableAccess> {
+    fn boundary_value(&self, _func: &Function, _block: &BasicBlock) -> SetLattice<TableAccess> {
         SetLattice::bottom().unwrap()
     }
 }
 
 /// Analyze table modifications and references in a function (forward, hop-level)
 pub fn analyze_table_mod_ref(
-    func: &FunctionCfg,
-    cfg_program: &crate::cfg::CfgProgram,
+    func: &Function,
+    program: &crate::cfg::Program,
 ) -> DataflowResults<SetLattice<TableAccess>> {
     let analysis = DataflowAnalysis::new(
         AnalysisLevel::Hop, // Important: hop-level analysis
@@ -110,5 +96,5 @@ pub fn analyze_table_mod_ref(
         AnalysisKind::May,
         TableModRefTransfer,
     );
-    analysis.analyze(func, cfg_program)
+    analysis.analyze(func, program)
 }

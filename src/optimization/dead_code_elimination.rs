@@ -1,5 +1,5 @@
 use super::OptimizationPass;
-use crate::cfg::{CfgProgram, FunctionId, LValue, RValue, Statement, VarId};
+use crate::cfg::{FunctionId, Instruction, Program, VariableId};
 use crate::dataflow::{analyze_live_variables, StmtLoc};
 use std::collections::HashSet;
 
@@ -10,26 +10,45 @@ impl DeadCodeElimination {
         Self
     }
 
-    /// Check if an assignment is dead (assigned variable is not live after assignment)
-    fn is_dead_assignment(&self, stmt: &Statement, live_after: &HashSet<VarId>) -> bool {
-        match stmt {
-            Statement::Assign { lvalue, rvalue, .. } => {
-                // Check if this is a variable assignment
-                if let LValue::Variable { var } = lvalue {
-                    // If the assigned variable is not live after this statement, it's dead
-                    let is_dead = !live_after.contains(var);
-
-                    // However, don't eliminate assignments with side effects
-                    let has_side_effects = match rvalue {
-                        RValue::TableAccess { .. } => true, // Table access might have side effects
-                        _ => false,
-                    };
-
-                    is_dead && !has_side_effects
+    /// Check if an instruction is dead (assigned variable is not live after assignment)
+    fn is_dead_instruction(&self, inst: &Instruction, live_after: &HashSet<VariableId>) -> bool {
+        match inst {
+            Instruction::Assign { dest, .. } => {
+                // If the assigned variable is not live after this instruction, it's dead
+                !live_after.contains(dest)
+            }
+            Instruction::BinaryOp { dest, .. } => {
+                // If the assigned variable is not live after this instruction, it's dead
+                !live_after.contains(dest)
+            }
+            Instruction::UnaryOp { dest, .. } => {
+                // If the assigned variable is not live after this instruction, it's dead
+                !live_after.contains(dest)
+            }
+            Instruction::Call { dest, .. } => {
+                // Function calls might have side effects, but if no one uses the result...
+                // For call-by-value, function calls with pure functions can be eliminated if result is unused
+                // However, conservatively keep all function calls for now
+                if let Some(_dest_var) = dest {
+                    // For now, conservatively keep all function calls
+                    // In the future, we could mark pure functions and eliminate dead calls to them
+                    false // Don't eliminate function calls
                 } else {
-                    // Array/table assignments might have side effects, don't eliminate
-                    false
+                    false // Call without return value, might have side effects
                 }
+            }
+            Instruction::TableGet { dest, .. } => {
+                // Table operations might have side effects, but if it's just a read...
+                // For now, conservatively keep table operations
+                !live_after.contains(dest) // Could eliminate if result unused
+            }
+            Instruction::TableSet { .. } => {
+                // Table writes have side effects, never eliminate
+                false
+            }
+            Instruction::Assert { .. } => {
+                // Assertions have side effects (they can abort), never eliminate
+                false
             }
         }
     }
@@ -40,14 +59,11 @@ impl OptimizationPass for DeadCodeElimination {
         "dead-code-elimination"
     }
 
-    fn optimize_function(&self, program: &mut CfgProgram, func_id: FunctionId) -> bool {
+    fn optimize_function(&self, program: &mut Program, func_id: FunctionId) -> bool {
         let function = &program.functions[func_id];
 
-        // Skip abstract functions
-        if matches!(
-            function.implementation,
-            crate::cfg::FunctionImplementation::Abstract
-        ) {
+        // Skip abstract functions (like operators)
+        if matches!(function.kind, crate::cfg::FunctionKind::Operator) {
             return false;
         }
 
@@ -56,20 +72,20 @@ impl OptimizationPass for DeadCodeElimination {
         let mut changed = false;
 
         // Process each block in the function
-        for &block_id in &function.blocks {
-            let block = &mut program.blocks[block_id];
-            let original_len = block.statements.len();
+        for &block_id in &function.all_blocks {
+            let block = &mut program.basic_blocks[block_id];
+            let original_len = block.instructions.len();
 
-            // First pass: mark statements for deletion
-            let mut statements_to_keep = Vec::new();
+            // First pass: mark instructions for deletion
+            let mut instructions_to_keep = Vec::new();
 
-            for (stmt_idx, stmt) in block.statements.iter().enumerate() {
+            for (inst_idx, inst) in block.instructions.iter().enumerate() {
                 let stmt_loc = StmtLoc {
                     block: block_id,
-                    index: stmt_idx,
+                    index: inst_idx,
                 };
 
-                // Get live variables after this statement
+                // Get live variables after this instruction
                 let should_keep =
                     if let Some(lattice_result) = liveness_results.stmt_exit.get(&stmt_loc) {
                         let live_after = if let Some(live_vars) = lattice_result.as_set() {
@@ -78,23 +94,23 @@ impl OptimizationPass for DeadCodeElimination {
                             HashSet::new()
                         };
 
-                        // Keep the statement if it's not dead
-                        !self.is_dead_assignment(stmt, &live_after)
+                        // Keep the instruction if it's not dead
+                        !self.is_dead_instruction(inst, &live_after)
                     } else {
-                        // If we don't have liveness info, keep the statement
+                        // If we don't have liveness info, keep the instruction
                         true
                     };
 
                 if should_keep {
-                    statements_to_keep.push(stmt.clone());
+                    instructions_to_keep.push(inst.clone());
                 }
             }
 
-            // Replace the statements
-            block.statements = statements_to_keep;
+            // Replace the instructions
+            block.instructions = instructions_to_keep;
 
-            // Check if we actually removed statements
-            if block.statements.len() < original_len {
+            // Check if we actually removed instructions
+            if block.instructions.len() < original_len {
                 changed = true;
             }
         }
