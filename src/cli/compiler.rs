@@ -141,14 +141,14 @@ impl Compiler {
                 let cfg_program: cfg::Program = cfg::cfg_builder::build(program);
 
                 // Write CFG pretty print
-                self.write_cfg_pretty(&cfg_program, output_dir)?;
+                self.write_cfg_pretty(&cfg_program, output_dir, "cfg_pretty.txt")?;
 
                 Ok(cfg_program)
             },
         )?;
 
         // Stage 3: Optimization (optional)
-        let cfg_program = if enable_optimization {
+        let _cfg_program = if enable_optimization {
             current_stage += 1;
             execute_stage(
                 "Optimization",
@@ -158,18 +158,16 @@ impl Compiler {
                     let optimizer = CfgOptimizer::default_passes();
                     let mut optimized_program = cfg_program;
                     let _results = optimizer.optimize_program(&mut optimized_program);
+
+                    // Write CFG pretty print
+                    self.write_cfg_pretty(&optimized_program, output_dir, "cfg_opt_pretty.txt")?;
+
                     Ok(optimized_program)
                 },
             )?
         } else {
             cfg_program
         };
-
-        // TODO: Stage 2: CFG Generation
-        // let cfg_program = cfg::build_cfg(program)?;
-
-        // TODO: Stage 3: Optimization
-        // let optimized_cfg = optimization::optimize(cfg_program)?;
 
         // TODO: Stage 4: SC-Graph Generation
         // let sc_graph = sc_graph::build_sc_graph(optimized_cfg, instances)?;
@@ -204,12 +202,13 @@ impl Compiler {
         &self,
         program: &cfg::Program,
         output_dir: &PathBuf,
+        filename: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Create output directory if it doesn't exist
         fs::create_dir_all(output_dir)?;
 
         // Write CFG with debug information (includes IDs and type information)
-        let cfg_file = output_dir.join("cfg_pretty.txt");
+        let cfg_file = output_dir.join(filename);
         let mut file = fs::File::create(&cfg_file)?;
         program.pretty_print_with_debug(&mut file)?;
 

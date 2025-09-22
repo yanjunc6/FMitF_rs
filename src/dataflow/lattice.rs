@@ -106,7 +106,7 @@ impl<T: Eq + Hash + Clone + Debug> Lattice for SetLattice<T> {
 
 impl<V: Clone + Eq + Debug> Flat<V> {
     /// Greatest lower bound  (meet, ∧)
-    fn meet(&self, other: &Self) -> Self {
+    pub fn meet(&self, other: &Self) -> Self {
         use Flat::*;
         match (self, other) {
             // Anything met with ⊤ stays/ becomes the other thing
@@ -127,7 +127,7 @@ impl<V: Clone + Eq + Debug> Flat<V> {
     }
 
     /// Least upper bound (join, ∨)
-    fn join(&self, other: &Self) -> Self {
+    pub fn join(&self, other: &Self) -> Self {
         use Flat::*;
         match (self, other) {
             // Anything joined with ⊥ gives the other thing
@@ -181,6 +181,27 @@ where
                 self.map.remove(&key);
             } else {
                 self.map.insert(key, val);
+            }
+        }
+    }
+
+    /// Monotonic insert: join the new value with the existing value.
+    ///
+    /// This ensures lattice monotonicity - values can only increase in the lattice order.
+    /// This is essential for dataflow analysis termination:
+    /// - Bottom ∨ Value(c) = Value(c)  (new constant assignment)
+    /// - Value(a) ∨ Value(a) = Value(a)  (idempotent)
+    /// - Value(a) ∨ Value(b) = Top  (conflicting constants -> no information)
+    /// - Top ∨ Value(c) = Top  (once Top, always Top)
+    pub fn insert_monotonic(&mut self, key: K, val: Flat<V>) {
+        if !self.is_top {
+            let old_val = self.get_flat(&key);
+            let new_val = old_val.join(&val);
+
+            if new_val == Flat::Bottom {
+                self.map.remove(&key);
+            } else {
+                self.map.insert(key, new_val);
             }
         }
     }
