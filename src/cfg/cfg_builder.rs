@@ -43,6 +43,9 @@ struct CfgBuilder {
 
     // Global counter for generating unique lambda names
     lambda_counter: u32,
+    
+    // Global counter for generating unique temporary variables across all contexts
+    temp_counter: u32,
 }
 
 /// Context for building the body of a single function. Manages scopes, blocks, and state.
@@ -54,9 +57,6 @@ struct FunctionContext<'a> {
 
     // Mapping for parameters, local to the function body build process.
     param_map: HashMap<ast::ParamId, cfg::VariableId>,
-
-    // Counter for generating unique temporary variables
-    temp_counter: u32,
 
     // Tracking Row<T> variables and their field decompositions
     // Maps AST variable ID to a map of field names to CFG variable IDs
@@ -82,6 +82,7 @@ impl CfgBuilder {
             var_map: HashMap::new(),
             resolved_type_cache: HashMap::new(),
             lambda_counter: 0,
+            temp_counter: 0,
         }
     }
 
@@ -639,7 +640,6 @@ impl<'a> FunctionContext<'a> {
             current_hop: None,
             current_block: None,
             param_map: HashMap::new(),
-            temp_counter: 0,
             row_field_map: HashMap::new(),
             param_row_field_map: HashMap::new(),
         }
@@ -818,8 +818,9 @@ impl<'a> FunctionContext<'a> {
                 else_block,
                 ..
             } => {
-                let start_block = self.current_block.take().unwrap();
+                // Build condition expression before taking the current block
                 let cond_operand = self.build_expression(condition);
+                let start_block = self.current_block.take().unwrap();
 
                 let then_bb = self.new_basic_block(self.current_hop.unwrap());
                 let merge_bb = self.new_basic_block(self.current_hop.unwrap());
@@ -1877,8 +1878,8 @@ impl<'a> FunctionContext<'a> {
     }
 
     fn new_temporary(&mut self, ty: cfg::TypeId) -> cfg::VariableId {
-        let name = format!("#tmp{}", self.temp_counter);
-        self.temp_counter += 1;
+        let name = format!("#tmp{}", self.builder.temp_counter);
+        self.builder.temp_counter += 1;
         self.new_variable(name, ty, cfg::VariableKind::Temporary)
     }
 }
