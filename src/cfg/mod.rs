@@ -161,6 +161,7 @@ pub enum VariableKind {
     Parameter,
     Local,
     Temporary,
+    Lambda(FunctionId), // Captured variable from enclosing scope
 }
 
 #[derive(Debug, Clone)]
@@ -239,7 +240,7 @@ pub enum Terminator {
     Return(Option<Operand>),
     /// Exit the current execution "hop" and jump to the entry block of the next one.
     HopExit {
-        next_block: BasicBlockId,
+        next_hop: HopId,
     },
     Abort,
 }
