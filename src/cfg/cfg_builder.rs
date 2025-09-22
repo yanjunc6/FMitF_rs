@@ -659,8 +659,15 @@ impl<'a> FunctionContext<'a> {
 
         // Ensure the last block is terminated if it hasn't been already (e.g., by a return)
         if let Some(block_id) = self.current_block {
-            let func_return_type = self.builder.cfg.functions[self.func_id].signature.ty;
-            let is_void = matches!(self.builder.cfg.types[func_return_type], cfg::Type::Void);
+            let func_signature_type = self.builder.cfg.functions[self.func_id].signature.ty;
+            let func_type = &self.builder.cfg.types[func_signature_type];
+
+            let is_void = if let cfg::Type::Function { return_type, .. } = func_type {
+                matches!(self.builder.cfg.types[**return_type], cfg::Type::Void)
+            } else {
+                false // Non-function types shouldn't happen for function signatures
+            };
+
             if is_void {
                 self.terminate(block_id, cfg::Terminator::Return(None));
             } else {
