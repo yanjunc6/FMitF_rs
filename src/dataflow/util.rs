@@ -61,7 +61,7 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
             );
         }
 
-        // fixed point algorithm
+        // Fixed point algorithm
         let mut changed = true;
 
         while changed {
