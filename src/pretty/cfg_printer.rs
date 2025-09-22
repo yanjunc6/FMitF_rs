@@ -144,24 +144,22 @@ impl<W: Write> CfgPrinter<W> {
         writeln!(self.writer, " {{")?;
         self.indent();
 
-        // Primary key fields
+        // Primary key fields - show with types and "primary" prefix
         if !table.primary_key_fields.is_empty() {
-            self.write_indent()?;
-            write!(self.writer, "primary_key: ")?;
-            for (i, field_id) in table.primary_key_fields.iter().enumerate() {
-                if i > 0 {
-                    write!(self.writer, ", ")?;
-                }
+            for field_id in &table.primary_key_fields {
                 let field = &program.table_fields[*field_id];
-                write!(self.writer, "{}", field.name)?;
+                self.write_indent()?;
+                write!(self.writer, "primary {}", field.name)?;
                 if SHOW_VAR_IDS {
                     write!(self.writer, "[f{}]", field_id.index())?;
                 }
+                write!(self.writer, ": ")?;
+                self.print_type_info(program, field.field_type)?;
+                writeln!(self.writer, ";")?;
             }
-            writeln!(self.writer, ";")?;
         }
 
-        // Other fields
+        // Other fields - show with types
         for field_id in &table.other_fields {
             let field = &program.table_fields[*field_id];
             self.write_indent()?;
@@ -171,6 +169,48 @@ impl<W: Write> CfgPrinter<W> {
             }
             write!(self.writer, ": ")?;
             self.print_type_info(program, field.field_type)?;
+            writeln!(self.writer, ";")?;
+        }
+
+        // Node partition information
+        if let Some(partition_func_id) = table.node_partition {
+            let partition_func = &program.functions[partition_func_id];
+            self.write_indent()?;
+            write!(self.writer, "node_partition: {}", partition_func.name)?;
+            if SHOW_VAR_IDS {
+                write!(self.writer, "[fn{}]", partition_func_id.index())?;
+            }
+            if !table.node_partition_args.is_empty() {
+                write!(self.writer, "(")?;
+                for (i, field_id) in table.node_partition_args.iter().enumerate() {
+                    if i > 0 {
+                        write!(self.writer, ", ")?;
+                    }
+                    let field = &program.table_fields[*field_id];
+                    write!(self.writer, "{}", field.name)?;
+                    if SHOW_VAR_IDS {
+                        write!(self.writer, "[f{}]", field_id.index())?;
+                    }
+                }
+                write!(self.writer, ")")?;
+            }
+            writeln!(self.writer, ";")?;
+        }
+
+        // Invariants
+        if !table.invariants.is_empty() {
+            self.write_indent()?;
+            write!(self.writer, "invariants: ")?;
+            for (i, invariant_id) in table.invariants.iter().enumerate() {
+                if i > 0 {
+                    write!(self.writer, ", ")?;
+                }
+                let invariant_func = &program.functions[*invariant_id];
+                write!(self.writer, "{}", invariant_func.name)?;
+                if SHOW_VAR_IDS {
+                    write!(self.writer, "[fn{}]", invariant_id.index())?;
+                }
+            }
             writeln!(self.writer, ";")?;
         }
 
@@ -239,29 +279,56 @@ impl<W: Write> CfgPrinter<W> {
         }
         write!(self.writer, ")")?;
 
-        // Function signature
+        // Function signature return type
         if SHOW_TYPE_INFO {
             write!(self.writer, " : ")?;
             self.print_type_info(program, function.signature.ty)?;
         }
 
-        writeln!(self.writer)?;
+        // Print assumptions if any
+        if !function.assumptions.is_empty() {
+            writeln!(self.writer)?;
+            self.indent();
+            self.write_indent()?;
+            write!(self.writer, "assumptions: ")?;
+            for (i, assumption_id) in function.assumptions.iter().enumerate() {
+                if i > 0 {
+                    write!(self.writer, ", ")?;
+                }
+                let assumption_func = &program.functions[*assumption_id];
+                write!(self.writer, "{}", assumption_func.name)?;
+                if SHOW_VAR_IDS {
+                    write!(self.writer, "[fn{}]", assumption_id.index())?;
+                }
+            }
+            writeln!(self.writer, ";")?;
+            self.dedent();
+        } else {
+            writeln!(self.writer)?;
+        }
 
-        // Print blocks
+        // Print function body
         if function.kind == FunctionKind::Transaction {
-            // For transactions, print hops
+            // For transactions, use braces to group all hops
+            writeln!(self.writer, " {{")?;
+            self.indent();
+
             if let Some(entry_hop) = function.entry_hop {
-                self.indent();
                 self.write_indent()?;
                 writeln!(self.writer, "entry_hop: hop{}", entry_hop.index())?;
-                self.dedent();
+                writeln!(self.writer)?;
             }
 
             for hop_id in &function.hops {
                 self.print_hop(program, *hop_id)?;
             }
+
+            self.dedent();
+            writeln!(self.writer, "}}")?;
         } else {
-            // For regular functions, print basic blocks
+            // For regular functions, print basic blocks without braces
+            writeln!(self.writer)?;
+
             if let Some(entry_block) = function.entry_block {
                 self.indent();
                 self.write_indent()?;
@@ -473,8 +540,8 @@ impl<W: Write> CfgPrinter<W> {
                 }
                 writeln!(self.writer, ";")?;
             }
-            Terminator::HopExit { next_block } => {
-                writeln!(self.writer, "hop_exit bb{};", next_block.index())?;
+            Terminator::HopExit { next_hop } => {
+                writeln!(self.writer, "hop_exit hop{};", next_hop.index())?;
             }
             Terminator::Abort => {
                 writeln!(self.writer, "abort;")?;

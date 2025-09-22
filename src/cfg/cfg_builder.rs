@@ -691,9 +691,7 @@ impl<'a> FunctionContext<'a> {
                     if let Some(prev_block_id) = self.current_block.take() {
                         self.terminate(
                             prev_block_id,
-                            cfg::Terminator::HopExit {
-                                next_block: entry_block,
-                            },
+                            cfg::Terminator::HopExit { next_hop: hop_id },
                         );
                     }
 
@@ -731,9 +729,7 @@ impl<'a> FunctionContext<'a> {
                         if let Some(prev_block_id) = self.current_block.take() {
                             self.terminate(
                                 prev_block_id,
-                                cfg::Terminator::HopExit {
-                                    next_block: entry_block,
-                                },
+                                cfg::Terminator::HopExit { next_hop: hop_id },
                             );
                         }
 
@@ -775,6 +771,12 @@ impl<'a> FunctionContext<'a> {
                     self.build_statement(stmt_id);
                 }
             }
+        }
+
+        // Ensure the last block is terminated if it hasn't been already (e.g., by a return)
+        if let Some(block_id) = self.current_block {
+            // Transactions should return unless there's an explicit abort
+            self.terminate(block_id, cfg::Terminator::Return(None));
         }
     }
 
@@ -1384,9 +1386,6 @@ impl<'a> FunctionContext<'a> {
                 ..
             } => {
                 // For lambda expressions, we create a temporary function and return a reference to it
-                // This is a simplified implementation - a full implementation would need more work
-
-                // Create a unique lambda function name
                 let lambda_name = format!("lambda_{}", self.temp_counter);
                 self.temp_counter += 1;
 
@@ -1396,14 +1395,36 @@ impl<'a> FunctionContext<'a> {
                     .convert_resolved_type(resolved_type.as_ref().unwrap())
                     .unwrap();
 
-                // For now, create a placeholder function and return a variable referring to it
-                // A full implementation would build the lambda body properly
-                let temp_var = self.new_temporary(func_type);
+                // Create the lambda function
+                let lambda_func = cfg::Function {
+                    name: lambda_name.clone(),
+                    signature: cfg::TypeScheme {
+                        quantified_params: Vec::new(), // Lambdas typically don't have generic params
+                        ty: func_type,
+                    },
+                    kind: cfg::FunctionKind::Lambda,
+                    params: Vec::new(), // Will be filled when building lambda body
+                    assumptions: Vec::new(),
+                    entry_block: None,
+                    all_blocks: Vec::new(),
+                    decorators: Vec::new(),
+                    entry_hop: None,
+                    hops: Vec::new(),
+                };
 
-                // TODO: Actually build the lambda function properly
-                // For now, this is just a placeholder to allow compilation to proceed
+                let lambda_func_id = self.builder.cfg.functions.alloc(lambda_func);
 
-                cfg::Operand::Variable(temp_var)
+                // TODO: Build lambda body properly by converting params and building body expression
+                // For now, we'll create a minimal function structure
+
+                // Create a variable to represent this lambda function
+                let lambda_var = self.new_variable(
+                    lambda_name,
+                    func_type,
+                    cfg::VariableKind::Lambda(lambda_func_id),
+                );
+
+                cfg::Operand::Variable(lambda_var)
             }
             ast::Expression::TableRowAccess {
                 table,
@@ -1745,7 +1766,7 @@ impl<'a> FunctionContext<'a> {
     }
 
     fn new_temporary(&mut self, ty: cfg::TypeId) -> cfg::VariableId {
-        let name = format!("$tmp{}", self.temp_counter);
+        let name = format!("#tmp{}", self.temp_counter);
         self.temp_counter += 1;
         self.new_variable(name, ty, cfg::VariableKind::Temporary)
     }
