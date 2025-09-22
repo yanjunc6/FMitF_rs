@@ -71,6 +71,34 @@ impl ConstantFoldingPass {
         }
         changed
     }
+
+    /// After variables are replaced, this checks if an entire instruction can be folded.
+    /// It uses the dataflow analysis results to see if the destination of an operation
+    /// is a known constant. If so, it replaces the entire instruction with a simple assignment.
+    fn fold_instruction(
+        instruction: &mut Instruction,
+        constants: &MapLattice<VariableId, ConstantValue>,
+    ) -> bool {
+        let dest_var = match instruction {
+            Instruction::BinaryOp { dest, .. } => Some(dest),
+            Instruction::UnaryOp { dest, .. } => Some(dest),
+            _ => None,
+        };
+
+        if let Some(dest) = dest_var {
+            // If the analysis determined the destination variable is a constant,
+            // we can replace the entire instruction that calculates it.
+            if let Flat::Value(const_val) = constants.get(dest) {
+                *instruction = Instruction::Assign {
+                    dest: *dest,
+                    src: Operand::Constant(const_val.clone()),
+                };
+                return true; // The instruction was changed
+            }
+        }
+
+        false
+    }
 }
 
 impl OptimizationPass for ConstantFoldingPass {
@@ -93,22 +121,25 @@ impl OptimizationPass for ConstantFoldingPass {
         // Process each block in the function
         for &block_id in &function.all_blocks {
             let block = &mut program.basic_blocks[block_id];
-
-            // Process each instruction
             for (idx, inst) in block.instructions.iter_mut().enumerate() {
-                // Get constants analysis result for this instruction (use entry state)
                 let stmt_loc = StmtLoc {
                     block: block_id,
                     index: idx,
                 };
-
-                let constants = match analysis_result.stmt_entry.get(&stmt_loc) {
-                    Some(lattice) => lattice,
-                    None => continue, // Skip if no analysis result
+                let entry_consts = match analysis_result.stmt_entry.get(&stmt_loc) {
+                    Some(l) => l,
+                    None => continue,
                 };
-
-                // Replace variables with constants in this instruction
-                changed |= Self::replace_vars_in_instruction(inst, constants);
+                // Substitute operands using entry state
+                if Self::replace_vars_in_instruction(inst, entry_consts) {
+                    changed = true;
+                }
+                // Use exit state to see the value *after* executing instruction (includes dest)
+                if let Some(exit_consts) = analysis_result.stmt_exit.get(&stmt_loc) {
+                    if Self::fold_instruction(inst, exit_consts) {
+                        changed = true;
+                    }
+                }
             }
         }
 

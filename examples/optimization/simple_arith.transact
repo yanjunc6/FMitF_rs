@@ -1,0 +1,1 @@
+function simple_test() -> int { return 18 + 18; }
