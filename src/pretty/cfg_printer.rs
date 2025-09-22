@@ -325,6 +325,23 @@ impl<W: Write> CfgPrinter<W> {
 
             self.dedent();
             writeln!(self.writer, "}}")?;
+        } else if function.kind == FunctionKind::Lambda {
+            // For lambda functions, print with consistent bracing like transactions
+            writeln!(self.writer)?;
+            writeln!(self.writer, "{{")?;
+            self.indent();
+
+            if let Some(entry_block) = function.entry_block {
+                self.write_indent()?;
+                writeln!(self.writer, "entry_block: bb{}", entry_block.index())?;
+
+                for block_id in &function.all_blocks {
+                    self.print_basic_block(program, *block_id)?;
+                }
+            }
+
+            self.dedent();
+            writeln!(self.writer, "}}")?;
         } else {
             // For regular functions, print basic blocks without braces
             writeln!(self.writer)?;
@@ -575,6 +592,14 @@ impl<W: Write> CfgPrinter<W> {
         if SHOW_VAR_IDS {
             write!(self.writer, "[v{}]", var_id.index())?;
         }
+
+        // For lambda variables, also show the function ID
+        if let VariableKind::Lambda(func_id) = variable.kind {
+            if SHOW_VAR_IDS {
+                write!(self.writer, "[fn{}]", func_id.index())?;
+            }
+        }
+
         if SHOW_TYPE_INFO {
             write!(self.writer, ":")?;
             self.print_type_info(program, variable.ty)?;

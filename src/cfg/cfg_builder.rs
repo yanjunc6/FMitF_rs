@@ -40,6 +40,9 @@ struct CfgBuilder {
 
     // Cache for type conversion to avoid duplicating type nodes
     resolved_type_cache: HashMap<ast::ResolvedType, cfg::TypeId>,
+
+    // Global counter for generating unique lambda names
+    lambda_counter: u32,
 }
 
 /// Context for building the body of a single function. Manages scopes, blocks, and state.
@@ -58,6 +61,10 @@ struct FunctionContext<'a> {
     // Tracking Row<T> variables and their field decompositions
     // Maps AST variable ID to a map of field names to CFG variable IDs
     row_field_map: HashMap<ast::VarId, HashMap<String, cfg::VariableId>>,
+
+    // Tracking Row<T> parameters and their field decompositions
+    // Maps AST parameter ID to a map of field names to CFG variable IDs
+    param_row_field_map: HashMap<ast::ParamId, HashMap<String, cfg::VariableId>>,
 }
 
 impl CfgBuilder {
@@ -74,6 +81,7 @@ impl CfgBuilder {
             generic_param_map: HashMap::new(),
             var_map: HashMap::new(),
             resolved_type_cache: HashMap::new(),
+            lambda_counter: 0,
         }
     }
 
@@ -633,6 +641,7 @@ impl<'a> FunctionContext<'a> {
             param_map: HashMap::new(),
             temp_counter: 0,
             row_field_map: HashMap::new(),
+            param_row_field_map: HashMap::new(),
         }
     }
 
@@ -1386,20 +1395,46 @@ impl<'a> FunctionContext<'a> {
                 }
             }
             ast::Expression::Lambda {
-                params: _params,
-                body: _body,
+                params,
+                body,
                 resolved_type,
                 ..
             } => {
-                // For lambda expressions, we create a temporary function and return a reference to it
-                let lambda_name = format!("lambda_{}", self.temp_counter);
-                self.temp_counter += 1;
+                // Generate a globally unique lambda name
+                let lambda_name = format!("lambda_{}", self.builder.lambda_counter);
+                self.builder.lambda_counter += 1;
 
                 // Convert the lambda type to get the function signature
                 let func_type = self
                     .builder
                     .convert_resolved_type(resolved_type.as_ref().unwrap())
                     .unwrap();
+
+                // Collect parameter information first to avoid borrowing issues
+                let param_data: Vec<_> = params
+                    .iter()
+                    .map(|param_id| {
+                        let param = &self.builder.ast.params[*param_id];
+                        (
+                            *param_id,
+                            param.name.name.clone(),
+                            param.resolved_type.clone().unwrap(),
+                        )
+                    })
+                    .collect();
+
+                // Process lambda parameters
+                let mut lambda_params = Vec::new();
+                for (_param_id, param_name, param_type) in &param_data {
+                    let param_type_id = self.builder.convert_resolved_type(param_type).unwrap();
+                    let param_var = cfg::Variable {
+                        name: param_name.clone(),
+                        ty: param_type_id,
+                        kind: cfg::VariableKind::Parameter,
+                    };
+                    let param_var_id = self.builder.cfg.variables.alloc(param_var);
+                    lambda_params.push(param_var_id);
+                }
 
                 // Create the lambda function
                 let lambda_func = cfg::Function {
@@ -1409,7 +1444,7 @@ impl<'a> FunctionContext<'a> {
                         ty: func_type,
                     },
                     kind: cfg::FunctionKind::Lambda,
-                    params: Vec::new(), // Will be filled when building lambda body
+                    params: lambda_params.clone(),
                     assumptions: Vec::new(),
                     entry_block: None,
                     all_blocks: Vec::new(),
@@ -1420,8 +1455,28 @@ impl<'a> FunctionContext<'a> {
 
                 let lambda_func_id = self.builder.cfg.functions.alloc(lambda_func);
 
-                // TODO: Build lambda body properly by converting params and building body expression
-                // For now, we'll create a minimal function structure
+                // Build lambda body
+                let mut lambda_context = FunctionContext::new(self.builder, lambda_func_id);
+
+                // Copy outer function parameter mappings to lambda context
+                lambda_context.param_map = self.param_map.clone();
+                lambda_context.param_row_field_map = self.param_row_field_map.clone();
+
+                // Map lambda parameters and create Row field mappings if needed
+                for (i, (param_id, param_name, param_type)) in param_data.iter().enumerate() {
+                    if let Some(&param_var_id) = lambda_params.get(i) {
+                        lambda_context.param_map.insert(*param_id, param_var_id);
+
+                        // Check if this parameter is a Row type and create field variables
+                        if let Some(table_id) = lambda_context.is_row_type(param_type) {
+                            lambda_context
+                                .create_param_row_field_variables(*param_id, param_name, table_id);
+                        }
+                    }
+                }
+
+                // Build the lambda body
+                lambda_context.build_function_body(body);
 
                 // Create a variable to represent this lambda function
                 let lambda_var = self.new_variable(
@@ -1480,34 +1535,63 @@ impl<'a> FunctionContext<'a> {
                         resolved_declarations,
                         ..
                     } => {
-                        // Check if this is accessing a field of a Row<T> variable
-                        if let Some(ast::IdentifierResolution::Var(var_id)) =
-                            resolved_declarations.first()
-                        {
-                            // Get the necessary data first to avoid borrowing conflicts
-                            let var_decl = self.builder.ast.var_decls[*var_id].clone();
-                            let var_id_val = *var_id;
+                        // Check if this is accessing a field of a Row<T> variable or parameter
+                        match resolved_declarations.first() {
+                            Some(ast::IdentifierResolution::Var(var_id)) => {
+                                // Get the necessary data first to avoid borrowing conflicts
+                                let var_decl = self.builder.ast.var_decls[*var_id].clone();
+                                let var_id_val = *var_id;
 
-                            // Check if this variable is of Row<T> type
-                            if let Some(table_id) =
-                                self.is_row_type(var_decl.resolved_type.as_ref().unwrap())
-                            {
-                                // This is a Row<T> variable - create field variables if not already done
-                                if !self.row_field_map.contains_key(&var_id_val) {
-                                    self.create_row_field_variables(
-                                        var_id_val,
-                                        &var_decl.name.name,
-                                        table_id,
-                                    );
-                                }
+                                // Check if this variable is of Row<T> type
+                                if let Some(table_id) =
+                                    self.is_row_type(var_decl.resolved_type.as_ref().unwrap())
+                                {
+                                    // This is a Row<T> variable - create field variables if not already done
+                                    if !self.row_field_map.contains_key(&var_id_val) {
+                                        self.create_row_field_variables(
+                                            var_id_val,
+                                            &var_decl.name.name,
+                                            table_id,
+                                        );
+                                    }
 
-                                // Now get the field variable
-                                if let Some(field_map) = self.row_field_map.get(&var_id_val) {
-                                    if let Some(&field_var_id) = field_map.get(&member.name) {
-                                        return cfg::Operand::Variable(field_var_id);
+                                    // Now get the field variable
+                                    if let Some(field_map) = self.row_field_map.get(&var_id_val) {
+                                        if let Some(&field_var_id) = field_map.get(&member.name) {
+                                            return cfg::Operand::Variable(field_var_id);
+                                        }
                                     }
                                 }
                             }
+                            Some(ast::IdentifierResolution::Param(param_id)) => {
+                                // Get the parameter data
+                                let param_decl = self.builder.ast.params[*param_id].clone();
+                                let param_id_val = *param_id;
+
+                                // Check if this parameter is of Row<T> type
+                                if let Some(table_id) =
+                                    self.is_row_type(param_decl.resolved_type.as_ref().unwrap())
+                                {
+                                    // This is a Row<T> parameter - create field variables if not already done
+                                    if !self.param_row_field_map.contains_key(&param_id_val) {
+                                        self.create_param_row_field_variables(
+                                            param_id_val,
+                                            &param_decl.name.name,
+                                            table_id,
+                                        );
+                                    }
+
+                                    // Now get the field variable
+                                    if let Some(field_map) =
+                                        self.param_row_field_map.get(&param_id_val)
+                                    {
+                                        if let Some(&field_var_id) = field_map.get(&member.name) {
+                                            return cfg::Operand::Variable(field_var_id);
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
                         }
 
                         // Regular member access - not supported yet for non-Row types
@@ -1685,6 +1769,26 @@ impl<'a> FunctionContext<'a> {
         }
 
         self.row_field_map.insert(var_id, field_map);
+    }
+
+    fn create_param_row_field_variables(
+        &mut self,
+        param_id: ast::ParamId,
+        param_name: &str,
+        table_id: cfg::TableId,
+    ) {
+        let fields = self.get_table_fields(table_id);
+        let mut field_map = HashMap::new();
+
+        for (field_name, field_id) in fields {
+            let field_var_name = format!("{}#{}", param_name, field_name);
+            let field_type = self.builder.cfg.table_fields[field_id].field_type;
+            let cfg_var_id =
+                self.new_variable(field_var_name, field_type, cfg::VariableKind::Local);
+            field_map.insert(field_name, cfg_var_id);
+        }
+
+        self.param_row_field_map.insert(param_id, field_map);
     }
 
     /// Handle assignment to a Row<T> variable by decomposing into field assignments
