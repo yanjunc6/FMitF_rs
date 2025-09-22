@@ -1,0 +1,115 @@
+// Comprehensive optimization test case
+// Tests all four optimization passes: constant folding, copy propagation, 
+// dead code elimination, and common subexpression elimination
+
+table TestTable {
+    primary id: int;
+    value: int;
+    name: string;
+}
+
+// Test 1: Constant Folding
+// Should fold arithmetic expressions with constants
+function test_constant_folding() -> int {
+    var a: int = 2 + 3;        // Should fold to 5
+    var b: int = a * 4;        // Should fold to 20 (if a is propagated)
+    var c: int = 10 / 2;       // Should fold to 5
+    var d: int = b + c;        // Should fold to 25
+    return d;
+}
+
+// Test 2: Copy Propagation  
+// Should replace variable uses with their assigned values
+function test_copy_propagation() -> int {
+    var x: int = 42;
+    var y: int = x;            // y should be replaced with 42
+    var z: int = y;            // z should be replaced with 42  
+    var result: int = z + 1;   // Should become 42 + 1, then fold to 43
+    return result;
+}
+
+// Test 3: Dead Code Elimination
+// Should remove unused variables and assignments
+function test_dead_code_elimination() -> int {
+    var used: int = 5;
+    var unused1: int = 10;     // Should be eliminated
+    var unused2: int = unused1 + 5;  // Should be eliminated
+    var also_unused: string = "hello";  // Should be eliminated
+    
+    var intermediate: int = used * 2;  // Should be kept if used
+    return intermediate;
+}
+
+// Test 4: Common Subexpression Elimination
+// Should eliminate redundant computations
+function test_common_subexpression() -> int {
+    var a: int = 3;
+    var b: int = 4;
+    var expr1: int = a + b;    // First computation of (a + b)
+    var expr2: int = a + b;    // Should reuse expr1
+    var expr3: int = expr1 + expr2;  // Should become expr1 + expr1
+    return expr3;
+}
+
+// Test 5: Combined optimizations
+// This should exercise multiple optimization passes together
+transaction test_combined_optimizations(input_id: int) {
+    hop {
+        // Constants that should be folded
+        var const1: int = 5 + 3;   // Should fold to 8
+        var const2: int = 10 * 2;  // Should fold to 20
+        
+        // Copy propagation opportunities
+        var copy1: int = const1;   // Should be replaced with 8
+        var copy2: int = copy1;    // Should be replaced with 8
+        
+        // Common subexpressions
+        var common1: int = copy1 + copy2;  // Should be 8 + 8, fold to 16
+        var common2: int = copy1 + copy2;  // Should reuse common1
+        
+        // Dead code - unused variables
+        var dead1: int = 999;      // Should be eliminated
+        var dead2: string = "unused";  // Should be eliminated
+        
+        // Actually used computation
+        var final_value: int = common1 + common2;  // Should be 16 + 16 = 32
+        
+        // Table operation (should not be optimized away)
+        TestTable[id: input_id].value = final_value;
+        TestTable[id: input_id].name = "optimized";
+    }
+}
+
+// Test 6: Nested expressions with multiple optimization opportunities
+function test_nested_optimizations() -> int {
+    var base: int = 2;
+    var doubled: int = base * 2;    // Should become 4
+    var squared: int = doubled * doubled;  // Should become 4 * 4 = 16
+    
+    // Dead code mixed with live code
+    var unused_calc: int = squared + 1000;  // Should be eliminated
+    var another_unused: int = unused_calc * 2;  // Should be eliminated
+    
+    // Common subexpression
+    var expr_a: int = squared + base;  // Should be 16 + 2 = 18
+    var expr_b: int = squared + base;  // Should reuse expr_a
+    
+    return expr_a + expr_b;  // Should be 18 + 18 = 36
+}
+
+// Test 7: Control flow that limits optimization
+function test_control_flow_limits(condition: bool) -> int {
+    var x: int = 5;
+    var result: int = x;
+    
+    if (condition) {
+        result = x + 10;    // Should be 5 + 10 = 15
+    } else {
+        result = x * 2;     // Should be 5 * 2 = 10  
+    }
+    
+    // This computation happens regardless of the branch
+    var always_computed: int = x + 1;  // Should be 5 + 1 = 6
+    
+    return result + always_computed;
+}

@@ -184,27 +184,6 @@ where
             }
         }
     }
-
-    /// Monotonic insert: join the new value with the existing value.
-    ///
-    /// This ensures lattice monotonicity - values can only increase in the lattice order.
-    /// This is essential for dataflow analysis termination:
-    /// - Bottom ∨ Value(c) = Value(c)  (new constant assignment)
-    /// - Value(a) ∨ Value(a) = Value(a)  (idempotent)
-    /// - Value(a) ∨ Value(b) = Top  (conflicting constants -> no information)
-    /// - Top ∨ Value(c) = Top  (once Top, always Top)
-    pub fn insert_monotonic(&mut self, key: K, val: Flat<V>) {
-        if !self.is_top {
-            let old_val = self.get_flat(&key);
-            let new_val = old_val.join(&val);
-
-            if new_val == Flat::Bottom {
-                self.map.remove(&key);
-            } else {
-                self.map.insert(key, new_val);
-            }
-        }
-    }
 }
 
 /// Implementation of the generic `Lattice` trait

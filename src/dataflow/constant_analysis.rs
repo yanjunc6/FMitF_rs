@@ -30,13 +30,15 @@ impl TransferFunction<MapLattice<VariableId, ConstantValue>> for ConstantTransfe
 
         match inst {
             Instruction::Assign { dest, src } => {
-                // Try to evaluate the source operand to a constant
+                // KILL: Remove old information about the destination variable
+                // GEN: Try to evaluate the source to a constant
                 if let Some(c) = self.eval_operand(src, state) {
-                    // Use monotonic insert: join new constant with existing value
-                    // This preserves lattice ordering and ensures termination
-                    out.insert_monotonic(*dest, Flat::Value(c));
+                    // For constant propagation, we want to replace (not join) the value
+                    out.insert(*dest, Flat::Value(c));
+                } else {
+                    // If we can't evaluate the source, the variable becomes non-constant
+                    out.insert(*dest, Flat::Top);
                 }
-                // If source can't be evaluated, variable retains its current value
             }
             Instruction::BinaryOp {
                 dest,
@@ -44,38 +46,49 @@ impl TransferFunction<MapLattice<VariableId, ConstantValue>> for ConstantTransfe
                 left,
                 right,
             } => {
-                // Try to fold the binary operation to a constant
+                // KILL: Remove old information about the destination variable
+                // GEN: Try to fold the binary operation to a constant
                 if let (Some(l), Some(r)) = (
                     self.eval_operand(left, state),
                     self.eval_operand(right, state),
                 ) {
                     if let Some(result) = Self::eval_binary_op(*op, &l, &r) {
-                        // Use monotonic insert to preserve lattice ordering
-                        out.insert_monotonic(*dest, Flat::Value(result));
+                        // For constant propagation, we want to replace (not join) the value
+                        out.insert(*dest, Flat::Value(result));
+                    } else {
+                        // Binary operation couldn't be evaluated (e.g., division by zero)
+                        out.insert(*dest, Flat::Top);
                     }
+                } else {
+                    // If operands can't be evaluated, variable becomes non-constant
+                    out.insert(*dest, Flat::Top);
                 }
-                // If operands can't be evaluated, variable retains its current value
             }
             Instruction::UnaryOp { dest, op, operand } => {
-                // Try to fold the unary operation to a constant
+                // KILL: Remove old information about the destination variable
+                // GEN: Try to fold the unary operation to a constant
                 if let Some(v) = self.eval_operand(operand, state) {
                     if let Some(result) = Self::eval_unary_op(*op, &v) {
-                        // Use monotonic insert to preserve lattice ordering
-                        out.insert_monotonic(*dest, Flat::Value(result));
+                        // For constant propagation, we want to replace (not join) the value
+                        out.insert(*dest, Flat::Value(result));
+                    } else {
+                        // Unary operation couldn't be evaluated
+                        out.insert(*dest, Flat::Top);
                     }
+                } else {
+                    // If operand can't be evaluated, variable becomes non-constant
+                    out.insert(*dest, Flat::Top);
                 }
-                // If operand can't be evaluated, variable retains its current value
             }
             Instruction::Call { dest, .. } => {
                 // Function calls are not constant-foldable
-                // Variables retain their current values (no information lost)
-                if let Some(_dest_var) = dest {
-                    // No action needed: Bottom ∨ existing_value = existing_value
+                if let Some(dest_var) = dest {
+                    out.insert(*dest_var, Flat::Top);
                 }
             }
-            Instruction::TableGet { dest: _, .. } => {
+            Instruction::TableGet { dest, .. } => {
                 // Table operations are not constant-foldable
-                // Variables retain their current values (no information lost)
+                out.insert(*dest, Flat::Top);
             }
             Instruction::TableSet { .. } | Instruction::Assert { .. } => {
                 // These instructions don't define variables
