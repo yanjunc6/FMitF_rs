@@ -1,0 +1,8 @@
+table Users {
+    id: int;
+    name: string;
+}
+
+function test_param(user: Row<Users>) -> void {
+    var user_id = user.id;
+}

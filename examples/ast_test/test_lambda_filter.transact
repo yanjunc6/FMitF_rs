@@ -1,0 +1,13 @@
+table Users {
+    id: int;
+    name: string;
+}
+
+function test_filter() -> void {
+    @global hop {
+        var user_list = scan(Users);
+        var filtered = filter(user_list, (user: Row<Users>) -> bool {
+            return user.id > 10 && user.name != "";
+        });
+    }
+}

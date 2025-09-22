@@ -1,0 +1,18 @@
+function partition_func(x: int) -> int {
+    return x % 10;
+}
+
+table TestTable {
+    primary id: int;
+    node partition_func(id);
+    name: string;
+    active: bool;
+    invariant active == true;
+}
+
+transaction test_transaction(table_id: int) {
+    hop {
+        var value: int = TestTable[id: table_id].id;
+        var name_val: string = TestTable[id: table_id].name;
+    }
+}

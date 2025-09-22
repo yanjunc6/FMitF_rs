@@ -1,0 +1,15 @@
+table Users {
+    id: int;
+    name: string;
+}
+
+function map_test<T, U>(list: List<T>, func: (T) -> U) -> List<U> {
+    return [];
+}
+
+function test_lambda_usage() -> void {
+    var user_list: List<Row<Users>>;
+    var result = map_test(user_list, (user: Row<Users>) -> int {
+        return user.id * 2;
+    });
+}

@@ -1,0 +1,26 @@
+function partition_func(x: int) -> int {
+    return x % 10;
+}
+
+function partition_func(x: int, y: int) -> int {
+    return x % 10 + y;
+}
+
+function partition_func(x: float) -> int {
+    return int(x) % 10;
+}
+
+table TestTable {
+    primary id: int;
+    name: string;
+    active: bool;
+    score: int;
+    node partition_func(id);
+    invariant score > 0;
+}
+
+transaction test_transaction(table_id: int) {
+    hop {
+        var value: int = TestTable[id: table_id].score;
+    }
+}

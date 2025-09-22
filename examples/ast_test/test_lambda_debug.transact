@@ -1,0 +1,10 @@
+table Users {
+    id: int;
+    name: string;
+}
+
+function test(users: Table<Users>) -> void {
+    var filter_lambda = (user: Row<Users>) -> bool {
+        return user.id > 10;
+    };
+}

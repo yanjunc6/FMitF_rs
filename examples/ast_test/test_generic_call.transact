@@ -1,0 +1,17 @@
+table Test {
+    primary id: int;
+}
+
+table Other {
+    primary x: int;
+}
+
+function generic_func<T>(t: Table<T>) -> int;
+
+function test() {
+    @global
+    hop {
+        var x = generic_func(Test);
+        var y = generic_func(Other);
+    }
+}

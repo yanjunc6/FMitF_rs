@@ -1,0 +1,9 @@
+table Test {
+    primary id: int;
+}
+
+function test() {
+    @global hop {
+        var x = Test.scan();
+    }
+}

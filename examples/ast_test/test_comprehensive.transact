@@ -1,0 +1,24 @@
+table Person {
+    primary ID: int;
+    name: string;
+    age: int;
+    salary: float;
+}
+
+function testComprehensive() {
+    var p: Person = Person[ID: 1];
+    
+    // Test member access field resolution 
+    var name: string = p.name;
+    var age: int = p.age;
+    var salary: float = p.salary;
+    
+    // Test unary operators
+    var negAge: int = -age;
+    var negSalary: float = -salary;
+    var isAdult: bool = age >= 18;
+    var notAdult: bool = !isAdult;
+    
+    // Test combined operations
+    var result: int = negAge + age;
+}

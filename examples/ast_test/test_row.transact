@@ -1,0 +1,34 @@
+// Simple test for Row<T> handling
+
+partition simple_partition(id: int) -> int {
+    return id % 2;
+}
+
+table TestTable {
+    primary ID: int;
+    node simple_partition(ID);
+    
+    NAME: string;
+    VALUE: int;
+}
+
+transaction testRowHandling(id: int, name: string, value: int) {
+    hop {
+        // Test 1: Simple table access (should not decompose)
+        var r: Row<TestTable> = TestTable[ID: id];
+        
+        // Test 2: Member access (should trigger decomposition)
+        var current_name: string = r.NAME;
+        var current_value: int = r.VALUE;
+        
+        // Test 3: Member assignment (should work with decomposed variables)
+        r.NAME = name;
+        r.VALUE = value;
+        
+        // Test 4: Table assignment with row literal
+        TestTable[ID: id] = {
+            NAME: name,
+            VALUE: value
+        };
+    }
+}

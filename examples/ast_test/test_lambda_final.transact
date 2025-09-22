@@ -1,0 +1,12 @@
+table Users {
+    id: int;
+    name: string;
+}
+
+function test_lambda_types() -> void {
+    var my_lambda = (user: Row<Users>) -> int {
+        var user_id = user.id;
+        var doubled = user_id * 2;
+        return doubled;
+    };
+}

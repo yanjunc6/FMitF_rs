@@ -1,0 +1,8 @@
+table Users {
+    id: int;
+    name: string;
+}
+
+function direct_test(user: Row<Users>) -> void {
+    var temp = user.id;
+}

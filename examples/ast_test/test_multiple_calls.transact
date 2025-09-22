@@ -1,0 +1,10 @@
+function identity<T>(x: T) -> T {
+    return x;
+}
+
+function main() {
+    var a: int = identity(42);
+    var b: string = identity("hello");
+    var c: bool = identity(true);
+    return;
+}

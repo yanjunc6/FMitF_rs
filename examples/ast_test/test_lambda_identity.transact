@@ -1,0 +1,11 @@
+table Users {
+    id: int;
+    name: string;
+}
+
+function test_identity() -> void {
+    var test_lambda = (user: Row<Users>) -> Row<Users> {
+        var copy: Row<Users> = user;
+        return copy;
+    };
+}

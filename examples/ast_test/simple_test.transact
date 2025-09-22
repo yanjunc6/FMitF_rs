@@ -1,0 +1,9 @@
+table TestTable {
+    primary id: int;
+    name: string;
+}
+
+function test() -> Row<TestTable> {
+    var x: Row<TestTable>;
+    return x;
+}

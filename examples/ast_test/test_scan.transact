@@ -1,0 +1,16 @@
+table Activity {
+    primary AID: UUID;
+    primary UID: int;
+    Type: int;
+    Log: string;
+    Time: int;
+}
+
+function scan(t: Activity) -> List<Row<Activity>>;
+
+transaction readActivities() -> List<string> {
+    @global hop {
+        var allActivities = scan(Activity);
+        return [];
+    }
+}

@@ -1,0 +1,9 @@
+table Users {
+    id: int;
+    name: string;
+}
+
+function test_simple() -> void {
+    var user_row = Users[id: 1];
+    var user_id = user_row.id;
+}

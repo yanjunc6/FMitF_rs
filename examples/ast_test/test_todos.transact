@@ -1,0 +1,15 @@
+table Test {
+    primary ID: int;
+    value: int;
+}
+
+function testUnary() {
+    var x: int = 5;
+    var y: int = -x;  // Test unary minus
+    var result: bool = !true;  // Test unary not
+}
+
+function testMemberAccess() {
+    var t: Test = Test[ID: 1];
+    var val: int = t.value;  // Test member access with field resolution
+}
