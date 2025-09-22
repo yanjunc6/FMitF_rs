@@ -10,13 +10,6 @@ use crate::cfg;
 use ordered_float::OrderedFloat;
 use std::collections::HashMap;
 
-// Helper macro for unimplemented features
-macro_rules! cfg_unimplemented {
-    ($($arg:tt)*) => {
-        unimplemented!("CFG build: {}", format!($($arg)*))
-    };
-}
-
 // ============================================================================
 // --- Main Builder Entry Point
 // ============================================================================
@@ -234,13 +227,11 @@ impl CfgBuilder {
                                 .alloc(cfg::Type::Primitive(cfg::PrimitiveType::Bool))
                         }
                         _ => {
-                            eprintln!("Warning: Skipping constant '{}' with unresolved type and unsupported literal", ast_const.name.name);
-                            continue;
+                            panic!("Constant '{}' has unresolved type and unsupported literal - should have been resolved in frontend", ast_const.name.name);
                         }
                     },
                     _ => {
-                        eprintln!("Warning: Skipping constant '{}' with unresolved type and non-literal value", ast_const.name.name);
-                        continue;
+                        panic!("Constant '{}' has unresolved type and non-literal value - should have been resolved in frontend", ast_const.name.name);
                     }
                 }
             };
@@ -598,7 +589,7 @@ impl CfgBuilder {
                 }
                 ast::Literal::String(s) => cfg::ConstantValue::String(s.clone()),
                 ast::Literal::Bool(b) => cfg::ConstantValue::Bool(*b),
-                ast::Literal::List(exprs) => {
+                ast::Literal::List(_exprs) => {
                     // For now, we don't support list literals in constant evaluation
                     // This would require evaluating each expression and creating a list constant
                     panic!("List literals are not supported in constant evaluation");
@@ -980,7 +971,7 @@ impl<'a> FunctionContext<'a> {
             }
             ast::Statement::HopsFor { .. } => {
                 // HopsFor is handled at transaction level
-                cfg_unimplemented!("Statement type in this context: {:?}", stmt)
+                panic!("Unsupported statement type in this context: {:?}", stmt)
             }
         }
     }
@@ -1000,13 +991,13 @@ impl<'a> FunctionContext<'a> {
                     }
                     // Complex literals need to be built as runtime expressions
                     ast::Literal::List(_) => {
-                        cfg_unimplemented!("List literals in expressions are not yet supported")
+                        panic!("List literals in expressions should have been handled in frontend");
                     }
-                    ast::Literal::RowLiteral(key_values) => {
+                    ast::Literal::RowLiteral(_key_values) => {
                         // Row literals are used in table assignments like:
                         // Table[key] = { field1: value1, field2: value2 }
                         // We need to handle this specially depending on context
-                        cfg_unimplemented!("Row literals need to be handled in assignment context")
+                        panic!("Row literals should be handled in assignment context, not as standalone expressions")
                     }
                 }
             }
@@ -1042,7 +1033,7 @@ impl<'a> FunctionContext<'a> {
                         // The verifier should handle the semantics of using a table as a value.
                         cfg::Operand::Variable(temp_var)
                     }
-                    _ => cfg_unimplemented!("Identifier resolution type: {:?}", res),
+                    _ => panic!("Unknown identifier resolution type: {:?}", res),
                 }
             }
             ast::Expression::Binary {
@@ -1070,7 +1061,7 @@ impl<'a> FunctionContext<'a> {
                     ">=" => cfg::BinaryOp::GeqInt,
                     "&&" => cfg::BinaryOp::And,
                     "||" => cfg::BinaryOp::Or,
-                    _ => cfg_unimplemented!("Binary operator {}", op.name),
+                    _ => panic!("Unknown binary operator: {}", op.name),
                 };
 
                 let dest_ty = self
@@ -1097,7 +1088,7 @@ impl<'a> FunctionContext<'a> {
                 let unary_op = match op.name.as_str() {
                     "-" => cfg::UnaryOp::NegInt, // Should check type to determine NegInt vs NegFloat
                     "!" => cfg::UnaryOp::NotBool,
-                    _ => cfg_unimplemented!("Unary operator {}", op.name),
+                    _ => panic!("Unknown unary operator: {}", op.name),
                 };
 
                 let dest_ty = self
@@ -1133,9 +1124,9 @@ impl<'a> FunctionContext<'a> {
                                     found_func = Some(*cfg_id);
                                     break;
                                 } else {
-                                    // This might be a built-in function that was filtered out
-                                    return cfg_unimplemented!(
-                                        "Built-in function call: {}",
+                                    // Built-in functions should have been resolved in frontend
+                                    panic!(
+                                        "Built-in function call should have been resolved: {}",
                                         name.name
                                     );
                                 }
@@ -1144,10 +1135,13 @@ impl<'a> FunctionContext<'a> {
                         if let Some(id) = found_func {
                             id
                         } else {
-                            return cfg_unimplemented!("Could not resolve function: {}", name.name);
+                            panic!(
+                                "Function should have been resolved in frontend: {}",
+                                name.name
+                            );
                         }
                     }
-                    _ => return cfg_unimplemented!("Dynamic callee"),
+                    _ => panic!("Dynamic callee should not reach CFG builder"),
                 };
 
                 let arg_operands: Vec<_> = args
@@ -1169,8 +1163,8 @@ impl<'a> FunctionContext<'a> {
                         args: arg_operands,
                     };
                     self.add_instruction(instr);
-                    // For void functions, we need to return something
-                    cfg_unimplemented!("Void function call result")
+                    // Void functions used as expressions should not happen in well-formed AST
+                    panic!("Void function call used as expression - should have been caught in frontend")
                 } else {
                     let temp_var = self.new_temporary(return_type);
                     let instr = cfg::Instruction::Call {
@@ -1260,7 +1254,7 @@ impl<'a> FunctionContext<'a> {
                                         }
                                     }
                                 }
-                                cfg_unimplemented!("Member assignment to non-Row variable");
+                                panic!("Member assignment to non-Row variable should have been caught in frontend");
                             }
                             ast::Expression::TableRowAccess {
                                 table, key_values, ..
@@ -1290,7 +1284,7 @@ impl<'a> FunctionContext<'a> {
 
                                 return src_op;
                             }
-                            _ => cfg_unimplemented!("Complex member assignment"),
+                            _ => panic!("Complex member assignment not supported"),
                         }
                     }
                     ast::Expression::TableRowAccess {
@@ -1392,8 +1386,8 @@ impl<'a> FunctionContext<'a> {
                 }
             }
             ast::Expression::Lambda {
-                params,
-                body,
+                params: _params,
+                body: _body,
                 resolved_type,
                 ..
             } => {
@@ -1517,7 +1511,10 @@ impl<'a> FunctionContext<'a> {
                         }
 
                         // Regular member access - not supported yet for non-Row types
-                        cfg_unimplemented!("Member access on non-Row type: {}", member.name);
+                        panic!(
+                            "Member access on non-Row type should have been caught in frontend: {}",
+                            member.name
+                        );
                     }
                     ast::Expression::TableRowAccess {
                         table, key_values, ..
@@ -1554,7 +1551,7 @@ impl<'a> FunctionContext<'a> {
                         cfg::Operand::Variable(temp_var)
                     }
                     _ => {
-                        cfg_unimplemented!("Member access on complex expression");
+                        panic!("Member access on complex expression not supported");
                     }
                 }
             }
@@ -1562,7 +1559,6 @@ impl<'a> FunctionContext<'a> {
                 // Grouped expressions are just parentheses, so we unwrap and build the inner expression
                 self.build_expression(expr)
             }
-            _ => cfg_unimplemented!("Expression type: {:?}", expr),
         }
     }
 
@@ -1740,7 +1736,7 @@ impl<'a> FunctionContext<'a> {
             }
             _ => {
                 // For other expressions, build the source and decompose
-                cfg_unimplemented!("Row assignment from non-TableRowAccess expression");
+                panic!("Row assignment from non-TableRowAccess expression not supported");
             }
         }
     }
