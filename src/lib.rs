@@ -7,6 +7,7 @@ pub mod dataflow;
 pub mod frontend;
 pub mod optimization;
 pub mod pretty;
+pub mod sc_graph;
 pub mod util;
 // Re-export main functionality
 pub use ast::Program;
