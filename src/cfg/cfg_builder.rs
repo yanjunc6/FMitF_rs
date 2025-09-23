@@ -1365,10 +1365,18 @@ impl<'a> FunctionContext<'a> {
                                 ..
                             } => {
                                 // Handle row literal assignment: Table[...] = { field1: value1, field2: value2 }
+                                // Build a name->FieldId map once for fallback lookup.
+                                let table_fields = self.get_table_fields(table_id);
+                                let mut field_name_to_id: HashMap<String, cfg::FieldId> =
+                                    HashMap::new();
+                                for (fname, fid) in table_fields {
+                                    field_name_to_id.insert(fname, fid);
+                                }
+
                                 for key_value in key_values {
                                     let field_value_op = self.build_expression(key_value.value);
 
-                                    // Use the resolved field information from AST
+                                    // Prefer resolved field from AST if present.
                                     if let Some(ast::IdentifierResolution::Field(field_id)) =
                                         &key_value.resolved_field
                                     {
@@ -1379,6 +1387,21 @@ impl<'a> FunctionContext<'a> {
                                             field: Some(cfg_field_id),
                                             value: field_value_op,
                                         });
+                                    } else {
+                                        // Fallback: attempt to match by field name (the identifier key).
+                                        // key_value.key is an Identifier; obtain its string name for fallback lookup
+                                        let field_name = key_value.key.name.clone();
+                                        if let Some(fid) = field_name_to_id.get(&field_name) {
+                                            self.add_instruction(cfg::Instruction::TableSet {
+                                                table: table_id,
+                                                keys: key_operands.clone(),
+                                                field: Some(*fid),
+                                                value: field_value_op,
+                                            });
+                                        } else {
+                                            // If field still not found, emit a panic for now to surface issue.
+                                            panic!("RowLiteral assignment field '{}' not resolved and not found in table.", field_name);
+                                        }
                                     }
                                 }
                                 // Return a placeholder value since row assignments don't have a meaningful return value
