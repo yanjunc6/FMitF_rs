@@ -1809,4 +1809,3 @@ impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
         Ok(())
     }
 }
-

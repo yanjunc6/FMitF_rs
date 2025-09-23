@@ -4,7 +4,7 @@ pub mod errors;
 pub mod partition;
 pub mod verify_result_process;
 
-use crate::cfg::CfgProgram;
+use crate::cfg::Program;
 use crate::sc_graph::SCGraph;
 use errors::Results;
 
@@ -32,7 +32,7 @@ impl VerificationManager {
     /// Generate verification programs based on type
     pub fn generate_verification_programs(
         &self,
-        cfg_program: &CfgProgram,
+        cfg_program: &Program,
         sc_graph: &SCGraph,
         verification_type: VerificationType,
     ) -> Results<Vec<Boogie::BoogieProgram>> {

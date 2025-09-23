@@ -56,7 +56,7 @@ impl<'a> SemanticAnalyzer<'a> {
     /// Gets the span from a statement.
     fn get_statement_span(&self, stmt: &Statement) -> Option<Span> {
         match stmt {
-            Statement::VarDecl(_) => None, // VarDecl span is in the arena
+            Statement::VarDecl(var_id) => self.program.var_decls[*var_id].span,
             Statement::If { span, .. } => *span,
             Statement::For { span, .. } => *span,
             Statement::Return { span, .. } => *span,
@@ -64,7 +64,7 @@ impl<'a> SemanticAnalyzer<'a> {
             Statement::Hop { span, .. } => *span,
             Statement::HopsFor { span, .. } => *span,
             Statement::Expression { span, .. } => *span,
-            Statement::Block(_) => None, // Block span is in the arena
+            Statement::Block(block_id) => self.program.blocks[*block_id].span,
         }
     }
 
