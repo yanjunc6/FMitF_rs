@@ -79,12 +79,12 @@ impl Compiler {
         &mut self,
         input_path: &PathBuf,
         output_dir: &PathBuf,
-        _instances: usize,
+        instances: usize,
         enable_optimization: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         println!("{} compilation pipeline", "Starting".bold().green());
 
-        const TOTAL_STAGES: usize = 5;
+        const TOTAL_STAGES: usize = 5; // Merged SC graph build+combine into single stage
         let mut current_stage = 0;
 
         // Stage 1: Frontend (Parsing)
@@ -148,8 +148,8 @@ impl Compiler {
         )?;
 
         // Stage 3: Optimization (optional)
-        let _cfg_program = if enable_optimization {
-            current_stage += 1;
+        current_stage += 1;
+        let optimized_or_cfg_program = if enable_optimization {
             execute_stage(
                 "Optimization",
                 current_stage,
@@ -158,10 +158,7 @@ impl Compiler {
                     let optimizer = CfgOptimizer::default_passes();
                     let mut optimized_program = cfg_program;
                     let _results = optimizer.optimize_program(&mut optimized_program);
-
-                    // Write CFG pretty print
                     self.write_cfg_pretty(&optimized_program, output_dir, "cfg_opt_pretty.txt")?;
-
                     Ok(optimized_program)
                 },
             )?
@@ -169,11 +166,21 @@ impl Compiler {
             cfg_program
         };
 
-        // TODO: Stage 4: SC-Graph Generation
-        // let sc_graph = sc_graph::build_sc_graph(optimized_cfg, instances)?;
-
-        // TODO: Stage 5: Output Generation
-        // output_manager::write_outputs(sc_graph, output_dir)?;
+        // Stage 4: SC-Graph (Build + Combine + DOT Outputs)
+        current_stage += 1;
+        let _combined = execute_stage(
+            "SC-Graph",
+            current_stage,
+            TOTAL_STAGES,
+            || -> Result<(), Box<dyn std::error::Error>> {
+                let builder = crate::sc_graph::SCGraphBuilder::new(instances as u32);
+                let sc = builder.build(&optimized_or_cfg_program);
+                let combined = crate::sc_graph::combine_for_deadlock_elimination(&sc);
+                self.write_sc_graph_dots(&sc, &combined, &optimized_or_cfg_program, output_dir)?;
+                Ok(())
+            },
+        )?;
+        // Placeholder for future stages (e.g., verification using sc_graph)
 
         println!("{}", "Completed".green().bold());
         Ok(())
@@ -213,6 +220,33 @@ impl Compiler {
         program.pretty_print_with_debug(&mut file)?;
 
         println!("📄 CFG file written to: {}", cfg_file.display());
+        Ok(())
+    }
+    // TOTAL_STAGES already defined above
+
+    /// Write both raw SCGraph and combined SCGraph DOT files.
+    fn write_sc_graph_dots(
+        &self,
+        sc: &crate::sc_graph::SCGraph,
+        combined: &crate::sc_graph::CombinedSCGraph,
+        program: &cfg::Program,
+        output_dir: &PathBuf,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use crate::pretty::{CombinedSCGraphDotPrinter, PrettyPrint, SCGraphDotPrinter};
+        std::fs::create_dir_all(output_dir)?;
+        // Raw
+        let sc_path = output_dir.join("sc_graph.dot");
+        let mut sc_file = std::fs::File::create(&sc_path)?;
+        SCGraphDotPrinter::new(sc, program).pretty_print(&mut sc_file)?;
+        // Combined
+        let combined_path = output_dir.join("combined_sc_graph.dot");
+        let mut c_file = std::fs::File::create(&combined_path)?;
+        CombinedSCGraphDotPrinter::new(combined, program).pretty_print(&mut c_file)?;
+        println!(
+            "📄 SC Graph DOT files written: {}, {}",
+            sc_path.display(),
+            combined_path.display()
+        );
         Ok(())
     }
 }
