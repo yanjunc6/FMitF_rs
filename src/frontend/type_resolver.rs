@@ -1810,5 +1810,3 @@ impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
     }
 }
 
-// ============================================================================
-// --- Pass 3: Apply Final Substitutions
