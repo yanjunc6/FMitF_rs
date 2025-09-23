@@ -45,10 +45,9 @@ table User {
 // ===========================================
 
 transaction beFriend(uid1: int, uid2: int, time: int) {
-    var aid1: UUID = genUUID();
-    var aid2: UUID = genUUID();
-    
     hop {
+        var aid1: UUID = genUUID();
+        var aid2: UUID = genUUID();
         Graph[UID1: uid1, UID2: uid2].Counter = 1;
     }
     
@@ -74,10 +73,9 @@ transaction beFriend(uid1: int, uid2: int, time: int) {
 }
 
 transaction unFriend(uid1: int, uid2: int, time: int) {
-    var aid1: UUID = genUUID();
-    var aid2: UUID = genUUID();
-    
     hop {
+        var aid1: UUID = genUUID();
+        var aid2: UUID = genUUID();
         Graph[UID1: uid1, UID2: uid2].Counter = 0;
     }
     
@@ -133,11 +131,10 @@ transaction readActivities(uid: int) -> List<string> {
     }
 }
 
-transaction postStatus(uid: int, status: string, time: int) {
-    var sid: UUID = genUUID();
-    var aid: UUID = genUUID();
-    
+transaction postStatus(uid: int, status: string, time: int) {   
     hop {
+        var sid: UUID = genUUID();
+        var aid: UUID = genUUID();
         Status[SID: sid, UID: uid] = {
             Status: status
         };
@@ -153,10 +150,9 @@ transaction postStatus(uid: int, status: string, time: int) {
 }
 
 transaction postWall(uid: int, message: string, time: int) {
-    var wid: UUID = genUUID();
-    var aid: UUID = genUUID();
-    
     hop {
+        var wid: UUID = genUUID();
+        var aid: UUID = genUUID();
         Wall[WID: wid, UID: uid] = {
             Message: message
         };
