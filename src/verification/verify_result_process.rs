@@ -1,6 +1,7 @@
-use crate::cfg::CfgProgram;
+use crate::cfg::Program as CfgProgram;
 use crate::sc_graph::{update_scgraph_for_commutative_errors, SCGraph};
-use crate::verification::errors::{SpannedError, VerificationError};
+use crate::util::{CompilerError, Span};
+use crate::verification::errors::VerificationErrorKind;
 use crate::verification::Boogie::BoogieError;
 
 /// Result processor for verification results
@@ -12,8 +13,8 @@ impl VerifyResultProcessor {
         cfg_program: &CfgProgram,
         scgraph: SCGraph,
         boogie_errors: Vec<BoogieError>,
-    ) -> (Vec<SpannedError>, SCGraph) {
-        let mut verification_errors = Vec::new();
+    ) -> (Vec<CompilerError>, SCGraph) {
+        let mut verification_errors: Vec<CompilerError> = Vec::new();
         let mut verified_not_commutative_pairs = Vec::new();
 
         for error in boogie_errors {
@@ -48,14 +49,15 @@ impl VerifyResultProcessor {
                         .map(|(_, p)| p.name.clone())
                         .unwrap_or_else(|| format!("partition_{}", partition_function_id));
 
-                    verification_errors.push(SpannedError {
-                        error: VerificationError::PartitionFunctionInconsistency {
+                    let span = span.unwrap_or(Span::new(0, 0, "<boogie>"));
+                    verification_errors.push(CompilerError::new(
+                        VerificationErrorKind::PartitionFunctionInconsistency {
                             function_name,
                             table_name,
                             partition_function_name: partition_name,
                         },
                         span,
-                    });
+                    ));
                 }
                 BoogieError::SliceCommutativityViolation { hop_id_1, hop_id_2 } => {
                     verified_not_commutative_pairs.push((hop_id_1, hop_id_2));

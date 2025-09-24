@@ -10,18 +10,16 @@ use crate::verification::{
 };
 
 pub struct BaseVerificationGenerator {
-    pub cfg_program: CfgProgram,
     // The scope is now a fundamental part of the generator.
     scope: ExecutionScope,
     pub generator: BoogieProgramGenerator,
 }
 
 impl BaseVerificationGenerator {
-    pub fn new(cfg_program: CfgProgram) -> Self {
+    pub fn new(cfg_program: &CfgProgram) -> Self {
         let boogie_program_name = "verification".to_string();
-        let generator = BoogieProgramGenerator::from_cfg(boogie_program_name, &cfg_program);
+        let generator = BoogieProgramGenerator::from_cfg(boogie_program_name, cfg_program);
         Self {
-            cfg_program,
             scope: ExecutionScope::default(),
             generator,
         }
@@ -52,25 +50,22 @@ impl BaseVerificationGenerator {
         &mut self,
         instruction: &Instruction,
         slice_id: SliceId,
+        cfg_program: &CfgProgram,
     ) -> Results<Vec<BoogieLine>> {
         self.scope.set_current_slice(slice_id);
         let mut lines = Vec::new();
         match &instruction.kind {
             InstructionKind::Assign { dest, src } => {
-                let dest_name = self
-                    .scope
-                    .get_scoped_variable_name(&self.cfg_program, *dest);
+                let dest_name = self.scope.get_scoped_variable_name(cfg_program, *dest);
                 let dest_type = BoogieProgramGenerator::convert_type_id(
-                    &self.cfg_program,
-                    &self.cfg_program.variables[*dest].ty,
+                    cfg_program,
+                    &cfg_program.variables[*dest].ty,
                 );
                 self.generator
                     .ensure_local_variable_exists(&dest_name, dest_type);
 
-                let src_name = self.get_operand_name(src, slice_id)?;
-                let src_expr = self
-                    .generator
-                    .convert_operand(&self.cfg_program, src, src_name)?;
+                let src_name = self.get_operand_name(src, slice_id, cfg_program)?;
+                let src_expr = self.generator.convert_operand(cfg_program, src, src_name)?;
 
                 lines.push(BoogieLine::Assign(dest_name, src_expr));
             }
@@ -80,25 +75,23 @@ impl BaseVerificationGenerator {
                 left,
                 right,
             } => {
-                let dest_name = self
-                    .scope
-                    .get_scoped_variable_name(&self.cfg_program, *dest);
+                let dest_name = self.scope.get_scoped_variable_name(cfg_program, *dest);
                 let dest_type = BoogieProgramGenerator::convert_type_id(
-                    &self.cfg_program,
-                    &self.cfg_program.variables[*dest].ty,
+                    cfg_program,
+                    &cfg_program.variables[*dest].ty,
                 );
                 self.generator
                     .ensure_local_variable_exists(&dest_name, dest_type);
 
-                let left_name = self.get_operand_name(left, slice_id)?;
-                let right_name = self.get_operand_name(right, slice_id)?;
+                let left_name = self.get_operand_name(left, slice_id, cfg_program)?;
+                let right_name = self.get_operand_name(right, slice_id, cfg_program)?;
 
-                let left_expr =
-                    self.generator
-                        .convert_operand(&self.cfg_program, left, left_name)?;
-                let right_expr =
-                    self.generator
-                        .convert_operand(&self.cfg_program, right, right_name)?;
+                let left_expr = self
+                    .generator
+                    .convert_operand(cfg_program, left, left_name)?;
+                let right_expr = self
+                    .generator
+                    .convert_operand(cfg_program, right, right_name)?;
 
                 let boogie_op = BoogieProgramGenerator::convert_binary_op(op);
                 let bin_expr = BoogieExpr {
@@ -111,20 +104,18 @@ impl BaseVerificationGenerator {
                 lines.push(BoogieLine::Assign(dest_name, bin_expr));
             }
             InstructionKind::UnaryOp { dest, op, operand } => {
-                let dest_name = self
-                    .scope
-                    .get_scoped_variable_name(&self.cfg_program, *dest);
+                let dest_name = self.scope.get_scoped_variable_name(cfg_program, *dest);
                 let dest_type = BoogieProgramGenerator::convert_type_id(
-                    &self.cfg_program,
-                    &self.cfg_program.variables[*dest].ty,
+                    cfg_program,
+                    &cfg_program.variables[*dest].ty,
                 );
                 self.generator
                     .ensure_local_variable_exists(&dest_name, dest_type);
 
-                let operand_name = self.get_operand_name(operand, slice_id)?;
-                let expr =
-                    self.generator
-                        .convert_operand(&self.cfg_program, operand, operand_name)?;
+                let operand_name = self.get_operand_name(operand, slice_id, cfg_program)?;
+                let expr = self
+                    .generator
+                    .convert_operand(cfg_program, operand, operand_name)?;
 
                 let boogie_op = self.generator.convert_unary_op(op)?;
                 let un_expr = BoogieExpr {
@@ -133,16 +124,12 @@ impl BaseVerificationGenerator {
                 lines.push(BoogieLine::Assign(dest_name, un_expr));
             }
             InstructionKind::Call { dest, func, args } => {
-                let func_decl = &self.cfg_program.functions[*func];
+                let func_decl = &cfg_program.functions[*func];
                 let func_name = func_decl.name.clone();
                 let mut boogie_args = Vec::new();
                 for arg in args {
-                    let arg_name = self.get_operand_name(arg, slice_id)?;
-                    boogie_args.push(self.generator.convert_operand(
-                        &self.cfg_program,
-                        arg,
-                        arg_name,
-                    )?);
+                    let arg_name = self.get_operand_name(arg, slice_id, cfg_program)?;
+                    boogie_args.push(self.generator.convert_operand(cfg_program, arg, arg_name)?);
                 }
                 let call_expr = BoogieExpr {
                     kind: BoogieExprKind::FunctionCall {
@@ -151,12 +138,10 @@ impl BaseVerificationGenerator {
                     },
                 };
                 if let Some(dest_id) = dest {
-                    let dest_name = self
-                        .scope
-                        .get_scoped_variable_name(&self.cfg_program, *dest_id);
+                    let dest_name = self.scope.get_scoped_variable_name(cfg_program, *dest_id);
                     let dest_type = BoogieProgramGenerator::convert_type_id(
-                        &self.cfg_program,
-                        &self.cfg_program.variables[*dest_id].ty,
+                        cfg_program,
+                        &cfg_program.variables[*dest_id].ty,
                     );
                     self.generator
                         .ensure_local_variable_exists(&dest_name, dest_type);
@@ -171,30 +156,24 @@ impl BaseVerificationGenerator {
                 keys,
                 field,
             } => {
-                let dest_name = self
-                    .scope
-                    .get_scoped_variable_name(&self.cfg_program, *dest);
+                let dest_name = self.scope.get_scoped_variable_name(cfg_program, *dest);
                 let dest_type = BoogieProgramGenerator::convert_type_id(
-                    &self.cfg_program,
-                    &self.cfg_program.variables[*dest].ty,
+                    cfg_program,
+                    &cfg_program.variables[*dest].ty,
                 );
                 self.generator
                     .ensure_local_variable_exists(&dest_name, dest_type);
 
-                let table_decl = &self.cfg_program.tables[*table];
-                let field_decl = &self.cfg_program.table_fields[field.unwrap()];
+                let table_decl = &cfg_program.tables[*table];
+                let field_decl = &cfg_program.table_fields[field.unwrap()];
                 let var_name = BoogieProgramGenerator::gen_table_field_var_name(
                     &table_decl.name,
                     &field_decl.name,
                 );
                 let mut key_exprs = Vec::new();
                 for key in keys {
-                    let key_name = self.get_operand_name(key, slice_id)?;
-                    key_exprs.push(self.generator.convert_operand(
-                        &self.cfg_program,
-                        key,
-                        key_name,
-                    )?);
+                    let key_name = self.get_operand_name(key, slice_id, cfg_program)?;
+                    key_exprs.push(self.generator.convert_operand(cfg_program, key, key_name)?);
                 }
                 let map_select = BoogieExpr {
                     kind: BoogieExprKind::MapSelect {
@@ -212,8 +191,8 @@ impl BaseVerificationGenerator {
                 field,
                 value,
             } => {
-                let table_decl = &self.cfg_program.tables[*table];
-                let field_decl = &self.cfg_program.table_fields[field.unwrap()];
+                let table_decl = &cfg_program.tables[*table];
+                let field_decl = &cfg_program.table_fields[field.unwrap()];
                 let var_name = BoogieProgramGenerator::gen_table_field_var_name(
                     &table_decl.name,
                     &field_decl.name,
@@ -221,17 +200,13 @@ impl BaseVerificationGenerator {
 
                 let mut key_exprs = Vec::new();
                 for key in keys {
-                    let key_name = self.get_operand_name(key, slice_id)?;
-                    key_exprs.push(self.generator.convert_operand(
-                        &self.cfg_program,
-                        key,
-                        key_name,
-                    )?);
+                    let key_name = self.get_operand_name(key, slice_id, cfg_program)?;
+                    key_exprs.push(self.generator.convert_operand(cfg_program, key, key_name)?);
                 }
-                let value_name = self.get_operand_name(value, slice_id)?;
-                let value_expr =
-                    self.generator
-                        .convert_operand(&self.cfg_program, value, value_name)?;
+                let value_name = self.get_operand_name(value, slice_id, cfg_program)?;
+                let value_expr = self
+                    .generator
+                    .convert_operand(cfg_program, value, value_name)?;
 
                 let map_store = BoogieExpr {
                     kind: BoogieExprKind::MapStore {
@@ -248,7 +223,7 @@ impl BaseVerificationGenerator {
                 // let cond_name = self.get_operand_name(condition)?;
                 // let cond_expr = self
                 //     .generator
-                //     .convert_operand(&self.cfg_program, condition, cond_name)?;
+                //     .convert_operand(cfg_program, condition, cond_name)?;
                 // let boogie_error = super::Boogie::BoogieError::GenericAssertionFailure {
                 //     message: message.clone(),
                 // };
@@ -259,15 +234,20 @@ impl BaseVerificationGenerator {
         Ok(lines)
     }
 
-    fn get_operand_name(&mut self, operand: &Operand, slice_id: SliceId) -> Results<String> {
+    fn get_operand_name(
+        &mut self,
+        operand: &Operand,
+        slice_id: SliceId,
+        cfg_program: &CfgProgram,
+    ) -> Results<String> {
         self.scope.set_current_slice(slice_id);
         match operand {
-            Operand::Variable(var_id) => Ok(self
-                .scope
-                .get_scoped_variable_name(&self.cfg_program, *var_id)),
+            Operand::Variable(var_id) => {
+                Ok(self.scope.get_scoped_variable_name(cfg_program, *var_id))
+            }
             Operand::Constant(c) => Ok(self.generator.convert_constant(c)?.to_string()),
             Operand::Global(g) => {
-                let g_const = &self.cfg_program.global_consts[*g];
+                let g_const = &cfg_program.global_consts[*g];
                 Ok(g_const.name.clone())
             }
         }
@@ -277,6 +257,7 @@ impl BaseVerificationGenerator {
         &mut self,
         block: &BasicBlock,
         slice_id: SliceId,
+        cfg_program: &CfgProgram,
     ) -> Results<Vec<BoogieLine>> {
         self.scope.set_current_slice(slice_id);
         let mut lines = Vec::new();
@@ -290,10 +271,10 @@ impl BaseVerificationGenerator {
                 if_true,
                 if_false,
             } => {
-                let cond_name = self.get_operand_name(condition, slice_id)?;
+                let cond_name = self.get_operand_name(condition, slice_id, cfg_program)?;
                 let cond_expr =
                     self.generator
-                        .convert_operand(&self.cfg_program, condition, cond_name)?;
+                        .convert_operand(cfg_program, condition, cond_name)?;
                 let true_label = self.scope.get_scoped_label(*if_true);
                 let false_label = self.scope.get_scoped_label(*if_false);
                 lines.push(BoogieLine::If {
@@ -304,10 +285,8 @@ impl BaseVerificationGenerator {
             }
             crate::cfg::Terminator::Return(ret_val) => {
                 if let Some(op) = ret_val {
-                    let ret_name = self.get_operand_name(op, slice_id)?;
-                    let ret_expr =
-                        self.generator
-                            .convert_operand(&self.cfg_program, op, ret_name)?;
+                    let ret_name = self.get_operand_name(op, slice_id, cfg_program)?;
+                    let ret_expr = self.generator.convert_operand(cfg_program, op, ret_name)?;
                     // Assuming a special return variable `__ret`
                     lines.push(BoogieLine::Assign(
                         self.scope.get_scoped_name("__ret"),
@@ -328,5 +307,17 @@ impl BaseVerificationGenerator {
             }
         }
         Ok(lines)
+    }
+
+    // Convenience helpers mirroring BoogieProgramGenerator patterns used elsewhere
+    pub fn add_comment_to_current_procedure(&mut self, text: String) {
+        self.add_line(BoogieLine::Comment(text));
+    }
+    pub fn add_assertion_to_current_procedure(
+        &mut self,
+        expr: BoogieExpr,
+        msg: super::Boogie::ErrorMessage,
+    ) {
+        self.add_line(BoogieLine::Assert(expr, msg));
     }
 }

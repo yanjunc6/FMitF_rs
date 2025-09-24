@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 // Import types from parent module
 use super::{CommutativeUnit, Interleaving};
+use crate::verification::scope::SliceId;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Direction {
@@ -15,9 +16,9 @@ enum Direction {
 /// Special interleavings that need to be tracked
 #[derive(Clone)]
 pub struct SpecialInterleavings {
-    /// slice_a followed by slice_b
+    /// slice 0 followed by slice 1
     pub a_then_b: Interleaving,
-    /// slice_b followed by slice_a  
+    /// slice 1 followed by slice 0  
     pub b_then_a: Interleaving,
 }
 
@@ -36,11 +37,12 @@ impl InterleavingGenerator {
         unit: &CommutativeUnit,
     ) -> Vec<Interleaving> {
         // Find all conflict edges between the two slices (excluding the unit's c_edge)
-        let conflicts =
-            self.find_cross_slice_conflicts(sc_graph, &unit.hops_A, &unit.hops_B, &unit.c_edge);
+        let slice_a = unit.hops_per_slice.get(&0).cloned().unwrap_or_default();
+        let slice_b = unit.hops_per_slice.get(&1).cloned().unwrap_or_default();
+        let conflicts = self.find_cross_slice_conflicts(sc_graph, &slice_a, &slice_b, &unit.c_edge);
 
         // Generate all legal interleavings using the algorithm from verification.md
-        self.generate_all_merges(&unit.hops_A, &unit.hops_B, &conflicts)
+        self.generate_all_merges(&slice_a, &slice_b, &conflicts)
     }
 
     /// Find conflict edges between two hop slices, excluding the given edge
@@ -90,7 +92,7 @@ impl InterleavingGenerator {
             conflicts: &HashSet<(HopId, HopId)>,
             i: usize,
             j: usize,
-            placed: &mut Vec<(HopId, bool)>,
+            placed: &mut Vec<(SliceId, HopId)>,
             direction: Direction,
             result: &mut Vec<Interleaving>,
         ) {
@@ -104,9 +106,9 @@ impl InterleavingGenerator {
             if i < slice_a.len() {
                 let hop_a = slice_a[i];
                 if let Some(new_dir) =
-                    check_direction_constraint(hop_a, true, placed, conflicts, direction)
+                    check_direction_constraint(hop_a, 0, placed, conflicts, direction)
                 {
-                    placed.push((hop_a, true));
+                    placed.push((0, hop_a));
                     dfs(
                         slice_a,
                         slice_b,
@@ -125,9 +127,9 @@ impl InterleavingGenerator {
             if j < slice_b.len() {
                 let hop_b = slice_b[j];
                 if let Some(new_dir) =
-                    check_direction_constraint(hop_b, false, placed, conflicts, direction)
+                    check_direction_constraint(hop_b, 1, placed, conflicts, direction)
                 {
-                    placed.push((hop_b, false));
+                    placed.push((1, hop_b));
                     dfs(
                         slice_a,
                         slice_b,
@@ -145,16 +147,16 @@ impl InterleavingGenerator {
 
         fn check_direction_constraint(
             current_hop: HopId,
-            is_from_a: bool,
-            placed: &[(HopId, bool)],
+            current_slice: SliceId,
+            placed: &[(SliceId, HopId)],
             conflicts: &HashSet<(HopId, HopId)>,
             current_direction: Direction,
         ) -> Option<Direction> {
             // Scan placed hops from right to left to find the first conflicting hop from opposite slice
-            for &(placed_hop, placed_is_from_a) in placed.iter().rev() {
-                if placed_is_from_a != is_from_a && conflicts.contains(&(current_hop, placed_hop)) {
+            for &(placed_slice, placed_hop) in placed.iter().rev() {
+                if placed_slice != current_slice && conflicts.contains(&(current_hop, placed_hop)) {
                     // Found conflicting pair
-                    let required_direction = if is_from_a {
+                    let required_direction = if current_slice == 0 {
                         Direction::ABeforeB
                     } else {
                         Direction::BBeforeA
@@ -171,7 +173,7 @@ impl InterleavingGenerator {
             Some(current_direction) // No conflicts found, continue with current direction
         }
 
-        let mut placed = Vec::new();
+        let mut placed: Vec<(SliceId, HopId)> = Vec::new();
         dfs(
             slice_a,
             slice_b,
@@ -186,29 +188,27 @@ impl InterleavingGenerator {
         result
     }
 
-    /// Extract the two special interleavings (A+B and B+A)
-    pub fn extract_special_interleavings(
-        &self,
-        slice_a: &[HopId],
-        slice_b: &[HopId],
-    ) -> SpecialInterleavings {
+    /// Extract the two special interleavings (slice0+slice1 and slice1+slice0)
+    pub fn extract_special_interleavings(&self, unit: &CommutativeUnit) -> SpecialInterleavings {
+        let slice_a = unit.hops_per_slice.get(&0).cloned().unwrap_or_default();
+        let slice_b = unit.hops_per_slice.get(&1).cloned().unwrap_or_default();
         let mut a_then_b = Vec::new();
         let mut b_then_a = Vec::new();
 
         // A followed by B
-        for &hop in slice_a {
-            a_then_b.push((hop, true));
+        for &hop in &slice_a {
+            a_then_b.push((0, hop));
         }
-        for &hop in slice_b {
-            a_then_b.push((hop, false));
+        for &hop in &slice_b {
+            a_then_b.push((1, hop));
         }
 
         // B followed by A
-        for &hop in slice_b {
-            b_then_a.push((hop, false));
+        for &hop in &slice_b {
+            b_then_a.push((1, hop));
         }
-        for &hop in slice_a {
-            b_then_a.push((hop, true));
+        for &hop in &slice_a {
+            b_then_a.push((0, hop));
         }
 
         SpecialInterleavings { a_then_b, b_then_a }
