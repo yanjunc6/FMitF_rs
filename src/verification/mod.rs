@@ -1,59 +1,62 @@
 pub mod Boogie;
-pub mod commutative;
+mod base_generator;
+mod scope;
+mod strategy;
+// pub mod commutative;
 pub mod errors;
-pub mod partition;
-pub mod verify_result_process;
+// pub mod partition;
+// pub mod verify_result_process;
 
-use crate::cfg::Program;
-use crate::sc_graph::SCGraph;
-use errors::Results;
+// use crate::cfg::Program;
+// use crate::sc_graph::SCGraph;
+// use errors::Results;
 
-pub use errors::{SpannedError, VerificationError};
+// pub use errors::{SpannedError, VerificationError};
 
-/// Types of verification to generate
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VerificationType {
-    /// Partition function consistency verification
-    Partition,
-    /// Slice commutativity verification  
-    Commutative,
-    /// Generate both verification types
-    All,
-}
+// /// Types of verification to generate
+// #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// pub enum VerificationType {
+//     /// Partition function consistency verification
+//     Partition,
+//     /// Slice commutativity verification
+//     Commutative,
+//     /// Generate both verification types
+//     All,
+// }
 
-/// Simple verification manager for Boogie generation
-pub struct VerificationManager {}
+// /// Simple verification manager for Boogie generation
+// pub struct VerificationManager {}
 
-impl VerificationManager {
-    pub fn new() -> Self {
-        VerificationManager {}
-    }
+// impl VerificationManager {
+//     pub fn new() -> Self {
+//         VerificationManager {}
+//     }
 
-    /// Generate verification programs based on type
-    pub fn generate_verification_programs(
-        &self,
-        cfg_program: &Program,
-        sc_graph: &SCGraph,
-        verification_type: VerificationType,
-    ) -> Results<Vec<Boogie::BoogieProgram>> {
-        let partition_manager = partition::PartitionVerificationManager::new();
-        let mut commutative_manager = commutative::CommutativeVerificationManager::new();
-        match verification_type {
-            VerificationType::Partition => {
-                partition_manager.generate_partition_verification(cfg_program)
-            }
-            VerificationType::Commutative => {
-                commutative_manager.generate_commutative_verification(cfg_program, sc_graph)
-            }
-            VerificationType::All => {
-                let mut all_programs = Vec::new();
-                all_programs
-                    .extend(partition_manager.generate_partition_verification(cfg_program)?);
-                all_programs.extend(
-                    commutative_manager.generate_commutative_verification(cfg_program, sc_graph)?,
-                );
-                Ok(all_programs)
-            }
-        }
-    }
-}
+//     /// Generate verification programs based on type
+//     pub fn generate_verification_programs(
+//         &self,
+//         cfg_program: &Program,
+//         sc_graph: &SCGraph,
+//         verification_type: VerificationType,
+//     ) -> Results<Vec<Boogie::BoogieProgram>> {
+//         let partition_manager = partition::PartitionVerificationManager::new();
+//         let mut commutative_manager = commutative::CommutativeVerificationManager::new();
+//         match verification_type {
+//             VerificationType::Partition => {
+//                 partition_manager.generate_partition_verification(cfg_program)
+//             }
+//             VerificationType::Commutative => {
+//                 commutative_manager.generate_commutative_verification(cfg_program, sc_graph)
+//             }
+//             VerificationType::All => {
+//                 let mut all_programs = Vec::new();
+//                 all_programs
+//                     .extend(partition_manager.generate_partition_verification(cfg_program)?);
+//                 all_programs.extend(
+//                     commutative_manager.generate_commutative_verification(cfg_program, sc_graph)?,
+//                 );
+//                 Ok(all_programs)
+//             }
+//         }
+//     }
+// }

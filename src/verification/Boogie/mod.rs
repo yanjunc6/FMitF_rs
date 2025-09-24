@@ -1,6 +1,6 @@
+use crate::util::Span;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-
 mod Boogie_printer;
 pub mod gen_Boogie;
 
@@ -59,11 +59,11 @@ pub enum BoogieLine {
 /// Boogie-specific verification errors that get embedded in Boogie assertions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BoogieError {
-    PartitionFunctionArgumentInconsistency {
+    PartitionFunctionInconsistency {
         partition_function_id: usize,
         function_id: usize,
         table_id: usize,
-        span: Option<crate::ast::Span>,
+        span: Option<Span>,
     },
     SliceCommutativityViolation {
         hop_id_1: usize,

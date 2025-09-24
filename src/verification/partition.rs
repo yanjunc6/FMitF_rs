@@ -341,7 +341,7 @@ impl PartitionVerificationManager {
 
         // Assert (args are equal) - all accesses to same partition function in same hop must have same args
         let error_msg = ErrorMessage {
-            boogie_error: BoogieError::PartitionFunctionArgumentInconsistency {
+            boogie_error: BoogieError::PartitionFunctionInconsistency {
                 partition_function_id: partition_function_id.index(),
                 function_id: function_id.index(),
                 table_id: table_id.index(),
