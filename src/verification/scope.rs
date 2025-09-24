@@ -17,6 +17,7 @@ pub struct ExecutionScope {
 }
 
 impl ExecutionScope {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -26,6 +27,7 @@ impl ExecutionScope {
         self.current_slice_id = Some(slice_id);
     }
 
+    #[allow(dead_code)]
     pub fn clear_current_slice(&mut self) {
         self.current_slice_id = None;
     }
@@ -66,6 +68,7 @@ impl ExecutionScope {
         label
     }
 
+    #[allow(dead_code)]
     /// **Generates other unique names on the fly.**
     /// Useful for temporary snapshot variables, etc.
     /// Example: `get_unique_name("final_state")` -> `s0_final_state`

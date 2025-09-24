@@ -18,7 +18,7 @@ where
     print!(
         "{} {} ",
         format!("[Stage {}/{}]", current, total).blue(),
-        stage_name
+        format!("{:<14}", stage_name)
     );
 
     let start = Instant::now();

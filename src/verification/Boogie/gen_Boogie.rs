@@ -26,6 +26,7 @@ impl BoogieProgramGenerator {
             },
             current_procedure_index: None,
         };
+        generator.gen_string_axioms();
         generator.gen_global_constants(cfg_program);
         generator.gen_table_variables(cfg_program);
         generator
