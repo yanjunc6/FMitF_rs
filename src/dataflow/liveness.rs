@@ -3,7 +3,8 @@ use super::{
     StmtLoc, TransferFunction,
 };
 use crate::cfg::{
-    BasicBlock, BasicBlockId, Function, Instruction, Operand, Terminator, VariableId,
+    BasicBlock, BasicBlockId, Function, Instruction, InstructionKind, Operand, Terminator,
+    VariableId,
 };
 
 /// Variable identifier for liveness analysis
@@ -27,14 +28,14 @@ impl TransferFunction<SetLattice<LiveVar>> for LivenessTransfer {
 
         let mut result_set = state.as_set().unwrap().clone();
 
-        match inst {
-            Instruction::Assign { dest, src } => {
+        match &inst.kind {
+            InstructionKind::Assign { dest, src } => {
                 // Add used variables (gen)
                 self.add_operand_vars(&mut result_set, src);
                 // Remove defined variable (kill)
                 result_set.remove(&LiveVar(*dest));
             }
-            Instruction::BinaryOp {
+            InstructionKind::BinaryOp {
                 dest, left, right, ..
             } => {
                 // Add used variables (gen)
@@ -43,13 +44,13 @@ impl TransferFunction<SetLattice<LiveVar>> for LivenessTransfer {
                 // Remove defined variable (kill)
                 result_set.remove(&LiveVar(*dest));
             }
-            Instruction::UnaryOp { dest, operand, .. } => {
+            InstructionKind::UnaryOp { dest, operand, .. } => {
                 // Add used variables (gen)
                 self.add_operand_vars(&mut result_set, operand);
                 // Remove defined variable (kill)
                 result_set.remove(&LiveVar(*dest));
             }
-            Instruction::Call { dest, args, .. } => {
+            InstructionKind::Call { dest, args, .. } => {
                 // Add used variables (gen)
                 for arg in args {
                     self.add_operand_vars(&mut result_set, arg);
@@ -59,7 +60,7 @@ impl TransferFunction<SetLattice<LiveVar>> for LivenessTransfer {
                     result_set.remove(&LiveVar(*dest_var));
                 }
             }
-            Instruction::TableGet { dest, keys, .. } => {
+            InstructionKind::TableGet { dest, keys, .. } => {
                 // Add used variables (gen)
                 for key in keys {
                     self.add_operand_vars(&mut result_set, key);
@@ -67,7 +68,7 @@ impl TransferFunction<SetLattice<LiveVar>> for LivenessTransfer {
                 // Remove defined variable (kill)
                 result_set.remove(&LiveVar(*dest));
             }
-            Instruction::TableSet { keys, value, .. } => {
+            InstructionKind::TableSet { keys, value, .. } => {
                 // Add used variables (gen)
                 for key in keys {
                     self.add_operand_vars(&mut result_set, key);
@@ -75,7 +76,7 @@ impl TransferFunction<SetLattice<LiveVar>> for LivenessTransfer {
                 self.add_operand_vars(&mut result_set, value);
                 // No variable is defined by TableSet
             }
-            Instruction::Assert { condition, .. } => {
+            InstructionKind::Assert { condition, .. } => {
                 // Add used variables (gen)
                 self.add_operand_vars(&mut result_set, condition);
                 // No variable is defined by Assert

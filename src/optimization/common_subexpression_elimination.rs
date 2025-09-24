@@ -1,5 +1,5 @@
 use super::OptimizationPass;
-use crate::cfg::{FunctionId, Instruction, Operand, Program, VariableId};
+use crate::cfg::{FunctionId, Instruction, InstructionKind, Operand, Program, VariableId};
 use crate::dataflow::{analyze_available_expressions, AvailExpr, ExprKind, StmtLoc};
 use std::collections::HashSet;
 
@@ -36,23 +36,23 @@ impl CommonSubexpressionElimination {
 
     /// Create an expression kind from an instruction for comparison
     fn extract_expr_kind(&self, inst: &Instruction) -> Option<ExprKind> {
-        match inst {
-            Instruction::BinaryOp {
+        match &inst.kind {
+            InstructionKind::BinaryOp {
                 op, left, right, ..
             } => Some(ExprKind::BinaryOp {
                 op: *op,
                 left: left.clone(),
                 right: right.clone(),
             }),
-            Instruction::UnaryOp { op, operand, .. } => Some(ExprKind::UnaryOp {
+            InstructionKind::UnaryOp { op, operand, .. } => Some(ExprKind::UnaryOp {
                 op: *op,
                 operand: operand.clone(),
             }),
-            Instruction::Call { func, args, .. } => Some(ExprKind::Call {
+            InstructionKind::Call { func, args, .. } => Some(ExprKind::Call {
                 func: *func,
                 args: args.clone(),
             }),
-            Instruction::Assign { src, .. } => Some(ExprKind::Use(src.clone())),
+            InstructionKind::Assign { src, .. } => Some(ExprKind::Use(src.clone())),
             _ => None, // TableGet, TableSet, Assert don't participate in CSE
         }
     }
@@ -104,28 +104,40 @@ impl OptimizationPass for CommonSubexpressionElimination {
                                 self.find_existing_var(&expr_kind, &available)
                             {
                                 // Replace the computation with a use of the existing variable
-                                match inst {
-                                    Instruction::BinaryOp { dest, .. } => {
-                                        *inst = Instruction::Assign {
-                                            dest: *dest,
-                                            src: Operand::Variable(existing_var),
+                                match &inst.kind {
+                                    InstructionKind::BinaryOp { dest, .. } => {
+                                        let span = inst.span;
+                                        *inst = Instruction {
+                                            kind: InstructionKind::Assign {
+                                                dest: *dest,
+                                                src: Operand::Variable(existing_var),
+                                            },
+                                            span,
                                         };
                                         changed = true;
                                     }
-                                    Instruction::UnaryOp { dest, .. } => {
-                                        *inst = Instruction::Assign {
-                                            dest: *dest,
-                                            src: Operand::Variable(existing_var),
+                                    InstructionKind::UnaryOp { dest, .. } => {
+                                        let span = inst.span;
+                                        *inst = Instruction {
+                                            kind: InstructionKind::Assign {
+                                                dest: *dest,
+                                                src: Operand::Variable(existing_var),
+                                            },
+                                            span,
                                         };
                                         changed = true;
                                     }
-                                    Instruction::Call {
+                                    InstructionKind::Call {
                                         dest: Some(dest), ..
                                     } => {
                                         let dest_var = *dest;
-                                        *inst = Instruction::Assign {
-                                            dest: dest_var,
-                                            src: Operand::Variable(existing_var),
+                                        let span = inst.span;
+                                        *inst = Instruction {
+                                            kind: InstructionKind::Assign {
+                                                dest: dest_var,
+                                                src: Operand::Variable(existing_var),
+                                            },
+                                            span,
                                         };
                                         changed = true;
                                     }

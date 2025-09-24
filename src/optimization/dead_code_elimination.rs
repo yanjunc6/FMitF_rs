@@ -1,5 +1,5 @@
 use super::OptimizationPass;
-use crate::cfg::{FunctionId, Instruction, Program, VariableId};
+use crate::cfg::{FunctionId, Instruction, InstructionKind, Program, VariableId};
 use crate::dataflow::{analyze_live_variables, StmtLoc};
 use std::collections::HashSet;
 
@@ -12,20 +12,20 @@ impl DeadCodeElimination {
 
     /// Check if an instruction is dead (assigned variable is not live after assignment)
     fn is_dead_instruction(&self, inst: &Instruction, live_after: &HashSet<VariableId>) -> bool {
-        match inst {
-            Instruction::Assign { dest, .. } => {
+        match &inst.kind {
+            InstructionKind::Assign { dest, .. } => {
                 // If the assigned variable is not live after this instruction, it's dead
                 !live_after.contains(dest)
             }
-            Instruction::BinaryOp { dest, .. } => {
+            InstructionKind::BinaryOp { dest, .. } => {
                 // If the assigned variable is not live after this instruction, it's dead
                 !live_after.contains(dest)
             }
-            Instruction::UnaryOp { dest, .. } => {
+            InstructionKind::UnaryOp { dest, .. } => {
                 // If the assigned variable is not live after this instruction, it's dead
                 !live_after.contains(dest)
             }
-            Instruction::Call { dest, .. } => {
+            InstructionKind::Call { dest, .. } => {
                 // Function calls might have side effects, but if no one uses the result...
                 // For call-by-value, function calls with pure functions can be eliminated if result is unused
                 // However, conservatively keep all function calls for now
@@ -37,16 +37,16 @@ impl DeadCodeElimination {
                     false // Call without return value, might have side effects
                 }
             }
-            Instruction::TableGet { dest, .. } => {
+            InstructionKind::TableGet { dest, .. } => {
                 // Table operations might have side effects, but if it's just a read...
                 // For now, conservatively keep table operations
                 !live_after.contains(dest) // Could eliminate if result unused
             }
-            Instruction::TableSet { .. } => {
+            InstructionKind::TableSet { .. } => {
                 // Table writes have side effects, never eliminate
                 false
             }
-            Instruction::Assert { .. } => {
+            InstructionKind::Assert { .. } => {
                 // Assertions have side effects (they can abort), never eliminate
                 false
             }

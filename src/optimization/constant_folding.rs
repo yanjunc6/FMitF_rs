@@ -4,7 +4,9 @@
 //! replacing them with their computed constant values.
 
 use super::OptimizationPass;
-use crate::cfg::{ConstantValue, FunctionId, Instruction, Operand, Program, VariableId};
+use crate::cfg::{
+    ConstantValue, FunctionId, Instruction, InstructionKind, Operand, Program, VariableId,
+};
 use crate::dataflow::{analyze_constants, Flat, MapLattice, StmtLoc};
 
 pub struct ConstantFoldingPass;
@@ -39,33 +41,54 @@ impl ConstantFoldingPass {
     ) -> bool {
         let mut changed = false;
         match instruction {
-            Instruction::Assign { src, .. } => {
+            Instruction {
+                kind: InstructionKind::Assign { src, .. },
+                ..
+            } => {
                 changed |= Self::replace_var_in_operand(src, constants);
             }
-            Instruction::BinaryOp { left, right, .. } => {
+            Instruction {
+                kind: InstructionKind::BinaryOp { left, right, .. },
+                ..
+            } => {
                 changed |= Self::replace_var_in_operand(left, constants);
                 changed |= Self::replace_var_in_operand(right, constants);
             }
-            Instruction::UnaryOp { operand, .. } => {
+            Instruction {
+                kind: InstructionKind::UnaryOp { operand, .. },
+                ..
+            } => {
                 changed |= Self::replace_var_in_operand(operand, constants);
             }
-            Instruction::Call { args, .. } => {
+            Instruction {
+                kind: InstructionKind::Call { args, .. },
+                ..
+            } => {
                 for arg in args.iter_mut() {
                     changed |= Self::replace_var_in_operand(arg, constants);
                 }
             }
-            Instruction::TableGet { keys, .. } => {
+            Instruction {
+                kind: InstructionKind::TableGet { keys, .. },
+                ..
+            } => {
                 for key in keys.iter_mut() {
                     changed |= Self::replace_var_in_operand(key, constants);
                 }
             }
-            Instruction::TableSet { keys, value, .. } => {
+            Instruction {
+                kind: InstructionKind::TableSet { keys, value, .. },
+                ..
+            } => {
                 for key in keys.iter_mut() {
                     changed |= Self::replace_var_in_operand(key, constants);
                 }
                 changed |= Self::replace_var_in_operand(value, constants);
             }
-            Instruction::Assert { condition, .. } => {
+            Instruction {
+                kind: InstructionKind::Assert { condition, .. },
+                ..
+            } => {
                 changed |= Self::replace_var_in_operand(condition, constants);
             }
         }
@@ -79,9 +102,9 @@ impl ConstantFoldingPass {
         instruction: &mut Instruction,
         constants: &MapLattice<VariableId, ConstantValue>,
     ) -> bool {
-        let dest_var = match instruction {
-            Instruction::BinaryOp { dest, .. } => Some(dest),
-            Instruction::UnaryOp { dest, .. } => Some(dest),
+        let dest_var = match &instruction.kind {
+            InstructionKind::BinaryOp { dest, .. } => Some(dest),
+            InstructionKind::UnaryOp { dest, .. } => Some(dest),
             _ => None,
         };
 
@@ -89,9 +112,13 @@ impl ConstantFoldingPass {
             // If the analysis determined the destination variable is a constant,
             // we can replace the entire instruction that calculates it.
             if let Flat::Value(const_val) = constants.get(dest) {
-                *instruction = Instruction::Assign {
-                    dest: *dest,
-                    src: Operand::Constant(const_val.clone()),
+                let span = instruction.span;
+                *instruction = Instruction {
+                    kind: InstructionKind::Assign {
+                        dest: *dest,
+                        src: Operand::Constant(const_val.clone()),
+                    },
+                    span,
                 };
                 return true; // The instruction was changed
             }

@@ -435,13 +435,13 @@ impl<W: Write> CfgPrinter<W> {
         instruction: &Instruction,
     ) -> io::Result<()> {
         self.write_indent()?;
-        match instruction {
-            Instruction::Assign { dest, src } => {
+        match &instruction.kind {
+            InstructionKind::Assign { dest, src } => {
                 self.print_variable_info(program, *dest)?;
                 write!(self.writer, " = ")?;
                 self.print_operand(program, src)?;
             }
-            Instruction::BinaryOp {
+            InstructionKind::BinaryOp {
                 dest,
                 op,
                 left,
@@ -453,12 +453,12 @@ impl<W: Write> CfgPrinter<W> {
                 write!(self.writer, " {} ", self.binary_op_to_string(op))?;
                 self.print_operand(program, right)?;
             }
-            Instruction::UnaryOp { dest, op, operand } => {
+            InstructionKind::UnaryOp { dest, op, operand } => {
                 self.print_variable_info(program, *dest)?;
                 write!(self.writer, " = {}", self.unary_op_to_string(op))?;
                 self.print_operand(program, operand)?;
             }
-            Instruction::Call { dest, func, args } => {
+            InstructionKind::Call { dest, func, args } => {
                 if let Some(dest) = dest {
                     self.print_variable_info(program, *dest)?;
                     write!(self.writer, " = ")?;
@@ -473,7 +473,7 @@ impl<W: Write> CfgPrinter<W> {
                 }
                 write!(self.writer, ")")?;
             }
-            Instruction::TableGet {
+            InstructionKind::TableGet {
                 dest,
                 table,
                 keys,
@@ -495,7 +495,7 @@ impl<W: Write> CfgPrinter<W> {
                     write!(self.writer, ".{}", field_info.name)?;
                 }
             }
-            Instruction::TableSet {
+            InstructionKind::TableSet {
                 table,
                 keys,
                 field,
@@ -517,7 +517,7 @@ impl<W: Write> CfgPrinter<W> {
                 write!(self.writer, " = ")?;
                 self.print_operand(program, value)?;
             }
-            Instruction::Assert { condition, message } => {
+            InstructionKind::Assert { condition, message } => {
                 write!(self.writer, "assert ")?;
                 self.print_operand(program, condition)?;
                 if !message.is_empty() {

@@ -3,8 +3,8 @@ use super::{
     MapLattice, StmtLoc, TransferFunction,
 };
 use crate::cfg::{
-    BasicBlock, BasicBlockId, BinaryOp, ConstantValue, Function, Instruction, Operand, Terminator,
-    UnaryOp, VariableId,
+    BasicBlock, BasicBlockId, BinaryOp, ConstantValue, Function, Instruction, InstructionKind,
+    Operand, Terminator, UnaryOp, VariableId,
 };
 
 /// Transfer function for constant propagation analysis.
@@ -28,8 +28,8 @@ impl TransferFunction<MapLattice<VariableId, ConstantValue>> for ConstantTransfe
 
         let mut out = state.clone();
 
-        match inst {
-            Instruction::Assign { dest, src } => {
+        match &inst.kind {
+            InstructionKind::Assign { dest, src } => {
                 // KILL: Remove old information about the destination variable
                 // GEN: Try to evaluate the source to a constant
                 if let Some(c) = self.eval_operand(src, state) {
@@ -40,7 +40,7 @@ impl TransferFunction<MapLattice<VariableId, ConstantValue>> for ConstantTransfe
                     out.insert(*dest, Flat::Top);
                 }
             }
-            Instruction::BinaryOp {
+            InstructionKind::BinaryOp {
                 dest,
                 op,
                 left,
@@ -64,7 +64,7 @@ impl TransferFunction<MapLattice<VariableId, ConstantValue>> for ConstantTransfe
                     out.insert(*dest, Flat::Top);
                 }
             }
-            Instruction::UnaryOp { dest, op, operand } => {
+            InstructionKind::UnaryOp { dest, op, operand } => {
                 // KILL: Remove old information about the destination variable
                 // GEN: Try to fold the unary operation to a constant
                 if let Some(v) = self.eval_operand(operand, state) {
@@ -80,17 +80,17 @@ impl TransferFunction<MapLattice<VariableId, ConstantValue>> for ConstantTransfe
                     out.insert(*dest, Flat::Top);
                 }
             }
-            Instruction::Call { dest, .. } => {
+            InstructionKind::Call { dest, .. } => {
                 // Function calls are not constant-foldable
                 if let Some(dest_var) = dest {
                     out.insert(*dest_var, Flat::Top);
                 }
             }
-            Instruction::TableGet { dest, .. } => {
+            InstructionKind::TableGet { dest, .. } => {
                 // Table operations are not constant-foldable
                 out.insert(*dest, Flat::Top);
             }
-            Instruction::TableSet { .. } | Instruction::Assert { .. } => {
+            InstructionKind::TableSet { .. } | InstructionKind::Assert { .. } => {
                 // These instructions don't define variables
             }
         }

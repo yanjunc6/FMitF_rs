@@ -4,7 +4,7 @@
 //! is known to hold the same value as another variable.
 
 use super::OptimizationPass;
-use crate::cfg::{FunctionId, Instruction, Operand, Program, VariableId};
+use crate::cfg::{FunctionId, Instruction, InstructionKind, Operand, Program, VariableId};
 use crate::dataflow::{analyze_copies, Flat, MapLattice, StmtLoc};
 
 pub struct CopyPropagationPass;
@@ -39,33 +39,54 @@ impl CopyPropagationPass {
     ) -> bool {
         let mut changed = false;
         match instruction {
-            Instruction::Assign { src, .. } => {
+            Instruction {
+                kind: InstructionKind::Assign { src, .. },
+                ..
+            } => {
                 changed |= Self::replace_var_in_operand(src, copies);
             }
-            Instruction::BinaryOp { left, right, .. } => {
+            Instruction {
+                kind: InstructionKind::BinaryOp { left, right, .. },
+                ..
+            } => {
                 changed |= Self::replace_var_in_operand(left, copies);
                 changed |= Self::replace_var_in_operand(right, copies);
             }
-            Instruction::UnaryOp { operand, .. } => {
+            Instruction {
+                kind: InstructionKind::UnaryOp { operand, .. },
+                ..
+            } => {
                 changed |= Self::replace_var_in_operand(operand, copies);
             }
-            Instruction::Call { args, .. } => {
+            Instruction {
+                kind: InstructionKind::Call { args, .. },
+                ..
+            } => {
                 for arg in args.iter_mut() {
                     changed |= Self::replace_var_in_operand(arg, copies);
                 }
             }
-            Instruction::TableGet { keys, .. } => {
+            Instruction {
+                kind: InstructionKind::TableGet { keys, .. },
+                ..
+            } => {
                 for key in keys.iter_mut() {
                     changed |= Self::replace_var_in_operand(key, copies);
                 }
             }
-            Instruction::TableSet { keys, value, .. } => {
+            Instruction {
+                kind: InstructionKind::TableSet { keys, value, .. },
+                ..
+            } => {
                 for key in keys.iter_mut() {
                     changed |= Self::replace_var_in_operand(key, copies);
                 }
                 changed |= Self::replace_var_in_operand(value, copies);
             }
-            Instruction::Assert { condition, .. } => {
+            Instruction {
+                kind: InstructionKind::Assert { condition, .. },
+                ..
+            } => {
                 changed |= Self::replace_var_in_operand(condition, copies);
             }
         }
