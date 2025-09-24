@@ -8,9 +8,14 @@ use crate::cfg;
 use crate::frontend::parse_and_analyze_program;
 use crate::optimization::CfgOptimizer;
 use crate::util::{CompilerError, DiagnosticReporter};
+use crate::verification::Boogie::{BoogieError, BoogieProgram};
+use crate::verification::{
+    verify_result_process::VerifyResultProcessor, VerificationManager, VerificationType,
+};
 use colored::*;
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 
 // ============================================================================
 // --- Compiler Structure
@@ -33,12 +38,14 @@ impl std::error::Error for StageError {}
 /// Main compiler orchestrator
 pub struct Compiler {
     pub reporter: DiagnosticReporter,
+    log_file: Option<fs::File>,
 }
 
 impl Compiler {
     pub fn new() -> Self {
         Self {
             reporter: DiagnosticReporter::new(),
+            log_file: None,
         }
     }
 
@@ -84,11 +91,19 @@ impl Compiler {
     ) -> Result<(), Box<dyn std::error::Error>> {
         println!("{} compilation pipeline", "Starting".bold().green());
 
-        const TOTAL_STAGES: usize = 5; // Merged SC graph build+combine into single stage
+        // Initialize logger and write opening line
+        self.init_logger(output_dir)?;
+        self.log_line("===== Compiler run started =====")?;
+
+        const TOTAL_STAGES: usize = 5; // Added Verification stage
         let mut current_stage = 0;
 
         // Stage 1: Frontend (Parsing)
         current_stage += 1;
+        self.log_line(format!(
+            "[Stage {}/{}] Frontend - start",
+            current_stage, TOTAL_STAGES
+        ))?;
         let program = execute_stage(
             "Frontend",
             current_stage,
@@ -132,6 +147,10 @@ impl Compiler {
 
         // Stage 2: CFG Generation
         current_stage += 1;
+        self.log_line(format!(
+            "[Stage {}/{}] CFG Generation - start",
+            current_stage, TOTAL_STAGES
+        ))?;
         let cfg_program = execute_stage(
             "CFG Generation",
             current_stage,
@@ -149,6 +168,10 @@ impl Compiler {
 
         // Stage 3: Optimization (optional)
         current_stage += 1;
+        self.log_line(format!(
+            "[Stage {}/{}] Optimization - start",
+            current_stage, TOTAL_STAGES
+        ))?;
         let optimized_or_cfg_program = if enable_optimization {
             execute_stage(
                 "Optimization",
@@ -168,19 +191,134 @@ impl Compiler {
 
         // Stage 4: SC-Graph (Build + Combine + DOT Outputs)
         current_stage += 1;
-        let _combined = execute_stage(
+        self.log_line(format!(
+            "[Stage {}/{}] SC-Graph - start",
+            current_stage, TOTAL_STAGES
+        ))?;
+        let (sc, _combined) = execute_stage(
             "SC-Graph",
             current_stage,
             TOTAL_STAGES,
-            || -> Result<(), Box<dyn std::error::Error>> {
+            || -> Result<(crate::sc_graph::SCGraph, crate::sc_graph::CombinedSCGraph), Box<dyn std::error::Error>> {
                 let builder = crate::sc_graph::SCGraphBuilder::new(instances as u32);
                 let sc = builder.build(&optimized_or_cfg_program);
                 let combined = crate::sc_graph::combine_for_deadlock_elimination(&sc);
-                self.write_sc_graph_dots(&sc, &combined, &optimized_or_cfg_program, output_dir)?;
+                // Unified DOT writer with empty prefix -> sc_graph.dot and combined_sc_graph.dot
+                self.write_sc_graph_dots(&sc, &optimized_or_cfg_program, output_dir, "")?;
+                Ok((sc, combined))
+            },
+        )?;
+
+        // Stage 5: Verification (Commutative) -> generate Boogie, run, process results, and write simplified graphs
+        current_stage += 1;
+        self.log_line(format!(
+            "[Stage {}/{}] Verification - start",
+            current_stage, TOTAL_STAGES
+        ))?;
+        let _ = execute_stage(
+            "Verification",
+            current_stage,
+            TOTAL_STAGES,
+            || -> Result<(), Box<dyn std::error::Error>> {
+                // 1) Generate Boogie programs for commutative verification
+                let verifier = VerificationManager::new();
+                let programs: Vec<BoogieProgram> = verifier
+                    .generate_verification_programs(
+                        &optimized_or_cfg_program,
+                        &sc,
+                        VerificationType::Commutative,
+                    )
+                    .map_err(|errs| {
+                        // Report now and convert to a simple boxed error
+                        let _ = self.reporter.report_all(&errs);
+                        let msg =
+                            format!("Verification generation failed with {} errors", errs.len());
+                        Box::<dyn std::error::Error>::from(msg)
+                    })?;
+
+                // Ensure output directory exists
+                fs::create_dir_all(output_dir)?;
+                let boogie_dir = output_dir.join("Boogie");
+                fs::create_dir_all(&boogie_dir)?;
+
+                // 2) Write each Boogie program to a .bpl file and run Boogie
+                let mut all_boogie_errors: Vec<BoogieError> = Vec::new();
+
+                for (_i, program) in programs.iter().enumerate() {
+                    let file_name = format!("{}.bpl", program.name);
+                    let file_path = boogie_dir.join(&file_name);
+                    // Write .bpl file
+                    {
+                        use std::io::Write;
+                        let mut f = fs::File::create(&file_path)?;
+                        write!(f, "{}", program)?;
+                    }
+
+                    // Run Boogie: boogie /quiet /errorTrace:0 <file>
+                    let output = Command::new("boogie")
+                        .arg("/quiet")
+                        .arg("/errorTrace:0")
+                        .arg(file_path.to_string_lossy().to_string())
+                        .output();
+
+                    // Append to compiler.log regardless of success
+                    match output {
+                        Ok(out) => {
+                            self.log_line(format!("===== Boogie run for {} =====", file_name))?;
+                            self.log_block("stdout:", &String::from_utf8_lossy(&out.stdout))?;
+                            self.log_block("stderr:", &String::from_utf8_lossy(&out.stderr))?;
+                            // Parse Boogie output lines for embedded {:msg "..."}
+                            let stdout_str = String::from_utf8_lossy(&out.stdout);
+                            let stderr_str = String::from_utf8_lossy(&out.stderr);
+                            let mut parse_streams = vec![stdout_str.as_ref(), stderr_str.as_ref()];
+                            for s in parse_streams.drain(..) {
+                                // Very simple parse: find all occurrences of {:msg "..."}
+                                for cap in s.match_indices("{:msg \"") {
+                                    let start = cap.0 + "{:msg \"".len();
+                                    if let Some(end_rel) = s[start..].find("\"}") {
+                                        let end = start + end_rel;
+                                        let payload = &s[start..end];
+                                        if let Some(err) = crate::verification::Boogie::BoogieError::from_boogie_string(payload) {
+                                            all_boogie_errors.push(err);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            self.log_line(format!(
+                                "===== Boogie run for {} FAILED: {} =====",
+                                file_name, e
+                            ))?;
+                        }
+                    }
+                }
+
+                // 3) Process results and write simplified graphs
+                let (verification_errors, simplified) =
+                    VerifyResultProcessor::process_boogie_errors(
+                        &optimized_or_cfg_program,
+                        sc.clone(),
+                        all_boogie_errors,
+                    );
+
+                // If there are user-facing verification errors, report them now
+                if !verification_errors.is_empty() {
+                    // Best effort reporting; ignore result
+                    let _ = self.reporter.report_all(&verification_errors);
+                }
+
+                // Write simplified graphs (unified) with prefix "simplified"
+                self.write_sc_graph_dots(
+                    &simplified,
+                    &optimized_or_cfg_program,
+                    output_dir,
+                    "simplified",
+                )?;
+
                 Ok(())
             },
         )?;
-        // Placeholder for future stages (e.g., verification using sc_graph)
 
         println!("{}", "Completed".green().bold());
         Ok(())
@@ -224,29 +362,77 @@ impl Compiler {
     }
     // TOTAL_STAGES already defined above
 
-    /// Write both raw SCGraph and combined SCGraph DOT files.
+    /// Unified method to write SCGraph and its combined variant as DOT files.
+    /// If `prefix` is empty, writes to sc_graph.dot and combined_sc_graph.dot.
+    /// Otherwise writes to {prefix}_sc_graph.dot and {prefix}_combined_sc_graph.dot.
     fn write_sc_graph_dots(
-        &self,
+        &mut self,
         sc: &crate::sc_graph::SCGraph,
-        combined: &crate::sc_graph::CombinedSCGraph,
         program: &cfg::Program,
         output_dir: &PathBuf,
+        prefix: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         use crate::pretty::{CombinedSCGraphDotPrinter, PrettyPrint, SCGraphDotPrinter};
         std::fs::create_dir_all(output_dir)?;
-        // Raw
-        let sc_path = output_dir.join("sc_graph.dot");
+
+        let sc_filename = if prefix.is_empty() {
+            "sc_graph.dot".to_string()
+        } else {
+            format!("{}_sc_graph.dot", prefix)
+        };
+        let combined_filename = if prefix.is_empty() {
+            "combined_sc_graph.dot".to_string()
+        } else {
+            format!("{}_combined_sc_graph.dot", prefix)
+        };
+
+        // Write raw graph
+        let sc_path = output_dir.join(&sc_filename);
         let mut sc_file = std::fs::File::create(&sc_path)?;
         SCGraphDotPrinter::new(sc, program).pretty_print(&mut sc_file)?;
-        // Combined
-        let combined_path = output_dir.join("combined_sc_graph.dot");
+
+        // Compute and write combined graph
+        let combined = crate::sc_graph::combine_for_deadlock_elimination(sc);
+        let combined_path = output_dir.join(&combined_filename);
         let mut c_file = std::fs::File::create(&combined_path)?;
-        CombinedSCGraphDotPrinter::new(combined, program).pretty_print(&mut c_file)?;
-        println!(
+        CombinedSCGraphDotPrinter::new(&combined, program).pretty_print(&mut c_file)?;
+
+        // Log instead of printing to stdout
+        self.log_line(format!(
             "📄 SC Graph DOT files written: {}, {}",
             sc_path.display(),
             combined_path.display()
-        );
+        ))?;
+        Ok(())
+    }
+
+    // -----------------------
+    // Simple logger utilities
+    // -----------------------
+    fn init_logger(&mut self, output_dir: &PathBuf) -> std::io::Result<()> {
+        fs::create_dir_all(output_dir)?;
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(output_dir.join("compiler.log"))?;
+        self.log_file = Some(file);
+        Ok(())
+    }
+
+    fn log_line<S: AsRef<str>>(&mut self, s: S) -> std::io::Result<()> {
+        use std::io::Write;
+        if let Some(f) = self.log_file.as_mut() {
+            writeln!(f, "{}", s.as_ref())?;
+        }
+        Ok(())
+    }
+
+    fn log_block<S: AsRef<str>>(&mut self, header: &str, body: S) -> std::io::Result<()> {
+        use std::io::Write;
+        if let Some(f) = self.log_file.as_mut() {
+            writeln!(f, "{}", header)?;
+            writeln!(f, "{}", body.as_ref())?;
+        }
         Ok(())
     }
 }

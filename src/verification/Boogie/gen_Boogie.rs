@@ -3,8 +3,7 @@ use super::{
     BoogieUnOp, BoogieVarDecl,
 };
 use crate::cfg::{self, BinaryOp, ConstantValue, Operand, Program as CfgProgram, UnaryOp};
-use crate::util::CompilerError;
-use crate::verification::errors::{Results, VerificationErrorKind};
+use crate::verification::errors::Results;
 use std::collections::HashMap;
 /// Helper functions for generating Boogie programs from CFG programs
 /// Focus on building blocks for Boogie generation with prefix support
