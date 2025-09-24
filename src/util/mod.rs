@@ -2,8 +2,8 @@
 //!
 //! This module provides a unified error system for consistent,
 //! beautiful error reporting across all compiler stages.
-
 use ariadne::{Color, ReportKind};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 
 // ============================================================================
@@ -11,7 +11,7 @@ use std::fmt;
 // ============================================================================
 
 /// Source location information - unified across all modules
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
@@ -29,6 +29,37 @@ impl Span {
 
     pub fn range(&self) -> std::ops::Range<usize> {
         self.start..self.end
+    }
+}
+
+// The proxy struct from Step 1
+#[derive(Deserialize)]
+struct SpanForDe {
+    start: usize,
+    end: usize,
+    filename: String,
+}
+
+// Manual `Deserialize` implementation for your real `Span`
+impl<'de> Deserialize<'de> for Span {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // 1. Deserialize into the temporary struct that can handle a String
+        let span_for_de = SpanForDe::deserialize(deserializer)?;
+
+        // 2. Convert the owned String into a Box<str>, then leak it.
+        //    Box::leak() consumes the Box and returns a mutable reference
+        //    with a 'static lifetime. This is the key to the whole solution.
+        let static_filename: &'static str = Box::leak(span_for_de.filename.into_boxed_str());
+
+        // 3. Create your actual Span struct with the now-'static filename
+        Ok(Span {
+            start: span_for_de.start,
+            end: span_for_de.end,
+            filename: static_filename,
+        })
     }
 }
 

@@ -18,7 +18,7 @@ impl VerifyResultProcessor {
 
         for error in boogie_errors {
             match error {
-                BoogieError::PartitionFunctionArgumentInconsistency {
+                BoogieError::PartitionFunctionInconsistency {
                     function_id,
                     table_id,
                     partition_function_id,
@@ -49,7 +49,7 @@ impl VerifyResultProcessor {
                         .unwrap_or_else(|| format!("partition_{}", partition_function_id));
 
                     verification_errors.push(SpannedError {
-                        error: VerificationError::PartitionFunctionArgumentInconsistency {
+                        error: VerificationError::PartitionFunctionInconsistency {
                             function_name,
                             table_name,
                             partition_function_name: partition_name,

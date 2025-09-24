@@ -1,15 +1,11 @@
 use super::{
-    BoogieBinOp, BoogieExpr, BoogieExprKind, BoogieLine, BoogieProcedure, BoogieProgram,
-    BoogieType, BoogieUnOp, BoogieVarDecl, ErrorMessage,
+    BoogieBinOp, BoogieExpr, BoogieExprKind, BoogieProcedure, BoogieProgram, BoogieType,
+    BoogieUnOp, BoogieVarDecl,
 };
-use crate::ast::TypeName;
-use crate::cfg::{
-    BasicBlockId, BinaryOp, CfgProgram, Constant, FunctionCfg, FunctionId, LValue, Operand, RValue,
-    Statement, UnaryOp, VarId, VariableKind,
-};
-use crate::verification::errors::{Results, SpannedError, VerificationError};
+use crate::cfg::{self, BinaryOp, ConstantValue, Operand, Program as CfgProgram, UnaryOp};
+use crate::util::CompilerError;
+use crate::verification::errors::{Results, VerificationErrorKind};
 use std::collections::HashMap;
-
 /// Helper functions for generating Boogie programs from CFG programs
 /// Focus on building blocks for Boogie generation with prefix support
 #[derive(Debug, Clone)]
@@ -19,9 +15,9 @@ pub struct BoogieProgramGenerator {
 }
 
 impl BoogieProgramGenerator {
-    /// Create a new generator with an empty Boogie program
-    pub fn new(name: String) -> Self {
-        BoogieProgramGenerator {
+    /// Create a new generator from a CFG program
+    pub fn from_cfg(name: String, cfg_program: &CfgProgram) -> Self {
+        let mut generator = BoogieProgramGenerator {
             program: BoogieProgram {
                 name,
                 global_vars: HashMap::new(),
@@ -30,15 +26,10 @@ impl BoogieProgramGenerator {
                 procedures: Vec::new(),
             },
             current_procedure_index: None,
-        }
-    }
-
-    /// Create a new generator with a provided Boogie program
-    pub fn with_program(program: BoogieProgram) -> Self {
-        BoogieProgramGenerator {
-            program,
-            current_procedure_index: None,
-        }
+        };
+        generator.gen_global_constants(cfg_program);
+        generator.gen_table_variables(cfg_program);
+        generator
     }
 
     /// Set the current procedure being worked on by index
@@ -54,16 +45,13 @@ impl BoogieProgramGenerator {
     /// Get a reference to the current procedure being worked on
     pub fn get_current_procedure(&self) -> Option<&BoogieProcedure> {
         self.current_procedure_index
-            .map(|idx| &self.program.procedures[idx])
+            .and_then(|i| self.program.procedures.get(i))
     }
 
     /// Get a mutable reference to the current procedure being worked on
     pub fn get_current_procedure_mut(&mut self) -> Option<&mut BoogieProcedure> {
-        if let Some(idx) = self.current_procedure_index {
-            Some(&mut self.program.procedures[idx])
-        } else {
-            None
-        }
+        self.current_procedure_index
+            .and_then(move |i| self.program.procedures.get_mut(i))
     }
 
     /// Generate string axioms and add to other_declarations
@@ -77,12 +65,6 @@ type String;
 const empty: String;
 
 function Concat(x: String, y: String): String;
-function IntToString(i: int): String;
-function RealToString(r: real): String;
-function BoolToString(b: bool): String;
-function int2real(i: int): real;
-function real2int(r: real): int;
-
 
 // --------------------------
 // Axioms (with correct triggers)
@@ -91,27 +73,8 @@ function real2int(r: real): int;
 // Identity of empty for concat
 axiom (forall s: String :: {Concat(empty, s)} Concat(empty, s) == s);
 axiom (forall s: String :: {Concat(s, empty)} Concat(s, empty) == s);
-
-// Injectivity of IntToString
-axiom (forall i: int, j: int ::
-{ IntToString(i), IntToString(j) }
-IntToString(i) == IntToString(j) ==> i == j);
-
-// Injectivity of RealToString
-axiom (forall x: real, y: real ::
-{ RealToString(x), RealToString(y) }
-RealToString(x) == RealToString(y) ==> x == y);
-
-// Injectivity of BoolToString
-axiom (forall x: bool, y: bool ::
-{ BoolToString(x), BoolToString(y) }
-BoolToString(x) == BoolToString(y) ==> x == y);
-
-// Conversions never yield empty
-axiom (forall i: int :: {IntToString(i)} IntToString(i) != empty);
-axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);
-axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
-            .to_string()];
+"
+        .to_string()];
 
         self.program.other_declarations.extend(string_axioms);
     }
@@ -159,87 +122,84 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
     }
 
     /// Generate global constants from CFG program
-    pub fn gen_global_constants(&mut self, cfg_program: &CfgProgram) {
-        for &var_id in &cfg_program.root_variables {
-            let var = &cfg_program.variables[var_id];
-            if var.kind == VariableKind::Global {
-                let boogie_type = Self::convert_type(&var.ty);
-                let var_decl = BoogieVarDecl {
-                    var_name: var.name.clone(),
-                    var_type: boogie_type,
-                    is_const: true,
-                };
-                self.program.global_vars.insert(var.name.clone(), var_decl);
-            }
+    fn gen_global_constants(&mut self, cfg_program: &CfgProgram) {
+        for (_, constant) in &cfg_program.global_consts {
+            let var_name = constant.name.clone();
+            let var_type = BoogieProgramGenerator::convert_type_id(cfg_program, &constant.ty);
+            let decl = BoogieVarDecl {
+                var_name: var_name.clone(),
+                var_type,
+                is_const: true,
+            };
+            self.program.global_vars.insert(var_name, decl);
         }
     }
 
     /// Generate global table variables from CFG program
-    pub fn gen_table_variables(&mut self, cfg_program: &CfgProgram) {
-        for &table_id in &cfg_program.root_tables {
-            let table = &cfg_program.tables[table_id];
-
-            // For each non-primary field, generate a map variable
-            for &field_id in &table.fields {
-                let field = &cfg_program.fields[field_id];
-                if !field.is_primary {
-                    let var_name = Self::gen_table_field_var_name(&table.name, &field.name);
-                    let map_type = Self::gen_table_field_type(cfg_program, table_id, field_id);
-
-                    let var_decl = BoogieVarDecl {
-                        var_name: var_name.clone(),
-                        var_type: map_type,
-                        is_const: false,
-                    };
-                    self.program.global_vars.insert(var_name, var_decl);
-                }
+    fn gen_table_variables(&mut self, cfg_program: &CfgProgram) {
+        for (_, table) in &cfg_program.tables {
+            for field_id in table
+                .primary_key_fields
+                .iter()
+                .chain(table.other_fields.iter())
+            {
+                let field = &cfg_program.table_fields[*field_id];
+                let var_name =
+                    BoogieProgramGenerator::gen_table_field_var_name(&table.name, &field.name);
+                let var_type = BoogieProgramGenerator::gen_table_field_type(cfg_program, *field_id);
+                let decl = BoogieVarDecl {
+                    var_name: var_name.clone(),
+                    var_type,
+                    is_const: false,
+                };
+                self.program.global_vars.insert(var_name, decl);
             }
         }
+    }
+
+    pub fn convert_type_id(program: &CfgProgram, type_id: &cfg::TypeId) -> BoogieType {
+        let ty = &program.types[*type_id];
+        Self::convert_type(program, ty)
     }
 
     /// Convert CFG TypeName to BoogieType
-    pub fn convert_type(ty: &TypeName) -> BoogieType {
+    pub fn convert_type(program: &CfgProgram, ty: &cfg::Type) -> BoogieType {
         match ty {
-            TypeName::Int => BoogieType::Int,
-            TypeName::Float => BoogieType::Real,
-            TypeName::Bool => BoogieType::Bool,
-            TypeName::String => BoogieType::UserDefined("String".to_string()),
-            TypeName::Table(s) => {
-                panic!("Table type '{}' should not be used directly in Boogie", s);
+            cfg::Type::Primitive(p) => match p {
+                cfg::PrimitiveType::Int => BoogieType::Int,
+                cfg::PrimitiveType::Float => BoogieType::Real,
+                cfg::PrimitiveType::Bool => BoogieType::Bool,
+                cfg::PrimitiveType::String => BoogieType::UserDefined("String".to_string()),
+            },
+            cfg::Type::List(elem_ty) => {
+                let boogie_base_ty = Self::convert_type_id(program, elem_ty);
+                BoogieType::Map(vec![Box::new(BoogieType::Int)], Box::new(boogie_base_ty))
             }
-            TypeName::Array {
-                element_type,
-                size: _,
-                size_expr: _,
-            } => {
-                // Flatten nested arrays by counting dimensions recursively
-                let (final_element_type, dimensions) = Self::flatten_array_type(element_type);
-
-                // Create int indices for each dimension
-                let mut key_types = Vec::new();
-                for _ in 0..dimensions {
-                    key_types.push(Box::new(BoogieType::Int));
-                }
-                key_types.push(Box::new(BoogieType::Int)); // Add one for this array level
-
-                let final_boogie_type = Box::new(Self::convert_type(&final_element_type));
-                BoogieType::Map(key_types, final_boogie_type)
+            cfg::Type::Declared { type_id, .. } => {
+                let udt = &program.user_defined_types[*type_id];
+                BoogieType::UserDefined(udt.name.clone())
             }
-        }
-    }
-
-    /// Helper function to flatten nested array types and count total dimensions
-    fn flatten_array_type(ty: &TypeName) -> (TypeName, usize) {
-        match ty {
-            TypeName::Array {
-                element_type,
-                size: _,
-                size_expr: _,
-            } => {
-                let (inner_type, inner_dims) = Self::flatten_array_type(element_type);
-                (inner_type, inner_dims + 1)
+            cfg::Type::Table(table_id) => {
+                let table = &program.tables[*table_id];
+                BoogieType::UserDefined(table.name.clone())
             }
-            _ => (ty.clone(), 0),
+            cfg::Type::Row { table_id } => {
+                let table = &program.tables[*table_id];
+                // Rows are often represented by their primary key type.
+                // This might need to be more sophisticated.
+                let pk_field = &program.table_fields[table.primary_key_fields[0]];
+                Self::convert_type_id(program, &pk_field.field_type)
+            }
+            cfg::Type::GenericParam(p) => {
+                let param = &program.generic_params[*p];
+                BoogieType::UserDefined(param.name.clone())
+            }
+            cfg::Type::Void => BoogieType::UserDefined("()".to_string()), // Or handle differently
+            cfg::Type::Function { .. } => {
+                // For now, representing function types as a generic user-defined type.
+                // This might need a more specific representation if you pass functions as arguments.
+                BoogieType::UserDefined("function".to_string())
+            }
         }
     }
 
@@ -251,878 +211,104 @@ axiom (forall b: bool :: {BoolToString(b)} BoolToString(b) != empty);"
     /// Generate Boogie type for a table field (used for both global variables and local snapshots)
     pub fn gen_table_field_type(
         cfg_program: &CfgProgram,
-        table_id: crate::cfg::TableId,
         field_id: crate::cfg::FieldId,
     ) -> BoogieType {
-        let table = &cfg_program.tables[table_id];
-        let field = &cfg_program.fields[field_id];
-
+        let field = &cfg_program.table_fields[field_id];
+        let table = &cfg_program.tables[field.table_id];
         let key_types: Vec<Box<BoogieType>> = table
-            .primary_keys
+            .primary_key_fields
             .iter()
-            .map(|&pk_id| Box::new(Self::convert_type(&cfg_program.fields[pk_id].ty)))
+            .map(|f_id| {
+                let key_field = &cfg_program.table_fields[*f_id];
+                Box::new(Self::convert_type_id(cfg_program, &key_field.field_type))
+            })
             .collect();
-        let value_type = Box::new(Self::convert_type(&field.ty));
-
+        let value_type = Box::new(Self::convert_type_id(cfg_program, &field.field_type));
         BoogieType::Map(key_types, value_type)
-    }
-
-    /// Helper function to check if a variable exists in current procedure's scope
-    /// Returns true if found, false if not found
-    fn check_variable_exists_in_procedure(&self, var_name: &str) -> bool {
-        // Check global variables first
-        if self.program.global_vars.contains_key(var_name) {
-            return true;
-        }
-
-        // Check current procedure parameters and local variables
-        if let Some(current_proc) = self.get_current_procedure() {
-            // Check parameters
-            for param in &current_proc.params {
-                if param.var_name == var_name {
-                    return true;
-                }
-            }
-            // Check local variables
-            for local_var in &current_proc.local_vars {
-                if local_var.var_name == var_name {
-                    return true;
-                }
-            }
-        }
-
-        false
     }
 
     /// Helper function to add a local variable to current procedure if it doesn't exist
     /// Returns true if variable was added, false if it already existed
-    fn ensure_local_variable_exists(&mut self, var_name: &str, var_type: BoogieType) -> bool {
-        if self.check_variable_exists_in_procedure(var_name) {
-            return false; // Variable already exists
-        }
-
-        // Add to current procedure's local variables
-        if let Some(current_proc) = self.get_current_procedure_mut() {
-            let var_decl = BoogieVarDecl {
-                var_name: var_name.to_string(),
-                var_type,
-                is_const: false,
-            };
-            current_proc.local_vars.push(var_decl);
-            return true; // Variable was added
-        }
-
-        false // No current procedure set
-    }
-
-    /// Add a local variable to the current procedure
-    /// This is for cases where generators need to create additional local variables
-    pub fn add_local_var(&mut self, var_name: &str, var_type: BoogieType) -> bool {
-        self.ensure_local_variable_exists(var_name, var_type)
-    }
-
-    /// Generate static variable name without adding to local variables (for procedure parameters)
-    pub fn gen_var_name_static(
-        cfg_program: &CfgProgram,
-        var_id: VarId,
-        prefix: Option<&str>,
-    ) -> String {
-        let var = &cfg_program.variables[var_id];
-        let base_name = match var.kind {
-            VariableKind::Global => var.name.clone(),
-            VariableKind::Parameter => format!("param_{}", var.name),
-            VariableKind::Local => format!("local_{}", var.name),
-            VariableKind::Temporary => format!("{}", var.name),
-        };
-
-        if let Some(prefix) = prefix {
-            format!("{}_{}", prefix, base_name)
-        } else {
-            base_name
-        }
-    }
-
-    /// Generate variable name for a CFG variable with optional prefix
-    /// Only automatically adds variables to local_vars for Local and Temporary variable kinds
-    pub fn gen_var_name(
-        &mut self,
-        cfg_program: &CfgProgram,
-        var_id: VarId,
-        prefix: Option<&str>,
-    ) -> String {
-        let var = &cfg_program.variables[var_id];
-        let var_name = Self::gen_var_name_static(cfg_program, var_id, prefix);
-
-        // For Local and Temporary variables, ensure they are declared in current procedure
-        match var.kind {
-            VariableKind::Local | VariableKind::Temporary | VariableKind::Parameter => {
-                let boogie_type = Self::convert_type(&var.ty);
-                self.ensure_local_variable_exists(&var_name, boogie_type);
-            }
-            VariableKind::Global => {
-                // Global and parameter variables should already be declared, just check they exist
-                // If they don't exist, it's likely a programming error, but we'll still return the name
+    pub fn ensure_local_variable_exists(&mut self, var_name: &str, var_type: BoogieType) -> bool {
+        if let Some(proc) = self.get_current_procedure_mut() {
+            if !proc.local_vars.iter().any(|v| v.var_name == var_name)
+                && !proc.params.iter().any(|v| v.var_name == var_name)
+            {
+                proc.local_vars.push(BoogieVarDecl {
+                    var_name: var_name.to_string(),
+                    var_type,
+                    is_const: false,
+                });
+                return true;
             }
         }
-
-        var_name
+        false
     }
 
-    /// Convert CFG operand to Boogie expression with optional prefix
+    /// Convert CFG operand to Boogie expression.
+    /// Note: This does not handle scoped names. The caller (BaseVerificationGenerator) should provide scoped names.
     pub fn convert_operand(
         &mut self,
-        cfg_program: &CfgProgram,
+        _cfg_program: &CfgProgram,
         operand: &Operand,
-        prefix: Option<&str>,
+        // The name of the variable is passed in directly by the caller
+        var_name: String,
     ) -> Results<BoogieExpr> {
         match operand {
-            Operand::Var(var_id) => {
-                let var_name = self.gen_var_name(cfg_program, *var_id, prefix);
-                Ok(BoogieExpr {
-                    kind: BoogieExprKind::Var(var_name),
-                })
-            }
-            Operand::Const(constant) => self.convert_constant(constant),
+            Operand::Variable(_) => Ok(BoogieExpr {
+                kind: BoogieExprKind::Var(var_name),
+            }),
+            Operand::Constant(constant) => self.convert_constant(constant),
+            Operand::Global(_) => Ok(BoogieExpr {
+                kind: BoogieExprKind::Var(var_name),
+            }),
         }
     }
 
     /// Convert CFG constant to Boogie expression
-    pub fn convert_constant(&mut self, constant: &Constant) -> Results<BoogieExpr> {
+    pub fn convert_constant(&mut self, constant: &ConstantValue) -> Results<BoogieExpr> {
         match constant {
-            Constant::Int(i) => Ok(BoogieExpr {
+            ConstantValue::Int(i) => Ok(BoogieExpr {
                 kind: BoogieExprKind::IntConst(*i),
             }),
-            Constant::Float(f) => Ok(BoogieExpr {
-                kind: BoogieExprKind::RealConst(f.into_inner()),
+            ConstantValue::Float(r) => Ok(BoogieExpr {
+                kind: BoogieExprKind::RealConst(r.into_inner()),
             }),
-            Constant::Bool(b) => Ok(BoogieExpr {
+            ConstantValue::Bool(b) => Ok(BoogieExpr {
                 kind: BoogieExprKind::BoolConst(*b),
             }),
-            Constant::String(s) => {
-                // Generate the expected string literal constant name
+            ConstantValue::String(s) => {
                 let const_name = self.add_string_literal(s);
                 Ok(BoogieExpr {
                     kind: BoogieExprKind::Var(const_name),
                 })
             }
-            Constant::Array(_) => Err(vec![SpannedError {
-                error: VerificationError::ArrayConstantNotSupported,
-                span: None,
-            }]),
         }
     }
 
     /// Convert CFG binary operation to Boogie binary operation
     pub fn convert_binary_op(op: &BinaryOp) -> BoogieBinOp {
         match op {
-            BinaryOp::Add => BoogieBinOp::Add,
-            BinaryOp::Sub => BoogieBinOp::Sub,
-            BinaryOp::Mul => BoogieBinOp::Mul,
-            BinaryOp::Div => BoogieBinOp::Div,
-            BinaryOp::Lt => BoogieBinOp::Lt,
-            BinaryOp::Lte => BoogieBinOp::Le,
-            BinaryOp::Gt => BoogieBinOp::Gt,
-            BinaryOp::Gte => BoogieBinOp::Ge,
-            BinaryOp::Eq => BoogieBinOp::Eq,
-            BinaryOp::Neq => BoogieBinOp::Ne,
+            BinaryOp::AddInt | BinaryOp::AddFloat => BoogieBinOp::Add,
+            BinaryOp::SubInt | BinaryOp::SubFloat => BoogieBinOp::Sub,
+            BinaryOp::MulInt | BinaryOp::MulFloat => BoogieBinOp::Mul,
+            BinaryOp::DivInt | BinaryOp::DivFloat => BoogieBinOp::Div,
+            BinaryOp::EqInt | BinaryOp::EqFloat | BinaryOp::Eq => BoogieBinOp::Eq,
+            BinaryOp::NeqInt | BinaryOp::NeqFloat | BinaryOp::Neq => BoogieBinOp::Ne,
+            BinaryOp::LtInt | BinaryOp::LtFloat => BoogieBinOp::Lt,
+            BinaryOp::LeqInt | BinaryOp::LeqFloat => BoogieBinOp::Le,
+            BinaryOp::GtInt | BinaryOp::GtFloat => BoogieBinOp::Gt,
+            BinaryOp::GeqInt | BinaryOp::GeqFloat => BoogieBinOp::Ge,
             BinaryOp::And => BoogieBinOp::And,
             BinaryOp::Or => BoogieBinOp::Or,
-            BinaryOp::Concat => panic!("Concat should be handled as function call, not binary op"),
+            _ => panic!("Unsupported binary operator"),
         }
     }
 
-    /// Convert CFG operand to Boogie expression, automatically converting to string if needed
-    pub fn convert_operand_to_string(
-        &mut self,
-        cfg_program: &CfgProgram,
-        operand: &Operand,
-        prefix: Option<&str>,
-    ) -> Results<BoogieExpr> {
-        match operand {
-            Operand::Var(var_id) => {
-                let var = &cfg_program.variables[*var_id];
-                let var_name = self.gen_var_name(cfg_program, *var_id, prefix);
-
-                match var.ty {
-                    TypeName::String => Ok(BoogieExpr {
-                        kind: BoogieExprKind::Var(var_name),
-                    }),
-                    TypeName::Int => Ok(BoogieExpr {
-                        kind: BoogieExprKind::FunctionCall {
-                            name: "IntToString".to_string(),
-                            args: vec![BoogieExpr {
-                                kind: BoogieExprKind::Var(var_name),
-                            }],
-                        },
-                    }),
-                    TypeName::Float => Ok(BoogieExpr {
-                        kind: BoogieExprKind::FunctionCall {
-                            name: "RealToString".to_string(),
-                            args: vec![BoogieExpr {
-                                kind: BoogieExprKind::Var(var_name),
-                            }],
-                        },
-                    }),
-                    TypeName::Bool => Ok(BoogieExpr {
-                        kind: BoogieExprKind::FunctionCall {
-                            name: "BoolToString".to_string(),
-                            args: vec![BoogieExpr {
-                                kind: BoogieExprKind::Var(var_name),
-                            }],
-                        },
-                    }),
-                    _ => {
-                        todo!("Implement conversion for other types")
-                    }
-                }
-            }
-            Operand::Const(constant) => match constant {
-                Constant::String(s) => {
-                    let const_name = self.add_string_literal(s);
-                    Ok(BoogieExpr {
-                        kind: BoogieExprKind::Var(const_name),
-                    })
-                }
-                Constant::Int(i) => Ok(BoogieExpr {
-                    kind: BoogieExprKind::FunctionCall {
-                        name: "IntToString".to_string(),
-                        args: vec![BoogieExpr {
-                            kind: BoogieExprKind::IntConst(*i),
-                        }],
-                    },
-                }),
-                Constant::Float(f) => Ok(BoogieExpr {
-                    kind: BoogieExprKind::FunctionCall {
-                        name: "RealToString".to_string(),
-                        args: vec![BoogieExpr {
-                            kind: BoogieExprKind::RealConst(f.into_inner()),
-                        }],
-                    },
-                }),
-                Constant::Bool(b) => Ok(BoogieExpr {
-                    kind: BoogieExprKind::FunctionCall {
-                        name: "BoolToString".to_string(),
-                        args: vec![BoogieExpr {
-                            kind: BoogieExprKind::BoolConst(*b),
-                        }],
-                    },
-                }),
-                Constant::Array(_) => Err(vec![SpannedError {
-                    error: VerificationError::ArrayConstantNotSupported,
-                    span: None,
-                }]),
-            },
-        }
-    }
-
-    /// Infer the type of an operand for concatenation logic
-    pub fn infer_operand_type(
-        &self,
-        cfg_program: &CfgProgram,
-        operand: &Operand,
-    ) -> Option<TypeName> {
-        match operand {
-            Operand::Var(var_id) => Some(cfg_program.variables[*var_id].ty.clone()),
-            Operand::Const(constant) => {
-                match constant {
-                    Constant::Int(_) => Some(TypeName::Int),
-                    Constant::Float(_) => Some(TypeName::Float),
-                    Constant::Bool(_) => Some(TypeName::Bool),
-                    Constant::String(_) => Some(TypeName::String),
-                    Constant::Array(_) => None, // Arrays not fully supported yet
-                }
-            }
-        }
-    }
-    pub fn convert_unary_op(op: &UnaryOp) -> Results<BoogieUnOp> {
+    pub fn convert_unary_op(&self, op: &UnaryOp) -> Results<BoogieUnOp> {
         match op {
-            UnaryOp::Not => Ok(BoogieUnOp::Not),
-            UnaryOp::Neg => Ok(BoogieUnOp::Neg),
-            UnaryOp::PreIncrement
-            | UnaryOp::PostIncrement
-            | UnaryOp::PreDecrement
-            | UnaryOp::PostDecrement => Err(vec![SpannedError {
-                error: VerificationError::IncrementDecrementNotSupported,
-                span: None,
-            }]),
+            UnaryOp::NotBool => Ok(BoogieUnOp::Not),
+            UnaryOp::NegInt | UnaryOp::NegFloat => Ok(BoogieUnOp::Neg),
         }
-    }
-
-    /// Convert CFG RValue to Boogie expression with optional prefix
-    pub fn convert_rvalue(
-        &mut self,
-        cfg_program: &CfgProgram,
-        rvalue: &RValue,
-        prefix: Option<&str>,
-    ) -> Results<BoogieExpr> {
-        match rvalue {
-            RValue::Use(operand) => self.convert_operand(cfg_program, operand, prefix),
-            RValue::TableAccess {
-                table,
-                pk_values,
-                field,
-                ..
-            } => {
-                let table_info = &cfg_program.tables[*table];
-                let field_info = &cfg_program.fields[*field];
-                let var_name = Self::gen_table_field_var_name(&table_info.name, &field_info.name);
-
-                let base_expr = Box::new(BoogieExpr {
-                    kind: BoogieExprKind::Var(var_name),
-                });
-
-                let mut indices = Vec::new();
-                let mut errors = Vec::new();
-
-                for operand in pk_values {
-                    match self.convert_operand(cfg_program, operand, prefix) {
-                        Ok(expr) => indices.push(expr),
-                        Err(mut errs) => errors.append(&mut errs),
-                    }
-                }
-
-                if !errors.is_empty() {
-                    return Err(errors);
-                }
-
-                Ok(BoogieExpr {
-                    kind: BoogieExprKind::MapSelect {
-                        base: base_expr,
-                        indices,
-                    },
-                })
-            }
-            RValue::ArrayAccess { array, index } => {
-                let array_expr = self.convert_operand(cfg_program, array, prefix)?;
-                let index_expr = self.convert_operand(cfg_program, index, prefix)?;
-
-                Ok(BoogieExpr {
-                    kind: BoogieExprKind::MapSelect {
-                        base: Box::new(array_expr),
-                        indices: vec![index_expr],
-                    },
-                })
-            }
-            RValue::UnaryOp { op, operand, .. } => {
-                let boogie_op = Self::convert_unary_op(op)?;
-                let operand_expr = self.convert_operand(cfg_program, operand, prefix)?;
-
-                Ok(BoogieExpr {
-                    kind: BoogieExprKind::UnOp(boogie_op, Box::new(operand_expr)),
-                })
-            }
-            RValue::BinaryOp {
-                op, left, right, ..
-            } => {
-                let left_expr = self.convert_operand(cfg_program, left, prefix)?;
-                let right_expr = self.convert_operand(cfg_program, right, prefix)?;
-
-                match op {
-                    BinaryOp::Concat => {
-                        // Handle string concatenation with type conversion
-                        let left_converted =
-                            self.convert_operand_to_string(cfg_program, left, prefix)?;
-                        let right_converted =
-                            self.convert_operand_to_string(cfg_program, right, prefix)?;
-
-                        Ok(BoogieExpr {
-                            kind: BoogieExprKind::FunctionCall {
-                                name: "Concat".to_string(),
-                                args: vec![left_converted, right_converted],
-                            },
-                        })
-                    }
-                    BinaryOp::Div => {
-                        // Determine whether to use regular division or integer division
-                        // based on the types of the operands
-                        let left_type = self.infer_operand_type(cfg_program, left);
-                        let right_type = self.infer_operand_type(cfg_program, right);
-
-                        // Use integer division if both operands are integers
-                        let boogie_op = match (left_type, right_type) {
-                            (Some(TypeName::Int), Some(TypeName::Int)) => BoogieBinOp::IntDiv,
-                            _ => BoogieBinOp::Div, // Default to regular division for floats or mixed types
-                        };
-
-                        Ok(BoogieExpr {
-                            kind: BoogieExprKind::BinOp(
-                                Box::new(left_expr),
-                                boogie_op,
-                                Box::new(right_expr),
-                            ),
-                        })
-                    }
-                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul => {
-                        // Handle type conversion for arithmetic operations
-                        let left_type = self.infer_operand_type(cfg_program, left);
-                        let right_type = self.infer_operand_type(cfg_program, right);
-                        let boogie_op = Self::convert_binary_op(op);
-
-                        // Convert int to real if needed for mixed arithmetic
-                        let (final_left, final_right) = match (left_type, right_type) {
-                            (Some(TypeName::Int), Some(TypeName::Float)) => {
-                                // Convert left (int) to real
-                                let converted_left = BoogieExpr {
-                                    kind: BoogieExprKind::FunctionCall {
-                                        name: "int2real".to_string(),
-                                        args: vec![left_expr],
-                                    },
-                                };
-                                (Box::new(converted_left), Box::new(right_expr))
-                            }
-                            (Some(TypeName::Float), Some(TypeName::Int)) => {
-                                // Convert right (int) to real
-                                let converted_right = BoogieExpr {
-                                    kind: BoogieExprKind::FunctionCall {
-                                        name: "int2real".to_string(),
-                                        args: vec![right_expr],
-                                    },
-                                };
-                                (Box::new(left_expr), Box::new(converted_right))
-                            }
-                            _ => (Box::new(left_expr), Box::new(right_expr)),
-                        };
-
-                        Ok(BoogieExpr {
-                            kind: BoogieExprKind::BinOp(final_left, boogie_op, final_right),
-                        })
-                    }
-                    _ => {
-                        let boogie_op = Self::convert_binary_op(op);
-                        Ok(BoogieExpr {
-                            kind: BoogieExprKind::BinOp(
-                                Box::new(left_expr),
-                                boogie_op,
-                                Box::new(right_expr),
-                            ),
-                        })
-                    }
-                }
-            }
-        }
-    }
-
-    /// Convert CFG assignment statement to Boogie assignment with optional prefix
-    pub fn convert_assignment(
-        &mut self,
-        cfg_program: &CfgProgram,
-        lvalue: &LValue,
-        rvalue: &RValue,
-        prefix: Option<&str>,
-    ) -> Results<BoogieLine> {
-        let rvalue_expr = self.convert_rvalue(cfg_program, rvalue, prefix)?;
-
-        match lvalue {
-            LValue::Variable { var } => {
-                let var_name = self.gen_var_name(cfg_program, *var, prefix);
-                Ok(BoogieLine::Assign(var_name, rvalue_expr))
-            }
-            LValue::ArrayElement { array, index } => {
-                let array_name = self.gen_var_name(cfg_program, *array, prefix);
-                let base_expr = Box::new(BoogieExpr {
-                    kind: BoogieExprKind::Var(array_name.clone()),
-                });
-                let index_expr = self.convert_operand(cfg_program, index, prefix)?;
-
-                let store_expr = BoogieExpr {
-                    kind: BoogieExprKind::MapStore {
-                        base: base_expr,
-                        indices: vec![index_expr],
-                        value: Box::new(rvalue_expr),
-                    },
-                };
-
-                Ok(BoogieLine::Assign(array_name, store_expr))
-            }
-            LValue::TableField {
-                table,
-                pk_values,
-                field,
-                ..
-            } => {
-                let table_info = &cfg_program.tables[*table];
-                let field_info = &cfg_program.fields[*field];
-                let var_name = Self::gen_table_field_var_name(&table_info.name, &field_info.name);
-
-                let base_expr = Box::new(BoogieExpr {
-                    kind: BoogieExprKind::Var(var_name.clone()),
-                });
-
-                let mut indices = Vec::new();
-                let mut errors = Vec::new();
-
-                for operand in pk_values {
-                    match self.convert_operand(cfg_program, operand, prefix) {
-                        Ok(expr) => indices.push(expr),
-                        Err(mut errs) => errors.append(&mut errs),
-                    }
-                }
-
-                if !errors.is_empty() {
-                    return Err(errors);
-                }
-
-                // Check if we need type conversion for the stored value
-                // For int fields, we need to be careful about type mismatches from arithmetic
-                let final_rvalue_expr = match field_info.ty {
-                    TypeName::Int => {
-                        // Use a more comprehensive check for when real2int conversion is needed
-                        if self.rvalue_needs_real_to_int_conversion(cfg_program, rvalue, prefix) {
-                            BoogieExpr {
-                                kind: BoogieExprKind::FunctionCall {
-                                    name: "real2int".to_string(),
-                                    args: vec![rvalue_expr],
-                                },
-                            }
-                        } else {
-                            rvalue_expr
-                        }
-                    }
-                    _ => rvalue_expr, // No conversion needed for other types
-                };
-
-                let store_expr = BoogieExpr {
-                    kind: BoogieExprKind::MapStore {
-                        base: base_expr,
-                        indices,
-                        value: Box::new(final_rvalue_expr),
-                    },
-                };
-
-                Ok(BoogieLine::Assign(var_name, store_expr))
-            }
-        }
-    }
-
-    /// Check if an RValue needs real2int conversion when stored in an int field
-    /// This handles both direct arithmetic and variables that might hold real values
-    fn rvalue_needs_real_to_int_conversion(
-        &self,
-        cfg_program: &CfgProgram,
-        rvalue: &RValue,
-        _prefix: Option<&str>,
-    ) -> bool {
-        match rvalue {
-            RValue::BinaryOp {
-                op, left, right, ..
-            } => {
-                // Direct arithmetic operations that mix int/real will produce real results
-                if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) {
-                    let left_type = self.infer_operand_type(cfg_program, left);
-                    let right_type = self.infer_operand_type(cfg_program, right);
-
-                    // If we have mixed int/real types, the result will be real
-                    match (left_type, right_type) {
-                        (Some(TypeName::Int), Some(TypeName::Float)) => true,
-                        (Some(TypeName::Float), Some(TypeName::Int)) => true,
-                        _ => false,
-                    }
-                } else {
-                    false
-                }
-            }
-            RValue::Use(Operand::Var(var_id)) => {
-                // Check if the variable might hold a real value
-                let var = &cfg_program.variables[*var_id];
-                // If it's a temp variable with Float type, it needs conversion for int storage
-                var.ty == TypeName::Float && var.kind == crate::cfg::VariableKind::Temporary
-            }
-            _ => false, // Constants, table access, etc. don't need conversion
-        }
-    }
-
-    /// Convert CFG statement to Boogie lines with optional prefix
-    pub fn convert_statement(
-        &mut self,
-        cfg_program: &CfgProgram,
-        stmt: &Statement,
-        prefix: Option<&str>,
-    ) -> Results<Vec<BoogieLine>> {
-        match stmt {
-            Statement::Assign {
-                lvalue,
-                rvalue,
-                span,
-            } => {
-                let assignment = self.convert_assignment(cfg_program, lvalue, rvalue, prefix);
-                match assignment {
-                    Ok(line) => Ok(vec![line]),
-                    Err(errors) => Err(errors
-                        .into_iter()
-                        .map(|e| SpannedError {
-                            error: e.error,
-                            span: Some(span.clone()),
-                        })
-                        .collect()),
-                }
-            }
-        }
-    }
-
-    /// Generate procedure parameters from function parameters with optional prefix
-    pub fn gen_procedure_params(
-        cfg_program: &CfgProgram,
-        function: &FunctionCfg,
-        prefix: Option<&str>,
-    ) -> Vec<BoogieVarDecl> {
-        function
-            .parameters
-            .iter()
-            .map(|&var_id| {
-                let var = &cfg_program.variables[var_id];
-                BoogieVarDecl {
-                    var_name: Self::gen_var_name_static(cfg_program, var_id, prefix),
-                    var_type: Self::convert_type(&var.ty),
-                    is_const: false,
-                }
-            })
-            .collect()
-    }
-
-    /// Convert BoogieType to string representation
-    pub fn boogie_type_to_string(ty: &BoogieType) -> String {
-        match ty {
-            BoogieType::Int => "int".to_string(),
-            BoogieType::Real => "real".to_string(),
-            BoogieType::Bool => "bool".to_string(),
-            BoogieType::UserDefined(name) => name.clone(),
-            BoogieType::Map(key_types, value_type) => {
-                let key_strs: Vec<String> = key_types
-                    .iter()
-                    .map(|kt| Self::boogie_type_to_string(kt))
-                    .collect();
-                let value_str = Self::boogie_type_to_string(value_type);
-                format!("[{}]{}", key_strs.join("]["), value_str)
-            }
-        }
-    }
-
-    /// Generate base Boogie program with common elements (constants, globals, axioms, tables)
-    /// Returns a BoogieProgram that can be used as a template for individual functions
-    pub fn gen_base_program(cfg_program: &CfgProgram) -> Results<BoogieProgram> {
-        let mut generator = BoogieProgramGenerator::new("base_program".to_string());
-
-        // Generate string axioms if needed
-        generator.gen_string_axioms();
-
-        // Generate global constants
-        generator.gen_global_constants(cfg_program);
-
-        // Generate table variables
-        generator.gen_table_variables(cfg_program);
-
-        Ok(generator.program)
-    }
-
-    /// Add a Boogie assertion to the current procedure
-    pub fn add_assertion_to_current_procedure(
-        &mut self,
-        condition: BoogieExpr,
-        error_msg: ErrorMessage,
-    ) {
-        if let Some(proc) = self.get_current_procedure_mut() {
-            proc.lines.push(BoogieLine::Assert(condition, error_msg));
-        }
-    }
-
-    /// Add a Boogie comment to the current procedure  
-    pub fn add_comment_to_current_procedure(&mut self, comment: String) {
-        if let Some(proc) = self.get_current_procedure_mut() {
-            proc.lines.push(BoogieLine::Comment(comment));
-        }
-    }
-
-    /// Add any Boogie line to the current procedure
-    pub fn add_line_to_current_procedure(&mut self, line: BoogieLine) {
-        if let Some(proc) = self.get_current_procedure_mut() {
-            proc.lines.push(line);
-        }
-    }
-
-    /// Add multiple Boogie lines to the current procedure
-    pub fn add_lines_to_current_procedure(&mut self, lines: Vec<BoogieLine>) {
-        if let Some(proc) = self.get_current_procedure_mut() {
-            proc.lines.extend(lines);
-        }
-    }
-
-    /// Generate boolean conjunction (AND) of multiple expressions
-    /// Returns true if expressions is empty, otherwise combines all with AND
-    pub fn gen_conjunction(expressions: Vec<BoogieExpr>) -> BoogieExpr {
-        if expressions.is_empty() {
-            return BoogieExpr {
-                kind: BoogieExprKind::BoolConst(true),
-            };
-        }
-
-        if expressions.len() == 1 {
-            return expressions.into_iter().next().unwrap();
-        }
-
-        let mut result = expressions[0].clone();
-        for expr in expressions.iter().skip(1) {
-            result = BoogieExpr {
-                kind: BoogieExprKind::BinOp(
-                    Box::new(result),
-                    BoogieBinOp::And,
-                    Box::new(expr.clone()),
-                ),
-            };
-        }
-
-        result
-    }
-
-    /// Generate boolean disjunction (OR) of multiple expressions
-    /// Returns false if expressions is empty, otherwise combines all with OR
-    pub fn gen_disjunction(expressions: Vec<BoogieExpr>) -> BoogieExpr {
-        if expressions.is_empty() {
-            return BoogieExpr {
-                kind: BoogieExprKind::BoolConst(false),
-            };
-        }
-
-        if expressions.len() == 1 {
-            return expressions.into_iter().next().unwrap();
-        }
-
-        let mut result = expressions[0].clone();
-        for expr in expressions.iter().skip(1) {
-            result = BoogieExpr {
-                kind: BoogieExprKind::BinOp(
-                    Box::new(result),
-                    BoogieBinOp::Or,
-                    Box::new(expr.clone()),
-                ),
-            };
-        }
-
-        result
-    }
-
-    /// Collect modified globals using hop-level table_mod_ref analysis
-    /// Returns list of global variable names that are modified by the function
-    pub fn collect_modified_globals_from_dataflow(
-        cfg_program: &CfgProgram,
-        function_id: FunctionId,
-    ) -> Vec<String> {
-        use crate::dataflow::{analyze_table_mod_ref, AccessType};
-
-        let function = &cfg_program.functions[function_id];
-        let analysis_results = analyze_table_mod_ref(function, cfg_program);
-
-        let mut modified_globals = std::collections::HashSet::new();
-
-        // Collect all table accesses from all basic blocks
-        for block_exit in analysis_results.block_exit.values() {
-            if let Some(accesses) = block_exit.as_set() {
-                for access in accesses {
-                    if access.access_type == AccessType::Write {
-                        let table = &cfg_program.tables[access.table];
-                        let field = &cfg_program.fields[access.field];
-                        let var_name = Self::gen_table_field_var_name(&table.name, &field.name);
-                        modified_globals.insert(var_name);
-                    }
-                }
-            }
-        }
-
-        modified_globals.into_iter().collect()
-    }
-
-    /// add suffix and prefix
-    pub fn add_suffix_prefix_helper(
-        name: &str,
-        prefix: Option<&str>,
-        suffix: Option<&str>,
-    ) -> String {
-        let mut result = name.to_string();
-        if let Some(prefix) = prefix {
-            result = format!("{}_{}", prefix, result);
-        }
-        if let Some(suffix) = suffix {
-            result = format!("{}_{}", result, suffix);
-        }
-        result
-    }
-
-    /// Generate a unique label name for a basic block with optional prefix and suffix  
-    pub fn gen_basic_block_label(
-        block_id: BasicBlockId,
-        prefix: Option<&str>,
-        suffix: Option<&str>,
-    ) -> String {
-        let label = format!("block{}", block_id.index());
-        Self::add_suffix_prefix_helper(&label, prefix, suffix)
-    }
-
-    /// Generate function start label
-    pub fn gen_function_start_label(
-        function_name: &str,
-        prefix: Option<&str>,
-        suffix: Option<&str>,
-    ) -> String {
-        let label = format!("{}_start", function_name);
-        Self::add_suffix_prefix_helper(&label, prefix, suffix)
-    }
-
-    /// Generate function end label
-    pub fn gen_function_end_label(
-        function_name: &str,
-        prefix: Option<&str>,
-        suffix: Option<&str>,
-    ) -> String {
-        let label = format!("{}_end", function_name);
-        Self::add_suffix_prefix_helper(&label, prefix, suffix)
-    }
-
-    /// Generate function return label,
-    /// should be placed at the same place as function end if the function is generated fully
-    pub fn gen_function_return_label(
-        function_name: &str,
-        prefix: Option<&str>,
-        suffix: Option<&str>,
-    ) -> String {
-        let label = format!("{}_return", function_name);
-        Self::add_suffix_prefix_helper(&label, prefix, suffix)
-    }
-
-    /// Generate function abort label,
-    /// should be placed at the same place as function end if the function is generated fully
-    pub fn gen_function_abort_label(
-        function_name: &str,
-        prefix: Option<&str>,
-        suffix: Option<&str>,
-    ) -> String {
-        let label = format!("{}_abort", function_name);
-        Self::add_suffix_prefix_helper(&label, prefix, suffix)
-    }
-
-    /// Generate goto edges for basic block control flow (moved to individual verification modules)
-    /// Each verification type (partition, commutative, etc.) should implement its own edge generation
-    /// This is kept as a deprecated placeholder - use the specific implementations instead
-    #[deprecated(
-        note = "Use partition-specific or commutative-specific edge generation methods instead"
-    )]
-    pub fn gen_basic_block_edges(
-        &mut self,
-        _lines: &mut Vec<BoogieLine>,
-        _cfg_program: &CfgProgram,
-        _block_id: BasicBlockId,
-        _is_last_hop: bool,
-        _function_name: &str,
-        _prefix: Option<&str>,
-        _suffix: Option<&str>,
-    ) {
-        // This method has been moved to individual verification modules
-        // - Partition verification: PartitionVerificationManager::gen_partition_basic_block_edges
-        // - Commutative verification: BoogieStateManager::gen_commutative_block_edges
-        panic!("gen_basic_block_edges has been moved to individual verification modules")
-    }
-}
-
-impl Default for BoogieProgramGenerator {
-    fn default() -> Self {
-        Self::new("program".to_string())
     }
 }
