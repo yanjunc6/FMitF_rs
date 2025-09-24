@@ -8,7 +8,6 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 
 mod boogie_helpers;
-mod executor;
 mod interleaving_generator;
 mod slice_analyzer;
 mod strategy;

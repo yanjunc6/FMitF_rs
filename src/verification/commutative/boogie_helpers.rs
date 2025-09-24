@@ -18,15 +18,6 @@ pub struct VariableSnapshots {
     pub var_snapshots: HashMap<SliceId, HashMap<VariableId, String>>, // slice -> (var -> name)
 }
 
-impl VariableSnapshots {
-    pub fn empty() -> Self {
-        VariableSnapshots {
-            table_snapshots: HashMap::new(),
-            var_snapshots: HashMap::new(),
-        }
-    }
-}
-
 pub struct BoogieStateManager;
 
 impl BoogieStateManager {

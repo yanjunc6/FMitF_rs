@@ -1,9 +1,13 @@
 // In src/verification/base_generator.rs
 
+use std::collections::HashMap;
+
 use super::Boogie::{
     gen_Boogie::BoogieProgramGenerator, BoogieExpr, BoogieExprKind, BoogieLine, BoogieProgram,
 };
-use crate::cfg::{BasicBlock, Instruction, InstructionKind, Operand, Program as CfgProgram};
+use crate::cfg::{
+    BasicBlock, Decorator, Instruction, InstructionKind, Operand, Program as CfgProgram,
+};
 use crate::verification::{
     errors::Results,
     scope::{ExecutionScope, SliceId},
@@ -13,6 +17,7 @@ pub struct BaseVerificationGenerator {
     // The scope is now a fundamental part of the generator.
     scope: ExecutionScope,
     pub generator: BoogieProgramGenerator,
+    pub Boogie_func_map: HashMap<&'static str, &'static str>,
 }
 
 impl BaseVerificationGenerator {
@@ -22,9 +27,11 @@ impl BaseVerificationGenerator {
         Self {
             scope: ExecutionScope::default(),
             generator,
+            Boogie_func_map: HashMap::from([("float", "real"), ("int", "int")]),
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_boogie_program(&self) -> &BoogieProgram {
         &self.generator.program
     }
@@ -39,6 +46,7 @@ impl BaseVerificationGenerator {
         }
     }
 
+    #[allow(dead_code)]
     pub fn add_lines(&mut self, lines: Vec<BoogieLine>) {
         if let Some(p) = self.generator.get_current_procedure_mut() {
             p.lines.extend(lines);
@@ -125,7 +133,19 @@ impl BaseVerificationGenerator {
             }
             InstructionKind::Call { dest, func, args } => {
                 let func_decl = &cfg_program.functions[*func];
-                let func_name = func_decl.name.clone();
+                let mut func_name = func_decl.name.clone();
+
+                // Map to Boogie func if decorated as @Boogie
+                if func_decl.decorators.contains(&Decorator {
+                    name: "Boogie".to_string(),
+                }) {
+                    func_name = self
+                        .Boogie_func_map
+                        .get(func_name.as_str())
+                        .unwrap_or(&func_name.as_str())
+                        .to_string();
+                }
+
                 let mut boogie_args = Vec::new();
                 for arg in args {
                     let arg_name = self.get_operand_name(arg, slice_id, cfg_program)?;

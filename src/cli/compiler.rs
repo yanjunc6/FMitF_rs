@@ -147,10 +147,6 @@ impl Compiler {
 
         // Stage 2: CFG Generation
         current_stage += 1;
-        self.log_line(format!(
-            "[Stage {}/{}] CFG Generation - start",
-            current_stage, TOTAL_STAGES
-        ))?;
         let cfg_program = execute_stage(
             "CFG Generation",
             current_stage,
@@ -168,10 +164,6 @@ impl Compiler {
 
         // Stage 3: Optimization (optional)
         current_stage += 1;
-        self.log_line(format!(
-            "[Stage {}/{}] Optimization - start",
-            current_stage, TOTAL_STAGES
-        ))?;
         let optimized_or_cfg_program = if enable_optimization {
             execute_stage(
                 "Optimization",
@@ -191,10 +183,6 @@ impl Compiler {
 
         // Stage 4: SC-Graph (Build + Combine + DOT Outputs)
         current_stage += 1;
-        self.log_line(format!(
-            "[Stage {}/{}] SC-Graph - start",
-            current_stage, TOTAL_STAGES
-        ))?;
         let (sc, _combined) = execute_stage(
             "SC-Graph",
             current_stage,
@@ -211,10 +199,6 @@ impl Compiler {
 
         // Stage 5: Verification (Commutative) -> generate Boogie, run, process results, and write simplified graphs
         current_stage += 1;
-        self.log_line(format!(
-            "[Stage {}/{}] Verification - start",
-            current_stage, TOTAL_STAGES
-        ))?;
         let _ = execute_stage(
             "Verification",
             current_stage,
@@ -241,38 +225,68 @@ impl Compiler {
                 let boogie_dir = output_dir.join("Boogie");
                 fs::create_dir_all(&boogie_dir)?;
 
-                // 2) Write each Boogie program to a .bpl file and run Boogie
+                // 2) Write each Boogie program to a .bpl file and run Boogie in parallel with progress
+                use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
+                use rayon::prelude::*;
+
                 let mut all_boogie_errors: Vec<BoogieError> = Vec::new();
 
-                for (_i, program) in programs.iter().enumerate() {
-                    let file_name = format!("{}.bpl", program.name);
-                    let file_path = boogie_dir.join(&file_name);
-                    // Write .bpl file
-                    {
-                        use std::io::Write;
-                        let mut f = fs::File::create(&file_path)?;
-                        write!(f, "{}", program)?;
-                    }
+                let total = programs.len() as u64;
+                let pb = ProgressBar::new(total);
+                pb.set_style(
+                    ProgressStyle::with_template(
+                        "[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}",
+                    )
+                    .unwrap()
+                    .progress_chars("=>-"),
+                );
+                pb.set_message("running Boogie");
 
-                    // Run Boogie: boogie /quiet /errorTrace:0 <file>
-                    let output = Command::new("boogie")
-                        .arg("/quiet")
-                        .arg("/errorTrace:0")
-                        .arg(file_path.to_string_lossy().to_string())
-                        .output();
+                // Run write+boogie per program in parallel, collecting outputs for sequential logging
+                let run_results: Vec<(String, Result<std::process::Output, std::io::Error>)> =
+                    programs
+                        .par_iter()
+                        .progress_with(pb.clone())
+                        .map(|program| {
+                            let file_name = format!("{}.bpl", program.name);
+                            let file_path = boogie_dir.join(&file_name);
+                            // Write .bpl file
+                            let write_res = (|| -> Result<(), std::io::Error> {
+                                use std::io::Write;
+                                let mut f = fs::File::create(&file_path)?;
+                                write!(f, "{}", program)?;
+                                Ok(())
+                            })();
 
-                    // Append to compiler.log regardless of success
+                            let output = match write_res {
+                                Ok(()) => Command::new("boogie")
+                                    .arg("/quiet")
+                                    .arg("/errorTrace:0")
+                                    .arg(file_path.to_string_lossy().to_string())
+                                    .output(),
+                                Err(e) => Err(e),
+                            };
+
+                            (file_name, output.map_err(|e| e))
+                        })
+                        .collect();
+
+                // Finish the progress bar before logging
+                pb.finish_with_message("Boogie runs complete");
+
+                // 3) Append outputs to compiler.log and parse errors sequentially
+                for (file_name, output) in run_results {
                     match output {
                         Ok(out) => {
                             self.log_line(format!("===== Boogie run for {} =====", file_name))?;
                             self.log_block("stdout:", &String::from_utf8_lossy(&out.stdout))?;
                             self.log_block("stderr:", &String::from_utf8_lossy(&out.stderr))?;
+
                             // Parse Boogie output lines for embedded {:msg "..."}
                             let stdout_str = String::from_utf8_lossy(&out.stdout);
                             let stderr_str = String::from_utf8_lossy(&out.stderr);
                             let mut parse_streams = vec![stdout_str.as_ref(), stderr_str.as_ref()];
                             for s in parse_streams.drain(..) {
-                                // Very simple parse: find all occurrences of {:msg "..."}
                                 for cap in s.match_indices("{:msg \"") {
                                     let start = cap.0 + "{:msg \"".len();
                                     if let Some(end_rel) = s[start..].find("\"}") {
@@ -294,7 +308,7 @@ impl Compiler {
                     }
                 }
 
-                // 3) Process results and write simplified graphs
+                // 4) Process results and write simplified graphs
                 let (verification_errors, simplified) =
                     VerifyResultProcessor::process_boogie_errors(
                         &optimized_or_cfg_program,
@@ -326,7 +340,7 @@ impl Compiler {
 
     /// Write AST pretty print to file
     fn write_ast_pretty(
-        &self,
+        &mut self,
         program: &Program,
         output_dir: &PathBuf,
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -338,13 +352,13 @@ impl Compiler {
         let mut file = fs::File::create(&ast_file)?;
         program.pretty_print_with_debug(&mut file)?;
 
-        println!("📄 AST file written to: {}", ast_file.display());
+        self.log_line(format!("📄 AST file written to: {}", ast_file.display()))?;
         Ok(())
     }
 
     /// Write CFG pretty print to file
     fn write_cfg_pretty(
-        &self,
+        &mut self,
         program: &cfg::Program,
         output_dir: &PathBuf,
         filename: &str,
@@ -357,7 +371,7 @@ impl Compiler {
         let mut file = fs::File::create(&cfg_file)?;
         program.pretty_print_with_debug(&mut file)?;
 
-        println!("📄 CFG file written to: {}", cfg_file.display());
+        self.log_line(format!("📄 CFG file written to: {}", cfg_file.display()))?;
         Ok(())
     }
     // TOTAL_STAGES already defined above
