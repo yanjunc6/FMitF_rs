@@ -6,6 +6,7 @@
 //! representation for user-defined types, and the `HopExit` terminator. The design
 //! adheres to an lvalue/rvalue instruction format and correctly models generic functions.
 
+use crate::util::Span;
 use id_arena::{Arena, Id};
 use std::collections::HashMap;
 
@@ -189,8 +190,14 @@ pub struct BasicBlock {
     pub terminator: Terminator,
 }
 
+#[derive(Debug, Clone)]
+pub struct Instruction {
+    pub kind: InstructionKind,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Instruction {
+pub enum InstructionKind {
     Assign {
         dest: VariableId,
         src: Operand,

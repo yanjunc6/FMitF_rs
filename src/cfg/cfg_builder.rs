@@ -7,6 +7,7 @@
 
 use crate::ast::{self, CallableDecl};
 use crate::cfg;
+use crate::util::Span;
 use ordered_float::OrderedFloat;
 use std::collections::HashMap;
 
@@ -754,9 +755,17 @@ impl<'a> FunctionContext<'a> {
                         );
                         self.builder.var_map.insert(var, loop_var_id);
 
-                        self.add_instruction(cfg::Instruction::Assign {
-                            dest: loop_var_id,
-                            src: cfg::Operand::Constant(cfg::ConstantValue::Int(i)),
+                        // HopsFor loop variable initialization; use a span from the loop bounds
+                        let init_span = self.pick_span(&[
+                            self.builder.ast.expressions[start].span(),
+                            self.builder.ast.expressions[end].span(),
+                        ]);
+                        self.add_instruction(cfg::Instruction {
+                            kind: cfg::InstructionKind::Assign {
+                                dest: loop_var_id,
+                                src: cfg::Operand::Constant(cfg::ConstantValue::Int(i)),
+                            },
+                            span: init_span,
                         });
 
                         self.build_block(body);
@@ -813,9 +822,13 @@ impl<'a> FunctionContext<'a> {
 
                 if let Some(init_expr_id) = decl.init {
                     let src_operand = self.build_expression(init_expr_id);
-                    self.add_instruction(cfg::Instruction::Assign {
-                        dest: new_var_id,
-                        src: src_operand,
+                    let span = self.pick_span(&[self.builder.ast.expressions[init_expr_id].span()]);
+                    self.add_instruction(cfg::Instruction {
+                        kind: cfg::InstructionKind::Assign {
+                            dest: new_var_id,
+                            src: src_operand,
+                        },
+                        span,
                     });
                 }
             }
@@ -887,11 +900,16 @@ impl<'a> FunctionContext<'a> {
                 let current_block = self.current_block.take().unwrap();
                 self.terminate(current_block, cfg::Terminator::Return(operand));
             }
-            ast::Statement::Assert { expr, .. } => {
+            ast::Statement::Assert { expr, span } => {
                 let cond = self.build_expression(expr);
-                self.add_instruction(cfg::Instruction::Assert {
-                    condition: cond,
-                    message: "Assertion failed".to_string(),
+                // Prefer the statement's span; otherwise, use the condition expression span
+                let span = self.pick_span(&[span, self.builder.ast.expressions[expr].span()]);
+                self.add_instruction(cfg::Instruction {
+                    kind: cfg::InstructionKind::Assert {
+                        condition: cond,
+                        message: "Assertion failed".to_string(),
+                    },
+                    span,
                 });
             }
             ast::Statement::Expression { expr, .. } => {
@@ -1058,6 +1076,7 @@ impl<'a> FunctionContext<'a> {
                 op,
                 right,
                 resolved_type,
+                span,
                 ..
             } => {
                 let left_op = self.build_expression(left);
@@ -1086,11 +1105,19 @@ impl<'a> FunctionContext<'a> {
                     .convert_resolved_type(resolved_type.as_ref().unwrap())
                     .unwrap();
                 let dest_var = self.new_temporary(dest_ty);
-                self.add_instruction(cfg::Instruction::BinaryOp {
-                    dest: dest_var,
-                    op: bin_op,
-                    left: left_op,
-                    right: right_op,
+                let span = self.pick_span(&[
+                    span,
+                    self.builder.ast.expressions[left].span(),
+                    self.builder.ast.expressions[right].span(),
+                ]);
+                self.add_instruction(cfg::Instruction {
+                    kind: cfg::InstructionKind::BinaryOp {
+                        dest: dest_var,
+                        op: bin_op,
+                        left: left_op,
+                        right: right_op,
+                    },
+                    span,
                 });
                 cfg::Operand::Variable(dest_var)
             }
@@ -1098,6 +1125,7 @@ impl<'a> FunctionContext<'a> {
                 op,
                 expr,
                 resolved_type,
+                span,
                 ..
             } => {
                 let operand = self.build_expression(expr);
@@ -1113,10 +1141,14 @@ impl<'a> FunctionContext<'a> {
                     .convert_resolved_type(resolved_type.as_ref().unwrap())
                     .unwrap();
                 let dest_var = self.new_temporary(dest_ty);
-                self.add_instruction(cfg::Instruction::UnaryOp {
-                    dest: dest_var,
-                    op: unary_op,
-                    operand,
+                let span = self.pick_span(&[span, self.builder.ast.expressions[expr].span()]);
+                self.add_instruction(cfg::Instruction {
+                    kind: cfg::InstructionKind::UnaryOp {
+                        dest: dest_var,
+                        op: unary_op,
+                        operand,
+                    },
+                    span,
                 });
                 cfg::Operand::Variable(dest_var)
             }
@@ -1124,6 +1156,7 @@ impl<'a> FunctionContext<'a> {
                 callee,
                 args,
                 resolved_type,
+                span,
                 ..
             } => {
                 // Get the function ID from the callee expression
@@ -1174,26 +1207,46 @@ impl<'a> FunctionContext<'a> {
                 let is_void = matches!(self.builder.cfg.types[return_type], cfg::Type::Void);
 
                 if is_void {
-                    let instr = cfg::Instruction::Call {
-                        dest: None,
-                        func: func_id,
-                        args: arg_operands,
+                    let call_span = span;
+                    let span = self.pick_span(&[
+                        call_span,
+                        self.builder.ast.expressions[callee].span(),
+                        args.first()
+                            .and_then(|id| self.builder.ast.expressions[*id].span()),
+                    ]);
+                    let instr = cfg::Instruction {
+                        kind: cfg::InstructionKind::Call {
+                            dest: None,
+                            func: func_id,
+                            args: arg_operands,
+                        },
+                        span,
                     };
                     self.add_instruction(instr);
                     // Void functions used as expressions should not happen in well-formed AST
                     panic!("Void function call used as expression - should have been caught in frontend")
                 } else {
                     let temp_var = self.new_temporary(return_type);
-                    let instr = cfg::Instruction::Call {
-                        dest: Some(temp_var),
-                        func: func_id,
-                        args: arg_operands,
+                    let call_span = span;
+                    let span = self.pick_span(&[
+                        call_span,
+                        self.builder.ast.expressions[callee].span(),
+                        args.first()
+                            .and_then(|id| self.builder.ast.expressions[*id].span()),
+                    ]);
+                    let instr = cfg::Instruction {
+                        kind: cfg::InstructionKind::Call {
+                            dest: Some(temp_var),
+                            func: func_id,
+                            args: arg_operands,
+                        },
+                        span,
                     };
                     self.add_instruction(instr);
                     cfg::Operand::Variable(temp_var)
                 }
             }
-            ast::Expression::Assignment { lhs, rhs, .. } => {
+            ast::Expression::Assignment { lhs, rhs, span, .. } => {
                 let lhs_expr = self.builder.ast.expressions[lhs].clone();
                 match lhs_expr {
                     ast::Expression::Identifier {
@@ -1212,9 +1265,18 @@ impl<'a> FunctionContext<'a> {
                                 // Regular assignment (including non-decomposed Row<T> variables)
                                 let src_op = self.build_expression(rhs);
                                 let dest_var = self.builder.var_map[&var_id];
-                                self.add_instruction(cfg::Instruction::Assign {
-                                    dest: dest_var,
-                                    src: src_op.clone(),
+                                let assign_span = span;
+                                let span = self.pick_span(&[
+                                    assign_span,
+                                    self.builder.ast.expressions[lhs].span(),
+                                    self.builder.ast.expressions[rhs].span(),
+                                ]);
+                                self.add_instruction(cfg::Instruction {
+                                    kind: cfg::InstructionKind::Assign {
+                                        dest: dest_var,
+                                        src: src_op.clone(),
+                                    },
+                                    span,
                                 });
                                 return src_op; // Assignment expression evaluates to the assigned value
                             }
@@ -1262,9 +1324,18 @@ impl<'a> FunctionContext<'a> {
                                         {
                                             if let Some(&field_var_id) = field_map.get(&member.name)
                                             {
-                                                self.add_instruction(cfg::Instruction::Assign {
-                                                    dest: field_var_id,
-                                                    src: src_op.clone(),
+                                                let assign_span = span;
+                                                let span = self.pick_span(&[
+                                                    assign_span,
+                                                    self.builder.ast.expressions[object].span(),
+                                                    self.builder.ast.expressions[rhs].span(),
+                                                ]);
+                                                self.add_instruction(cfg::Instruction {
+                                                    kind: cfg::InstructionKind::Assign {
+                                                        dest: field_var_id,
+                                                        src: src_op.clone(),
+                                                    },
+                                                    span,
                                                 });
                                                 return src_op;
                                             }
@@ -1291,11 +1362,24 @@ impl<'a> FunctionContext<'a> {
                                     resolved_fields.first()
                                 {
                                     let cfg_field_id = self.builder.field_map[field_id];
-                                    self.add_instruction(cfg::Instruction::TableSet {
-                                        table: table_id,
-                                        keys: key_operands,
-                                        field: Some(cfg_field_id),
-                                        value: src_op.clone(),
+                                    let assign_span = span;
+                                    let span = self.pick_span(&[
+                                        assign_span,
+                                        self.builder.ast.expressions[table].span(),
+                                        key_values
+                                            .first()
+                                            .map(|kv| self.builder.ast.expressions[kv.value].span())
+                                            .flatten(),
+                                        self.builder.ast.expressions[rhs].span(),
+                                    ]);
+                                    self.add_instruction(cfg::Instruction {
+                                        kind: cfg::InstructionKind::TableSet {
+                                            table: table_id,
+                                            keys: key_operands,
+                                            field: Some(cfg_field_id),
+                                            value: src_op.clone(),
+                                        },
+                                        span,
                                     });
                                 }
 
@@ -1340,11 +1424,20 @@ impl<'a> FunctionContext<'a> {
                                             if let Some(&field_id) =
                                                 field_name_to_id.get(&field_name)
                                             {
-                                                self.add_instruction(cfg::Instruction::TableSet {
-                                                    table: table_id,
-                                                    keys: key_operands.clone(),
-                                                    field: Some(field_id),
-                                                    value: cfg::Operand::Variable(field_var_id),
+                                                let assign_span = span;
+                                                let span = self.pick_span(&[
+                                                    assign_span,
+                                                    self.builder.ast.expressions[lhs].span(),
+                                                    self.builder.ast.expressions[rhs].span(),
+                                                ]);
+                                                self.add_instruction(cfg::Instruction {
+                                                    kind: cfg::InstructionKind::TableSet {
+                                                        table: table_id,
+                                                        keys: key_operands.clone(),
+                                                        field: Some(field_id),
+                                                        value: cfg::Operand::Variable(field_var_id),
+                                                    },
+                                                    span,
                                                 });
                                             }
                                         }
@@ -1352,11 +1445,20 @@ impl<'a> FunctionContext<'a> {
                                     }
                                 }
                                 // Regular identifier assignment
-                                self.add_instruction(cfg::Instruction::TableSet {
-                                    table: table_id,
-                                    keys: key_operands,
-                                    field: None, // None means set the whole row
-                                    value: src_op.clone(),
+                                let assign_span = span;
+                                let span = self.pick_span(&[
+                                    assign_span,
+                                    self.builder.ast.expressions[lhs].span(),
+                                    self.builder.ast.expressions[rhs].span(),
+                                ]);
+                                self.add_instruction(cfg::Instruction {
+                                    kind: cfg::InstructionKind::TableSet {
+                                        table: table_id,
+                                        keys: key_operands,
+                                        field: None, // None means set the whole row
+                                        value: src_op.clone(),
+                                    },
+                                    span,
                                 });
                                 return src_op;
                             }
@@ -1381,22 +1483,41 @@ impl<'a> FunctionContext<'a> {
                                         &key_value.resolved_field
                                     {
                                         let cfg_field_id = self.builder.field_map[field_id];
-                                        self.add_instruction(cfg::Instruction::TableSet {
-                                            table: table_id,
-                                            keys: key_operands.clone(),
-                                            field: Some(cfg_field_id),
-                                            value: field_value_op,
+                                        let assign_span = span;
+                                        let span = self.pick_span(&[
+                                            assign_span,
+                                            self.builder.ast.expressions[lhs].span(),
+                                            self.builder.ast.expressions[key_value.value].span(),
+                                        ]);
+                                        self.add_instruction(cfg::Instruction {
+                                            kind: cfg::InstructionKind::TableSet {
+                                                table: table_id,
+                                                keys: key_operands.clone(),
+                                                field: Some(cfg_field_id),
+                                                value: field_value_op,
+                                            },
+                                            span,
                                         });
                                     } else {
                                         // Fallback: attempt to match by field name (the identifier key).
                                         // key_value.key is an Identifier; obtain its string name for fallback lookup
                                         let field_name = key_value.key.name.clone();
                                         if let Some(fid) = field_name_to_id.get(&field_name) {
-                                            self.add_instruction(cfg::Instruction::TableSet {
-                                                table: table_id,
-                                                keys: key_operands.clone(),
-                                                field: Some(*fid),
-                                                value: field_value_op,
+                                            let assign_span = span;
+                                            let span = self.pick_span(&[
+                                                assign_span,
+                                                self.builder.ast.expressions[lhs].span(),
+                                                self.builder.ast.expressions[key_value.value]
+                                                    .span(),
+                                            ]);
+                                            self.add_instruction(cfg::Instruction {
+                                                kind: cfg::InstructionKind::TableSet {
+                                                    table: table_id,
+                                                    keys: key_operands.clone(),
+                                                    field: Some(*fid),
+                                                    value: field_value_op,
+                                                },
+                                                span,
                                             });
                                         } else {
                                             // If field still not found, emit a panic for now to surface issue.
@@ -1410,11 +1531,20 @@ impl<'a> FunctionContext<'a> {
                             _ => {
                                 // Regular table assignment for other expression types
                                 let src_op = self.build_expression(rhs);
-                                self.add_instruction(cfg::Instruction::TableSet {
-                                    table: table_id,
-                                    keys: key_operands,
-                                    field: None, // None means set the whole row
-                                    value: src_op.clone(),
+                                let assign_span = span;
+                                let span = self.pick_span(&[
+                                    assign_span,
+                                    self.builder.ast.expressions[lhs].span(),
+                                    self.builder.ast.expressions[rhs].span(),
+                                ]);
+                                self.add_instruction(cfg::Instruction {
+                                    kind: cfg::InstructionKind::TableSet {
+                                        table: table_id,
+                                        keys: key_operands,
+                                        field: None, // None means set the whole row
+                                        value: src_op.clone(),
+                                    },
+                                    span,
                                 });
                                 return src_op;
                             }
@@ -1522,6 +1652,7 @@ impl<'a> FunctionContext<'a> {
                 table,
                 key_values,
                 resolved_type,
+                span,
                 ..
             } => {
                 // Handle table row access: Table[key1: val1, key2: val2]
@@ -1542,11 +1673,22 @@ impl<'a> FunctionContext<'a> {
                 let temp_var = self.new_temporary(return_type);
 
                 // For direct table access, we don't specify a field (get the whole row)
-                self.add_instruction(cfg::Instruction::TableGet {
-                    dest: temp_var,
-                    table: table_id,
-                    keys: key_operands,
-                    field: None, // None means get the whole row
+                let tr_span = self.pick_span(&[
+                    span,
+                    self.builder.ast.expressions[table].span(),
+                    key_values
+                        .first()
+                        .map(|kv| self.builder.ast.expressions[kv.value].span())
+                        .flatten(),
+                ]);
+                self.add_instruction(cfg::Instruction {
+                    kind: cfg::InstructionKind::TableGet {
+                        dest: temp_var,
+                        table: table_id,
+                        keys: key_operands,
+                        field: None, // None means get the whole row
+                    },
+                    span: tr_span,
                 });
 
                 cfg::Operand::Variable(temp_var)
@@ -1556,6 +1698,7 @@ impl<'a> FunctionContext<'a> {
                 member,
                 resolved_fields,
                 resolved_type,
+                span,
                 ..
             } => {
                 // Handle member access: obj.field
@@ -1655,11 +1798,16 @@ impl<'a> FunctionContext<'a> {
                             resolved_fields.first()
                         {
                             let cfg_field_id = self.builder.field_map[field_id];
-                            self.add_instruction(cfg::Instruction::TableGet {
-                                dest: temp_var,
-                                table: table_id,
-                                keys: key_operands,
-                                field: Some(cfg_field_id),
+                            let ma_span = self
+                                .pick_span(&[span, self.builder.ast.expressions[object].span()]);
+                            self.add_instruction(cfg::Instruction {
+                                kind: cfg::InstructionKind::TableGet {
+                                    dest: temp_var,
+                                    table: table_id,
+                                    keys: key_operands,
+                                    field: Some(cfg_field_id),
+                                },
+                                span: ma_span,
                             });
                         }
 
@@ -1733,6 +1881,18 @@ impl<'a> FunctionContext<'a> {
                 .push(block_id);
         }
         self.builder.cfg.basic_blocks[block_id].terminator = term;
+    }
+
+    /// Pick the first available span from a list of candidates.
+    /// This helps attach a meaningful source location for generated instructions.
+    fn pick_span(&self, candidates: &[Option<Span>]) -> Span {
+        for c in candidates {
+            if let Some(s) = c {
+                return *s;
+            }
+        }
+        // As a last resort, return an "unknown" span instead of a synthetic "<generated>".
+        Span::new(0, 0, "unknown")
     }
 
     // --- Variable and Scope Management ---
@@ -1834,7 +1994,10 @@ impl<'a> FunctionContext<'a> {
         let source_expr = self.builder.ast.expressions[source_expr_id].clone();
         match source_expr {
             ast::Expression::TableRowAccess {
-                table, key_values, ..
+                table,
+                key_values,
+                span,
+                ..
             } => {
                 // This is an assignment like: var c: Row<Customer> = Customer[...];
                 // Decompose into: c#field1 = Customer[...].field1; c#field2 = Customer[...].field2; etc.
@@ -1860,11 +2023,21 @@ impl<'a> FunctionContext<'a> {
                         table_fields.into_iter().collect();
 
                     if let Some(&field_id) = field_name_to_id.get(field_name) {
-                        self.add_instruction(cfg::Instruction::TableGet {
-                            dest: field_var_id,
-                            table: table_id,
-                            keys: key_operands,
-                            field: Some(field_id),
+                        let tr_span = self.pick_span(&[
+                            span,
+                            self.builder.ast.expressions[table].span(),
+                            key_expr_ids
+                                .first()
+                                .and_then(|id| self.builder.ast.expressions[*id].span()),
+                        ]);
+                        self.add_instruction(cfg::Instruction {
+                            kind: cfg::InstructionKind::TableGet {
+                                dest: field_var_id,
+                                table: table_id,
+                                keys: key_operands,
+                                field: Some(field_id),
+                            },
+                            span: tr_span,
                         });
                     }
                 }

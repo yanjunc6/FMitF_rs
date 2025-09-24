@@ -3,7 +3,7 @@
 use super::Boogie::{
     gen_Boogie::BoogieProgramGenerator, BoogieExpr, BoogieExprKind, BoogieLine, BoogieProgram,
 };
-use crate::cfg::{BasicBlock, Instruction, Operand, Program as CfgProgram};
+use crate::cfg::{BasicBlock, Instruction, InstructionKind, Operand, Program as CfgProgram};
 use crate::verification::{
     errors::Results,
     scope::{ExecutionScope, SliceId},
@@ -55,8 +55,8 @@ impl BaseVerificationGenerator {
     ) -> Results<Vec<BoogieLine>> {
         self.scope.set_current_slice(slice_id);
         let mut lines = Vec::new();
-        match instruction {
-            Instruction::Assign { dest, src } => {
+        match &instruction.kind {
+            InstructionKind::Assign { dest, src } => {
                 let dest_name = self
                     .scope
                     .get_scoped_variable_name(&self.cfg_program, *dest);
@@ -74,7 +74,7 @@ impl BaseVerificationGenerator {
 
                 lines.push(BoogieLine::Assign(dest_name, src_expr));
             }
-            Instruction::BinaryOp {
+            InstructionKind::BinaryOp {
                 dest,
                 op,
                 left,
@@ -110,7 +110,7 @@ impl BaseVerificationGenerator {
                 };
                 lines.push(BoogieLine::Assign(dest_name, bin_expr));
             }
-            Instruction::UnaryOp { dest, op, operand } => {
+            InstructionKind::UnaryOp { dest, op, operand } => {
                 let dest_name = self
                     .scope
                     .get_scoped_variable_name(&self.cfg_program, *dest);
@@ -132,7 +132,7 @@ impl BaseVerificationGenerator {
                 };
                 lines.push(BoogieLine::Assign(dest_name, un_expr));
             }
-            Instruction::Call { dest, func, args } => {
+            InstructionKind::Call { dest, func, args } => {
                 let func_decl = &self.cfg_program.functions[*func];
                 let func_name = func_decl.name.clone();
                 let mut boogie_args = Vec::new();
@@ -165,7 +165,7 @@ impl BaseVerificationGenerator {
                     // This would be a procedure call, which needs a different BoogieLine variant if it's not an expression
                 }
             }
-            Instruction::TableGet {
+            InstructionKind::TableGet {
                 dest,
                 table,
                 keys,
@@ -206,7 +206,7 @@ impl BaseVerificationGenerator {
                 };
                 lines.push(BoogieLine::Assign(dest_name, map_select));
             }
-            Instruction::TableSet {
+            InstructionKind::TableSet {
                 table,
                 keys,
                 field,
@@ -244,7 +244,7 @@ impl BaseVerificationGenerator {
                 };
                 lines.push(BoogieLine::Assign(var_name, map_store));
             }
-            Instruction::Assert { .. } => {
+            InstructionKind::Assert { .. } => {
                 // let cond_name = self.get_operand_name(condition)?;
                 // let cond_expr = self
                 //     .generator

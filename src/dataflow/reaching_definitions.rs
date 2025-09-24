@@ -2,7 +2,9 @@ use super::{
     AnalysisKind, AnalysisLevel, DataflowAnalysis, DataflowResults, Direction, Lattice, SetLattice,
     StmtLoc, TransferFunction,
 };
-use crate::cfg::{BasicBlock, BasicBlockId, Function, Instruction, Terminator, VariableId};
+use crate::cfg::{
+    BasicBlock, BasicBlockId, Function, Instruction, InstructionKind, Terminator, VariableId,
+};
 
 /// Definition point for a variable (simplified)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -28,8 +30,8 @@ impl TransferFunction<SetLattice<Definition>> for ReachingDefTransfer {
 
         let mut result_set = state.as_set().unwrap().clone();
 
-        match inst {
-            Instruction::Assign { dest, .. } => {
+        match &inst.kind {
+            InstructionKind::Assign { dest, .. } => {
                 // Kill all previous definitions of this variable
                 result_set.retain(|def| def.var != *dest);
                 // Gen: Add new definition
@@ -38,7 +40,7 @@ impl TransferFunction<SetLattice<Definition>> for ReachingDefTransfer {
                     loc: stmt_loc,
                 });
             }
-            Instruction::BinaryOp { dest, .. } => {
+            InstructionKind::BinaryOp { dest, .. } => {
                 // Kill all previous definitions of this variable
                 result_set.retain(|def| def.var != *dest);
                 // Gen: Add new definition
@@ -47,7 +49,7 @@ impl TransferFunction<SetLattice<Definition>> for ReachingDefTransfer {
                     loc: stmt_loc,
                 });
             }
-            Instruction::UnaryOp { dest, .. } => {
+            InstructionKind::UnaryOp { dest, .. } => {
                 // Kill all previous definitions of this variable
                 result_set.retain(|def| def.var != *dest);
                 // Gen: Add new definition
@@ -56,7 +58,7 @@ impl TransferFunction<SetLattice<Definition>> for ReachingDefTransfer {
                     loc: stmt_loc,
                 });
             }
-            Instruction::Call { dest, .. } => {
+            InstructionKind::Call { dest, .. } => {
                 // Kill all previous definitions of this variable (if any)
                 if let Some(dest_var) = dest {
                     result_set.retain(|def| def.var != *dest_var);
@@ -67,7 +69,7 @@ impl TransferFunction<SetLattice<Definition>> for ReachingDefTransfer {
                     });
                 }
             }
-            Instruction::TableGet { dest, .. } => {
+            InstructionKind::TableGet { dest, .. } => {
                 // Kill all previous definitions of this variable
                 result_set.retain(|def| def.var != *dest);
                 // Gen: Add new definition
@@ -76,7 +78,7 @@ impl TransferFunction<SetLattice<Definition>> for ReachingDefTransfer {
                     loc: stmt_loc,
                 });
             }
-            Instruction::TableSet { .. } | Instruction::Assert { .. } => {
+            InstructionKind::TableSet { .. } | InstructionKind::Assert { .. } => {
                 // These instructions don't define any variables
             }
         }

@@ -3,7 +3,9 @@ use super::{
     TransferFunction,
 };
 use crate::cfg::BasicBlock;
-use crate::cfg::{BasicBlockId, FieldId, Function, Instruction, TableId, Terminator};
+use crate::cfg::{
+    BasicBlockId, FieldId, Function, Instruction, InstructionKind, TableId, Terminator,
+};
 use crate::dataflow::StmtLoc;
 
 /// Table access tracking
@@ -37,8 +39,8 @@ impl TransferFunction<SetLattice<TableAccess>> for TableModRefTransfer {
 
         let mut result_set = state.as_set().unwrap().clone();
 
-        match inst {
-            Instruction::TableGet { table, field, .. } => {
+        match &inst.kind {
+            InstructionKind::TableGet { table, field, .. } => {
                 // Read from the table
                 if let Some(field_id) = field {
                     result_set.insert(TableAccess {
@@ -48,7 +50,7 @@ impl TransferFunction<SetLattice<TableAccess>> for TableModRefTransfer {
                     });
                 }
             }
-            Instruction::TableSet { table, field, .. } => {
+            InstructionKind::TableSet { table, field, .. } => {
                 // Write to the table
                 if let Some(field_id) = field {
                     result_set.insert(TableAccess {

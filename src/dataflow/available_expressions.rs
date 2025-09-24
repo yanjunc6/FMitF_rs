@@ -3,7 +3,8 @@ use super::{
     StmtLoc, TransferFunction,
 };
 use crate::cfg::{
-    BasicBlockId, BinaryOp, Function, Instruction, Operand, Terminator, UnaryOp, VariableId,
+    BasicBlockId, BinaryOp, Function, Instruction, InstructionKind, Operand, Terminator, UnaryOp,
+    VariableId,
 };
 
 /// Available expression for tracking computations
@@ -48,8 +49,8 @@ impl TransferFunction<SetLattice<AvailExpr>> for AvailExprTransfer {
 
         let mut result_set = state.as_set().unwrap().clone();
 
-        match inst {
-            Instruction::Assign { dest, src } => {
+        match &inst.kind {
+            InstructionKind::Assign { dest, src } => {
                 // Kill expressions that use the assigned variable
                 result_set.retain(|expr| !self.expr_uses_var(expr, *dest));
 
@@ -59,7 +60,7 @@ impl TransferFunction<SetLattice<AvailExpr>> for AvailExprTransfer {
                     op: ExprKind::Use(src.clone()),
                 });
             }
-            Instruction::BinaryOp {
+            InstructionKind::BinaryOp {
                 dest,
                 op,
                 left,
@@ -78,7 +79,7 @@ impl TransferFunction<SetLattice<AvailExpr>> for AvailExprTransfer {
                     },
                 });
             }
-            Instruction::UnaryOp { dest, op, operand } => {
+            InstructionKind::UnaryOp { dest, op, operand } => {
                 // Kill expressions that use the assigned variable
                 result_set.retain(|expr| !self.expr_uses_var(expr, *dest));
 
@@ -91,7 +92,7 @@ impl TransferFunction<SetLattice<AvailExpr>> for AvailExprTransfer {
                     },
                 });
             }
-            Instruction::Call { dest, func, args } => {
+            InstructionKind::Call { dest, func, args } => {
                 if let Some(dest_var) = dest {
                     // Kill expressions that use the assigned variable
                     result_set.retain(|expr| !self.expr_uses_var(expr, *dest_var));
@@ -106,12 +107,12 @@ impl TransferFunction<SetLattice<AvailExpr>> for AvailExprTransfer {
                     });
                 }
             }
-            Instruction::TableGet { dest, .. } => {
+            InstructionKind::TableGet { dest, .. } => {
                 // Kill expressions that use the assigned variable
                 result_set.retain(|expr| !self.expr_uses_var(expr, *dest));
                 // Don't generate expression for table operations (they're not pure)
             }
-            Instruction::TableSet { .. } | Instruction::Assert { .. } => {
+            InstructionKind::TableSet { .. } | InstructionKind::Assert { .. } => {
                 // These instructions don't define variables or generate expressions
             }
         }

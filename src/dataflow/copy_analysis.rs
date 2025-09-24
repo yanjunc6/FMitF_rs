@@ -3,7 +3,8 @@ use super::{
     MapLattice, StmtLoc, TransferFunction,
 };
 use crate::cfg::{
-    BasicBlock, BasicBlockId, Function, Instruction, Operand, Terminator, VariableId,
+    BasicBlock, BasicBlockId, Function, Instruction, InstructionKind, Operand, Terminator,
+    VariableId,
 };
 
 /// Transfer function for copy propagation analysis
@@ -23,8 +24,8 @@ impl TransferFunction<MapLattice<VariableId, VariableId>> for CopyTransfer {
 
         let mut result = state.clone();
 
-        match inst {
-            Instruction::Assign { dest, src } => {
+        match &inst.kind {
+            InstructionKind::Assign { dest, src } => {
                 // Kill: remove any copy relation for this variable
                 result.insert(*dest, Flat::Bottom);
 
@@ -33,19 +34,19 @@ impl TransferFunction<MapLattice<VariableId, VariableId>> for CopyTransfer {
                     result.insert(*dest, Flat::Value(*source_var));
                 }
             }
-            Instruction::BinaryOp { dest, .. }
-            | Instruction::UnaryOp { dest, .. }
-            | Instruction::TableGet { dest, .. } => {
+            InstructionKind::BinaryOp { dest, .. }
+            | InstructionKind::UnaryOp { dest, .. }
+            | InstructionKind::TableGet { dest, .. } => {
                 // These create new values, not copies
                 result.insert(*dest, Flat::Bottom);
             }
-            Instruction::Call { dest, .. } => {
+            InstructionKind::Call { dest, .. } => {
                 // Function calls create new values, not copies
                 if let Some(dest_var) = dest {
                     result.insert(*dest_var, Flat::Bottom);
                 }
             }
-            Instruction::TableSet { .. } | Instruction::Assert { .. } => {
+            InstructionKind::TableSet { .. } | InstructionKind::Assert { .. } => {
                 // These instructions don't affect copy relations
             }
         }
