@@ -31,7 +31,7 @@ impl BoogieStateManager {
         base: &mut BaseVerificationGenerator,
         cfg_program: &CfgProgram,
         analysis_info: &SliceAnalysisInfo,
-        _unit: &CommutativeUnit,
+        unit: &CommutativeUnit,
     ) -> Results<()> {
         base.add_comment_to_current_procedure("--- Step 1: Havoc initial state ---".to_string());
 
@@ -54,6 +54,24 @@ impl BoogieStateManager {
                 let var_name = format!("s{}_{}", slice, cfg_program.variables[var_id].name);
                 base.add_line(BoogieLine::Havoc(var_name));
             }
+        }
+
+        // Initialize active flags to true (don't havoc them, set them directly)
+        for (&slice_id, _) in &unit.hops_per_slice {
+            let active_var_name = format!("s{}_active", slice_id);
+
+            // Ensure the active flag variable exists as a local variable
+            base.generator.ensure_local_variable_exists(
+                &active_var_name,
+                crate::verification::Boogie::BoogieType::Bool,
+            );
+
+            base.add_line(BoogieLine::Assign(
+                active_var_name,
+                BoogieExpr {
+                    kind: BoogieExprKind::BoolConst(true),
+                },
+            ));
         }
 
         Ok(())
@@ -126,7 +144,7 @@ impl BoogieStateManager {
         base: &mut BaseVerificationGenerator,
         cfg_program: &CfgProgram,
         analysis_info: &SliceAnalysisInfo,
-        _unit: &CommutativeUnit,
+        unit: &CommutativeUnit,
     ) -> Results<()> {
         base.add_comment_to_current_procedure("Restoring initial state:".to_string());
 
@@ -157,6 +175,15 @@ impl BoogieStateManager {
                 };
                 base.add_line(BoogieLine::Assign(var_name, assign_expr));
             }
+        }
+
+        // Reset active flags back to true (they should always be active between interleavings)
+        for (&slice_id, _) in &unit.hops_per_slice {
+            let active_var_name = format!("s{}_active", slice_id);
+            let assign_expr = BoogieExpr {
+                kind: BoogieExprKind::BoolConst(true),
+            };
+            base.add_line(BoogieLine::Assign(active_var_name, assign_expr));
         }
 
         Ok(())
