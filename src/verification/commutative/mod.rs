@@ -87,8 +87,12 @@ impl CommutativeVerificationManager {
                     // Create a fresh Boogie program for this unit
                     let mut unit_base = BaseVerificationGenerator::new(cfg_program);
                     unit_base.generator.program.name = format!(
-                        "commutative_simple_hop{}_vs_hop{}",
+                        "commutative_f{}_i{}_h{}_vs_f{}_i{}_h{}",
+                        unit.c_edge.source.function_id.index(),
+                        unit.c_edge.source.instance,
                         unit.c_edge.source.hop_id.index(),
+                        unit.c_edge.target.function_id.index(),
+                        unit.c_edge.target.instance,
                         unit.c_edge.target.hop_id.index()
                     );
 
