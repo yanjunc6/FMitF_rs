@@ -10,7 +10,7 @@ type String;
 
 const empty: String;
 
-function Concat(x: String, y: String): String;
+function concat(x: String, y: String): String;
 
 // Generic to-string for any type T
 function str<a>(x: a): String;
@@ -21,8 +21,8 @@ function str<a>(x: a): String;
 // --------------------------
 
 // Identity of empty for concat
-axiom (forall s: String :: {Concat(empty, s)} Concat(empty, s) == s);
-axiom (forall s: String :: {Concat(s, empty)} Concat(s, empty) == s);
+axiom (forall s: String :: {concat(empty, s)} concat(empty, s) == s);
+axiom (forall s: String :: {concat(s, empty)} concat(s, empty) == s);
 
 // Injectivity of str<T> (for each instantiation of T)
 axiom (forall<a> x: a, y: a :: {str(x), str(y)} str(x) == str(y) ==> x == y);
@@ -54,14 +54,14 @@ procedure TestConcatIdentityLeft()
 {
   var s: String;
   havoc s;
-  assert Concat(empty, s) == s;
+  assert concat(empty, s) == s;
 }
 
 procedure TestConcatIdentityRight()
 {
   var s: String;
   havoc s;
-  assert Concat(s, empty) == s;
+  assert concat(s, empty) == s;
 }
 
 procedure Test_str_int_Injective()
@@ -89,8 +89,8 @@ procedure Test_str_NotEmpty()
 
 procedure TestConcatWith_str()
 {
-  assert Concat(str(1.5), empty) == str(1.5);
-  assert Concat(empty, str(42)) == str(42);
+  assert concat(str(1.5), empty) == str(1.5);
+  assert concat(empty, str(42)) == str(42);
 }
 
 
@@ -136,8 +136,8 @@ procedure TestEqualityCongruence()
   var s1, s2: String;
   havoc s1, s2;
   assume s1 == s2;
-  assert Concat(s1, empty) == Concat(s2, empty);
-  assert Concat(empty, s1) == Concat(empty, s2);
+  assert concat(s1, empty) == concat(s2, empty);
+  assert concat(empty, s1) == concat(empty, s2);
 }
 
 procedure Test_SameLiteralIsSameSymbol()

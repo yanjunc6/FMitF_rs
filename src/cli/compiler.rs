@@ -425,9 +425,9 @@ impl Compiler {
             format!("{}_sc_graph.dot", prefix)
         };
         let combined_filename = if prefix.is_empty() {
-            "combined_sc_graph.dot".to_string()
+            "sc_graph_combined.dot".to_string()
         } else {
-            format!("{}_combined_sc_graph.dot", prefix)
+            format!("{}_sc_graph_combined.dot", prefix)
         };
 
         // Write raw graph

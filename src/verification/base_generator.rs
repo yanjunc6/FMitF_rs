@@ -31,7 +31,8 @@ impl BaseVerificationGenerator {
                 ("float", "real"),
                 ("int", "int"),
                 ("str", "str"),
-                ("+", "Concat"),
+                ("+", "concat"),
+                ("genUUID", "genUUID"),
             ]),
         }
     }
@@ -303,7 +304,12 @@ impl BaseVerificationGenerator {
             Operand::Constant(c) => Ok(self.generator.convert_constant(c)?.to_string()),
             Operand::Global(g) => {
                 let g_const = &cfg_program.global_consts[*g];
-                Ok(g_const.name.clone())
+                // Special handling for __slice__ constant - replace with actual slice ID
+                if g_const.name == "__slice__" {
+                    Ok(slice_id.to_string())
+                } else {
+                    Ok(g_const.name.clone())
+                }
             }
         }
     }
