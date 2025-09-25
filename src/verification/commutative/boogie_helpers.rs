@@ -4,7 +4,7 @@ use crate::verification::errors::Results;
 use crate::verification::scope::SliceId;
 use crate::verification::Boogie::{
     gen_Boogie::BoogieProgramGenerator, BoogieBinOp, BoogieError, BoogieExpr, BoogieExprKind,
-    BoogieLine, ErrorMessage,
+    BoogieLine, ErrorMessage, VerificationNodeId,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -244,8 +244,8 @@ impl BoogieStateManager {
         analysis_info: &SliceAnalysisInfo,
         a_then_b_vars: &VariableSnapshots,
         b_then_a_vars: &VariableSnapshots,
-        hop_id_a: usize,
-        hop_id_b: usize,
+        node_a: (usize, u32, usize), // (function_id, instance, hop_id)
+        node_b: (usize, u32, usize), // (function_id, instance, hop_id)
     ) -> Results<()> {
         base.add_comment_to_current_procedure("Verifying A->B === B->A equivalence:".to_string());
 
@@ -352,10 +352,20 @@ impl BoogieStateManager {
 
         let error_msg = ErrorMessage {
             boogie_error: BoogieError::SpecialInterleavingNonEquivalence {
-                hop_id_1: hop_id_a,
-                hop_id_2: hop_id_b,
+                node_1: VerificationNodeId {
+                    function_id: node_a.0,
+                    instance: node_a.1,
+                    hop_id: node_a.2,
+                },
+                node_2: VerificationNodeId {
+                    function_id: node_b.0,
+                    instance: node_b.1,
+                    hop_id: node_b.2,
+                },
             },
         };
+
+        // Remove debug output
 
         base.add_assertion_to_current_procedure(equivalence_assertion, error_msg);
 

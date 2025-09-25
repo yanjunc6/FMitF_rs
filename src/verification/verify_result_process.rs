@@ -59,11 +59,11 @@ impl VerifyResultProcessor {
                         span,
                     ));
                 }
-                BoogieError::SliceCommutativityViolation { hop_id_1, hop_id_2 } => {
-                    verified_not_commutative_pairs.push((hop_id_1, hop_id_2));
+                BoogieError::SliceCommutativityViolation { node_1, node_2 } => {
+                    verified_not_commutative_pairs.push((node_1, node_2));
                 }
-                BoogieError::SpecialInterleavingNonEquivalence { hop_id_1, hop_id_2 } => {
-                    verified_not_commutative_pairs.push((hop_id_1, hop_id_2));
+                BoogieError::SpecialInterleavingNonEquivalence { node_1, node_2 } => {
+                    verified_not_commutative_pairs.push((node_1, node_2));
                 }
             }
         }

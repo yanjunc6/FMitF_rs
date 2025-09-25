@@ -275,6 +275,8 @@ impl Compiler {
                 pb.finish_with_message("Boogie runs complete");
 
                 // 3) Append outputs to compiler.log and parse errors sequentially
+                let mut exec_errors = Vec::new();
+
                 for (file_name, output) in run_results {
                     match output {
                         Ok(out) => {
@@ -293,26 +295,25 @@ impl Compiler {
                                 || combined_output.contains("type errors detected")
                                 || combined_output.contains("type checking errors detected")
                             {
-                                return Err(Box::from(format!(
-                                    "Boogie compilation failed. Check compiler.log for details."
-                                )));
+                                exec_errors.push(format!(
+                                    "Boogie compilation failed for {}: Check compiler.log for details.", 
+                                    file_name
+                                ));
+                                continue; // Continue logging other results instead of returning immediately
                             }
 
-                            // Parse Boogie output lines for embedded {:msg "..."}
+                            // Parse Boogie output lines for S-expressions
+                            // Boogie outputs the {:msg "..."} content directly, not wrapped
                             let mut parse_streams = vec![stdout_str.as_ref(), stderr_str.as_ref()];
                             for s in parse_streams.drain(..) {
-                                for cap in s.match_indices("{:msg \"") {
-                                    let start = cap.0 + "{:msg \"".len();
-                                    if let Some(end_rel) = s[start..].find("\"}") {
-                                        let end = start + end_rel;
-                                        let payload = &s[start..end];
-                                        if let Some(err) = crate::verification::Boogie::BoogieError::from_boogie_string(payload) {
+                                // Split into lines and try to parse each line as an S-expression
+                                for line in s.lines() {
+                                    let line = line.trim();
+                                    if line.starts_with('(') && line.ends_with(')') {
+                                        // This might be an S-expression - try to parse it
+                                        if let Some(err) = crate::verification::Boogie::BoogieError::from_boogie_string(line) {
                                             // This is a valid BoogieError (verification result) - add it
                                             all_boogie_errors.push(err);
-                                        } else {
-                                            // {:msg "..."} pattern found but couldn't parse as BoogieError
-                                            // This indicates an actual compilation error
-                                            return Err(Box::from(format!("Boogie compilation error detected. Check compiler.log for details.")));
                                         }
                                     }
                                 }
@@ -323,11 +324,18 @@ impl Compiler {
                                 "===== Boogie run for {} FAILED: {} =====",
                                 file_name, e
                             ))?;
-                            return Err(Box::from(format!(
-                                "Failed to run Boogie. Check compiler.log for details."
-                            )));
+                            exec_errors
+                                .push(format!("Failed to run Boogie for {}: {}", file_name, e));
                         }
                     }
+                }
+
+                // After logging all results, check if there were any errors
+                if !exec_errors.is_empty() {
+                    return Err(Box::from(format!(
+                        "Boogie verification failed: {} errors. Check compiler.log for details.",
+                        exec_errors.len()
+                    )));
                 }
 
                 // 4) Process results and write simplified graphs

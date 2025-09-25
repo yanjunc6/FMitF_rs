@@ -112,8 +112,16 @@ impl CommutativeStrategy {
             &a_then_b_vars,
             &b_then_a_vars,
             &state_manager,
-            unit.c_edge.source.hop_id.index(),
-            unit.c_edge.target.hop_id.index(),
+            (
+                unit.c_edge.source.function_id.index(),
+                unit.c_edge.source.instance,
+                unit.c_edge.source.hop_id.index(),
+            ),
+            (
+                unit.c_edge.target.function_id.index(),
+                unit.c_edge.target.instance,
+                unit.c_edge.target.hop_id.index(),
+            ),
         )?;
 
         // Finalize and return the constructed procedure
@@ -159,8 +167,8 @@ impl CommutativeStrategy {
         a_then_b_vars: &VariableSnapshots,
         b_then_a_vars: &VariableSnapshots,
         state_manager: &BoogieStateManager,
-        hop_id_a: usize,
-        hop_id_b: usize,
+        node_a: (usize, u32, usize), // (function_id, instance, hop_id)
+        node_b: (usize, u32, usize), // (function_id, instance, hop_id)
     ) -> Results<()> {
         base.add_comment_to_current_procedure(
             "--- Step 4: Verify A→B ≡ B→A (Special interleavings equivalence) ---".to_string(),
@@ -172,8 +180,8 @@ impl CommutativeStrategy {
             analysis_info,
             a_then_b_vars,
             b_then_a_vars,
-            hop_id_a,
-            hop_id_b,
+            node_a,
+            node_b,
         )
     }
 }

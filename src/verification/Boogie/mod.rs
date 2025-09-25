@@ -59,6 +59,14 @@ pub enum BoogieLine {
     },
 }
 
+/// Node identifier for verification errors
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerificationNodeId {
+    pub function_id: usize,
+    pub instance: u32,
+    pub hop_id: usize,
+}
+
 /// Boogie-specific verification errors that get embedded in Boogie assertions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BoogieError {
@@ -69,12 +77,12 @@ pub enum BoogieError {
         span: Option<Span>,
     },
     SliceCommutativityViolation {
-        hop_id_1: usize,
-        hop_id_2: usize,
+        node_1: VerificationNodeId,
+        node_2: VerificationNodeId,
     },
     SpecialInterleavingNonEquivalence {
-        hop_id_1: usize,
-        hop_id_2: usize,
+        node_1: VerificationNodeId,
+        node_2: VerificationNodeId,
     },
 }
 /// Attach an error message with structured error information to an assertion.
