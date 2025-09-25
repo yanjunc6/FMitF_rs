@@ -193,6 +193,14 @@ impl BaseVerificationGenerator {
                 let mut key_exprs = Vec::new();
                 for key in keys {
                     let key_name = self.get_operand_name(key, slice_id, cfg_program)?;
+                    // ensure key locals exist if variables
+                    if let Operand::Variable(var_id) = key {
+                        let kty = BoogieProgramGenerator::convert_type_id(
+                            cfg_program,
+                            &cfg_program.variables[*var_id].ty,
+                        );
+                        self.generator.ensure_local_variable_exists(&key_name, kty);
+                    }
                     key_exprs.push(self.generator.convert_operand(cfg_program, key, key_name)?);
                 }
                 let map_select = BoogieExpr {
@@ -221,9 +229,24 @@ impl BaseVerificationGenerator {
                 let mut key_exprs = Vec::new();
                 for key in keys {
                     let key_name = self.get_operand_name(key, slice_id, cfg_program)?;
+                    if let Operand::Variable(var_id) = key {
+                        let kty = BoogieProgramGenerator::convert_type_id(
+                            cfg_program,
+                            &cfg_program.variables[*var_id].ty,
+                        );
+                        self.generator.ensure_local_variable_exists(&key_name, kty);
+                    }
                     key_exprs.push(self.generator.convert_operand(cfg_program, key, key_name)?);
                 }
                 let value_name = self.get_operand_name(value, slice_id, cfg_program)?;
+                if let Operand::Variable(var_id) = value {
+                    let vty = BoogieProgramGenerator::convert_type_id(
+                        cfg_program,
+                        &cfg_program.variables[*var_id].ty,
+                    );
+                    self.generator
+                        .ensure_local_variable_exists(&value_name, vty);
+                }
                 let value_expr = self
                     .generator
                     .convert_operand(cfg_program, value, value_name)?;
@@ -263,7 +286,14 @@ impl BaseVerificationGenerator {
         self.scope.set_current_slice(slice_id);
         match operand {
             Operand::Variable(var_id) => {
-                Ok(self.scope.get_scoped_variable_name(cfg_program, *var_id))
+                // Ensure the local variable exists before use
+                let name = self.scope.get_scoped_variable_name(cfg_program, *var_id);
+                let var_type = BoogieProgramGenerator::convert_type_id(
+                    cfg_program,
+                    &cfg_program.variables[*var_id].ty,
+                );
+                self.generator.ensure_local_variable_exists(&name, var_type);
+                Ok(name)
             }
             Operand::Constant(c) => Ok(self.generator.convert_constant(c)?.to_string()),
             Operand::Global(g) => {
