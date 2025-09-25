@@ -31,7 +31,7 @@ impl ConstantFoldingPass {
                     _ => false,
                 }
             }
-            Operand::Constant(_) | Operand::Global(_) => false, // Already a constant
+            Operand::Constant(_) | Operand::Global(_) | Operand::Table(_) => false, // Already non-variable
         }
     }
 

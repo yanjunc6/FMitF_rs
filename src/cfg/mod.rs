@@ -261,6 +261,7 @@ pub enum Operand {
     Variable(VariableId),
     Constant(ConstantValue),
     Global(GlobalConstId),
+    Table(TableId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

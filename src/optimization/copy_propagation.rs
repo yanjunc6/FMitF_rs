@@ -29,7 +29,7 @@ impl CopyPropagationPass {
                     _ => false,
                 }
             }
-            Operand::Constant(_) | Operand::Global(_) => false, // Constants don't need copy propagation
+            Operand::Constant(_) | Operand::Global(_) | Operand::Table(_) => false, // Non-variables don't need copy propagation
         }
     }
 

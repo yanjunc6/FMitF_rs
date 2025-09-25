@@ -1061,12 +1061,8 @@ impl<'a> FunctionContext<'a> {
                     }
                     ast::IdentifierResolution::Table(id) => {
                         let cfg_table_id = self.builder.table_map[&id];
-                        let table_type =
-                            self.builder.cfg.types.alloc(cfg::Type::Table(cfg_table_id));
-                        let temp_var = self.new_temporary(table_type);
-                        // This is a placeholder. We don't have a value to assign to the temporary.
-                        // The verifier should handle the semantics of using a table as a value.
-                        cfg::Operand::Variable(temp_var)
+                        // Lower table identifiers directly to a Table operand
+                        cfg::Operand::Table(cfg_table_id)
                     }
                     _ => panic!("Unknown identifier resolution type: {:?}", res),
                 }
@@ -1437,7 +1433,8 @@ impl<'a> FunctionContext<'a> {
                     _ => panic!("Dynamic callee should not reach CFG builder"),
                 };
 
-                let arg_operands: Vec<_> = args
+                // Build arguments uniformly; table identifiers lower to Operand::Table via build_expression
+                let arg_operands: Vec<cfg::Operand> = args
                     .iter()
                     .map(|arg_expr_id| self.build_expression(*arg_expr_id))
                     .collect();

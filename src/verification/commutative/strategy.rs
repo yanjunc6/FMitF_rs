@@ -269,6 +269,10 @@ impl InterleavingExecutor {
                             crate::cfg::Operand::Global(gid) => {
                                 cfg_program.global_consts[*gid].name.clone()
                             }
+                            crate::cfg::Operand::Table(tid) => {
+                                let table = &cfg_program.tables[*tid];
+                                format!("TBL_{}", table.name)
+                            }
                         };
                         let cond_expr =
                             base.generator
