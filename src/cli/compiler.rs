@@ -282,9 +282,23 @@ impl Compiler {
                             self.log_block("stdout:", &String::from_utf8_lossy(&out.stdout))?;
                             self.log_block("stderr:", &String::from_utf8_lossy(&out.stderr))?;
 
-                            // Parse Boogie output lines for embedded {:msg "..."}
                             let stdout_str = String::from_utf8_lossy(&out.stdout);
                             let stderr_str = String::from_utf8_lossy(&out.stderr);
+                            let combined_output = format!("{}\n{}", stdout_str, stderr_str);
+
+                            // Check for compilation errors (non-zero exit code or error patterns)
+                            if !out.status.success()
+                                || combined_output.contains("parse errors detected")
+                                || combined_output.contains("name resolution errors detected")
+                                || combined_output.contains("type errors detected")
+                                || combined_output.contains("type checking errors detected")
+                            {
+                                return Err(Box::from(format!(
+                                    "Boogie compilation failed. Check compiler.log for details."
+                                )));
+                            }
+
+                            // Parse Boogie output lines for embedded {:msg "..."}
                             let mut parse_streams = vec![stdout_str.as_ref(), stderr_str.as_ref()];
                             for s in parse_streams.drain(..) {
                                 for cap in s.match_indices("{:msg \"") {
@@ -293,7 +307,12 @@ impl Compiler {
                                         let end = start + end_rel;
                                         let payload = &s[start..end];
                                         if let Some(err) = crate::verification::Boogie::BoogieError::from_boogie_string(payload) {
+                                            // This is a valid BoogieError (verification result) - add it
                                             all_boogie_errors.push(err);
+                                        } else {
+                                            // {:msg "..."} pattern found but couldn't parse as BoogieError
+                                            // This indicates an actual compilation error
+                                            return Err(Box::from(format!("Boogie compilation error detected. Check compiler.log for details.")));
                                         }
                                     }
                                 }
@@ -304,6 +323,9 @@ impl Compiler {
                                 "===== Boogie run for {} FAILED: {} =====",
                                 file_name, e
                             ))?;
+                            return Err(Box::from(format!(
+                                "Failed to run Boogie. Check compiler.log for details."
+                            )));
                         }
                     }
                 }

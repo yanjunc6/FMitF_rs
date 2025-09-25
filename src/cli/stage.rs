@@ -36,14 +36,14 @@ where
             Ok(value)
         }
         Err(error) => {
-            // Error: show the error details first, then "Error" with duration
+            // Error: show the error details to stderr, then "Error" with duration
             let error_msg = format!("{}", error);
+            eprintln!("{}", error_msg);
 
-            // Print the "Error:" prefix with the message and duration on the same line
+            // Print the "Error:" prefix with duration on the same line
             println!(
-                "{} {}    {}",
-                "Error:".red(),
-                error_msg,
+                "{} {}",
+                "Error.".red(),
                 format_duration(duration).truecolor(128, 128, 128)
             );
 
