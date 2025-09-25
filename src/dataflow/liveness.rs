@@ -133,7 +133,7 @@ impl LivenessTransfer {
             Operand::Variable(var_id) => {
                 vars.insert(LiveVar(*var_id));
             }
-            Operand::Constant(_) | Operand::Global(_) => {
+            Operand::Constant(_) | Operand::Global(_) | Operand::Table(_) => {
                 // Constants and globals don't contribute to liveness
             }
         }

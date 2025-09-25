@@ -158,7 +158,10 @@ impl AvailExprTransfer {
     }
 
     fn operand_uses_var(&self, operand: &Operand, var: VariableId) -> bool {
-        matches!(operand, Operand::Variable(v) if *v == var)
+        match operand {
+            Operand::Variable(v) => *v == var,
+            Operand::Constant(_) | Operand::Global(_) | Operand::Table(_) => false,
+        }
     }
 }
 

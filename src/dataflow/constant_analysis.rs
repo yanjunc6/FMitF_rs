@@ -134,6 +134,7 @@ impl ConstantTransfer {
                 _ => None,
             },
             Operand::Global(_) => None, // We don't track global constants here
+            Operand::Table(_) => None,  // Tables are not constants
         }
     }
 

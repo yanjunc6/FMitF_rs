@@ -311,9 +311,14 @@ impl BaseVerificationGenerator {
                     Ok(g_const.name.clone())
                 }
             }
+            Operand::Table(tid) => {
+                let table = &cfg_program.tables[*tid];
+                Ok(format!("TBL_{}", table.name))
+            }
         }
     }
 
+    #[allow(dead_code)]
     pub fn default_generate_block_edges(
         &mut self,
         block: &BasicBlock,

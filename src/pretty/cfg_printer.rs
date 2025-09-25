@@ -582,6 +582,13 @@ impl<W: Write> CfgPrinter<W> {
                     write!(self.writer, "[gc{}]", global_id.index())?;
                 }
             }
+            Operand::Table(table_id) => {
+                let table = &program.tables[*table_id];
+                write!(self.writer, "<table {}>", table.name)?;
+                if SHOW_VAR_IDS {
+                    write!(self.writer, "[tab{}]", table_id.index())?;
+                }
+            }
         }
         Ok(())
     }

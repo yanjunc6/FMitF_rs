@@ -352,6 +352,9 @@ impl BoogieProgramGenerator {
             Operand::Global(_) => Ok(BoogieExpr {
                 kind: BoogieExprKind::Var(var_name),
             }),
+            Operand::Table(_) => Ok(BoogieExpr {
+                kind: BoogieExprKind::Var(var_name),
+            }),
         }
     }
 

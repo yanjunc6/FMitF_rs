@@ -8,6 +8,7 @@ use super::{
 };
 use crate::cfg::{BasicBlock, Function as FunctionCfg, Instruction, Program as CfgProgram};
 
+#[allow(dead_code)]
 pub trait VerificationStrategy {
     /// Provides access to the underlying base generator.
     fn base(&mut self) -> &mut BaseVerificationGenerator;
