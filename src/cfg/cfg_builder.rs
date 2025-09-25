@@ -1075,6 +1075,7 @@ impl<'a> FunctionContext<'a> {
                 left,
                 op,
                 right,
+                resolved_callables,
                 resolved_type,
                 span,
                 ..
@@ -1082,75 +1083,317 @@ impl<'a> FunctionContext<'a> {
                 let left_op = self.build_expression(left);
                 let right_op = self.build_expression(right);
 
-                let bin_op = match op.name.as_str() {
-                    "+" => cfg::BinaryOp::AddInt, // Should check type
-                    "-" => cfg::BinaryOp::SubInt,
-                    "*" => cfg::BinaryOp::MulInt,
-                    "/" => cfg::BinaryOp::DivInt,
-                    "%" => cfg::BinaryOp::ModInt,
-                    "==" => cfg::BinaryOp::Eq,
-                    "===" => cfg::BinaryOp::Eq, // Strict equality, treat same as ==
-                    "!=" => cfg::BinaryOp::Neq,
-                    "<" => cfg::BinaryOp::LtInt,
-                    "<=" => cfg::BinaryOp::LeqInt,
-                    ">" => cfg::BinaryOp::GtInt,
-                    ">=" => cfg::BinaryOp::GeqInt,
-                    "&&" => cfg::BinaryOp::And,
-                    "||" => cfg::BinaryOp::Or,
-                    _ => panic!("Unknown binary operator: {}", op.name),
-                };
+                // Binary operators MUST resolve to exactly one function
+                if resolved_callables.is_empty() {
+                    panic!("Binary operator '{}' has no resolved function - should have been resolved in frontend", op.name);
+                }
+                if resolved_callables.len() > 1 {
+                    panic!("Binary operator '{}' resolves to multiple functions - type checker should ensure only one", op.name);
+                }
 
-                let dest_ty = self
-                    .builder
-                    .convert_resolved_type(resolved_type.as_ref().unwrap())
-                    .unwrap();
-                let dest_var = self.new_temporary(dest_ty);
-                let span = self.pick_span(&[
-                    span,
-                    self.builder.ast.expressions[left].span(),
-                    self.builder.ast.expressions[right].span(),
-                ]);
-                self.add_instruction(cfg::Instruction {
-                    kind: cfg::InstructionKind::BinaryOp {
-                        dest: dest_var,
-                        op: bin_op,
-                        left: left_op,
-                        right: right_op,
-                    },
-                    span,
-                });
-                cfg::Operand::Variable(dest_var)
+                let func_id = resolved_callables[0];
+                let ast_func = &self.builder.ast.functions[func_id];
+
+                // Check if this function is a @builtinop
+                let is_builtin = self.builder.is_builtin_op(&ast_func.decorators);
+
+                if is_builtin {
+                    // This is a built-in operator - use BinaryOp with proper type checking
+                    // Get types before the borrow checker complains
+                    let left_resolved_type = self.builder.ast.expressions[left]
+                        .resolved_type()
+                        .unwrap()
+                        .clone();
+                    let right_resolved_type = self.builder.ast.expressions[right]
+                        .resolved_type()
+                        .unwrap()
+                        .clone();
+                    let left_type_id = self
+                        .builder
+                        .convert_resolved_type(&left_resolved_type)
+                        .unwrap();
+                    let right_type_id = self
+                        .builder
+                        .convert_resolved_type(&right_resolved_type)
+                        .unwrap();
+                    let left_type = &self.builder.cfg.types[left_type_id];
+                    let right_type = &self.builder.cfg.types[right_type_id];
+
+                    let bin_op = match (op.name.as_str(), left_type, right_type) {
+                        (
+                            "+",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Int),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Int),
+                        ) => cfg::BinaryOp::AddInt,
+                        (
+                            "+",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Float),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Float),
+                        ) => cfg::BinaryOp::AddFloat,
+                        (
+                            "-",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Int),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Int),
+                        ) => cfg::BinaryOp::SubInt,
+                        (
+                            "-",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Float),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Float),
+                        ) => cfg::BinaryOp::SubFloat,
+                        (
+                            "*",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Int),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Int),
+                        ) => cfg::BinaryOp::MulInt,
+                        (
+                            "*",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Float),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Float),
+                        ) => cfg::BinaryOp::MulFloat,
+                        (
+                            "/",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Int),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Int),
+                        ) => cfg::BinaryOp::DivInt,
+                        (
+                            "/",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Float),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Float),
+                        ) => cfg::BinaryOp::DivFloat,
+                        (
+                            "%",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Int),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Int),
+                        ) => cfg::BinaryOp::ModInt,
+                        (
+                            "==",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Int),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Int),
+                        ) => cfg::BinaryOp::EqInt,
+                        (
+                            "==",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Float),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Float),
+                        ) => cfg::BinaryOp::EqFloat,
+                        (
+                            "==",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Bool),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Bool),
+                        ) => cfg::BinaryOp::Eq,
+                        (
+                            "!=",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Int),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Int),
+                        ) => cfg::BinaryOp::NeqInt,
+                        (
+                            "!=",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Float),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Float),
+                        ) => cfg::BinaryOp::NeqFloat,
+                        (
+                            "!=",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Bool),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Bool),
+                        ) => cfg::BinaryOp::Neq,
+                        (
+                            "<",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Int),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Int),
+                        ) => cfg::BinaryOp::LtInt,
+                        (
+                            "<",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Float),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Float),
+                        ) => cfg::BinaryOp::LtFloat,
+                        (
+                            "<=",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Int),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Int),
+                        ) => cfg::BinaryOp::LeqInt,
+                        (
+                            "<=",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Float),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Float),
+                        ) => cfg::BinaryOp::LeqFloat,
+                        (
+                            ">",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Int),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Int),
+                        ) => cfg::BinaryOp::GtInt,
+                        (
+                            ">",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Float),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Float),
+                        ) => cfg::BinaryOp::GtFloat,
+                        (
+                            ">=",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Int),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Int),
+                        ) => cfg::BinaryOp::GeqInt,
+                        (
+                            ">=",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Float),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Float),
+                        ) => cfg::BinaryOp::GeqFloat,
+                        (
+                            "&&",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Bool),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Bool),
+                        ) => cfg::BinaryOp::And,
+                        (
+                            "||",
+                            cfg::Type::Primitive(cfg::PrimitiveType::Bool),
+                            cfg::Type::Primitive(cfg::PrimitiveType::Bool),
+                        ) => cfg::BinaryOp::Or,
+                        ("===", _, _) => cfg::BinaryOp::Eq, // Generic strict equality
+                        ("!==", _, _) => cfg::BinaryOp::Neq, // Generic strict inequality
+                        _ => panic!(
+                            "Unsupported @builtinop binary operator '{}' with types {:?} and {:?}",
+                            op.name, left_type, right_type
+                        ),
+                    };
+
+                    let dest_ty = self
+                        .builder
+                        .convert_resolved_type(resolved_type.as_ref().unwrap())
+                        .unwrap();
+                    let dest_var = self.new_temporary(dest_ty);
+                    let span = self.pick_span(&[
+                        span,
+                        self.builder.ast.expressions[left].span(),
+                        self.builder.ast.expressions[right].span(),
+                    ]);
+                    self.add_instruction(cfg::Instruction {
+                        kind: cfg::InstructionKind::BinaryOp {
+                            dest: dest_var,
+                            op: bin_op,
+                            left: left_op,
+                            right: right_op,
+                        },
+                        span,
+                    });
+                    cfg::Operand::Variable(dest_var)
+                } else {
+                    // This is a regular function (like string concatenation with @Boogie)
+                    if let Some(&cfg_func_id) = self.builder.func_map.get(&func_id) {
+                        let return_type = self
+                            .builder
+                            .convert_resolved_type(resolved_type.as_ref().unwrap())
+                            .unwrap();
+                        let temp_var = self.new_temporary(return_type);
+                        let call_span = span;
+                        let span = self.pick_span(&[
+                            call_span,
+                            self.builder.ast.expressions[left].span(),
+                            self.builder.ast.expressions[right].span(),
+                        ]);
+
+                        self.add_instruction(cfg::Instruction {
+                            kind: cfg::InstructionKind::Call {
+                                dest: Some(temp_var),
+                                func: cfg_func_id,
+                                args: vec![left_op, right_op],
+                            },
+                            span,
+                        });
+                        cfg::Operand::Variable(temp_var)
+                    } else {
+                        panic!("Binary operator function '{}' should have been mapped during function shell building", op.name);
+                    }
+                }
             }
             ast::Expression::Unary {
                 op,
                 expr,
+                resolved_callables,
                 resolved_type,
                 span,
                 ..
             } => {
                 let operand = self.build_expression(expr);
 
-                let unary_op = match op.name.as_str() {
-                    "-" => cfg::UnaryOp::NegInt, // Should check type to determine NegInt vs NegFloat
-                    "!" => cfg::UnaryOp::NotBool,
-                    _ => panic!("Unknown unary operator: {}", op.name),
-                };
+                // Unary operators MUST resolve to exactly one function
+                if resolved_callables.is_empty() {
+                    panic!("Unary operator '{}' has no resolved function - should have been resolved in frontend", op.name);
+                }
+                if resolved_callables.len() > 1 {
+                    panic!("Unary operator '{}' resolves to multiple functions - type checker should ensure only one", op.name);
+                }
 
-                let dest_ty = self
-                    .builder
-                    .convert_resolved_type(resolved_type.as_ref().unwrap())
-                    .unwrap();
-                let dest_var = self.new_temporary(dest_ty);
-                let span = self.pick_span(&[span, self.builder.ast.expressions[expr].span()]);
-                self.add_instruction(cfg::Instruction {
-                    kind: cfg::InstructionKind::UnaryOp {
-                        dest: dest_var,
-                        op: unary_op,
-                        operand,
-                    },
-                    span,
-                });
-                cfg::Operand::Variable(dest_var)
+                let func_id = resolved_callables[0];
+                let ast_func = &self.builder.ast.functions[func_id];
+
+                // Check if this function is a @builtinop
+                let is_builtin = self.builder.is_builtin_op(&ast_func.decorators);
+
+                if is_builtin {
+                    // This is a built-in operator - use UnaryOp with proper type checking
+                    let expr_resolved_type = self.builder.ast.expressions[expr]
+                        .resolved_type()
+                        .unwrap()
+                        .clone();
+                    let expr_type_id = self
+                        .builder
+                        .convert_resolved_type(&expr_resolved_type)
+                        .unwrap();
+                    let expr_type = &self.builder.cfg.types[expr_type_id];
+
+                    let unary_op = match (op.name.as_str(), expr_type) {
+                        ("-", cfg::Type::Primitive(cfg::PrimitiveType::Int)) => {
+                            cfg::UnaryOp::NegInt
+                        }
+                        ("-", cfg::Type::Primitive(cfg::PrimitiveType::Float)) => {
+                            cfg::UnaryOp::NegFloat
+                        }
+                        ("!", cfg::Type::Primitive(cfg::PrimitiveType::Bool)) => {
+                            cfg::UnaryOp::NotBool
+                        }
+                        _ => panic!(
+                            "Unsupported @builtinop unary operator '{}' with type {:?}",
+                            op.name, expr_type
+                        ),
+                    };
+
+                    let dest_ty = self
+                        .builder
+                        .convert_resolved_type(resolved_type.as_ref().unwrap())
+                        .unwrap();
+                    let dest_var = self.new_temporary(dest_ty);
+                    let span = self.pick_span(&[span, self.builder.ast.expressions[expr].span()]);
+                    self.add_instruction(cfg::Instruction {
+                        kind: cfg::InstructionKind::UnaryOp {
+                            dest: dest_var,
+                            op: unary_op,
+                            operand,
+                        },
+                        span,
+                    });
+                    cfg::Operand::Variable(dest_var)
+                } else {
+                    // This is a regular function
+                    if let Some(&cfg_func_id) = self.builder.func_map.get(&func_id) {
+                        let return_type = self
+                            .builder
+                            .convert_resolved_type(resolved_type.as_ref().unwrap())
+                            .unwrap();
+                        let temp_var = self.new_temporary(return_type);
+                        let call_span = span;
+                        let span =
+                            self.pick_span(&[call_span, self.builder.ast.expressions[expr].span()]);
+
+                        self.add_instruction(cfg::Instruction {
+                            kind: cfg::InstructionKind::Call {
+                                dest: Some(temp_var),
+                                func: cfg_func_id,
+                                args: vec![operand],
+                            },
+                            span,
+                        });
+                        cfg::Operand::Variable(temp_var)
+                    } else {
+                        panic!("Unary operator function '{}' should have been mapped during function shell building", op.name);
+                    }
+                }
             }
             ast::Expression::Call {
                 callee,
