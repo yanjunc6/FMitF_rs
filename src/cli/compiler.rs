@@ -425,10 +425,8 @@ impl Compiler {
     // -----------------------
     fn init_logger(&mut self, output_dir: &PathBuf) -> std::io::Result<()> {
         fs::create_dir_all(output_dir)?;
-        let file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(output_dir.join("compiler.log"))?;
+        // Create a fresh log file each run (truncate if exists)
+        let file = fs::File::create(output_dir.join("compiler.log"))?;
         self.log_file = Some(file);
         Ok(())
     }

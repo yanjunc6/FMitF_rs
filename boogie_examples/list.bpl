@@ -1,120 +1,86 @@
-// ----------------------------------------
-// List<T> model with map/filter/reduce
-// ----------------------------------------
+// ------------------------------------------------------------
+// Polymorphic List with Nil/Cons, length, and get
+// ------------------------------------------------------------
 
-type List<T>;
+type List a;
 
-const Nil<T>: List<T>;
-function Cons<T>(head: T, tail: List<T>) returns (List<T>);
+// Constructors
+function Cons<a>(x:a, t:List a) returns (List a);
+// Nil needs a witness of type a (standard polytype trick)
+function Nil<a>(w:a) returns (List a);
 
-// Basic operations
-function length<T>(list: List<T>) returns (int);
-function get<T>(list: List<T>, idx: int) returns (T);
+// Operations
+function length<a>(l:List a) returns (int);
+function get<a>(l:List a, i:int) returns (a);
 
-// Higher-order style operations (functions as maps)
-function map<T, U>(list: List<T>, f: [T]U) returns (List<U>);
-function filter<T>(list: List<T>, p: [T]bool) returns (List<T>);
-function reduce<T, U>(list: List<T>, rf: [U, T]U, init: U) returns (U);
+// ------------------------------------------------------------
+// Axioms
+// ------------------------------------------------------------
 
-// ----------------------------------------
-// Axioms: structure and semantics
-// ----------------------------------------
-
-// Non-negativity of length
-axiom (forall T: Type, l: List<T> :: length(l) >= 0);
+// Nil is independent of its witness (so Nil(0) == Nil(42) == Nil(x))
+axiom (forall<a> u:a, v:a :: Nil(u) == Nil(v));
 
 // Length of Nil and Cons
-axiom (forall T: Type :: length(Nil<T>) == 0);
-axiom (forall T: Type, h: T, t: List<T> :: length(Cons(h, t)) == 1 + length(t));
+axiom (forall<a> w:a :: length(Nil(w)) == 0);
+axiom (forall<a> x:a, t:List a :: length(Cons(x, t)) == 1 + length(t));
 
-// Indexing for Cons: head at 0; tail shifted for i>0 but only within bounds
-axiom (forall T: Type, h: T, t: List<T> :: get(Cons(h, t), 0) == h);
-axiom (forall T: Type, h: T, t: List<T>, i: int ::
-  0 < i && i < length(Cons(h, t)) ==> get(Cons(h, t), i) == get(t, i - 1)
+// Indexing semantics (only defined within bounds)
+// Head at index 0
+axiom (forall<a> x:a, t:List a :: get(Cons(x, t), 0) == x);
+// Tail shifted for i>0, guarded by bounds
+axiom (forall<a> x:a, t:List a, i:int ::
+  0 < i && i < length(Cons(x, t)) ==> get(Cons(x, t), i) == get(t, i - 1)
 );
 
-// Map semantics: structural (map preserves shape) and pointwise behavior
-axiom (forall T: Type, U: Type, f: [T]U :: map(Nil<T>, f) == Nil<U>);
-axiom (forall T: Type, U: Type, f: [T]U, h: T, t: List<T> ::
-  map(Cons(h, t), f) == Cons(f[h], map(t, f))
-);
+// Non-negativity (helps discharge bounds like 0 <= i < length(l))
+axiom (forall<a> l:List a :: length(l) >= 0);
 
-// Map preserves length; for indices in range, map applies f to elements
-axiom (forall T: Type, U: Type, l: List<T>, f: [T]U :: length(map(l, f)) == length(l));
-axiom (forall T: Type, U: Type, l: List<T>, f: [T]U, i: int ::
-  0 <= i && i < length(l) ==> get(map(l, f), i) == f[get(l, i)]
-);
 
-// Filter semantics: structural (keep/drop head) and length monotonicity
-axiom (forall T: Type, p: [T]bool :: filter(Nil<T>, p) == Nil<T>);
-axiom (forall T: Type, p: [T]bool, h: T, t: List<T> ::
-  p[h] ==> filter(Cons(h, t), p) == Cons(h, filter(t, p))
-);
-axiom (forall T: Type, p: [T]bool, h: T, t: List<T> ::
-  !p[h] ==> filter(Cons(h, t), p) == filter(t, p)
-);
-// Filter does not increase length
-axiom (forall T: Type, l: List<T>, p: [T]bool :: length(filter(l, p)) <= length(l));
+// ------------------------------------------------------------
+// Tests: build list literals with Cons/.../Nil
+// ------------------------------------------------------------
 
-// Reduce (fold-left) semantics over the list
-axiom (forall T: Type, U: Type, rf: [U, T]U, init: U :: reduce(Nil<T>, rf, init) == init);
-axiom (forall T: Type, U: Type, rf: [U, T]U, init: U, h: T, t: List<T> ::
-  reduce(Cons(h, t), rf, init) == reduce(t, rf, rf[init, h])
-);
+procedure Test_Int() {
+  var NIL:List int;
+  var l:List int;
+  var l2:List int;
 
-// ----------------------------------------
-// Test harness over int lists
-// ----------------------------------------
+  // Empty list (witness can be any int; uniqueness axiom makes it canonical)
+  NIL := Nil(0);
 
-procedure TestIntLists();
-implementation TestIntLists() {
-  var l: List<int>;
-  var lm: List<int>;
-  var lf: List<int>;
-  var inc: [int]int;
-  var even: [int]bool;
-  var add: [int, int]int;
-  var r: int;
+  // Build [1, 2, 3]
+  l := Cons(1, Cons(2, Cons(3, NIL)));
 
-  // Build a concrete list [1, 2, 3]
-  l := Cons(1, Cons(2, Cons(3, Nil<int>)));
-
-  // Define inc(x) = x + 1, even(x) = x mod 2 == 0, and add(acc, x) = acc + x
-  inc := (lambda x: int :: x + 1);
-  even := (lambda x: int :: (x mod 2) == 0);
-  add := (lambda acc: int, x: int :: acc + x);
-
-  // Basic list checks
   assert length(l) == 3;
   assert get(l, 0) == 1;
   assert get(l, 1) == 2;
   assert get(l, 2) == 3;
 
-  // Map: inc over [1,2,3] gives [2,3,4]
-  lm := map(l, inc);
-  assert length(lm) == 3;
-  assert get(lm, 0) == 2;
-  assert get(lm, 1) == 3;
-  assert get(lm, 2) == 4;
+  // Witness independence: Nil(123) is the same empty list
+  assert Nil(0) == Nil(123);
 
-  // Filter: keep even numbers from [1,2,3] gives [2]
-  lf := filter(l, even);
-  assert length(lf) == 1;
-  assert get(lf, 0) == 2;
+  // Another literal: [5, 6]
+  l2 := Cons(5, Cons(6, NIL));
+  assert length(l2) == 2 && get(l2, 0) == 5 && get(l2, 1) == 6;
 
-  // Reduce: sum with initial 0 over [1,2,3] gives 6
-  r := reduce(l, add, 0);
-  assert r == 6;
+  // Sanity: this should not be provable
+  assert length(Cons(1, Cons(2, Cons(3, NIL)))) == 2; // not provable
+}
 
-  // Composition examples
-  var lf_map: List<int>;
-  lf_map := map(lf, inc);           // [2] mapped by inc gives [3]
-  assert length(lf_map) == length(lf);
-  assert get(lf_map, 0) == 3;
+procedure Test_Generic<a>(x:a, y:a, z:a) {
+  var NIL:List a;
+  var l:List a;
+  var tail:List a;
 
-  // Sum of map(l, inc) = 2 + 3 + 4 = 9
-  assert reduce(map(l, inc), add, 0) == 9;
+  NIL := Nil(x);
+  l := Cons(x, Cons(y, Cons(z, NIL)));
 
-  // Filter the mapped list for evens: [2,3,4] -> [2,4], sum is 6
-  assert reduce(filter(map(l, inc), even), add, 0) == 6;
+  assert length(l) == 3;
+  assert get(l, 0) == x;
+  assert get(l, 1) == y;
+  assert get(l, 2) == z;
+
+  // Removing the head yields a tail whose length is one less
+  tail := Cons(y, Cons(z, NIL));
+  assert length(tail) == length(l) - 1;
 }

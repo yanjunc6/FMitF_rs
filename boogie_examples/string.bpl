@@ -1,6 +1,6 @@
 // StringModel.bpl
-// Uninterpreted String model with concat, empty, int/real conversions.
-// No assumption that IntToString(i) and RealToString(r) are always distinct.
+// Uninterpreted String model with concat, empty, and a generic str<a>.
+// No IntToString/RealToString—only str<a>.
 
 // --------------------------
 // Type and Operators
@@ -11,31 +11,24 @@ type String;
 const empty: String;
 
 function Concat(x: String, y: String): String;
-function IntToString(i: int): String;
-function RealToString(r: real): String;
+
+// Generic to-string for any type T
+function str<a>(x: a): String;
 
 
 // --------------------------
-// Axioms (with correct triggers)
+// Axioms (with triggers)
 // --------------------------
 
 // Identity of empty for concat
 axiom (forall s: String :: {Concat(empty, s)} Concat(empty, s) == s);
 axiom (forall s: String :: {Concat(s, empty)} Concat(s, empty) == s);
 
-// Injectivity of IntToString
-axiom (forall i: int, j: int ::
-  { IntToString(i), IntToString(j) }
-  IntToString(i) == IntToString(j) ==> i == j);
+// Injectivity of str<T> (for each instantiation of T)
+axiom (forall<a> x: a, y: a :: {str(x), str(y)} str(x) == str(y) ==> x == y);
 
-// Injectivity of RealToString
-axiom (forall x: real, y: real ::
-  { RealToString(x), RealToString(y) }
-  RealToString(x) == RealToString(y) ==> x == y);
-
-// Conversions never yield empty
-axiom (forall i: int :: {IntToString(i)} IntToString(i) != empty);
-axiom (forall r: real :: {RealToString(r)} RealToString(r) != empty);
+// Optional: str<T>(x) is never the empty string (uniform for all T)
+axiom (forall<a> x: a :: {str(x)} str(x) != empty);
 
 
 // --------------------------
@@ -50,7 +43,8 @@ const L_abc: String; // models the literal "abc"
 const L_def: String; // models the literal "def"
 // Add more as needed, e.g., const L_hello: String;
 
-// The empty literal "" is represented by 'empty' (no extra constant needed).
+// The empty literal "" is represented by 'empty'.
+
 
 // --------------------------
 // Tests / Verification Harness
@@ -70,35 +64,33 @@ procedure TestConcatIdentityRight()
   assert Concat(s, empty) == s;
 }
 
-procedure TestIntToStringInjective()
+procedure Test_str_int_Injective()
 {
   var i, j: int;
   havoc i, j;
-  assume IntToString(i) == IntToString(j);
+  assume str(i) == str(j);
   assert i == j;
 }
 
-procedure TestRealToStringInjective()
+procedure Test_str_real_Injective()
 {
   var x, y: real;
   havoc x, y;
-  assume RealToString(x) == RealToString(y);
+  assume str(x) == str(y);
   assert x == y;
 }
 
-// We removed the "distinct codomains" test because we no longer assume it.
-
-// Conversions not empty
-procedure TestConversionsNotEmpty()
+// str-values are not empty (axiomatized above)
+procedure Test_str_NotEmpty()
 {
-  assert IntToString(0) != empty;
-  assert RealToString(0.0) != empty;
+  assert str(0) != empty;
+  assert str(0.0) != empty;
 }
 
-procedure TestConcatWithConversion()
+procedure TestConcatWith_str()
 {
-  assert Concat(RealToString(1.5), empty) == RealToString(1.5);
-  assert Concat(empty, IntToString(42)) == IntToString(42);
+  assert Concat(str(1.5), empty) == str(1.5);
+  assert Concat(empty, str(42)) == str(42);
 }
 
 
@@ -106,7 +98,6 @@ procedure TestConcatWithConversion()
 // General Equality Tests
 // --------------------------
 
-// Equality from assignment (use := for assignment and == for equality)
 procedure TestEqualityByAssignment()
 {
   var s, s1, s2: String;
@@ -116,7 +107,6 @@ procedure TestEqualityByAssignment()
   assert s1 == s2;
 }
 
-// Transitivity: given s1 == s2 and s2 == s3, then s1 == s3
 procedure TestEqualityTransitivity()
 {
   var s1, s2, s3: String;
@@ -126,7 +116,6 @@ procedure TestEqualityTransitivity()
   assert s1 == s3;
 }
 
-// Reflexivity: s == s
 procedure TestEqualityReflexivity()
 {
   var s: String;
@@ -134,7 +123,6 @@ procedure TestEqualityReflexivity()
   assert s == s;
 }
 
-// Symmetry: from s1 == s2 infer s2 == s1
 procedure TestEqualitySymmetry()
 {
   var s1, s2: String;
@@ -143,7 +131,6 @@ procedure TestEqualitySymmetry()
   assert s2 == s1;
 }
 
-// Congruence (substitutivity) for functions
 procedure TestEqualityCongruence()
 {
   var s1, s2: String;
@@ -161,12 +148,23 @@ procedure Test_SameLiteralIsSameSymbol()
   assert a == b; // same constant reused for the same literal
 }
 
+type AnyT;
+
+procedure Test_str_GenericInjective()
+{
+  var x, y: AnyT;
+  havoc x, y;
+  assume str(x) == str(y);
+  assert x == y;
+}
+
 procedure Negative_Test_DoNotProveUnknownFacts()
 {
   // Neither of these should be provable under the minimal model:
   assert L_abc == L_def;     // should fail
   assert L_abc != L_def;     // should also fail
 }
+
 
 // --------------------------
 // Main: Run all tests
@@ -176,10 +174,11 @@ procedure Main()
 {
   call TestConcatIdentityLeft();
   call TestConcatIdentityRight();
-  call TestIntToStringInjective();
-  call TestRealToStringInjective();
-  call TestConversionsNotEmpty();
-  call TestConcatWithConversion();
+
+  call Test_str_int_Injective();
+  call Test_str_real_Injective();
+  call Test_str_NotEmpty();
+  call TestConcatWith_str();
 
   call TestEqualityByAssignment();
   call TestEqualityTransitivity();
@@ -187,5 +186,9 @@ procedure Main()
   call TestEqualitySymmetry();
   call TestEqualityCongruence();
   call Test_SameLiteralIsSameSymbol();
-  call Negative_Test_DoNotProveUnknownFacts();
+
+  call Test_str_GenericInjective();
+
+  // Uncomment to see failing proof:
+  // call Negative_Test_DoNotProveUnknownFacts();
 }
