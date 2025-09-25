@@ -27,7 +27,12 @@ impl BaseVerificationGenerator {
         Self {
             scope: ExecutionScope::default(),
             generator,
-            Boogie_func_map: HashMap::from([("float", "real"), ("int", "int")]),
+            Boogie_func_map: HashMap::from([
+                ("float", "real"),
+                ("int", "int"),
+                ("str", "str"),
+                ("+", "Concat"),
+            ]),
         }
     }
 

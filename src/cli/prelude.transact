@@ -73,7 +73,7 @@
 // String Operators
 // ===========================================
 
-@intrinsic @infix operator +(a: string, b: string) -> string;
+@intrinsic @infix @Boogie operator +(a: string, b: string) -> string;
 
 // ===========================================
 // General Operators
@@ -96,7 +96,7 @@
 // Type conversion functions
 @intrinsic @Boogie function float(x: int) -> float;
 @intrinsic @Boogie function int(x: float) -> int; // truncating conversion
-@intrinsic function str<T>(x: T) -> string;
+@intrinsic @Boogie function str<T>(x: T) -> string;
 
 @intrinsic function genUUID() -> UUID;
 
