@@ -91,7 +91,6 @@ impl CommutativeStrategy {
 
         // Interleaving execution
         let mut executor = InterleavingExecutor::new();
-        executor.init_active_flags(base, unit);
 
         // Execute A->B, snapshot, restore, execute B->A, snapshot
         let (a_then_b_vars, b_then_a_vars) = Self::execute_special_interleavings(
@@ -210,26 +209,6 @@ struct InterleavingExecutor;
 impl InterleavingExecutor {
     pub fn new() -> Self {
         Self
-    }
-
-    pub fn init_active_flags(
-        &mut self,
-        base: &mut BaseVerificationGenerator,
-        unit: &CommutativeUnit,
-    ) {
-        for (&slice_id, _) in &unit.hops_per_slice {
-            let var_name = format!("s{}_active", slice_id);
-            base.generator.ensure_local_variable_exists(
-                &var_name,
-                crate::verification::Boogie::BoogieType::Bool,
-            );
-            base.add_line(crate::verification::Boogie::BoogieLine::Assign(
-                var_name,
-                crate::verification::Boogie::BoogieExpr {
-                    kind: crate::verification::Boogie::BoogieExprKind::BoolConst(true),
-                },
-            ));
-        }
     }
 
     pub fn execute_interleaving(
