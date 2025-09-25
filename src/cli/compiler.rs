@@ -330,6 +330,22 @@ impl Compiler {
                     }
                 }
 
+                // 4) Process results and write simplified graphs
+                let (verification_errors, simplified) =
+                    VerifyResultProcessor::process_boogie_errors(
+                        &optimized_or_cfg_program,
+                        sc.clone(),
+                        all_boogie_errors,
+                    );
+                
+                // Write simplified graphs (unified) with prefix "simplified"
+                self.write_sc_graph_dots(
+                    &simplified,
+                    &optimized_or_cfg_program,
+                    output_dir,
+                    "simplified",
+                )?;
+                
                 // After logging all results, check if there were any errors
                 if !exec_errors.is_empty() {
                     return Err(Box::from(format!(
@@ -338,27 +354,11 @@ impl Compiler {
                     )));
                 }
 
-                // 4) Process results and write simplified graphs
-                let (verification_errors, simplified) =
-                    VerifyResultProcessor::process_boogie_errors(
-                        &optimized_or_cfg_program,
-                        sc.clone(),
-                        all_boogie_errors,
-                    );
-
                 // If there are user-facing verification errors, report them now
                 if !verification_errors.is_empty() {
                     // Best effort reporting; ignore result
                     let _ = self.reporter.report_all(&verification_errors);
                 }
-
-                // Write simplified graphs (unified) with prefix "simplified"
-                self.write_sc_graph_dots(
-                    &simplified,
-                    &optimized_or_cfg_program,
-                    output_dir,
-                    "simplified",
-                )?;
 
                 Ok(())
             },
