@@ -25,8 +25,11 @@ pub enum BoogieType {
     Int,
     Real,
     Bool,
-    Map(Vec<Box<BoogieType>>, Box<BoogieType>), //:[type1]type2, or :[type1][type2]type3, all the BoogieType here must be flattened simple types.
-    UserDefined(String),
+    Map(Vec<Box<BoogieType>>, Box<BoogieType>), // :[type1]type2, or :[type1][type2]type3
+    // A type constructor with zero or more type parameters, e.g.,
+    //   Parametric { name: "List", args: [Int] }  ->  List int
+    //   Parametric { name: "Pair", args: [Int, Bool] } -> Pair int bool
+    Parametric { name: String, args: Vec<BoogieType> },
 }
 
 #[derive(Debug, Clone)]

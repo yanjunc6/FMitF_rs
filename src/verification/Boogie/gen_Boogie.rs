@@ -27,6 +27,7 @@ impl BoogieProgramGenerator {
             current_procedure_index: None,
         };
         generator.gen_string_axioms();
+        generator.gen_list_axioms();
         generator.gen_global_constants(cfg_program);
         generator.gen_table_variables(cfg_program);
         generator
@@ -56,27 +57,57 @@ impl BoogieProgramGenerator {
 
     /// Generate string axioms and add to other_declarations
     pub fn gen_string_axioms(&mut self) {
-        let string_axioms = vec!["// --------------------------
-// Type and Operators
-// --------------------------
+        let mut decls = Vec::new();
+        // Type and operators
+        decls.push("type String;".to_string());
+        decls.push("const empty: String;".to_string());
+        decls.push("function Concat(x: String, y: String): String;".to_string());
+        // Generic to-string for any type T
+        decls.push("function str<a>(x: a): String;".to_string());
 
-type String;
+        // Axioms (with correct triggers)
+        decls.push(
+            "axiom (forall s: String :: {Concat(empty, s)} Concat(empty, s) == s);".to_string(),
+        );
+        decls.push(
+            "axiom (forall s: String :: {Concat(s, empty)} Concat(s, empty) == s);".to_string(),
+        );
+        // Injectivity of str<T> (for each instantiation of T)
+        decls.push(
+            "axiom (forall<a> x: a, y: a :: {str(x), str(y)} str(x) == str(y) ==> x == y);"
+                .to_string(),
+        );
+        // str<T>(x) is never the empty string (uniform for all T)
+        decls.push("axiom (forall<a> x: a :: {str(x)} str(x) != empty);".to_string());
 
-const empty: String;
+        self.program.other_declarations.extend(decls);
+    }
 
-function Concat(x: String, y: String): String;
+    /// Generate polymorphic list type and axioms similar to list.bpl
+    pub fn gen_list_axioms(&mut self) {
+        let mut decls = Vec::new();
+        // Type
+        decls.push("type List a;".to_string());
+        // Constructors
+        decls.push("function Cons<a>(x:a, t:List a) returns (List a);".to_string());
+        decls.push("function Nil<a>(w:a) returns (List a);".to_string());
+        // Ops
+        decls.push("function length<a>(l:List a) returns (int);".to_string());
+        decls.push("function get<a>(l:List a, i:int) returns (a);".to_string());
+        // Axioms
+        decls.push("axiom (forall<a> u:a, v:a :: Nil(u) == Nil(v));".to_string());
+        decls.push("axiom (forall<a> w:a :: length(Nil(w)) == 0);".to_string());
+        decls.push(
+            "axiom (forall<a> x:a, t:List a :: length(Cons(x, t)) == 1 + length(t));".to_string(),
+        );
+        decls.push("axiom (forall<a> x:a, t:List a :: get(Cons(x, t), 0) == x);".to_string());
+        decls.push(
+            "axiom (forall<a> x:a, t:List a, i:int ::  0 < i && i < length(Cons(x, t)) ==> get(Cons(x, t), i) == get(t, i - 1));"
+                .to_string(),
+        );
+        decls.push("axiom (forall<a> l:List a :: length(l) >= 0);".to_string());
 
-// --------------------------
-// Axioms (with correct triggers)
-// --------------------------
-
-// Identity of empty for concat
-axiom (forall s: String :: {Concat(empty, s)} Concat(empty, s) == s);
-axiom (forall s: String :: {Concat(s, empty)} Concat(s, empty) == s);
-"
-        .to_string()];
-
-        self.program.other_declarations.extend(string_axioms);
+        self.program.other_declarations.extend(decls);
     }
 
     /// Helper function to generate a global constant name for a string literal
@@ -110,7 +141,10 @@ axiom (forall s: String :: {Concat(s, empty)} Concat(s, empty) == s);
         {
             let var_decl = BoogieVarDecl {
                 var_name: const_name.clone(),
-                var_type: BoogieType::UserDefined("String".to_string()),
+                var_type: BoogieType::Parametric {
+                    name: "String".to_string(),
+                    args: vec![],
+                },
                 is_const: true,
             };
             self.program
@@ -169,36 +203,61 @@ axiom (forall s: String :: {Concat(s, empty)} Concat(s, empty) == s);
                 cfg::PrimitiveType::Int => BoogieType::Int,
                 cfg::PrimitiveType::Float => BoogieType::Real,
                 cfg::PrimitiveType::Bool => BoogieType::Bool,
-                cfg::PrimitiveType::String => BoogieType::UserDefined("String".to_string()),
+                cfg::PrimitiveType::String => BoogieType::Parametric {
+                    name: "String".to_string(),
+                    args: vec![],
+                },
             },
             cfg::Type::List(elem_ty) => {
                 let boogie_base_ty = Self::convert_type_id(program, elem_ty);
-                BoogieType::Map(vec![Box::new(BoogieType::Int)], Box::new(boogie_base_ty))
+                // Represent list as a parametric List type rather than a map
+                BoogieType::Parametric {
+                    name: "List".to_string(),
+                    args: vec![boogie_base_ty],
+                }
             }
             cfg::Type::Declared { type_id, .. } => {
                 let udt = &program.user_defined_types[*type_id];
-                BoogieType::UserDefined(udt.name.clone())
+                BoogieType::Parametric {
+                    name: udt.name.clone(),
+                    args: vec![],
+                }
             }
             cfg::Type::Table(table_id) => {
                 let table = &program.tables[*table_id];
-                BoogieType::UserDefined(table.name.clone())
+                BoogieType::Parametric {
+                    name: table.name.clone(),
+                    args: vec![],
+                }
             }
             cfg::Type::Row { table_id } => {
                 let table = &program.tables[*table_id];
-                // Rows are often represented by their primary key type.
-                // This might need to be more sophisticated.
-                let pk_field = &program.table_fields[table.primary_key_fields[0]];
-                Self::convert_type_id(program, &pk_field.field_type)
+                // Represent a row as a parametric Row<Table>
+                BoogieType::Parametric {
+                    name: "Row".to_string(),
+                    args: vec![BoogieType::Parametric {
+                        name: table.name.clone(),
+                        args: vec![],
+                    }],
+                }
             }
             cfg::Type::GenericParam(p) => {
                 let param = &program.generic_params[*p];
-                BoogieType::UserDefined(param.name.clone())
+                BoogieType::Parametric {
+                    name: param.name.clone(),
+                    args: vec![],
+                }
             }
-            cfg::Type::Void => BoogieType::UserDefined("()".to_string()), // Or handle differently
+            cfg::Type::Void => BoogieType::Parametric {
+                name: "()".to_string(),
+                args: vec![],
+            },
             cfg::Type::Function { .. } => {
-                // For now, representing function types as a generic user-defined type.
-                // This might need a more specific representation if you pass functions as arguments.
-                BoogieType::UserDefined("function".to_string())
+                // Represent function as an opaque parametric marker
+                BoogieType::Parametric {
+                    name: "function".to_string(),
+                    args: vec![],
+                }
             }
         }
     }

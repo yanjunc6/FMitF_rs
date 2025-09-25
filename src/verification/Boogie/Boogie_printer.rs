@@ -60,7 +60,18 @@ impl Display for BoogieType {
                 // Finally print the range
                 write!(f, "{}", range)
             }
-            BoogieType::UserDefined(name) => write!(f, "{}", name),
+            BoogieType::Parametric { name, args } => {
+                if args.is_empty() {
+                    write!(f, "{}", name)
+                } else {
+                    // Print as: Name t1 t2 ...; if nested, inner types must be parenthesised by caller during construction
+                    write!(f, "{}", name)?;
+                    for arg in args {
+                        write!(f, " {}", arg)?;
+                    }
+                    Ok(())
+                }
+            }
         }
     }
 }
