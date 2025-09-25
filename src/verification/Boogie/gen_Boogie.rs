@@ -28,6 +28,7 @@ impl BoogieProgramGenerator {
         };
         generator.gen_string_axioms();
         generator.gen_list_axioms();
+        generator.gen_uuid_axioms();
         generator.gen_global_constants(cfg_program);
         generator.gen_table_variables(cfg_program);
         generator
@@ -61,16 +62,16 @@ impl BoogieProgramGenerator {
         // Type and operators
         decls.push("type String;".to_string());
         decls.push("const empty: String;".to_string());
-        decls.push("function Concat(x: String, y: String): String;".to_string());
+        decls.push("function concat(x: String, y: String): String;".to_string());
         // Generic to-string for any type T
         decls.push("function str<a>(x: a): String;".to_string());
 
         // Axioms (with correct triggers)
         decls.push(
-            "axiom (forall s: String :: {Concat(empty, s)} Concat(empty, s) == s);".to_string(),
+            "axiom (forall s: String :: {concat(empty, s)} concat(empty, s) == s);".to_string(),
         );
         decls.push(
-            "axiom (forall s: String :: {Concat(s, empty)} Concat(s, empty) == s);".to_string(),
+            "axiom (forall s: String :: {concat(s, empty)} concat(s, empty) == s);".to_string(),
         );
         // Injectivity of str<T> (for each instantiation of T)
         decls.push(
@@ -106,6 +107,36 @@ impl BoogieProgramGenerator {
                 .to_string(),
         );
         decls.push("axiom (forall<a> l:List a :: length(l) >= 0);".to_string());
+
+        self.program.other_declarations.extend(decls);
+    }
+
+    /// Generate UUID type and axioms based on UUID.bpl
+    pub fn gen_uuid_axioms(&mut self) {
+        let mut decls = Vec::new();
+
+        // UUID type
+        decls.push("type UUID;".to_string());
+
+        // Pure generator keyed by a pair of integers
+        decls.push("function genUUID(n: int, m: int): UUID;".to_string());
+
+        // Injectivity axioms:
+        // 1) Equality of outputs implies equality of both indices
+        decls.push(
+            "axiom (forall n1: int, m1: int, n2: int, m2: int :: \
+             {genUUID(n1, m1), genUUID(n2, m2)} \
+             genUUID(n1, m1) == genUUID(n2, m2) ==> (n1 == n2 && m1 == m2));"
+                .to_string(),
+        );
+
+        // 2) Distinctness of indices implies distinct outputs
+        decls.push(
+            "axiom (forall n1: int, m1: int, n2: int, m2: int :: \
+             {genUUID(n1, m1), genUUID(n2, m2)} \
+             (n1 != n2 || m1 != m2) ==> genUUID(n1, m1) != genUUID(n2, m2));"
+                .to_string(),
+        );
 
         self.program.other_declarations.extend(decls);
     }

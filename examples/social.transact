@@ -46,8 +46,8 @@ table User {
 
 transaction beFriend(uid1: int, uid2: int, time: int) {
     hop {
-        var aid1: UUID = genUUID();
-        var aid2: UUID = genUUID();
+        var aid1: UUID = genUUID(1, __slice__);
+        var aid2: UUID = genUUID(2, __slice__);
         Graph[UID1: uid1, UID2: uid2].Counter = 1;
     }
     
@@ -74,8 +74,8 @@ transaction beFriend(uid1: int, uid2: int, time: int) {
 
 transaction unFriend(uid1: int, uid2: int, time: int) {
     hop {
-        var aid1: UUID = genUUID();
-        var aid2: UUID = genUUID();
+        var aid1: UUID = genUUID(3, __slice__);
+        var aid2: UUID = genUUID(4, __slice__);
         Graph[UID1: uid1, UID2: uid2].Counter = 0;
     }
     
@@ -133,8 +133,8 @@ transaction readActivities(uid: int) -> List<string> {
 
 transaction postStatus(uid: int, status: string, time: int) {   
     hop {
-        var sid: UUID = genUUID();
-        var aid: UUID = genUUID();
+        var sid: UUID = genUUID(5, __slice__);
+        var aid: UUID = genUUID(6, __slice__);
         Status[SID: sid, UID: uid] = {
             Status: status
         };
@@ -151,8 +151,8 @@ transaction postStatus(uid: int, status: string, time: int) {
 
 transaction postWall(uid: int, message: string, time: int) {
     hop {
-        var wid: UUID = genUUID();
-        var aid: UUID = genUUID();
+        var wid: UUID = genUUID(7, __slice__);
+        var aid: UUID = genUUID(8, __slice__);
         Wall[WID: wid, UID: uid] = {
             Message: message
         };

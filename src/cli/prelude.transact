@@ -98,7 +98,8 @@
 @intrinsic @Boogie function int(x: float) -> int; // truncating conversion
 @intrinsic @Boogie function str<T>(x: T) -> string;
 
-@intrinsic function genUUID() -> UUID;
+const __slice__: int = 0;
+@intrinsic @Boogie function genUUID(n: int, m: int) -> UUID;
 
 @intrinsic @global function scan<T>(t: Table<T>) -> List<Row<T>>;
 

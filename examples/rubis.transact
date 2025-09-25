@@ -110,7 +110,7 @@ transaction userAuth(nickname: string, password: string) -> bool {
 
 transaction registerUser(nickname: string, password: string, firstname: string, lastname: string, email: string) {
     hop {
-        var uid: UUID = genUUID();
+        var uid: UUID = genUUID(1, __slice__);
         if (Usernames[nickname: nickname].counter > 0) {
             return;
         }
@@ -139,7 +139,7 @@ transaction viewUser(uid: UUID) -> string {
 
 transaction makeComment(from_uid: UUID, to_uid: UUID, iid: UUID, comment: string, rating: int) {
     hop {
-        var id: UUID = genUUID();
+        var id: UUID = genUUID(2, __slice__);
         Users[id: to_uid].rating = Users[id: to_uid].rating + rating;
     }
 
@@ -216,7 +216,7 @@ transaction getItemsByCategory(category_id: int) -> List<Row<Items>> {
 
 transaction registerItem(name: string, description: string, initial_price: float, quantity: int, reserve_price: float, buy_now: float, date: int, seller: UUID, region: int, category: int) {
     hop {
-        var iid: UUID = genUUID();
+        var iid: UUID = genUUID(3, __slice__);
         Items[id: iid] = {
             name: name,
             description: description,
@@ -236,7 +236,7 @@ transaction registerItem(name: string, description: string, initial_price: float
 
 transaction putBid(iid: UUID, max_bid_val: float, uid: UUID, quantity: int, bid_val: float, date: int) {
     hop {
-        var bid_id: UUID = genUUID();
+        var bid_id: UUID = genUUID(4, __slice__);
         var cur_max: float = Items[id: iid].max_bid;
         if max_bid_val > cur_max {
             Items[id: iid].max_bid = max_bid_val;
@@ -289,8 +289,8 @@ transaction getBidsByUser(uid: UUID) -> List<Row<Bids>> {
 }
 
 transaction buyNow(iid: UUID, uid: UUID, quantity: int, date: int) {
-    var bnid: UUID = genUUID();
     hop {
+        var bnid: UUID = genUUID(5, __slice__);
         var cur_qty: int = Items[id: iid].quantity;
         if quantity > cur_qty {
             return;
