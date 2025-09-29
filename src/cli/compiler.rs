@@ -337,7 +337,7 @@ impl Compiler {
                         sc.clone(),
                         all_boogie_errors,
                     );
-                
+
                 // Write simplified graphs (unified) with prefix "simplified"
                 self.write_sc_graph_dots(
                     &simplified,
@@ -345,7 +345,7 @@ impl Compiler {
                     output_dir,
                     "simplified",
                 )?;
-                
+
                 // After logging all results, check if there were any errors
                 if !exec_errors.is_empty() {
                     return Err(Box::from(format!(

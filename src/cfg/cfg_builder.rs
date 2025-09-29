@@ -992,7 +992,7 @@ impl<'a> FunctionContext<'a> {
                 // Build update if present and connect back to loop entry
                 if let Some(update_id) = update {
                     if self.current_block.is_some() {
-                        self.build_expression(update_id);
+                        self.build_expression_or_void(update_id);
                     }
                 }
 
@@ -2063,6 +2063,81 @@ impl<'a> FunctionContext<'a> {
                 self.build_expression(expr)
             }
         }
+    }
+
+    /// Build an expression that might return void (used in contexts like for-loop updates)
+    fn build_expression_or_void(&mut self, expr_id: ast::ExprId) {
+        // Extract the necessary data first to avoid borrow checker issues
+        let expr = self.builder.ast.expressions[expr_id].clone();
+        if let ast::Expression::Call {
+            callee,
+            args,
+            span,
+            resolved_type,
+            ..
+        } = expr
+        {
+            // Check if this returns void
+            if let Some(resolved_type) = resolved_type {
+                let return_type = self.builder.convert_resolved_type(&resolved_type).unwrap();
+                let is_void = matches!(self.builder.cfg.types[return_type], cfg::Type::Void);
+
+                if is_void {
+                    // Handle void function call directly (similar to build_expression but without panic)
+                    let callee_expr = self.builder.ast.expressions[callee].clone();
+                    let func_id = match callee_expr {
+                        ast::Expression::Identifier {
+                            resolved_declarations,
+                            ..
+                        } => {
+                            // Find the function in resolved declarations
+                            let mut found_func = None;
+                            for resolution in resolved_declarations {
+                                if let ast::IdentifierResolution::Function(id) = resolution {
+                                    if let Some(cfg_id) = self.builder.func_map.get(&id) {
+                                        found_func = Some(*cfg_id);
+                                        break;
+                                    }
+                                }
+                            }
+                            if let Some(id) = found_func {
+                                id
+                            } else {
+                                panic!("Function should have been resolved in frontend");
+                            }
+                        }
+                        _ => panic!("Dynamic callee should not reach CFG builder"),
+                    };
+
+                    // Build arguments
+                    let arg_operands: Vec<cfg::Operand> = args
+                        .iter()
+                        .map(|arg_expr_id| self.build_expression(*arg_expr_id))
+                        .collect();
+
+                    // Create void function call instruction
+                    let call_span = self.pick_span(&[
+                        span,
+                        self.builder.ast.expressions[callee].span(),
+                        args.first()
+                            .and_then(|id| self.builder.ast.expressions[*id].span()),
+                    ]);
+                    let instr = cfg::Instruction {
+                        kind: cfg::InstructionKind::Call {
+                            dest: None,
+                            func: func_id,
+                            args: arg_operands,
+                        },
+                        span: call_span,
+                    };
+                    self.add_instruction(instr);
+                    return;
+                }
+            }
+        }
+
+        // Not a void function call, use regular expression building (discard the result)
+        self.build_expression(expr_id);
     }
 
     // --- CFG Structure Helpers ---

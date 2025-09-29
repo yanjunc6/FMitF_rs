@@ -13,6 +13,7 @@ pub fn generate_table_accessors(program: &mut Program) {
 
     for table_id in table_ids {
         generate_accessors_for_table(program, table_id);
+        generate_iterator_accessors_for_table(program, table_id);
     }
 }
 
@@ -225,4 +226,100 @@ fn create_generic_type(program: &mut Program, base: AstTypeId, args: Vec<AstType
         resolved_base_type: None,
         span: None,
     })
+}
+
+/// Generate iterator accessor functions for a specific table
+fn generate_iterator_accessors_for_table(program: &mut Program, table_id: TableId) {
+    let table_decl = program.table_decls[table_id].clone();
+    let table_name = table_decl.name.name.clone();
+
+    // Collect field information first to avoid borrow checker issues
+    let field_info: Vec<_> = table_decl
+        .elements
+        .iter()
+        .filter_map(|element| {
+            if let TableElement::Field(field_id) = element {
+                Some(program.fields[*field_id].clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Generate iterator getter functions for primary key fields
+    for field in field_info {
+        if field.is_primary {
+            generate_iterator_field_getter(program, &table_name, &field);
+        }
+    }
+}
+
+/// Generate a getter function for a field accessed through an iterator
+fn generate_iterator_field_getter(
+    program: &mut Program,
+    table_name: &str,
+    field: &TableField,
+) -> FunctionId {
+    let field_name = &field.name.name;
+
+    // Create Iterator<T> type for parameter
+    let iter_base_type = create_identifier_type(program, "Iterator");
+    let table_arg_type = create_identifier_type(program, table_name);
+    let iter_type = create_generic_type(program, iter_base_type, vec![table_arg_type]);
+
+    // Create parameter: iter: Iterator<TableName>
+    let param_id = program.params.alloc(Parameter {
+        name: Identifier {
+            name: "iter".to_string(),
+            span: None,
+        },
+        ty: iter_type,
+        resolved_type: None,
+        span: None,
+    });
+
+    // Return type is the field type
+    let return_type = field.ty;
+
+    // Function name: get_FieldName
+    let function_name = format!("get_{}", field_name);
+
+    // Create the function declaration
+    let function_id = program.functions.alloc(CallableDecl {
+        kind: CallableKind::Function,
+        name: Identifier {
+            name: function_name,
+            span: None,
+        },
+        decorators: vec![
+            Decorator {
+                name: Identifier {
+                    name: "generated".to_string(),
+                    span: None,
+                },
+                span: None,
+            },
+            Decorator {
+                name: Identifier {
+                    name: "intrinsic".to_string(),
+                    span: None,
+                },
+                span: None,
+            },
+        ],
+        generic_params: vec![],
+        params: vec![param_id],
+        return_type: Some(return_type),
+        body: None, // Intrinsic functions have no body
+        resolved_param_types: None,
+        resolved_return_type: None,
+        resolved_function_type: None,
+        assumptions: Vec::new(),
+        span: None,
+    });
+
+    // Add to program declarations
+    program.declarations.push(Item::Callable(function_id));
+
+    function_id
 }
