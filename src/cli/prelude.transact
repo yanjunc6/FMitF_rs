@@ -21,6 +21,7 @@
 @intrinsic @builtin type Row<T>; // A row Activity is of type Row<Activity>
 @intrinsic @builtin type Table<T>; // A table Activity as var is of type Table<Activity>
 
+@intrinsic type Iterator<T>; // An iterator over table Activity is of type Iterator<Activity>
 @intrinsic type UUID;
 // ===========================================
 // Arithmetic Operators
@@ -86,12 +87,14 @@
 // Built-in Functions
 // ===========================================
 
-@intrinsic function map<T, U>(list: List<T>, func: (T) -> U) -> List<U>;
-@intrinsic function filter<T>(list: List<T>, predicate: (T) -> bool) -> List<T>;
-@intrinsic function reduce<T, U>(list: List<T>, func: (U, T) -> U, initial: U) -> U;
+// @intrinsic function map<T, U>(list: List<T>, func: (T) -> U) -> List<U>;
+// @intrinsic function filter<T>(list: List<T>, predicate: (T) -> bool) -> List<T>;
+// @intrinsic function reduce<T, U>(list: List<T>, func: (U, T) -> U, initial: U) -> U;
 
 @intrinsic function length<T>(list: List<T>) -> int;
 @intrinsic function get<T>(list: List<T>, idx: int) -> T;
+@intrinsic function append<T>(list: List<T>, elem: T) -> List<T>;
+@intrinsic function emptyList<T>() -> List<T>;
 
 // Type conversion functions
 @intrinsic @Boogie function float(x: int) -> float;
@@ -101,7 +104,9 @@
 const __slice__: int = 0;
 @intrinsic @Boogie function genUUID(n: int, m: int) -> UUID;
 
-@intrinsic @global function scan<T>(t: Table<T>) -> List<Row<T>>;
+@intrinsic @global function scan<T>(t: Table<T>) -> Iterator<T>;
+@intrinsic function next<T>(iter: Iterator<T>) -> Row<T>;
+@intrinsic function hasNext<T>(iter: Iterator<T>) -> bool;
 
 // ===========================================
 // (deprecated) Generated Functions for Row

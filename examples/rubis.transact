@@ -259,16 +259,28 @@ transaction putBid(iid: UUID, max_bid_val: float, uid: UUID, quantity: int, bid_
 }
 
 transaction getBidsByItem(iid: UUID) -> List<Row<Bids>> {
+//    @global hop {
+//        var bidList: List<Row<Bids>> =
+//        Bids
+//        .scan()
+//        .filter(
+//            (b: Row<Bids>) -> bool { return b.item_id === iid; }
+//        )
+//        .map(
+//            (b: Row<Bids>) -> Row<Bids> { return b; }
+//        );
+//        return bidList;
+//    }
+
     @global hop {
-        var bidList: List<Row<Bids>> =
-        Bids
-        .scan()
-        .filter(
-            (b: Row<Bids>) -> bool { return b.item_id === iid; }
-        )
-        .map(
-            (b: Row<Bids>) -> Row<Bids> { return b; }
-        );
+        var bids_iter: Iterator<Bids> = Bids.scan();
+        var bidList: List<Row<Bids>> = emptyList();
+        while (bids_iter.hasNext()) {
+            var b: Row<Bids> = bids_iter.next();
+            if b.item_id === iid {
+                bidList.append(b);
+            }
+        }
         return bidList;
     }
 }
