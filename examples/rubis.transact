@@ -276,9 +276,11 @@ transaction getBidsByItem(iid: UUID) -> List<Row<Bids>> {
         var bids_iter: Iterator<Bids> = Bids.scan();
         var bidList: List<Row<Bids>> = emptyList();
         while (bids_iter.hasNext()) {
-            var b: Row<Bids> = bids_iter.next();
-            if b.item_id === iid {
-                bidList.append(b);
+            bids_iter.next();
+            var bid = bids_iter.get_id();
+            var b_item_id = Bids[id: bid].item_id;
+            if b_item_id === iid {
+                bidList.append(Bids[id: bid]);
             }
         }
         return bidList;

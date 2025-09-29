@@ -105,8 +105,17 @@ const __slice__: int = 0;
 @intrinsic @Boogie function genUUID(n: int, m: int) -> UUID;
 
 @intrinsic @global function scan<T>(t: Table<T>) -> Iterator<T>;
-@intrinsic function next<T>(iter: Iterator<T>) -> Row<T>;
+@intrinsic function next<T>(iter: Iterator<T>) -> void;
 @intrinsic function hasNext<T>(iter: Iterator<T>) -> bool;
+
+// ===========================================
+//  Generated Functions for Iterator
+// ===========================================
+// For a table Activity with schema (id: int, name: string, active: bool), where primary key is id,
+// the following functions are automatically generated:
+// @generated function get_id(t: Iterator<Activity>) -> int;
+// ===========================================
+
 
 // ===========================================
 // (deprecated) Generated Functions for Row
