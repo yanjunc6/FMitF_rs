@@ -156,60 +156,56 @@ transaction makeComment(from_uid: UUID, to_uid: UUID, iid: UUID, comment: string
 
 transaction getCommentsByToUID(to_id: UUID) -> List<string> {
     @global hop {
-        var commentList: List<string> =
-        Comments
-        .scan()
-        .filter(
-            (c: Row<Comments>) -> bool { return c.to_user_id === to_id; }
-        )
-        .map(
-            (c: Row<Comments>) -> string { return c.comment; }
-        );
+        var commentList: List<string> = emptyList();
+        for (var comments_iter: Iterator<Comments> = scan(Comments); hasNext(comments_iter); next(comments_iter)) {
+            var comment_id = get_id(comments_iter);
+            var c_to_user_id = Comments[id: comment_id].to_user_id;
+            if c_to_user_id === to_id {
+                commentList = append(commentList, Comments[id: comment_id].comment);
+            }
+        }
         return commentList;
     }
 }
 
 transaction getCommentsByIID(iid: UUID) -> List<string> {
     @global hop {
-        var commentList: List<string> =
-        Comments
-        .scan()
-        .filter(
-            (c: Row<Comments>) -> bool { return c.item_id === iid; }
-        )
-        .map(
-            (c: Row<Comments>) -> string { return c.comment; }
-        );
+        var commentList: List<string> = emptyList();
+        for (var comments_iter: Iterator<Comments> = scan(Comments); hasNext(comments_iter); next(comments_iter)) {
+            var comment_id = get_id(comments_iter);
+            var c_item_id = Comments[id: comment_id].item_id;
+            if c_item_id === iid {
+                commentList = append(commentList, Comments[id: comment_id].comment);
+            }
+        }
         return commentList;
     }
 }
 
 transaction getItemsByRegion(region_id: int) -> List<Row<Items>> {
     @global hop {
-        var itemList: List<Row<Items>> =
-        Items
-        .scan()
-        .filter(
-            (i: Row<Items>) -> bool { return i.region == region_id; }
-        )
-        .map(
-            (i: Row<Items>) -> Row<Items> { return i; }
-        );
+        var itemList: List<Row<Items>> = emptyList();
+        for (var items_iter: Iterator<Items> = scan(Items); hasNext(items_iter); next(items_iter)) {
+            var item_id = get_id(items_iter);
+            var i_region = Items[id: item_id].region;
+            if i_region == region_id {
+                itemList = append(itemList, Items[id: item_id]);
+            }
+        }
         return itemList;
     }
 }
 
 transaction getItemsByCategory(category_id: int) -> List<Row<Items>> {
     @global hop {
-        var itemList: List<Row<Items>> =
-        Items
-        .scan()
-        .filter(
-            (i: Row<Items>) -> bool { return i.category == category_id; }
-        )
-        .map(
-            (i: Row<Items>) -> Row<Items> { return i; }
-        );
+        var itemList: List<Row<Items>> = emptyList();
+        for (var items_iter: Iterator<Items> = scan(Items); hasNext(items_iter); next(items_iter)) {
+            var item_id = get_id(items_iter);
+            var i_category = Items[id: item_id].category;
+            if i_category == category_id {
+                itemList = append(itemList, Items[id: item_id]);
+            }
+        }
         return itemList;
     }
 }
@@ -273,14 +269,12 @@ transaction getBidsByItem(iid: UUID) -> List<Row<Bids>> {
 //    }
 
     @global hop {
-        var bids_iter: Iterator<Bids> = Bids.scan();
         var bidList: List<Row<Bids>> = emptyList();
-        while (bids_iter.hasNext()) {
-            bids_iter.next();
-            var bid = bids_iter.get_id();
+        for (var bids_iter: Iterator<Bids> = scan(Bids); hasNext(bids_iter); next(bids_iter)) {
+            var bid = get_id(bids_iter);
             var b_item_id = Bids[id: bid].item_id;
             if b_item_id === iid {
-                bidList.append(Bids[id: bid]);
+                bidList = append(bidList, Bids[id: bid]);
             }
         }
         return bidList;
@@ -289,15 +283,14 @@ transaction getBidsByItem(iid: UUID) -> List<Row<Bids>> {
 
 transaction getBidsByUser(uid: UUID) -> List<Row<Bids>> {
     @global hop {
-        var bidList: List<Row<Bids>> =
-        Bids
-        .scan()
-        .filter(
-            (b: Row<Bids>) -> bool { return b.user_id === uid; }
-        )
-        .map(
-            (b: Row<Bids>) -> Row<Bids> { return b; }
-        );
+        var bidList: List<Row<Bids>> = emptyList();
+        for (var bids_iter: Iterator<Bids> = scan(Bids); hasNext(bids_iter); next(bids_iter)) {
+            var bid_id = get_id(bids_iter);
+            var b_user_id = Bids[id: bid_id].user_id;
+            if b_user_id === uid {
+                bidList = append(bidList, Bids[id: bid_id]);
+            }
+        }
         return bidList;
     }
 }

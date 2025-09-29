@@ -103,30 +103,29 @@ transaction unFriend(uid1: int, uid2: int, time: int) {
 // Using map/filter/reduce pattern for table scanning
 transaction readFriends(uid: int) -> List<int> {
     @global hop {
-        // Using filter and map pattern
-        var uids: List<int> =
-        Graph
-        .scan()
-        .filter(
-            (g: Row<Graph>) -> bool { return g.UID1 == uid && g.Counter > 0; }
-        )
-        .map(
-            (g: Row<Graph>) -> int { return g.UID2; }
-        );
+        var uids: List<int> = emptyList();
+        for (var graph_iter: Iterator<Graph> = scan(Graph); hasNext(graph_iter); next(graph_iter)) {
+            var graph_uid1 = get_UID1(graph_iter);
+            var graph_uid2 = get_UID2(graph_iter);
+            var g_counter = Graph[UID1: graph_uid1, UID2: graph_uid2].Counter;
+            if graph_uid1 == uid && g_counter > 0 {
+                uids = append(uids, graph_uid2);
+            }
+        }
         return uids;
     }
 }
 
 transaction readActivities(uid: int) -> List<string> {
     @global hop {
-        // Using filter and map pattern
-        var allActivities: List<Row<Activity>> = scan(Activity);
-        var userActivities: List<Row<Activity>> = filter(allActivities,
-            (a: Row<Activity>) -> bool { return a.UID == uid; }
-        );
-        var logs: List<string> = map(userActivities,
-            (a: Row<Activity>) -> string { return a.Log; }
-        );
+        var logs: List<string> = emptyList();
+        for (var activity_iter: Iterator<Activity> = scan(Activity); hasNext(activity_iter); next(activity_iter)) {
+            var activity_aid = get_AID(activity_iter);
+            var activity_uid = get_UID(activity_iter);
+            if activity_uid == uid {
+                logs = append(logs, Activity[AID: activity_aid, UID: activity_uid].Log);
+            }
+        }
         return logs;
     }
 }

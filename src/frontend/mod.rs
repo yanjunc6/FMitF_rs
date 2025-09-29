@@ -24,9 +24,8 @@ pub fn parse_and_analyze_program(
         }
     };
 
-    // Stage 1.5: Generate accessor functions for table Row<T> types
-    // generated_functions::generate_table_accessors(&mut program);
-    // no need to have get/set functions
+    // Stage 1.5: Generate accessor functions for table Row<T> types and Iterator<T> types
+    generated_functions::generate_table_accessors(&mut program);
 
     // Stage 2: Name resolution
     if let Err(errors) = name_resolver::resolve_names(&mut program) {
