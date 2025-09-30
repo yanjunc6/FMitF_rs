@@ -33,6 +33,10 @@ impl BaseVerificationGenerator {
                 ("str", "str"),
                 ("+", "concat"),
                 ("genUUID", "genUUID"),
+                ("emptyList", "emptyList"),
+                ("append", "append"),
+                ("length", "length"),
+                ("get", "get"),
             ]),
         }
     }
@@ -153,10 +157,40 @@ impl BaseVerificationGenerator {
                 }
 
                 let mut boogie_args = Vec::new();
+
+                // Special handling for emptyList - add dummy variable as witness argument
+                if func_name == "emptyList" {
+                    // For emptyList calls, we need to create a dummy variable of the element type
+                    // and pass it as the first argument as a witness
+                    if let Some(dest_id) = dest {
+                        let dest_type_id = cfg_program.variables[*dest_id].ty;
+                        let dest_type = &cfg_program.types[dest_type_id];
+                        if let crate::cfg::Type::List(element_type_id) = dest_type {
+                            // Create a dummy variable name for the witness
+                            let witness_name = format!("__dummy_witness_{}", slice_id);
+                            let element_type = BoogieProgramGenerator::convert_type_id(
+                                cfg_program,
+                                element_type_id,
+                            );
+
+                            // Ensure the dummy variable exists
+                            self.generator
+                                .ensure_local_variable_exists(&witness_name, element_type);
+
+                            // Add the dummy variable as the first argument
+                            boogie_args.push(BoogieExpr {
+                                kind: BoogieExprKind::Var(witness_name),
+                            });
+                        }
+                    }
+                }
+
+                // Add the regular function arguments
                 for arg in args {
                     let arg_name = self.get_operand_name(arg, slice_id, cfg_program)?;
                     boogie_args.push(self.generator.convert_operand(cfg_program, arg, arg_name)?);
                 }
+
                 let call_expr = BoogieExpr {
                     kind: BoogieExprKind::FunctionCall {
                         name: func_name,
