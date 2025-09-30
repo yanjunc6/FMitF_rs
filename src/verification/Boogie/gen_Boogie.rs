@@ -89,23 +89,29 @@ impl BoogieProgramGenerator {
         let mut decls = Vec::new();
         // Type
         decls.push("type List a;".to_string());
-        // Constructors
-        decls.push("function Cons<a>(x:a, t:List a) returns (List a);".to_string());
-        decls.push("function Nil<a>(w:a) returns (List a);".to_string());
-        // Ops
-        decls.push("function length<a>(l:List a) returns (int);".to_string());
-        decls.push("function get<a>(l:List a, i:int) returns (a);".to_string());
+        // Core operations
+        decls.push("function length<a>(List a) returns (int);".to_string());
+        decls.push("function get<a>(List a, int) returns (a);".to_string());
+        decls.push("function append<a>(List a, a) returns (List a);".to_string());
+        // The emptyList function takes a witness argument of type 'a'
+        decls.push("function emptyList<a>(a) returns (List a);".to_string());
+
         // Axioms
-        decls.push("axiom (forall<a> u:a, v:a :: Nil(u) == Nil(v));".to_string());
-        decls.push("axiom (forall<a> w:a :: length(Nil(w)) == 0);".to_string());
+        // Axiom 1: All empty lists of the same type 'a' are equal
+        decls.push("axiom (forall<a> w1:a, w2:a :: emptyList(w1) == emptyList(w2));".to_string());
+        // Axiom 2: The length of an empty list is 0
+        decls.push("axiom (forall<a> w:a :: length(emptyList(w)) == 0);".to_string());
+        // Axiom 3: Appending an element increases the length by 1
         decls.push(
-            "axiom (forall<a> x:a, t:List a :: length(Cons(x, t)) == 1 + length(t));".to_string(),
+            "axiom (forall<a> l:List a, e:a :: length(append(l, e)) == length(l) + 1);".to_string(),
         );
-        decls.push("axiom (forall<a> x:a, t:List a :: get(Cons(x, t), 0) == x);".to_string());
+        // Axiom 4: Getting the last element after an append returns the appended element
         decls.push(
-            "axiom (forall<a> x:a, t:List a, i:int ::  0 < i && i < length(Cons(x, t)) ==> get(Cons(x, t), i) == get(t, i - 1));"
-                .to_string(),
+            "axiom (forall<a> l:List a, e:a :: get(append(l, e), length(l)) == e);".to_string(),
         );
+        // Axiom 5: Accessing other elements remains the same after an append
+        decls.push("axiom (forall<a> l:List a, e:a, i:int :: 0 <= i && i < length(l) ==> get(append(l, e), i) == get(l, i));".to_string());
+        // Axiom 6: Length is never negative
         decls.push("axiom (forall<a> l:List a :: length(l) >= 0);".to_string());
 
         self.program.other_declarations.extend(decls);
