@@ -65,3 +65,13 @@ procedure TestMyListAxioms()
     assert get(l3, 1) == 20;
     assert get(l3, 0) == 10;
 }
+
+procedure TestMyListAxioms2()
+{
+    var l0, l1: List int;
+
+    // Create the empty list by providing a witness value (0) of the desired type (int).
+    l0 := emptyList(0);
+    l1 := emptyList(1);
+    assert l0 == l1; // Axiom 1: All empty lists of the same type are equal.
+}

@@ -262,6 +262,7 @@ impl Compiler {
                                 Ok(()) => Command::new("boogie")
                                     .arg("/quiet")
                                     .arg("/errorTrace:0")
+                                    .arg("/loopUnroll:11")
                                     .arg(file_path.to_string_lossy().to_string())
                                     .output(),
                                 Err(e) => Err(e),
