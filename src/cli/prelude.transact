@@ -113,7 +113,7 @@ const __slice__: int = 0;
 // ===========================================
 // For a table Activity with schema (id: int, name: string, active: bool), where primary key is id,
 // the following functions are automatically generated:
-// @generated function get_id(t: Iterator<Activity>) -> int;
+// @intrinsic @generated @iterator @rename function get_id(t: Iterator<Activity>) -> int;
 // ===========================================
 
 
@@ -122,10 +122,10 @@ const __slice__: int = 0;
 // ===========================================
 // For a table Activity with schema (id: int, name: string, active: bool), where primary key is id,
 // the following functions are automatically generated:
-// @generated function get_name(t: Row<Activity>) -> string;
-// @generated function get_id(t: Row<Activity>) -> int;
-// @generated function get_active(t: Row<Activity>) -> bool;
-// @generated function set_name(t: Row<Activity>, v: string) -> void;
-// @generated function set_id(t: Row<Activity>, v: int) -> void;
-// @generated function set_active(t: Row<Activity>, v: bool) -> void;
+// @intrinsic @generated function get_name(t: Row<Activity>) -> string;
+// @intrinsic @generated function get_id(t: Row<Activity>) -> int;
+// @intrinsic @generated function get_active(t: Row<Activity>) -> bool;
+// @intrinsic @generated function set_name(t: Row<Activity>, v: string) -> void;
+// @intrinsic @generated function set_id(t: Row<Activity>, v: int) -> void;
+// @intrinsic @generated function set_active(t: Row<Activity>, v: bool) -> void;
 // ===========================================

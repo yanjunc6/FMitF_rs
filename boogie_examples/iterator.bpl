@@ -12,6 +12,7 @@ type Table a;
 type String;
 type UUID;
 type Activity;
+type Bank;
 const empty_string: String; // A constant for string initialization if needed.
 const __dummy_witness_1: int; // A witness value for creating an emptyList.
 
@@ -55,12 +56,13 @@ function scan<T>(t: Table T, n: int, m: int) returns (Iterator T);
 function next<T>(iter: Iterator T) returns (Iterator T);
 function hasNext<T>(iter: Iterator T) returns (bool);
 function get_AID(iter: Iterator Activity) returns (UUID);
-function get_UID(iter: Iterator Activity) returns (int);
-
+// function get_UID#1(iter: Iterator Activity) returns (int);
+// function get_AID#2(iter: Iterator Bank) returns (int);
 // --- Iterator Axioms ---
 
 // Axiom for deterministic length
 axiom (forall n: int, m: int :: model_iter_length(n, m) >= 0);
+axiom (forall n: int, m: int :: model_iter_length(n, m) == 1); //  we should always include this line.
 
 // scan()
 axiom (forall<T> t: Table T, n: int, m: int :: iter_position(scan(t, n, m)) == 0);
