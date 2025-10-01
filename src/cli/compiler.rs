@@ -226,8 +226,11 @@ impl Compiler {
                 fs::create_dir_all(&boogie_dir)?;
 
                 // 2) Write each Boogie program to a .bpl file and run Boogie in parallel with progress
-                use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
+                use indicatif::{ProgressBar, ProgressStyle};
                 use rayon::prelude::*;
+                use std::collections::HashSet;
+                use std::sync::atomic::{AtomicUsize, Ordering};
+                use std::sync::{Arc, Mutex};
 
                 let mut all_boogie_errors: Vec<BoogieError> = Vec::new();
 
@@ -242,15 +245,20 @@ impl Compiler {
                 );
                 pb.set_message("running Boogie");
 
+                // Thread-safe tracking: running files set and completed counter
+                let running_files: Arc<Mutex<HashSet<String>>> =
+                    Arc::new(Mutex::new(HashSet::new()));
+                let completed_count = Arc::new(AtomicUsize::new(0));
+
                 // Run write+boogie per program in parallel, collecting outputs for sequential logging
                 let run_results: Vec<(String, Result<std::process::Output, std::io::Error>)> =
                     programs
                         .par_iter()
-                        .progress_with(pb.clone())
                         .map(|program| {
                             let file_name = format!("{}.bpl", program.name);
                             let file_path = boogie_dir.join(&file_name);
-                            // Write .bpl file
+
+                            // Write .bpl file (fast, don't track this)
                             let write_res = (|| -> Result<(), std::io::Error> {
                                 use std::io::Write;
                                 let mut f = fs::File::create(&file_path)?;
@@ -259,12 +267,66 @@ impl Compiler {
                             })();
 
                             let output = match write_res {
-                                Ok(()) => Command::new("boogie")
-                                    .arg("/quiet")
-                                    .arg("/errorTrace:0")
-                                    .arg("/loopUnroll:11")
-                                    .arg(file_path.to_string_lossy().to_string())
-                                    .output(),
+                                Ok(()) => {
+                                    // Add to running set RIGHT before calling Boogie
+                                    {
+                                        let mut files = running_files.lock().unwrap();
+                                        files.insert(file_name.clone());
+                                        let files_list: Vec<String> =
+                                            files.iter().cloned().collect();
+                                        let completed = completed_count.load(Ordering::Relaxed);
+                                        let msg = if files_list.len() <= 3 {
+                                            format!("Running: {}", files_list.join(", "))
+                                        } else {
+                                            format!(
+                                                "Running: {}, {}, {} (+{} more)",
+                                                files_list[0],
+                                                files_list[1],
+                                                files_list[2],
+                                                files_list.len() - 3
+                                            )
+                                        };
+                                        pb.set_position(completed as u64);
+                                        pb.set_message(msg);
+                                    }
+
+                                    // Actually run Boogie
+                                    let result = Command::new("boogie")
+                                        .arg("/quiet")
+                                        .arg("/errorTrace:0")
+                                        .arg("/loopUnroll:11")
+                                        .arg(file_path.to_string_lossy().to_string())
+                                        .output();
+
+                                    // Remove from running set and increment completed counter
+                                    {
+                                        let mut files = running_files.lock().unwrap();
+                                        files.remove(&file_name);
+                                        let new_completed =
+                                            completed_count.fetch_add(1, Ordering::Relaxed) + 1;
+                                        let files_list: Vec<String> =
+                                            files.iter().cloned().collect();
+                                        if !files_list.is_empty() {
+                                            let msg = if files_list.len() <= 3 {
+                                                format!("Running: {}", files_list.join(", "))
+                                            } else {
+                                                format!(
+                                                    "Running: {}, {}, {} (+{} more)",
+                                                    files_list[0],
+                                                    files_list[1],
+                                                    files_list[2],
+                                                    files_list.len() - 3
+                                                )
+                                            };
+                                            pb.set_position(new_completed as u64);
+                                            pb.set_message(msg);
+                                        } else {
+                                            pb.set_position(new_completed as u64);
+                                        }
+                                    }
+
+                                    result
+                                }
                                 Err(e) => Err(e),
                             };
 
