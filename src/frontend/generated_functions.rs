@@ -306,6 +306,20 @@ fn generate_iterator_field_getter(
                 },
                 span: None,
             },
+            Decorator {
+                name: Identifier {
+                    name: "iterator".to_string(),
+                    span: None,
+                },
+                span: None,
+            },
+            Decorator {
+                name: Identifier {
+                    name: "rename".to_string(),
+                    span: None,
+                },
+                span: None,
+            },
         ],
         generic_params: vec![],
         params: vec![param_id],
