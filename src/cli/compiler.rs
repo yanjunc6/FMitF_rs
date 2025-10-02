@@ -90,16 +90,24 @@ impl Compiler {
         output_dir: &PathBuf,
         instances: usize,
         enable_optimization: bool,
+        loop_unroll: u32,
+        timeout_secs: u32,
     ) -> Result<(), Box<dyn std::error::Error>> {
         println!("{} compilation pipeline", "Starting".bold().green());
 
         // Initialize logger and write opening line
         self.logger.init(output_dir)?;
         self.logger.line("===== Compiler run started =====")?;
+        self.logger.line(format!(
+            "Boogie configuration: loopUnroll = {}, timeLimit = {}s",
+            loop_unroll, timeout_secs
+        ))?;
 
         const TOTAL_STAGES: usize = 5; // Added Verification stage
         let mut current_stage = 0;
         let mut summary = RunSummary::new(instances);
+        summary.boogie_loop_unroll = loop_unroll as usize;
+        summary.boogie_timeout_secs = timeout_secs as usize;
 
         // Stage 1: Frontend (Parsing)
         current_stage += 1;
@@ -312,8 +320,8 @@ impl Compiler {
                                     let result = Command::new("boogie")
                                         .arg("/quiet")
                                         .arg("/errorTrace:0")
-                                        .arg("/loopUnroll:12")
-                                        .arg("/timeLimit:1") // 1 second limit
+                                        .arg(format!("/loopUnroll:{}", loop_unroll))
+                                        .arg(format!("/timeLimit:{}", timeout_secs))
                                         .arg(file_path.to_string_lossy().to_string())
                                         .output();
 

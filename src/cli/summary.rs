@@ -7,6 +7,8 @@ pub struct RunSummary {
     pub function_count: usize,
     pub hop_count: usize,
     pub instance_count: usize,
+    pub boogie_loop_unroll: usize,
+    pub boogie_timeout_secs: usize,
     pub sc_c_edges: usize,
     pub simplified_sc_c_edges: usize,
     pub verification_total: usize,
@@ -46,6 +48,14 @@ impl RunSummary {
             self.simplified_sc_c_edges
         );
 
+        let boogie = format!(
+            "  {} {}  {} {}s",
+            term("Boogie loopUnroll:"),
+            self.boogie_loop_unroll,
+            term("Boogie timeLimit:"),
+            self.boogie_timeout_secs
+        );
+
         let verification = format!(
             "  {} {}  {} {}  {} {}  {} {}  {} {}",
             term("Verifications:"),
@@ -60,7 +70,7 @@ impl RunSummary {
             self.boogie_compile_failures
         );
 
-        vec![header, basic, sc, verification].join("\n")
+        vec![header, basic, sc, boogie, verification].join("\n")
     }
 
     pub fn format_plain(&self) -> String {
@@ -72,6 +82,10 @@ impl RunSummary {
             "  C-edges (original): {}  C-edges (simplified): {}",
             self.sc_c_edges, self.simplified_sc_c_edges
         );
+        let boogie = format!(
+            "  Boogie loopUnroll: {}  Boogie timeLimit: {}s",
+            self.boogie_loop_unroll, self.boogie_timeout_secs
+        );
         let verification = format!(
             "  Verifications: {}  Pass: {}  Errors: {}  Timeouts: {}  Boogie failures: {}",
             self.verification_total,
@@ -81,7 +95,7 @@ impl RunSummary {
             self.boogie_compile_failures
         );
 
-        vec![basic, sc, verification].join("\n")
+        vec![basic, sc, boogie, verification].join("\n")
     }
 }
 
