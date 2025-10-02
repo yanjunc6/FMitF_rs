@@ -65,6 +65,9 @@ impl VerifyResultProcessor {
                 BoogieError::SpecialInterleavingNonEquivalence { node_1, node_2 } => {
                     verified_not_commutative_pairs.push((node_1, node_2));
                 }
+                BoogieError::SpecialInterleavingTimeout { node_1, node_2 } => {
+                    verified_not_commutative_pairs.push((node_1, node_2));
+                }
             }
         }
 

@@ -84,6 +84,10 @@ pub enum BoogieError {
         node_1: VerificationNodeId,
         node_2: VerificationNodeId,
     },
+    SpecialInterleavingTimeout {
+        node_1: VerificationNodeId,
+        node_2: VerificationNodeId,
+    },
 }
 /// Attach an error message with structured error information to an assertion.
 #[derive(Debug, Clone)]
