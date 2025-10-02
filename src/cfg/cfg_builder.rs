@@ -1395,42 +1395,29 @@ impl<'a> FunctionContext<'a> {
                 callee,
                 args,
                 resolved_type,
+                resolved_callables,
                 span,
                 ..
             } => {
-                // Get the function ID from the callee expression
-                let func_id = match &self.builder.ast.expressions[callee] {
-                    ast::Expression::Identifier {
-                        name,
-                        resolved_declarations,
-                        ..
-                    } => {
-                        // Find the function in resolved declarations
-                        let mut found_func = None;
-                        for resolution in resolved_declarations {
-                            if let ast::IdentifierResolution::Function(id) = resolution {
-                                if let Some(cfg_id) = self.builder.func_map.get(id) {
-                                    found_func = Some(*cfg_id);
-                                    break;
-                                } else {
-                                    // Built-in functions should have been resolved in frontend
-                                    panic!(
-                                        "Built-in function call should have been resolved: {}",
-                                        name.name
-                                    );
-                                }
-                            }
-                        }
-                        if let Some(id) = found_func {
-                            id
-                        } else {
-                            panic!(
-                                "Function should have been resolved in frontend: {}",
-                                name.name
-                            );
-                        }
-                    }
-                    _ => panic!("Dynamic callee should not reach CFG builder"),
+                // Get the function ID from resolved_callables (already narrowed down by type checker)
+                if resolved_callables.is_empty() {
+                    let callee_expr = &self.builder.ast.expressions[callee];
+                    panic!("Function call has no resolved callables - should have been resolved in frontend: {:?}", callee_expr);
+                }
+                if resolved_callables.len() > 1 {
+                    panic!("Function call resolves to multiple functions - type checker should ensure only one: {:?}", resolved_callables);
+                }
+
+                let ast_func_id = resolved_callables[0];
+                let func_id = if let Some(&cfg_id) = self.builder.func_map.get(&ast_func_id) {
+                    cfg_id
+                } else {
+                    // Built-in functions should have been resolved in frontend
+                    let ast_func = &self.builder.ast.functions[ast_func_id];
+                    panic!(
+                        "Built-in function call should have been resolved: {}",
+                        ast_func.name.name
+                    );
                 };
 
                 // Build arguments uniformly; table identifiers lower to Operand::Table via build_expression
