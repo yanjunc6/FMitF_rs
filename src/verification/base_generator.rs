@@ -5,9 +5,7 @@ use std::collections::HashMap;
 use super::Boogie::{
     gen_Boogie::BoogieProgramGenerator, BoogieExpr, BoogieExprKind, BoogieLine, BoogieProgram,
 };
-use crate::cfg::{
-    BasicBlock, Decorator, Instruction, InstructionKind, Operand, Program as CfgProgram,
-};
+use crate::cfg::{BasicBlock, Instruction, InstructionKind, Operand, Program as CfgProgram};
 use crate::verification::{
     errors::Results,
     scope::{ExecutionScope, SliceId},
@@ -145,10 +143,11 @@ impl BaseVerificationGenerator {
                 let func_decl = &cfg_program.functions[*func];
                 let mut func_name = func_decl.name.clone();
 
-                // Map to Boogie func if decorated as @Boogie
-                if func_decl.decorators.contains(&Decorator {
-                    name: "Boogie".to_string(),
-                }) {
+                // Check for @rename or @Boogie decorator to map to builtin functions, @rename will take precedence
+                if func_decl.decorators.iter().any(|d| d.name == "rename") {
+                    func_name = format!("{}#{}", func_decl.name, func.index());
+                } else if func_decl.decorators.iter().any(|d| d.name == "Boogie") {
+                    // Map to Boogie func if decorated as @Boogie (only if not renamed)
                     func_name = self
                         .Boogie_func_map
                         .get(func_name.as_str())
