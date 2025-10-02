@@ -1,0 +1,39 @@
+// Partition function declaration
+function f(x: int) -> int;
+
+// ===========================================
+// Table Declarations
+// ===========================================
+
+table Graph {
+    primary UID1: int;
+    primary UID2: int;
+    node f(UID1);
+    Counter: int;
+}
+
+
+
+transaction unFriend(uid1: int, uid2: int, time: int) {
+    hop {
+        var aid1: UUID = genUUID(3, __slice__);
+        var aid2: UUID = genUUID(4, __slice__);
+        Graph[UID1: uid1, UID2: uid2].Counter = 0;
+    }
+}
+
+// Using map/filter/reduce pattern for table scanning
+transaction readFriends(uid: int) -> List<int> {
+    @global hop {
+        var uids: List<int> = emptyList();
+        for (var graph_iter: Iterator<Graph> = scan(Graph, 0, __slice__); hasNext(graph_iter); graph_iter = next(graph_iter)) {
+            var graph_uid1 = get_UID1(graph_iter);
+            var graph_uid2 = get_UID2(graph_iter);
+            var g_counter = Graph[UID1: graph_uid1, UID2: graph_uid2].Counter;
+            if graph_uid1 == uid && g_counter > 0 {
+                uids = append(uids, graph_uid2);
+            }
+        }
+        return uids;
+    }
+}

@@ -38,6 +38,14 @@ axiom (forall<a> l:List a, e:a, i:int :: 0 <= i && i < length(l) ==> get(append(
 // Axiom 6: Length is never negative (good practice for the verifier).
 axiom (forall<a> l:List a :: length(l) >= 0);
 
+// Axiom 7: Inequality of lists is determined by their lengths.
+axiom (forall<a> l1:List a, l2:List a :: (length(l1) != length(l2) ==> l1 != l2));
+
+// Axiom 8: Equality of lists of the same type is determined by their elements.
+// axiom (forall<a> l1:List a, l2:List a :: l1 == l2 <==> (length(l1) == length(l2) && (forall i:int :: 0 <= i && i < length(l1) ==> get(l1, i) == get(l2, i))));
+
+// Axiom 9: Appending to equal lists yields equal lists.
+axiom (forall<a> l1:List a, l2:List a, e:a, f:a :: (e == f && l1 == l2) ==> append(l1, e) == append(l2, f));
 
 // ------------------------------------------------------------
 // Test Procedure
@@ -73,5 +81,7 @@ procedure TestMyListAxioms2()
     // Create the empty list by providing a witness value (0) of the desired type (int).
     l0 := emptyList(0);
     l1 := emptyList(1);
+    l0 := append(l0, 42);
+    l1 := append(l1, 42);
     assert l0 == l1; // Axiom 1: All empty lists of the same type are equal.
 }

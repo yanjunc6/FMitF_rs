@@ -91,10 +91,10 @@
 // @intrinsic function filter<T>(list: List<T>, predicate: (T) -> bool) -> List<T>;
 // @intrinsic function reduce<T, U>(list: List<T>, func: (U, T) -> U, initial: U) -> U;
 
-@intrinsic function length<T>(list: List<T>) -> int;
-@intrinsic function get<T>(list: List<T>, idx: int) -> T;
-@intrinsic function append<T>(list: List<T>, elem: T) -> List<T>;
-@intrinsic function emptyList<T>() -> List<T>;
+@intrinsic @Boogie function length<T>(list: List<T>) -> int;
+@intrinsic @Boogie function get<T>(list: List<T>, idx: int) -> T;
+@intrinsic @Boogie function append<T>(list: List<T>, elem: T) -> List<T>;
+@intrinsic @Boogie function emptyList<T>() -> List<T>;
 
 // Type conversion functions
 @intrinsic @Boogie function float(x: int) -> float;
@@ -104,9 +104,9 @@
 const __slice__: int = 0;
 @intrinsic @Boogie function genUUID(n: int, m: int) -> UUID;
 
-@intrinsic @global function scan<T>(t: Table<T>, n: int, m: int) -> Iterator<T>;
-@intrinsic function next<T>(iter: Iterator<T>) -> void;
-@intrinsic function hasNext<T>(iter: Iterator<T>) -> bool;
+@intrinsic @global @Boogie function scan<T>(t: Table<T>, n: int, m: int) -> Iterator<T>;
+@intrinsic @Boogie function next<T>(iter: Iterator<T>) -> Iterator<T>;
+@intrinsic @Boogie function hasNext<T>(iter: Iterator<T>) -> bool;
 
 // ===========================================
 //  Generated Functions for Iterator
