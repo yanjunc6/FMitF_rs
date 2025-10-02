@@ -8,7 +8,7 @@ use crate::cfg;
 use crate::frontend::parse_and_analyze_program;
 use crate::optimization::CfgOptimizer;
 use crate::util::{CompilerError, DiagnosticReporter};
-use crate::verification::Boogie::{BoogieError, BoogieProgram};
+use crate::verification::Boogie::{BoogieError, BoogieProgram, VerificationNodeId};
 use crate::verification::{
     verify_result_process::VerifyResultProcessor, VerificationManager, VerificationType,
 };
@@ -295,7 +295,7 @@ impl Compiler {
                                         .arg("/quiet")
                                         .arg("/errorTrace:0")
                                         .arg("/loopUnroll:12")
-                                        .arg("/timeLimit:30") // 30 second limit
+                                        .arg("/timeLimit:1") // 1 second limit
                                         .arg(file_path.to_string_lossy().to_string())
                                         .output();
 
@@ -363,6 +363,20 @@ impl Compiler {
                                     "Boogie compilation failed for {}: Check compiler.log for details.", 
                                     file_name
                                 ));
+                                continue; // Continue logging other results instead of returning immediately
+                            }
+
+                            if combined_output.contains("timed out") {
+                                if let Some(timeout_error) =
+                                    Self::build_timeout_error_from_commutative(&file_name)
+                                {
+                                    all_boogie_errors.push(timeout_error);
+                                } else {
+                                    exec_errors.push(format!(
+                                        "Boogie verification timed out for unknown file {}.",
+                                        file_name
+                                    ));
+                                }
                                 continue; // Continue logging other results instead of returning immediately
                             }
 
@@ -512,6 +526,39 @@ impl Compiler {
             combined_path.display()
         ))?;
         Ok(())
+    }
+
+    fn build_timeout_error_from_commutative(file_name: &str) -> Option<BoogieError> {
+        let trimmed = file_name.strip_suffix(".bpl").unwrap_or(file_name);
+        if !trimmed.starts_with("commutative_") {
+            return None;
+        }
+
+        let parts: Vec<&str> = trimmed.split('_').collect();
+        if parts.len() != 8 || parts.get(4).copied() != Some("vs") {
+            return None;
+        }
+
+        let node_1 = Self::parse_commutative_node(parts[1], parts[2], parts[3])?;
+        let node_2 = Self::parse_commutative_node(parts[5], parts[6], parts[7])?;
+
+        Some(BoogieError::SpecialInterleavingTimeout { node_1, node_2 })
+    }
+
+    fn parse_commutative_node(
+        f_part: &str,
+        i_part: &str,
+        h_part: &str,
+    ) -> Option<VerificationNodeId> {
+        let function_id = f_part.strip_prefix('f')?.parse().ok()?;
+        let instance = i_part.strip_prefix('i')?.parse().ok()?;
+        let hop_id = h_part.strip_prefix('h')?.parse().ok()?;
+
+        Some(VerificationNodeId {
+            function_id,
+            instance,
+            hop_id,
+        })
     }
 
     // -----------------------
