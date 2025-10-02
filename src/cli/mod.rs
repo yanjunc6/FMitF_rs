@@ -28,6 +28,14 @@ pub struct Args {
     #[arg(long, default_value = "2")]
     pub instances: usize,
 
+    /// Loop unroll bound passed to Boogie (must be >= 1)
+    #[arg(long, default_value_t = 12, value_parser = clap::value_parser!(u32).range(1..))]
+    pub loop_unroll: u32,
+
+    /// Timeout (in seconds) passed to Boogie per verification (must be >= 1)
+    #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u32).range(1..))]
+    pub timeout: u32,
+
     /// Skip optimization passes
     #[arg(long)]
     pub no_optimize: bool,
@@ -56,7 +64,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut compiler = Compiler::new();
     let output_dir = args.output_dir();
 
-    compiler.run_pipeline(&args.input, &output_dir, args.instances, !args.no_optimize)
+    compiler.run_pipeline(
+        &args.input,
+        &output_dir,
+        args.instances,
+        !args.no_optimize,
+        args.loop_unroll,
+        args.timeout,
+    )
 }
 
 // ============================================================================
