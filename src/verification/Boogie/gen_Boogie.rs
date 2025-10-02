@@ -166,8 +166,10 @@ impl BoogieProgramGenerator {
         decls.push("function model_iter_length(n: int, m: int) returns (int);".to_string());
 
         // Public intrinsic functions
-        decls
-            .push("function scan<T>(t: Table T, n: int, m: int) returns (Iterator T);".to_string());
+        decls.push(
+            "function scan<T>(t: Table T, n: int, m: int) returns (Iterator (Table T));"
+                .to_string(),
+        );
         decls.push("function next<T>(iter: Iterator T) returns (Iterator T);".to_string());
         decls.push("function hasNext<T>(iter: Iterator T) returns (bool);".to_string());
 

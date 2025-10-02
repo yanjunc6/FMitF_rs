@@ -465,6 +465,9 @@ impl<W: Write> CfgPrinter<W> {
                 }
                 let function = &program.functions[*func];
                 write!(self.writer, "{}(", function.name)?;
+                if SHOW_VAR_IDS {
+                    write!(self.writer, "[fn{}]", func.index())?;
+                }
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {
                         write!(self.writer, ", ")?;
