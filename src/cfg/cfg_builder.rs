@@ -947,18 +947,14 @@ impl<'a> FunctionContext<'a> {
                 }
 
                 // Create loop structure
-                let loop_entry = self
-                    .current_hop
-                    .map(|hop_id| self.new_basic_block(hop_id))
-                    .unwrap();
-                let loop_body = self
-                    .current_hop
-                    .map(|hop_id| self.new_basic_block(hop_id))
-                    .unwrap();
-                let loop_exit = self
-                    .current_hop
-                    .map(|hop_id| self.new_basic_block(hop_id))
-                    .unwrap();
+                let loop_entry = self.new_basic_block(self.current_hop.unwrap());
+                let loop_body = self.new_basic_block(self.current_hop.unwrap());
+                let loop_update = if update.is_some() {
+                    Some(self.new_basic_block(self.current_hop.unwrap()))
+                } else {
+                    None
+                };
+                let loop_exit = self.new_basic_block(self.current_hop.unwrap());
 
                 // Connect current block to loop entry
                 if let Some(current) = self.current_block.take() {
@@ -989,16 +985,19 @@ impl<'a> FunctionContext<'a> {
                 self.current_block = Some(loop_body);
                 self.build_block(body);
 
-                // Build update if present and connect back to loop entry
-                if let Some(update_id) = update {
-                    if self.current_block.is_some() {
-                        self.build_expression_or_void(update_id);
-                    }
+                // Connect fallthrough of loop body to update (if present) or back to entry
+                if let Some(current) = self.current_block.take() {
+                    let next_block = loop_update.unwrap_or(loop_entry);
+                    self.terminate(current, cfg::Terminator::Jump(next_block));
                 }
 
-                // Connect back to loop entry (if body didn't terminate)
-                if let Some(current) = self.current_block.take() {
-                    self.terminate(current, cfg::Terminator::Jump(loop_entry));
+                // Build update block if present, then jump back to entry
+                if let (Some(update_bb), Some(update_id)) = (loop_update, update) {
+                    self.current_block = Some(update_bb);
+                    self.build_expression_or_void(update_id);
+                    if let Some(current) = self.current_block.take() {
+                        self.terminate(current, cfg::Terminator::Jump(loop_entry));
+                    }
                 }
 
                 // Continue from loop exit

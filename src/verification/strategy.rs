@@ -88,6 +88,16 @@ pub trait VerificationStrategy {
                     self.base().add_lines(edge_lines);
                 }
 
+                // Emit a dedicated hop-exit label so terminators can branch out of this hop.
+                self.base()
+                    .get_mut_scope()
+                    .set_current_slice(current_hop_id.index());
+                let hop_exit_label = self
+                    .base()
+                    .get_mut_scope()
+                    .get_scoped_name("hop_exit");
+                self.base().add_line(BoogieLine::Label(hop_exit_label));
+
                 if let Some(next_hop_id) = next_hop_opt {
                     current_hop_id = next_hop_id;
                 } else {

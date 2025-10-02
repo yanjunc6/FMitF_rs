@@ -1,5 +1,6 @@
 // In src/verification/base_generator.rs
 
+use core::panic;
 use std::collections::HashMap;
 
 use super::Boogie::{
@@ -35,6 +36,9 @@ impl BaseVerificationGenerator {
                 ("append", "append"),
                 ("length", "length"),
                 ("get", "get"),
+                ("scan", "scan"),
+                ("next", "next"),
+                ("hasNext", "hasNext"),
             ]),
         }
     }
@@ -207,6 +211,7 @@ impl BaseVerificationGenerator {
                     lines.push(BoogieLine::Assign(dest_name, call_expr));
                 } else {
                     // This would be a procedure call, which needs a different BoogieLine variant if it's not an expression
+                    panic!("Procedure calls without destination are not supported in base generator yet.");
                 }
             }
             InstructionKind::TableGet {

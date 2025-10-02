@@ -227,6 +227,10 @@ impl InterleavingExecutor {
 
             let mut guarded_lines: Vec<Box<crate::verification::Boogie::BoogieLine>> = Vec::new();
 
+            base.get_mut_scope().set_current_slice(slice_id);
+            let base_exit_label = base.get_mut_scope().get_scoped_name("hop_exit");
+            let hop_exit_label = format!("{}__{}", base_exit_label, label_suffix);
+
             let hop = &cfg_program.hops[hop_id];
             for &block_id in hop.blocks.iter() {
                 base.get_mut_scope().set_current_slice(slice_id);
@@ -308,9 +312,14 @@ impl InterleavingExecutor {
                                 },
                             ),
                         ));
+                        guarded_lines.push(Box::new(
+                            crate::verification::Boogie::BoogieLine::Goto(hop_exit_label.clone()),
+                        ));
                     }
                     crate::cfg::Terminator::HopExit { .. } => {
-                        // End of hop; do nothing special
+                        guarded_lines.push(Box::new(
+                            crate::verification::Boogie::BoogieLine::Goto(hop_exit_label.clone()),
+                        ));
                     }
                     crate::cfg::Terminator::Abort => {
                         guarded_lines.push(Box::new(
@@ -323,9 +332,16 @@ impl InterleavingExecutor {
                                 },
                             ),
                         ));
+                        guarded_lines.push(Box::new(
+                            crate::verification::Boogie::BoogieLine::Goto(hop_exit_label.clone()),
+                        ));
                     }
                 }
             }
+
+            guarded_lines.push(Box::new(
+                crate::verification::Boogie::BoogieLine::Label(hop_exit_label),
+            ));
 
             base.add_line(crate::verification::Boogie::BoogieLine::If {
                 cond,

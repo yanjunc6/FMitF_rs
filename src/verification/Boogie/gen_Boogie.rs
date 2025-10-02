@@ -115,6 +115,13 @@ impl BoogieProgramGenerator {
         decls.push("axiom (forall<a> l:List a, e:a, i:int :: 0 <= i && i < length(l) ==> get(append(l, e), i) == get(l, i));".to_string());
         // Axiom 6: Length is never negative
         decls.push("axiom (forall<a> l:List a :: length(l) >= 0);".to_string());
+        // Axiom 7: Inequality of lists is determined by their lengths.
+        decls.push(
+            "axiom (forall<a> l1:List a, l2:List a :: (length(l1) != length(l2) ==> l1 != l2));"
+                .to_string(),
+        );
+        // Axiom 9: Appending to equal lists yields equal lists.
+        decls.push("axiom (forall<a> l1:List a, l2:List a, e:a, f:a :: (e == f && l1 == l2) ==> append(l1, e) == append(l2, f));".to_string());
 
         self.program.other_declarations.extend(decls);
     }
