@@ -35,6 +35,85 @@ impl std::fmt::Display for StageError {
 
 impl std::error::Error for StageError {}
 
+#[derive(Default)]
+struct RunSummary {
+    function_count: usize,
+    hop_count: usize,
+    instance_count: usize,
+    sc_c_edges: usize,
+    simplified_sc_c_edges: usize,
+    verification_total: usize,
+    verification_pass: usize,
+    verification_errors: usize,
+    verification_timeouts: usize,
+    boogie_compile_failures: usize,
+}
+
+impl RunSummary {
+    fn new(instances: usize) -> Self {
+        Self {
+            instance_count: instances,
+            ..Default::default()
+        }
+    }
+
+    fn format(&self) -> String {
+        let header = "Summary:".bold().magenta().to_string();
+        let basic = format!(
+            "  {} {}  {} {}  {} {}",
+            "Functions:".green(),
+            self.function_count.to_string().yellow(),
+            "Hops:".green(),
+            self.hop_count.to_string().yellow(),
+            "Instances:".green(),
+            self.instance_count.to_string().yellow()
+        );
+        let sc = format!(
+            "  {} {}  {} {}",
+            "C-edges (original):".green(),
+            self.sc_c_edges.to_string().yellow(),
+            "C-edges (simplified):".green(),
+            self.simplified_sc_c_edges.to_string().yellow()
+        );
+        let verification = format!(
+            "  {} {}  {} {}  {} {}  {} {}  {} {}",
+            "Verifications:".green(),
+            self.verification_total.to_string().yellow(),
+            "Pass:".green(),
+            self.verification_pass.to_string().yellow(),
+            "Errors:".green(),
+            self.verification_errors.to_string().yellow(),
+            "Timeouts:".green(),
+            self.verification_timeouts.to_string().yellow(),
+            "Boogie failures:".green(),
+            self.boogie_compile_failures.to_string().yellow()
+        );
+
+        vec![header, basic, sc, verification].join("\n")
+    }
+
+    fn format_plain(&self) -> String {
+        let basic = format!(
+            "  Functions: {}  Hops: {}  Instances: {}",
+            self.function_count, self.hop_count, self.instance_count
+        );
+        let sc = format!(
+            "  C-edges (original): {}  C-edges (simplified): {}",
+            self.sc_c_edges, self.simplified_sc_c_edges
+        );
+        let verification = format!(
+            "  Verifications: {}  Pass: {}  Errors: {}  Timeouts: {}  Boogie failures: {}",
+            self.verification_total,
+            self.verification_pass,
+            self.verification_errors,
+            self.verification_timeouts,
+            self.boogie_compile_failures
+        );
+
+        vec![basic, sc, verification].join("\n")
+    }
+}
+
 /// Main compiler orchestrator
 pub struct Compiler {
     pub reporter: DiagnosticReporter,
@@ -97,6 +176,7 @@ impl Compiler {
 
         const TOTAL_STAGES: usize = 5; // Added Verification stage
         let mut current_stage = 0;
+        let mut summary = RunSummary::new(instances);
 
         // Stage 1: Frontend (Parsing)
         current_stage += 1;
@@ -181,6 +261,9 @@ impl Compiler {
             cfg_program
         };
 
+        summary.function_count = optimized_or_cfg_program.functions.len();
+        summary.hop_count = optimized_or_cfg_program.hops.len();
+
         // Stage 4: SC-Graph (Build + Combine + DOT Outputs)
         current_stage += 1;
         let (sc, _combined) = execute_stage(
@@ -196,6 +279,12 @@ impl Compiler {
                 Ok((sc, combined))
             },
         )?;
+
+        summary.sc_c_edges = sc
+            .edges
+            .iter()
+            .filter(|edge| matches!(edge.edge_type, crate::sc_graph::EdgeType::C))
+            .count();
 
         // Stage 5: Verification (Commutative) -> generate Boogie, run, process results, and write simplified graphs
         current_stage += 1;
@@ -219,6 +308,12 @@ impl Compiler {
                             format!("Verification generation failed with {} errors", errs.len());
                         Box::<dyn std::error::Error>::from(msg)
                     })?;
+
+                summary.verification_total = programs.len();
+                summary.verification_pass = 0;
+                summary.verification_errors = 0;
+                summary.verification_timeouts = 0;
+                summary.boogie_compile_failures = 0;
 
                 // Ensure output directory exists
                 fs::create_dir_all(output_dir)?;
@@ -359,6 +454,7 @@ impl Compiler {
                                 || combined_output.contains("type errors detected")
                                 || combined_output.contains("type checking errors detected")
                             {
+                                summary.boogie_compile_failures += 1;
                                 exec_errors.push(format!(
                                     "Boogie compilation failed for {}: Check compiler.log for details.", 
                                     file_name
@@ -370,8 +466,10 @@ impl Compiler {
                                 if let Some(timeout_error) =
                                     Self::build_timeout_error_from_commutative(&file_name)
                                 {
+                                    summary.verification_timeouts += 1;
                                     all_boogie_errors.push(timeout_error);
                                 } else {
+                                    summary.boogie_compile_failures += 1;
                                     exec_errors.push(format!(
                                         "Boogie verification timed out for unknown file {}.",
                                         file_name
@@ -379,6 +477,8 @@ impl Compiler {
                                 }
                                 continue; // Continue logging other results instead of returning immediately
                             }
+
+                            let mut is_pass = true;
 
                             // Parse Boogie output lines for S-expressions
                             // Boogie outputs the {:msg "..."} content directly, not wrapped
@@ -391,10 +491,16 @@ impl Compiler {
                                         // This might be an S-expression - try to parse it
                                         if let Some(err) = crate::verification::Boogie::BoogieError::from_boogie_string(line) {
                                             // This is a valid BoogieError (verification result) - add it
+                                            summary.verification_errors += 1;
+                                            is_pass = false;
                                             all_boogie_errors.push(err);
                                         }
                                     }
                                 }
+                            }
+
+                            if is_pass {
+                                summary.verification_pass += 1;
                             }
                         }
                         Err(e) => {
@@ -402,6 +508,7 @@ impl Compiler {
                                 "===== Boogie run for {} FAILED: {} =====",
                                 file_name, e
                             ))?;
+                            summary.boogie_compile_failures += 1;
                             exec_errors
                                 .push(format!("Failed to run Boogie for {}: {}", file_name, e));
                         }
@@ -415,6 +522,12 @@ impl Compiler {
                         sc.clone(),
                         all_boogie_errors,
                     );
+
+                summary.simplified_sc_c_edges = simplified
+                    .edges
+                    .iter()
+                    .filter(|edge| matches!(edge.edge_type, crate::sc_graph::EdgeType::C))
+                    .count();
 
                 // Write simplified graphs (unified) with prefix "simplified"
                 self.write_sc_graph_dots(
@@ -443,6 +556,7 @@ impl Compiler {
         )?;
 
         println!("{}", "Completed".green().bold());
+        self.emit_summary(&summary);
         Ok(())
     }
 
@@ -526,6 +640,13 @@ impl Compiler {
             combined_path.display()
         ))?;
         Ok(())
+    }
+
+    fn emit_summary(&mut self, summary: &RunSummary) {
+        let console = summary.format();
+        println!("{}", console);
+        let plain = summary.format_plain();
+        let _ = self.log_block("Summary:", &plain);
     }
 
     fn build_timeout_error_from_commutative(file_name: &str) -> Option<BoogieError> {
