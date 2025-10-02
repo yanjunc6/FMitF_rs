@@ -5,6 +5,8 @@
 use super::stage::execute_stage; // Import the new helper
 use crate::ast::Program;
 use crate::cfg;
+use crate::cli::log::Logger;
+use crate::cli::summary::{emit_summary, RunSummary};
 use crate::frontend::parse_and_analyze_program;
 use crate::optimization::CfgOptimizer;
 use crate::util::{CompilerError, DiagnosticReporter};
@@ -35,96 +37,17 @@ impl std::fmt::Display for StageError {
 
 impl std::error::Error for StageError {}
 
-#[derive(Default)]
-struct RunSummary {
-    function_count: usize,
-    hop_count: usize,
-    instance_count: usize,
-    sc_c_edges: usize,
-    simplified_sc_c_edges: usize,
-    verification_total: usize,
-    verification_pass: usize,
-    verification_errors: usize,
-    verification_timeouts: usize,
-    boogie_compile_failures: usize,
-}
-
-impl RunSummary {
-    fn new(instances: usize) -> Self {
-        Self {
-            instance_count: instances,
-            ..Default::default()
-        }
-    }
-
-    fn format(&self) -> String {
-        let header = "Summary:".bold().magenta().to_string();
-        let basic = format!(
-            "  {} {}  {} {}  {} {}",
-            "Functions:".green(),
-            self.function_count.to_string().yellow(),
-            "Hops:".green(),
-            self.hop_count.to_string().yellow(),
-            "Instances:".green(),
-            self.instance_count.to_string().yellow()
-        );
-        let sc = format!(
-            "  {} {}  {} {}",
-            "C-edges (original):".green(),
-            self.sc_c_edges.to_string().yellow(),
-            "C-edges (simplified):".green(),
-            self.simplified_sc_c_edges.to_string().yellow()
-        );
-        let verification = format!(
-            "  {} {}  {} {}  {} {}  {} {}  {} {}",
-            "Verifications:".green(),
-            self.verification_total.to_string().yellow(),
-            "Pass:".green(),
-            self.verification_pass.to_string().yellow(),
-            "Errors:".green(),
-            self.verification_errors.to_string().yellow(),
-            "Timeouts:".green(),
-            self.verification_timeouts.to_string().yellow(),
-            "Boogie failures:".green(),
-            self.boogie_compile_failures.to_string().yellow()
-        );
-
-        vec![header, basic, sc, verification].join("\n")
-    }
-
-    fn format_plain(&self) -> String {
-        let basic = format!(
-            "  Functions: {}  Hops: {}  Instances: {}",
-            self.function_count, self.hop_count, self.instance_count
-        );
-        let sc = format!(
-            "  C-edges (original): {}  C-edges (simplified): {}",
-            self.sc_c_edges, self.simplified_sc_c_edges
-        );
-        let verification = format!(
-            "  Verifications: {}  Pass: {}  Errors: {}  Timeouts: {}  Boogie failures: {}",
-            self.verification_total,
-            self.verification_pass,
-            self.verification_errors,
-            self.verification_timeouts,
-            self.boogie_compile_failures
-        );
-
-        vec![basic, sc, verification].join("\n")
-    }
-}
-
 /// Main compiler orchestrator
 pub struct Compiler {
     pub reporter: DiagnosticReporter,
-    log_file: Option<fs::File>,
+    logger: Logger,
 }
 
 impl Compiler {
     pub fn new() -> Self {
         Self {
             reporter: DiagnosticReporter::new(),
-            log_file: None,
+            logger: Logger::new(),
         }
     }
 
@@ -171,8 +94,8 @@ impl Compiler {
         println!("{} compilation pipeline", "Starting".bold().green());
 
         // Initialize logger and write opening line
-        self.init_logger(output_dir)?;
-        self.log_line("===== Compiler run started =====")?;
+        self.logger.init(output_dir)?;
+        self.logger.line("===== Compiler run started =====")?;
 
         const TOTAL_STAGES: usize = 5; // Added Verification stage
         let mut current_stage = 0;
@@ -180,7 +103,7 @@ impl Compiler {
 
         // Stage 1: Frontend (Parsing)
         current_stage += 1;
-        self.log_line(format!(
+        self.logger.line(format!(
             "[Stage {}/{}] Frontend - start",
             current_stage, TOTAL_STAGES
         ))?;
@@ -439,9 +362,12 @@ impl Compiler {
                 for (file_name, output) in run_results {
                     match output {
                         Ok(out) => {
-                            self.log_line(format!("===== Boogie run for {} =====", file_name))?;
-                            self.log_block("stdout:", &String::from_utf8_lossy(&out.stdout))?;
-                            self.log_block("stderr:", &String::from_utf8_lossy(&out.stderr))?;
+                            self.logger
+                                .line(format!("===== Boogie run for {} =====", file_name))?;
+                            self.logger
+                                .block("stdout:", &String::from_utf8_lossy(&out.stdout))?;
+                            self.logger
+                                .block("stderr:", &String::from_utf8_lossy(&out.stderr))?;
 
                             let stdout_str = String::from_utf8_lossy(&out.stdout);
                             let stderr_str = String::from_utf8_lossy(&out.stderr);
@@ -504,7 +430,7 @@ impl Compiler {
                             }
                         }
                         Err(e) => {
-                            self.log_line(format!(
+                            self.logger.line(format!(
                                 "===== Boogie run for {} FAILED: {} =====",
                                 file_name, e
                             ))?;
@@ -556,7 +482,7 @@ impl Compiler {
         )?;
 
         println!("{}", "Completed".green().bold());
-        self.emit_summary(&summary);
+        emit_summary(&summary, &mut self.logger);
         Ok(())
     }
 
@@ -574,7 +500,8 @@ impl Compiler {
         let mut file = fs::File::create(&ast_file)?;
         program.pretty_print_with_debug(&mut file)?;
 
-        self.log_line(format!("📄 AST file written to: {}", ast_file.display()))?;
+        self.logger
+            .line(format!("📄 AST file written to: {}", ast_file.display()))?;
         Ok(())
     }
 
@@ -593,7 +520,8 @@ impl Compiler {
         let mut file = fs::File::create(&cfg_file)?;
         program.pretty_print_with_debug(&mut file)?;
 
-        self.log_line(format!("📄 CFG file written to: {}", cfg_file.display()))?;
+        self.logger
+            .line(format!("📄 CFG file written to: {}", cfg_file.display()))?;
         Ok(())
     }
     // TOTAL_STAGES already defined above
@@ -634,19 +562,12 @@ impl Compiler {
         CombinedSCGraphDotPrinter::new(&combined, program).pretty_print(&mut c_file)?;
 
         // Log instead of printing to stdout
-        self.log_line(format!(
+        self.logger.line(format!(
             "📄 SC Graph DOT files written: {}, {}",
             sc_path.display(),
             combined_path.display()
         ))?;
         Ok(())
-    }
-
-    fn emit_summary(&mut self, summary: &RunSummary) {
-        let console = summary.format();
-        println!("{}", console);
-        let plain = summary.format_plain();
-        let _ = self.log_block("Summary:", &plain);
     }
 
     fn build_timeout_error_from_commutative(file_name: &str) -> Option<BoogieError> {
@@ -680,34 +601,6 @@ impl Compiler {
             instance,
             hop_id,
         })
-    }
-
-    // -----------------------
-    // Simple logger utilities
-    // -----------------------
-    fn init_logger(&mut self, output_dir: &PathBuf) -> std::io::Result<()> {
-        fs::create_dir_all(output_dir)?;
-        // Create a fresh log file each run (truncate if exists)
-        let file = fs::File::create(output_dir.join("compiler.log"))?;
-        self.log_file = Some(file);
-        Ok(())
-    }
-
-    fn log_line<S: AsRef<str>>(&mut self, s: S) -> std::io::Result<()> {
-        use std::io::Write;
-        if let Some(f) = self.log_file.as_mut() {
-            writeln!(f, "{}", s.as_ref())?;
-        }
-        Ok(())
-    }
-
-    fn log_block<S: AsRef<str>>(&mut self, header: &str, body: S) -> std::io::Result<()> {
-        use std::io::Write;
-        if let Some(f) = self.log_file.as_mut() {
-            writeln!(f, "{}", header)?;
-            writeln!(f, "{}", body.as_ref())?;
-        }
-        Ok(())
     }
 }
 
