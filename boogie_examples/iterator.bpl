@@ -52,11 +52,11 @@ function model_get_AID(n: int, m: int, index: int) returns (UUID);
 function model_get_UID(n: int, m: int, index: int) returns (int);
 
 // --- Public Intrinsic Functions ---
-function scan<T>(t: Table T, n: int, m: int) returns (Iterator T);
+function scan<T>(t: Table T, n: int, m: int) returns (Iterator (Table T));
 function next<T>(iter: Iterator T) returns (Iterator T);
 function hasNext<T>(iter: Iterator T) returns (bool);
-function get_AID(iter: Iterator Activity) returns (UUID);
-// function get_UID#1(iter: Iterator Activity) returns (int);
+function get_AID(iter: Iterator (Table Activity)) returns (UUID);
+function get_UID(iter: Iterator (Table Activity)) returns (int);
 // function get_AID#2(iter: Iterator Bank) returns (int);
 // --- Iterator Axioms ---
 
@@ -83,11 +83,11 @@ axiom (forall<T> iter: Iterator T :: hasNext(iter) <==> iter_position(iter) < it
 
 // get_...()
 // The values returned by 'get' now map to the pure model functions using the iterator's key.
-axiom (forall iter: Iterator Activity :: hasNext(iter) ==>
+axiom (forall iter: Iterator (Table Activity) :: hasNext(iter) ==>
     get_AID(iter) == model_get_AID(iter_n(iter), iter_m(iter), iter_position(iter))
 );
 
-axiom (forall iter: Iterator Activity :: hasNext(iter) ==>
+axiom (forall iter: Iterator (Table Activity) :: hasNext(iter) ==>
     get_UID(iter) == model_get_UID(iter_n(iter), iter_m(iter), iter_position(iter))
 );
 
@@ -115,7 +115,7 @@ procedure DeterminismCheck()
 
   // Local variables for the first run
   var s1_logs_run1: List String;
-  var s1_activity_iter_run1: Iterator Activity;
+  var s1_activity_iter_run1: Iterator (Table Activity);
   var s1_active_run1: bool;
   var s1_activity_aid_run1: UUID;
   var s1_activity_uid_run1: int;
@@ -129,7 +129,7 @@ procedure DeterminismCheck()
 
     // Local variables for the second run
   var s1_logs_run2: List String;
-  var s1_activity_iter_run2: Iterator Activity;
+  var s1_activity_iter_run2: Iterator (Table Activity);
   var s1_active_run2: bool;
   var s1_activity_aid_run2: UUID;
   var s1_activity_uid_run2: int;

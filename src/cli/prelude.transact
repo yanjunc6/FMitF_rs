@@ -104,7 +104,7 @@
 const __slice__: int = 0;
 @intrinsic @Boogie function genUUID(n: int, m: int) -> UUID;
 
-@intrinsic @global function scan<T>(t: Table<T>) -> Iterator<T>;
+@intrinsic @global function scan<T>(t: Table<T>, n: int, m: int) -> Iterator<T>;
 @intrinsic function next<T>(iter: Iterator<T>) -> void;
 @intrinsic function hasNext<T>(iter: Iterator<T>) -> bool;
 

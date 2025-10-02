@@ -29,7 +29,9 @@ impl BoogieProgramGenerator {
         generator.gen_string_axioms();
         generator.gen_list_axioms();
         generator.gen_uuid_axioms();
+        generator.gen_iterator_axioms();
         generator.gen_global_constants(cfg_program);
+        generator.gen_iterator_function_declarations(cfg_program);
         generator.gen_table_variables(cfg_program);
         generator
     }
@@ -147,6 +149,162 @@ impl BoogieProgramGenerator {
         self.program.other_declarations.extend(decls);
     }
 
+    /// Generate iterator type and axioms for deterministic iteration
+    pub fn gen_iterator_axioms(&mut self) {
+        let mut decls = Vec::new();
+
+        // Iterator type
+        decls.push("type Iterator a;".to_string());
+
+        // Internal model functions
+        decls.push("function iter_position<T>(iter: Iterator T) returns (int);".to_string());
+        decls.push("function iter_length<T>(iter: Iterator T) returns (int);".to_string());
+        decls.push("function iter_n<T>(iter: Iterator T) returns (int);".to_string());
+        decls.push("function iter_m<T>(iter: Iterator T) returns (int);".to_string());
+
+        // Model functions for deterministic behavior
+        decls.push("function model_iter_length(n: int, m: int) returns (int);".to_string());
+
+        // Public intrinsic functions
+        decls
+            .push("function scan<T>(t: Table T, n: int, m: int) returns (Iterator T);".to_string());
+        decls.push("function next<T>(iter: Iterator T) returns (Iterator T);".to_string());
+        decls.push("function hasNext<T>(iter: Iterator T) returns (bool);".to_string());
+
+        // Axioms for deterministic length
+        decls.push("axiom (forall n: int, m: int :: model_iter_length(n, m) >= 0);".to_string());
+        decls.push("axiom (forall n: int, m: int :: model_iter_length(n, m) == 1);".to_string());
+
+        // scan() axioms
+        decls.push(
+            "axiom (forall<T> t: Table T, n: int, m: int :: iter_position(scan(t, n, m)) == 0);"
+                .to_string(),
+        );
+        decls.push(
+            "axiom (forall<T> t: Table T, n: int, m: int :: iter_n(scan(t, n, m)) == n);"
+                .to_string(),
+        );
+        decls.push(
+            "axiom (forall<T> t: Table T, n: int, m: int :: iter_m(scan(t, n, m)) == m);"
+                .to_string(),
+        );
+        decls.push("axiom (forall<T> t: Table T, n: int, m: int :: iter_length(scan(t, n, m)) == model_iter_length(n, m));".to_string());
+
+        // next() axioms
+        decls.push("axiom (forall<T> iter: Iterator T :: iter_position(next(iter)) == iter_position(iter) + 1);".to_string());
+        decls.push(
+            "axiom (forall<T> iter: Iterator T :: iter_length(next(iter)) == iter_length(iter));"
+                .to_string(),
+        );
+        decls.push(
+            "axiom (forall<T> iter: Iterator T :: iter_n(next(iter)) == iter_n(iter));".to_string(),
+        );
+        decls.push(
+            "axiom (forall<T> iter: Iterator T :: iter_m(next(iter)) == iter_m(iter));".to_string(),
+        );
+
+        // hasNext() axiom
+        decls.push("axiom (forall<T> iter: Iterator T :: hasNext(iter) <==> iter_position(iter) < iter_length(iter));".to_string());
+
+        self.program.other_declarations.extend(decls);
+    }
+
+    /// Generate function declarations for iterator accessor functions
+    /// Functions with @iterator decorator get special treatment following iterator.bpl pattern
+    fn gen_iterator_function_declarations(&mut self, cfg_program: &CfgProgram) {
+        use std::collections::HashSet;
+
+        let mut declared_model_funcs = HashSet::new();
+
+        for (func_id, func_decl) in &cfg_program.functions {
+            // Check if this function has @iterator decorator
+            let has_iterator = func_decl.decorators.iter().any(|d| d.name == "iterator");
+
+            if !has_iterator {
+                continue;
+            }
+
+            // Check if function also has @rename decorator
+            let has_rename = func_decl.decorators.iter().any(|d| d.name == "rename");
+
+            // Use base name or renamed name based on @rename decorator
+            let func_name = if has_rename {
+                format!("{}#{}", func_decl.name, func_id.index())
+            } else {
+                func_decl.name.clone()
+            };
+
+            // Build parameter types (WITHOUT simplifying Iterator<Table<T>>)
+            let param_types: Vec<BoogieType> = func_decl
+                .params
+                .iter()
+                .map(|param_id| {
+                    let var = &cfg_program.variables[*param_id];
+                    // Use convert_type directly to keep Iterator<Table<T>> structure
+                    let ty = &cfg_program.types[var.ty];
+                    Self::convert_type(cfg_program, ty)
+                })
+                .collect();
+
+            // Get return type from function signature
+            let return_type = match &cfg_program.types[func_decl.signature.ty] {
+                cfg::Type::Function { return_type, .. } => {
+                    Self::convert_type_id(cfg_program, return_type)
+                }
+                _ => Self::convert_type_id(cfg_program, &func_decl.signature.ty),
+            };
+
+            // Generate function declaration: function get_FieldName(iter: Iterator (Table TableName)) returns (Type);
+            let mut func_decl_str = format!("function {}", func_name);
+
+            // Add parameters
+            func_decl_str.push('(');
+            for (i, param_type) in param_types.iter().enumerate() {
+                if i > 0 {
+                    func_decl_str.push_str(", ");
+                }
+                // Display will format Iterator types as "Iterator (Table T)" automatically
+                func_decl_str.push_str(&format!("arg{}: {}", i, param_type));
+            }
+            func_decl_str.push(')');
+
+            // Add return type
+            func_decl_str.push_str(&format!(" returns ({})", return_type));
+            func_decl_str.push(';');
+
+            self.program.other_declarations.push(func_decl_str);
+
+            // Generate model function and axiom for get_* functions
+            if func_decl.name.starts_with("get_") {
+                let model_func_name = format!("model_{}", func_decl.name);
+
+                // Only declare model function if not already declared (avoid duplicates)
+                if declared_model_funcs.insert(model_func_name.clone()) {
+                    let model_func_decl = format!(
+                        "function {}(n: int, m: int, index: int) returns ({});",
+                        model_func_name, return_type
+                    );
+                    self.program.other_declarations.push(model_func_decl);
+                }
+
+                // Extract the table type for the axiom - keep the full Iterator (Table T) type to match function signature
+                let table_type_str = if !param_types.is_empty() {
+                    // Use the full param_types[0] which is Iterator<Table<T>> - Display will format it as "Iterator (Table T)"
+                    format!("{}", param_types[0])
+                } else {
+                    "T".to_string()
+                };
+
+                // Generate axiom: axiom (forall iter: Iterator (Table Activity) :: hasNext(iter) ==> get_AID(iter) == model_get_AID(...));
+                let axiom = format!(
+                    "axiom (forall iter: {} :: hasNext(iter) ==> {}(iter) == {}(iter_n(iter), iter_m(iter), iter_position(iter)));",
+                    table_type_str, func_name, model_func_name
+                );
+                self.program.other_declarations.push(axiom);
+            }
+        }
+    }
+
     /// Helper function to generate a global constant name for a string literal
     /// For string literal "abc", generates "L_abc"
     /// Uses $ prefix for unicode escapes to ensure uniqueness
@@ -208,7 +366,38 @@ impl BoogieProgramGenerator {
 
     /// Generate global table variables from CFG program
     fn gen_table_variables(&mut self, cfg_program: &CfgProgram) {
+        // Generate Table type declaration
+        self.program
+            .other_declarations
+            .push("type Table a;".to_string());
+
+        // Declare each table type (e.g., type Wall;)
         for (_, table) in &cfg_program.tables {
+            self.program
+                .other_declarations
+                .push(format!("type {};", table.name));
+        }
+
+        for (_, table) in &cfg_program.tables {
+            // Generate const TBL_TableName: Table TableName; for each table
+            let table_const_name = format!("TBL_{}", table.name);
+            let table_type = BoogieType::Parametric {
+                name: "Table".to_string(),
+                args: vec![BoogieType::Parametric {
+                    name: table.name.clone(),
+                    args: vec![],
+                }],
+            };
+            let table_const_decl = BoogieVarDecl {
+                var_name: table_const_name.clone(),
+                var_type: table_type,
+                is_const: true,
+            };
+            self.program
+                .global_vars
+                .insert(table_const_name, table_const_decl);
+
+            // Generate field variables as before
             for field_id in table
                 .primary_key_fields
                 .iter()
@@ -230,7 +419,9 @@ impl BoogieProgramGenerator {
 
     pub fn convert_type_id(program: &CfgProgram, type_id: &cfg::TypeId) -> BoogieType {
         let ty = &program.types[*type_id];
-        Self::convert_type(program, ty)
+        let boogie_ty = Self::convert_type(program, ty);
+        // Simplify Iterator<Table<T>> to Iterator<T>
+        boogie_ty
     }
 
     /// Convert CFG TypeName to BoogieType
@@ -253,18 +444,25 @@ impl BoogieProgramGenerator {
                     args: vec![boogie_base_ty],
                 }
             }
-            cfg::Type::Declared { type_id, .. } => {
+            cfg::Type::Declared { type_id, args } => {
                 let udt = &program.user_defined_types[*type_id];
+                let boogie_args: Vec<BoogieType> = args
+                    .iter()
+                    .map(|arg_type_id| Self::convert_type_id(program, arg_type_id))
+                    .collect();
                 BoogieType::Parametric {
                     name: udt.name.clone(),
-                    args: vec![],
+                    args: boogie_args,
                 }
             }
             cfg::Type::Table(table_id) => {
                 let table = &program.tables[*table_id];
                 BoogieType::Parametric {
-                    name: table.name.clone(),
-                    args: vec![],
+                    name: "Table".to_string(),
+                    args: vec![BoogieType::Parametric {
+                        name: table.name.clone(),
+                        args: vec![],
+                    }],
                 }
             }
             cfg::Type::Row { table_id } => {

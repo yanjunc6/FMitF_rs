@@ -67,7 +67,7 @@ impl Display for BoogieType {
                     // Print as: Name t1 t2 ...; if nested, inner types must be parenthesised by caller during construction
                     write!(f, "{}", name)?;
                     for arg in args {
-                        write!(f, " {}", arg)?;
+                        write!(f, " ({})", arg)?;
                     }
                     Ok(())
                 }
