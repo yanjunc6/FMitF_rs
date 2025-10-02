@@ -339,9 +339,9 @@ impl InterleavingExecutor {
                 }
             }
 
-            guarded_lines.push(Box::new(
-                crate::verification::Boogie::BoogieLine::Label(hop_exit_label),
-            ));
+            guarded_lines.push(Box::new(crate::verification::Boogie::BoogieLine::Label(
+                hop_exit_label,
+            )));
 
             base.add_line(crate::verification::Boogie::BoogieLine::If {
                 cond,

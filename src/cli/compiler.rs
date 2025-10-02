@@ -294,7 +294,8 @@ impl Compiler {
                                     let result = Command::new("boogie")
                                         .arg("/quiet")
                                         .arg("/errorTrace:0")
-                                        .arg("/loopUnroll:11")
+                                        .arg("/loopUnroll:12")
+                                        .arg("/timeLimit:30") // 30 second limit
                                         .arg(file_path.to_string_lossy().to_string())
                                         .output();
 
