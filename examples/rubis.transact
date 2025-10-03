@@ -84,11 +84,11 @@ table Comments {
 }
 
 table Buy_now {
-    primary id: int;
+    primary id: UUID;
     node f(id);
 
-    buyer_id: int;
-    item_id: int;
+    buyer_id: UUID;
+    item_id: UUID;
     qty: int;
     date: int;
 }
@@ -221,7 +221,7 @@ transaction registerItem(name: string, description: string, initial_price: float
             reserve_price: reserve_price,
             buy_now: buy_now,
             nb_of_bids: 0,
-            max_bid: 0,
+            max_bid: 0.0,
             start_date: date,
             seller: seller,
             region: region,

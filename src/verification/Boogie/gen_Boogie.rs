@@ -33,6 +33,7 @@ impl BoogieProgramGenerator {
         generator.gen_global_constants(cfg_program);
         generator.gen_iterator_function_declarations(cfg_program);
         generator.gen_table_variables(cfg_program);
+        generator.gen_row_axioms(cfg_program);
         generator
     }
 
@@ -221,10 +222,6 @@ impl BoogieProgramGenerator {
     /// Generate function declarations for iterator accessor functions
     /// Functions with @iterator decorator get special treatment following iterator.bpl pattern
     fn gen_iterator_function_declarations(&mut self, cfg_program: &CfgProgram) {
-        use std::collections::HashSet;
-
-        let mut declared_model_funcs = HashSet::new();
-
         for (func_id, func_decl) in &cfg_program.functions {
             // Check if this function has @iterator decorator
             let has_iterator = func_decl.decorators.iter().any(|d| d.name == "iterator");
@@ -285,16 +282,19 @@ impl BoogieProgramGenerator {
 
             // Generate model function and axiom for get_* functions
             if func_decl.name.starts_with("get_") {
-                let model_func_name = format!("model_{}", func_decl.name);
+                // Model function name should include the unique function ID suffix
+                let model_func_name = if has_rename {
+                    format!("model_{}#{}", func_decl.name, func_id.index())
+                } else {
+                    format!("model_{}", func_decl.name)
+                };
 
-                // Only declare model function if not already declared (avoid duplicates)
-                if declared_model_funcs.insert(model_func_name.clone()) {
-                    let model_func_decl = format!(
-                        "function {}(n: int, m: int, index: int) returns ({});",
-                        model_func_name, return_type
-                    );
-                    self.program.other_declarations.push(model_func_decl);
-                }
+                // Declare model function with unique name (no need to check for duplicates since names are unique)
+                let model_func_decl = format!(
+                    "function {}(n: int, m: int, index: int) returns ({});",
+                    model_func_name, return_type
+                );
+                self.program.other_declarations.push(model_func_decl);
 
                 // Extract the table type for the axiom - keep the full Iterator (Table T) type to match function signature
                 let table_type_str = if !param_types.is_empty() {
@@ -304,7 +304,7 @@ impl BoogieProgramGenerator {
                     "T".to_string()
                 };
 
-                // Generate axiom: axiom (forall iter: Iterator (Table Activity) :: hasNext(iter) ==> get_AID(iter) == model_get_AID(...));
+                // Generate axiom: axiom (forall iter: Iterator (Table Activity) :: hasNext(iter) ==> get_AID#N(iter) == model_get_AID#N(...));
                 let axiom = format!(
                     "axiom (forall iter: {} :: hasNext(iter) ==> {}(iter) == {}(iter_n(iter), iter_m(iter), iter_position(iter)));",
                     table_type_str, func_name, model_func_name
@@ -426,6 +426,100 @@ impl BoogieProgramGenerator {
         }
     }
 
+    /// Generate Row type and row constructor axioms for each table
+    /// Following the pattern from row.bpl:
+    /// 1. Declare Row type (already exists)
+    /// 2. For each table, create a constructor function taking all fields
+    /// 3. Create equality axiom: rows are equal iff all fields are equal
+    pub fn gen_row_axioms(&mut self, cfg_program: &CfgProgram) {
+        // Row type declaration
+        self.program
+            .other_declarations
+            .push("type Row a;".to_string());
+
+        // For each table, generate constructor and axioms
+        for (_, table) in &cfg_program.tables {
+            let table_name = &table.name;
+
+            // Collect all fields (primary keys + other fields) in order
+            let all_field_ids: Vec<_> = table
+                .primary_key_fields
+                .iter()
+                .chain(table.other_fields.iter())
+                .copied()
+                .collect();
+
+            // Build constructor function declaration
+            // function construct_Row_TableName(field1: Type1, field2: Type2, ...): Row (Table TableName);
+            let mut constructor_decl = format!("function construct_Row_{}", table_name);
+            constructor_decl.push('(');
+
+            let mut field_params = Vec::new();
+            for field_id in &all_field_ids {
+                let field = &cfg_program.table_fields[*field_id];
+                let field_type = Self::convert_type_id(cfg_program, &field.field_type);
+                field_params.push(format!("{}: {}", field.name, field_type));
+            }
+            constructor_decl.push_str(&field_params.join(", "));
+            constructor_decl.push_str(&format!("): Row (Table {});", table_name));
+
+            self.program.other_declarations.push(constructor_decl);
+
+            // Build equality axiom
+            // axiom (forall field1_1: Type1, field2_1: Type2, ..., field1_2: Type1, field2_2: Type2, ... ::
+            //     construct_Row_TableName(field1_1, field2_1, ...) == construct_Row_TableName(field1_2, field2_2, ...)
+            //     <==> (field1_1 == field1_2 && field2_1 == field2_2 && ...)
+            // );
+
+            let mut axiom = String::from("axiom (forall\n    ");
+
+            // Generate quantified variables (two sets: _1 and _2 suffixes)
+            let mut vars_1 = Vec::new();
+            let mut vars_2 = Vec::new();
+            for field_id in &all_field_ids {
+                let field = &cfg_program.table_fields[*field_id];
+                let field_type = Self::convert_type_id(cfg_program, &field.field_type);
+                vars_1.push(format!("{}_1: {}", field.name, field_type));
+                vars_2.push(format!("{}_2: {}", field.name, field_type));
+            }
+
+            axiom.push_str(&vars_1.join(", "));
+            axiom.push_str(",\n    ");
+            axiom.push_str(&vars_2.join(", "));
+            axiom.push_str("\n    ::\n    ");
+
+            // Left side of equivalence
+            axiom.push_str(&format!("construct_Row_{}(", table_name));
+            let field_names_1: Vec<_> = all_field_ids
+                .iter()
+                .map(|fid| format!("{}_1", cfg_program.table_fields[*fid].name))
+                .collect();
+            axiom.push_str(&field_names_1.join(", "));
+            axiom.push_str(") == ");
+
+            axiom.push_str(&format!("construct_Row_{}(", table_name));
+            let field_names_2: Vec<_> = all_field_ids
+                .iter()
+                .map(|fid| format!("{}_2", cfg_program.table_fields[*fid].name))
+                .collect();
+            axiom.push_str(&field_names_2.join(", "));
+            axiom.push_str(")\n    <==>\n    (");
+
+            // Right side of equivalence: conjunction of field equalities
+            let field_equalities: Vec<_> = all_field_ids
+                .iter()
+                .map(|fid| {
+                    let fname = &cfg_program.table_fields[*fid].name;
+                    format!("{}_1 == {}_2", fname, fname)
+                })
+                .collect();
+            axiom.push_str(&field_equalities.join(" && "));
+            axiom.push_str(")\n);");
+
+            self.program.other_declarations.push(axiom);
+        }
+    }
+
     pub fn convert_type_id(program: &CfgProgram, type_id: &cfg::TypeId) -> BoogieType {
         let ty = &program.types[*type_id];
         let boogie_ty = Self::convert_type(program, ty);
@@ -476,12 +570,15 @@ impl BoogieProgramGenerator {
             }
             cfg::Type::Row { table_id } => {
                 let table = &program.tables[*table_id];
-                // Represent a row as a parametric Row<Table>
+                // Represent a row as Row (Table TableName) to match constructor signature
                 BoogieType::Parametric {
                     name: "Row".to_string(),
                     args: vec![BoogieType::Parametric {
-                        name: table.name.clone(),
-                        args: vec![],
+                        name: "Table".to_string(),
+                        args: vec![BoogieType::Parametric {
+                            name: table.name.clone(),
+                            args: vec![],
+                        }],
                     }],
                 }
             }
