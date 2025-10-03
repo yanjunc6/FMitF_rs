@@ -100,11 +100,8 @@ table Buy_now {
 transaction userAuth(nickname: string, password: string) -> bool {
     hop {
         var pwd: string = Usernames[nickname: nickname].password;
-        if pwd === password {
-            return true;
-        } else {
-            return false;
-        }
+        var is_match: bool = (pwd === password);
+        return is_match;
     }
 }
 
