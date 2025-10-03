@@ -1,0 +1,28 @@
+// Test row construction
+function f(x: int) -> int {
+    return x;
+}
+
+table TestTable {
+    primary id: int;
+    node f(id);
+    
+    name: string;
+    value: int;
+}
+
+transaction test1(id_param: int) -> Row<TestTable> {
+    @global hop {
+        TestTable[id: id_param].value = 1;
+        var row: Row<TestTable> = TestTable[id: id_param];
+        return row;
+    }
+}
+
+transaction test2(id_param: int) -> Row<TestTable> {
+    @global hop {
+        TestTable[id: id_param].value = 2;
+        var row: Row<TestTable> = TestTable[id: id_param];
+        return row;
+    }
+}

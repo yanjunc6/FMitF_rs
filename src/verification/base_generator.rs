@@ -229,11 +229,8 @@ impl BaseVerificationGenerator {
                     .ensure_local_variable_exists(&dest_name, dest_type);
 
                 let table_decl = &cfg_program.tables[*table];
-                let field_decl = &cfg_program.table_fields[field.unwrap()];
-                let var_name = BoogieProgramGenerator::gen_table_field_var_name(
-                    &table_decl.name,
-                    &field_decl.name,
-                );
+
+                // Process keys
                 let mut key_exprs = Vec::new();
                 for key in keys {
                     let key_name = self.get_operand_name(key, slice_id, cfg_program)?;
@@ -247,15 +244,63 @@ impl BaseVerificationGenerator {
                     }
                     key_exprs.push(self.generator.convert_operand(cfg_program, key, key_name)?);
                 }
-                let map_select = BoogieExpr {
-                    kind: BoogieExprKind::MapSelect {
-                        base: Box::new(BoogieExpr {
-                            kind: BoogieExprKind::Var(var_name),
-                        }),
-                        indices: key_exprs,
-                    },
-                };
-                lines.push(BoogieLine::Assign(dest_name, map_select));
+
+                if let Some(field_id) = field {
+                    // Field access: read a specific field value
+                    let field_decl = &cfg_program.table_fields[*field_id];
+                    let var_name = BoogieProgramGenerator::gen_table_field_var_name(
+                        &table_decl.name,
+                        &field_decl.name,
+                    );
+                    let map_select = BoogieExpr {
+                        kind: BoogieExprKind::MapSelect {
+                            base: Box::new(BoogieExpr {
+                                kind: BoogieExprKind::Var(var_name),
+                            }),
+                            indices: key_exprs,
+                        },
+                    };
+                    lines.push(BoogieLine::Assign(dest_name, map_select));
+                } else {
+                    // Row access: construct a row from all field values
+                    // Call construct_Row_TableName(field1_val, field2_val, ...)
+
+                    let all_field_ids: Vec<_> = table_decl
+                        .primary_key_fields
+                        .iter()
+                        .chain(table_decl.other_fields.iter())
+                        .copied()
+                        .collect();
+
+                    let mut field_value_exprs = Vec::new();
+                    for field_id in all_field_ids {
+                        let field = &cfg_program.table_fields[field_id];
+                        let var_name = BoogieProgramGenerator::gen_table_field_var_name(
+                            &table_decl.name,
+                            &field.name,
+                        );
+                        // Read the field value: TableName_FieldName[key1][key2]...
+                        let field_value = BoogieExpr {
+                            kind: BoogieExprKind::MapSelect {
+                                base: Box::new(BoogieExpr {
+                                    kind: BoogieExprKind::Var(var_name),
+                                }),
+                                indices: key_exprs.clone(),
+                            },
+                        };
+                        field_value_exprs.push(field_value);
+                    }
+
+                    // Construct the row
+                    let constructor_name = format!("construct_Row_{}", table_decl.name);
+                    let row_expr = BoogieExpr {
+                        kind: BoogieExprKind::FunctionCall {
+                            name: constructor_name,
+                            args: field_value_exprs,
+                        },
+                    };
+                    lines.push(BoogieLine::Assign(dest_name, row_expr));
+                }
             }
             InstructionKind::TableSet {
                 table,
