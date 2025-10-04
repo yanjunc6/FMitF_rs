@@ -50,6 +50,13 @@ struct CfgBuilder {
 }
 
 /// Context for building the body of a single function. Manages scopes, blocks, and state.
+enum SpecialExprContext {
+    TableInvariant {
+        table_id: cfg::TableId,
+        key_params: Vec<(String, ast::ResolvedType)>,
+    },
+}
+
 struct FunctionContext<'a> {
     builder: &'a mut CfgBuilder,
     func_id: cfg::FunctionId,
@@ -66,6 +73,15 @@ struct FunctionContext<'a> {
     // Tracking Row<T> parameters and their field decompositions
     // Maps AST parameter ID to a map of field names to CFG variable IDs
     param_row_field_map: HashMap<ast::ParamId, HashMap<String, cfg::VariableId>>,
+
+    // Additional context for evaluating table invariants
+    table_invariant_context: Option<TableInvariantContext>,
+}
+
+#[derive(Clone)]
+struct TableInvariantContext {
+    table_id: cfg::TableId,
+    key_vars: Vec<cfg::VariableId>,
 }
 
 impl CfgBuilder {
@@ -152,13 +168,25 @@ impl CfgBuilder {
             .map(|(id, tbl)| (id, tbl.clone()))
             .collect();
         for (id, ast_table) in table_decls {
+            let elements = ast_table.elements.clone();
+
+            // Collect field declarations first so we can materialize the table structure
+            let mut field_decls: Vec<(ast::FieldId, ast::TableField)> = Vec::new();
+            for element in &elements {
+                if let ast::TableElement::Field(field_id) = element {
+                    let ast_field = self.ast.fields[*field_id].clone();
+                    field_decls.push((*field_id, ast_field));
+                }
+            }
+
+            // Create the CFG table shell with empty invariants; fields will be populated below
             let cfg_table = cfg::Table {
                 name: ast_table.name.name.clone(),
-                primary_key_fields: Vec::new(),  // populated below
-                other_fields: Vec::new(),        // populated below
-                node_partition: None,            // populated in a later pass
-                node_partition_args: Vec::new(), // populated in a later pass
-                invariants: Vec::new(),          // populated in synthesize pass
+                primary_key_fields: Vec::new(),
+                other_fields: Vec::new(),
+                node_partition: None,
+                node_partition_args: Vec::new(),
+                invariants: Vec::new(),
             };
             let table_id = self.cfg.tables.alloc(cfg_table);
             self.cfg
@@ -166,32 +194,63 @@ impl CfgBuilder {
                 .insert(ast_table.name.name.clone(), table_id);
             self.table_map.insert(id, table_id);
 
-            // Now iterate through elements to create fields
-            let elements = ast_table.elements.clone();
-            for element in &elements {
-                if let ast::TableElement::Field(field_id) = element {
-                    let ast_field = self.ast.fields[*field_id].clone();
-                    let field_type = self
-                        .convert_resolved_type(ast_field.resolved_type.as_ref().unwrap())
-                        .unwrap();
+            // Materialize table fields into CFG and populate primary/other lists
+            for (field_id, ast_field) in &field_decls {
+                let field_type = self
+                    .convert_resolved_type(ast_field.resolved_type.as_ref().unwrap())
+                    .unwrap();
 
-                    let cfg_field = cfg::TableField {
-                        name: ast_field.name.name.clone(),
-                        field_type,
-                        table_id,
-                    };
-                    let new_field_id = self.cfg.table_fields.alloc(cfg_field);
-                    self.field_map.insert(*field_id, new_field_id);
+                let cfg_field = cfg::TableField {
+                    name: ast_field.name.name.clone(),
+                    field_type,
+                    table_id,
+                };
+                let new_field_id = self.cfg.table_fields.alloc(cfg_field);
+                self.field_map.insert(*field_id, new_field_id);
 
-                    if ast_field.is_primary {
-                        self.cfg.tables[table_id]
-                            .primary_key_fields
-                            .push(new_field_id);
-                    } else {
-                        self.cfg.tables[table_id].other_fields.push(new_field_id);
-                    }
+                if ast_field.is_primary {
+                    self.cfg.tables[table_id]
+                        .primary_key_fields
+                        .push(new_field_id);
+                } else {
+                    self.cfg.tables[table_id].other_fields.push(new_field_id);
                 }
             }
+
+            // Prepare primary key parameter specifications for invariants
+            let primary_key_specs: Vec<(String, ast::ResolvedType)> = field_decls
+                .iter()
+                .filter(|(_, field)| field.is_primary)
+                .map(|(_, field)| {
+                    (
+                        field.name.name.clone(),
+                        field
+                            .resolved_type
+                            .clone()
+                            .expect("Primary key field must have resolved type"),
+                    )
+                })
+                .collect();
+
+            // Build invariant helper functions now that field and key metadata are available
+            for element in &elements {
+                if let ast::TableElement::Invariant(expr_id) = element {
+                    let inv_index = self.cfg.tables[table_id].invariants.len();
+                    let context = SpecialExprContext::TableInvariant {
+                        table_id,
+                        key_params: primary_key_specs.clone(),
+                    };
+                    let inv_func_id = self.build_special_expr_function(
+                        &format!("{}_inv_{}", ast_table.name.name, inv_index),
+                        *expr_id,
+                        cfg::FunctionKind::Invariant,
+                        &[],
+                        Some(context),
+                    );
+                    self.cfg.tables[table_id].invariants.push(inv_func_id);
+                }
+            }
+
             self.cfg.all_tables.push(table_id);
         }
     }
@@ -302,12 +361,24 @@ impl CfgBuilder {
                 params.push(var_id);
             }
 
+            let mut assumptions = Vec::new();
+            for assume_expr_id in &ast_func.assumptions {
+                let assume_func_id = self.build_special_expr_function(
+                    &format!("{}_assume_{}", ast_func.name.name, assumptions.len()),
+                    *assume_expr_id,
+                    cfg::FunctionKind::Assumption,
+                    &ast_func.params,
+                    None,
+                );
+                assumptions.push(assume_func_id);
+            }
+
             let cfg_func = cfg::Function {
                 name: ast_func.name.name.clone(),
                 signature,
                 kind: self.convert_callable_kind(&ast_func),
-                params,                  // parameters processed here for all functions
-                assumptions: Vec::new(), // populated in synthesize pass
+                params,
+                assumptions,
                 entry_block: None,
                 all_blocks: Vec::new(),
                 decorators: self.convert_decorators(&ast_func.decorators),
@@ -627,6 +698,109 @@ impl CfgBuilder {
             _ => panic!("Constant expression must be a literal or constant identifier."),
         }
     }
+
+    fn build_special_expr_function(
+        &mut self,
+        name: &str,
+        expr_id: ast::ExprId,
+        kind: cfg::FunctionKind,
+        param_ids: &[ast::ParamId],
+        context: Option<SpecialExprContext>,
+    ) -> cfg::FunctionId {
+        // 1. Create signature and params
+        let expr_resolved_type = self.ast.expressions[expr_id]
+            .resolved_type()
+            .cloned()
+            .expect("Special expression function must have a resolved type");
+        let bool_cfg_type = self
+            .convert_resolved_type(&expr_resolved_type)
+            .expect("Failed to convert special expression return type");
+
+        let mut cfg_params = Vec::new();
+        let mut param_types = Vec::new();
+        let mut param_map = HashMap::new();
+        let mut table_invariant_context = None;
+
+        for ast_param_id in param_ids {
+            let ast_param = self.ast.params[*ast_param_id].clone();
+            let ty = self
+                .convert_resolved_type(&ast_param.resolved_type.as_ref().unwrap())
+                .unwrap();
+            let var = cfg::Variable {
+                name: ast_param.name.name.clone(),
+                ty,
+                kind: cfg::VariableKind::Parameter,
+            };
+            let var_id = self.cfg.variables.alloc(var);
+            cfg_params.push(var_id);
+            param_types.push(ty);
+            param_map.insert(*ast_param_id, var_id);
+        }
+
+        if let Some(SpecialExprContext::TableInvariant {
+            table_id,
+            key_params,
+        }) = context
+        {
+            let mut key_vars = Vec::new();
+            for (name, key_type) in key_params {
+                let ty = self.convert_resolved_type(&key_type).unwrap();
+                let var = cfg::Variable {
+                    name,
+                    ty,
+                    kind: cfg::VariableKind::Parameter,
+                };
+                let var_id = self.cfg.variables.alloc(var);
+                cfg_params.push(var_id);
+                param_types.push(ty);
+                key_vars.push(var_id);
+            }
+            table_invariant_context = Some(TableInvariantContext { table_id, key_vars });
+        }
+
+        let func_type = self.cfg.types.alloc(cfg::Type::Function {
+            param_types,
+            return_type: Box::new(bool_cfg_type),
+        });
+
+        let signature = cfg::TypeScheme {
+            quantified_params: vec![],
+            ty: func_type,
+        };
+
+        // 2. Create function shell
+        let func = cfg::Function {
+            name: name.to_string(),
+            signature,
+            kind,
+            params: cfg_params,
+            assumptions: vec![],
+            entry_block: None,
+            all_blocks: vec![],
+            decorators: vec![],
+            entry_hop: None,
+            hops: vec![],
+        };
+        let func_id = self.cfg.functions.alloc(func);
+
+        // 3. Build function body
+        let mut context = FunctionContext::new(self, func_id);
+        context.param_map = param_map;
+        context.table_invariant_context = table_invariant_context;
+
+        let hop_id = context.new_hop(vec![]);
+        context.builder.cfg.functions[func_id].entry_hop = Some(hop_id);
+        let entry_block = context.new_basic_block(hop_id);
+        context.builder.cfg.functions[func_id].entry_block = Some(entry_block);
+        context.builder.cfg.hops[hop_id].entry_block = Some(entry_block);
+        context.current_block = Some(entry_block);
+
+        let result_operand = context.build_expression(expr_id);
+        let current_block = context.current_block.take().unwrap();
+        context.terminate(current_block, cfg::Terminator::Return(Some(result_operand)));
+
+        func_id
+    }
 }
 
 // ============================================================================
@@ -643,6 +817,7 @@ impl<'a> FunctionContext<'a> {
             param_map: HashMap::new(),
             row_field_map: HashMap::new(),
             param_row_field_map: HashMap::new(),
+            table_invariant_context: None,
         }
     }
 
@@ -1000,17 +1175,16 @@ impl<'a> FunctionContext<'a> {
                     }
                 }
 
-                // Continue from loop exit
                 self.current_block = Some(loop_exit);
             }
             ast::Statement::HopsFor { .. } => {
-                // HopsFor is handled at transaction level
-                panic!("Unsupported statement type in this context: {:?}", stmt)
+                // This is handled in `build_transaction_body`, so we can ignore it here.
             }
         }
     }
 
-    /// Build an AST expression, generating instructions and returning the final operand.
+    /// Builds an AST expression into a CFG operand.
+    /// This is the core of the expression-to-instruction logic.
     fn build_expression(&mut self, expr_id: ast::ExprId) -> cfg::Operand {
         let expr = self.builder.ast.expressions[expr_id].clone();
         match expr {
@@ -1037,6 +1211,7 @@ impl<'a> FunctionContext<'a> {
             }
             ast::Expression::Identifier {
                 resolved_declarations,
+                span,
                 ..
             } => {
                 let res = resolved_declarations
@@ -1062,6 +1237,39 @@ impl<'a> FunctionContext<'a> {
                         let cfg_table_id = self.builder.table_map[&id];
                         // Lower table identifiers directly to a Table operand
                         cfg::Operand::Table(cfg_table_id)
+                    }
+                    ast::IdentifierResolution::Field(field_id) => {
+                        if let Some(inv_ctx) = &self.table_invariant_context {
+                            let cfg_field_id = *self
+                                .builder
+                                .field_map
+                                .get(field_id)
+                                .expect("Field should be registered in field_map before invariants are built");
+                            let field_type = self.builder.cfg.table_fields[cfg_field_id].field_type;
+                            let table_id = inv_ctx.table_id;
+                            let key_operands: Vec<_> = inv_ctx
+                                .key_vars
+                                .iter()
+                                .map(|var_id| cfg::Operand::Variable(*var_id))
+                                .collect();
+                            let instr_span = self.pick_span(&[span]);
+                            let temp_var = self.new_temporary(field_type);
+                            self.add_instruction(cfg::Instruction {
+                                kind: cfg::InstructionKind::TableGet {
+                                    dest: temp_var,
+                                    table: table_id,
+                                    keys: key_operands,
+                                    field: Some(cfg_field_id),
+                                },
+                                span: instr_span,
+                            });
+                            cfg::Operand::Variable(temp_var)
+                        } else {
+                            panic!(
+                                "Field identifier '{}' used outside of a table invariant context",
+                                self.builder.ast.fields[*field_id].name.name
+                            );
+                        }
                     }
                     _ => panic!("Unknown identifier resolution type: {:?}", res),
                 }
@@ -1848,6 +2056,7 @@ impl<'a> FunctionContext<'a> {
                 // Copy outer function parameter mappings to lambda context
                 lambda_context.param_map = self.param_map.clone();
                 lambda_context.param_row_field_map = self.param_row_field_map.clone();
+                lambda_context.table_invariant_context = self.table_invariant_context.clone();
 
                 // Map lambda parameters and create Row field mappings if needed
                 for (i, (param_id, param_name, param_type)) in param_data.iter().enumerate() {

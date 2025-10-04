@@ -1,10 +1,13 @@
-use crate::cfg::{Program as CfgProgram, VariableId};
+use crate::cfg::{
+    BasicBlockId, FunctionId, Instruction, InstructionKind, Operand, Program as CfgProgram,
+    Terminator, VariableId,
+};
 use crate::verification::base_generator::BaseVerificationGenerator;
 use crate::verification::errors::Results;
 use crate::verification::scope::SliceId;
 use crate::verification::Boogie::{
     gen_Boogie::BoogieProgramGenerator, BoogieBinOp, BoogieError, BoogieExpr, BoogieExprKind,
-    BoogieLine, ErrorMessage, VerificationNodeId,
+    BoogieLine, BoogieQuantifierKind, ErrorMessage, VerificationNodeId,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -44,15 +47,19 @@ impl BoogieStateManager {
             tables_to_havoc.extend(set);
         }
 
+        let mut havocked_vars: HashSet<String> = HashSet::new();
+
         for table_var_name in tables_to_havoc {
             base.add_line(BoogieLine::Havoc(table_var_name.clone()));
+            havocked_vars.insert(table_var_name.clone());
         }
 
         // Havoc live-IN variables only
         for (slice, vars) in &analysis_info.live_in {
             for &var_id in vars {
                 let var_name = format!("s{}_{}", slice, cfg_program.variables[var_id].name);
-                base.add_line(BoogieLine::Havoc(var_name));
+                base.add_line(BoogieLine::Havoc(var_name.clone()));
+                havocked_vars.insert(var_name);
             }
         }
 
@@ -72,6 +79,75 @@ impl BoogieStateManager {
                     kind: BoogieExprKind::BoolConst(true),
                 },
             ));
+        }
+
+        // Add assumptions from table invariants
+        for table_id in cfg_program.all_tables.iter() {
+            let table = &cfg_program.tables[*table_id];
+            for inv_func_id in &table.invariants {
+                let inv_func = &cfg_program.functions[*inv_func_id];
+                let arg_exprs: Vec<BoogieExpr> = inv_func
+                    .params
+                    .iter()
+                    .map(|param_var_id| {
+                        let param_var = &cfg_program.variables[*param_var_id];
+                        BoogieExpr {
+                            kind: BoogieExprKind::Var(param_var.name.clone()),
+                        }
+                    })
+                    .collect();
+
+                let body_expr =
+                    Self::inline_special_function(base, cfg_program, *inv_func_id, &arg_exprs);
+
+                if inv_func.params.is_empty() {
+                    base.add_line(BoogieLine::Assume(body_expr));
+                } else {
+                    let bound_vars = inv_func
+                        .params
+                        .iter()
+                        .map(|param_var_id| {
+                            let param_var = &cfg_program.variables[*param_var_id];
+                            let var_type =
+                                BoogieProgramGenerator::convert_type_id(cfg_program, &param_var.ty);
+                            (param_var.name.clone(), var_type)
+                        })
+                        .collect();
+                    let quant_expr = BoogieExpr {
+                        kind: BoogieExprKind::Quantifier {
+                            kind: BoogieQuantifierKind::Forall,
+                            bound_vars,
+                            body: Box::new(body_expr),
+                        },
+                    };
+                    base.add_line(BoogieLine::Assume(quant_expr));
+                }
+            }
+        }
+
+        // Add assumptions from transaction parameters
+        for (slice_id, hops) in &unit.hops_per_slice {
+            if let Some(first_hop_id) = hops.first() {
+                let func_id = cfg_program.hops[*first_hop_id].function_id;
+                let func = &cfg_program.functions[func_id];
+                for assume_func_id in &func.assumptions {
+                    let assume_func = &cfg_program.functions[*assume_func_id];
+                    let mut args = Vec::new();
+                    for param_id in &assume_func.params {
+                        let expr = Self::ensure_slice_variable_initialized(
+                            base,
+                            cfg_program,
+                            *param_id,
+                            *slice_id,
+                            &mut havocked_vars,
+                        );
+                        args.push(expr);
+                    }
+                    let assume_expr =
+                        Self::inline_special_function(base, cfg_program, *assume_func_id, &args);
+                    base.add_line(BoogieLine::Assume(assume_expr));
+                }
+            }
         }
 
         Ok(())
@@ -261,6 +337,246 @@ impl BoogieStateManager {
             table_snapshots,
             var_snapshots,
         })
+    }
+
+    fn inline_special_function(
+        base: &mut BaseVerificationGenerator,
+        cfg_program: &CfgProgram,
+        func_id: FunctionId,
+        args: &[BoogieExpr],
+    ) -> BoogieExpr {
+        let func = &cfg_program.functions[func_id];
+        assert_eq!(
+            func.params.len(),
+            args.len(),
+            "Special function {} expected {} arguments, got {}",
+            func.name,
+            func.params.len(),
+            args.len()
+        );
+
+        let mut env: HashMap<VariableId, BoogieExpr> = HashMap::new();
+        for (param_id, arg_expr) in func.params.iter().zip(args.iter()) {
+            env.insert(*param_id, arg_expr.clone());
+        }
+
+        let mut current_block = func
+            .entry_block
+            .expect("Special function must have an entry block");
+
+        enum InlineControl {
+            Next(BasicBlockId),
+            Return(BoogieExpr),
+        }
+
+        loop {
+            let control = {
+                let block = &cfg_program.basic_blocks[current_block];
+                for instruction in &block.instructions {
+                    Self::evaluate_special_instruction(base, cfg_program, instruction, &mut env);
+                }
+
+                match &block.terminator {
+                    Terminator::Return(Some(op)) => {
+                        let expr = Self::operand_to_expr(base, cfg_program, op, &env);
+                        InlineControl::Return(expr)
+                    }
+                    Terminator::Return(None) => InlineControl::Return(BoogieExpr {
+                        kind: BoogieExprKind::BoolConst(true),
+                    }),
+                    Terminator::Jump(next) => InlineControl::Next(*next),
+                    Terminator::Abort => {
+                        panic!("Abort terminator not supported in special expression function")
+                    }
+                    Terminator::Branch { .. } => {
+                        panic!("Branch terminator not supported in special expression function")
+                    }
+                    Terminator::HopExit { .. } => {
+                        panic!("Hop exit terminator not supported in special expression function")
+                    }
+                }
+            };
+
+            match control {
+                InlineControl::Return(expr) => return expr,
+                InlineControl::Next(next_block) => current_block = next_block,
+            }
+        }
+    }
+
+    fn evaluate_special_instruction(
+        base: &mut BaseVerificationGenerator,
+        cfg_program: &CfgProgram,
+        instruction: &Instruction,
+        env: &mut HashMap<VariableId, BoogieExpr>,
+    ) {
+        match &instruction.kind {
+            InstructionKind::Assign { dest, src } => {
+                let expr = Self::operand_to_expr(base, cfg_program, src, env);
+                env.insert(*dest, expr);
+            }
+            InstructionKind::BinaryOp {
+                dest,
+                op,
+                left,
+                right,
+            } => {
+                let left_expr = Self::operand_to_expr(base, cfg_program, left, env);
+                let right_expr = Self::operand_to_expr(base, cfg_program, right, env);
+                let bin_op = BoogieProgramGenerator::convert_binary_op(op);
+                let result = BoogieExpr {
+                    kind: BoogieExprKind::BinOp(Box::new(left_expr), bin_op, Box::new(right_expr)),
+                };
+                env.insert(*dest, result);
+            }
+            InstructionKind::UnaryOp { dest, op, operand } => {
+                let operand_expr = Self::operand_to_expr(base, cfg_program, operand, env);
+                let un_op = match base.generator.convert_unary_op(op) {
+                    Ok(op) => op,
+                    Err(_) => {
+                        panic!("Failed to convert unary op in special expression function")
+                    }
+                };
+                let result = BoogieExpr {
+                    kind: BoogieExprKind::UnOp(un_op, Box::new(operand_expr)),
+                };
+                env.insert(*dest, result);
+            }
+            InstructionKind::Call { dest, func, args } => {
+                let func_name = base.resolve_function_name(cfg_program, *func);
+                let mut boogie_args = Vec::with_capacity(args.len());
+                for arg in args {
+                    boogie_args.push(Self::operand_to_expr(base, cfg_program, arg, env));
+                }
+                let call_expr = BoogieExpr {
+                    kind: BoogieExprKind::FunctionCall {
+                        name: func_name,
+                        args: boogie_args,
+                    },
+                };
+                if let Some(dest_id) = dest {
+                    env.insert(*dest_id, call_expr);
+                } else {
+                    panic!("Procedure call without destination in special expression function");
+                }
+            }
+            InstructionKind::TableGet {
+                dest,
+                table,
+                keys,
+                field,
+            } => {
+                let table_decl = &cfg_program.tables[*table];
+                let key_exprs: Vec<BoogieExpr> = keys
+                    .iter()
+                    .map(|key| Self::operand_to_expr(base, cfg_program, key, env))
+                    .collect();
+
+                if let Some(field_id) = field {
+                    let field_decl = &cfg_program.table_fields[*field_id];
+                    let var_name = BoogieProgramGenerator::gen_table_field_var_name(
+                        &table_decl.name,
+                        &field_decl.name,
+                    );
+                    let result = BoogieExpr {
+                        kind: BoogieExprKind::MapSelect {
+                            base: Box::new(BoogieExpr {
+                                kind: BoogieExprKind::Var(var_name),
+                            }),
+                            indices: key_exprs,
+                        },
+                    };
+                    env.insert(*dest, result);
+                } else {
+                    let all_field_ids: Vec<_> = table_decl
+                        .primary_key_fields
+                        .iter()
+                        .chain(table_decl.other_fields.iter())
+                        .copied()
+                        .collect();
+                    let mut field_value_exprs = Vec::new();
+                    for field_id in all_field_ids {
+                        let field = &cfg_program.table_fields[field_id];
+                        let var_name = BoogieProgramGenerator::gen_table_field_var_name(
+                            &table_decl.name,
+                            &field.name,
+                        );
+                        field_value_exprs.push(BoogieExpr {
+                            kind: BoogieExprKind::MapSelect {
+                                base: Box::new(BoogieExpr {
+                                    kind: BoogieExprKind::Var(var_name),
+                                }),
+                                indices: key_exprs.clone(),
+                            },
+                        });
+                    }
+                    let constructor_name = format!("construct_Row_{}", table_decl.name);
+                    let row_expr = BoogieExpr {
+                        kind: BoogieExprKind::FunctionCall {
+                            name: constructor_name,
+                            args: field_value_exprs,
+                        },
+                    };
+                    env.insert(*dest, row_expr);
+                }
+            }
+            InstructionKind::TableSet { .. } => {
+                panic!("TableSet instruction not supported in special expression function")
+            }
+            InstructionKind::Assert { .. } => {
+                panic!("Assertions are not supported in special expression function lowering")
+            }
+        }
+    }
+
+    fn operand_to_expr(
+        base: &mut BaseVerificationGenerator,
+        cfg_program: &CfgProgram,
+        operand: &Operand,
+        env: &HashMap<VariableId, BoogieExpr>,
+    ) -> BoogieExpr {
+        match operand {
+            Operand::Variable(var_id) => env.get(var_id).cloned().unwrap_or_else(|| {
+                panic!("Uninitialised variable {:?} in special function", var_id)
+            }),
+            Operand::Constant(constant) => match base.generator.convert_constant(constant) {
+                Ok(expr) => expr,
+                Err(_) => panic!("Failed to convert constant in special expression function"),
+            },
+            Operand::Global(global_id) => {
+                let name = cfg_program.global_consts[*global_id].name.clone();
+                BoogieExpr {
+                    kind: BoogieExprKind::Var(name),
+                }
+            }
+            Operand::Table(table_id) => {
+                let table = &cfg_program.tables[*table_id];
+                BoogieExpr {
+                    kind: BoogieExprKind::Var(format!("TBL_{}", table.name)),
+                }
+            }
+        }
+    }
+
+    fn ensure_slice_variable_initialized(
+        base: &mut BaseVerificationGenerator,
+        cfg_program: &CfgProgram,
+        var_id: VariableId,
+        slice_id: SliceId,
+        havocked_vars: &mut HashSet<String>,
+    ) -> BoogieExpr {
+        let param = &cfg_program.variables[var_id];
+        let var_name = format!("s{}_{}", slice_id, param.name);
+        let var_type = BoogieProgramGenerator::convert_type_id(cfg_program, &param.ty);
+        base.generator
+            .ensure_local_variable_exists(&var_name, var_type);
+        if !havocked_vars.contains(&var_name) {
+            base.add_line(BoogieLine::Havoc(var_name.clone()));
+            havocked_vars.insert(var_name.clone());
+        }
+        BoogieExpr {
+            kind: BoogieExprKind::Var(var_name),
+        }
     }
 
     /// Assert that the two special interleavings (A→B and B→A) produce equivalent results

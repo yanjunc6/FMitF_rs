@@ -161,6 +161,12 @@ pub enum BoogieExprKind {
         indices: Vec<BoogieExpr>, // the key(s) to update
         value: Box<BoogieExpr>,   // the new element
     },
+
+    Quantifier {
+        kind: BoogieQuantifierKind,
+        bound_vars: Vec<(String, BoogieType)>,
+        body: Box<BoogieExpr>,
+    },
 }
 
 /// Binary operators you already supported
@@ -187,4 +193,10 @@ pub enum BoogieBinOp {
 pub enum BoogieUnOp {
     Neg, // arithmetic  −e
     Not, // Boolean     !e
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum BoogieQuantifierKind {
+    Forall,
+    Exists,
 }
