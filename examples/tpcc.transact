@@ -143,14 +143,14 @@ table Stock {
     S_REMOTE_CNT: int;
     S_DATA: string;
 
-    // invariant S_QUANTITY >= 0 && S_QUANTITY <= 100;
+    invariant S_QUANTITY >= 0 && S_QUANTITY <= 100;
 }
 
 // ============================================================================
 // Constants and Helper Declarations
 // ============================================================================
 
-const O_OL_CNT: int = 1;
+const O_OL_CNT: int = 10;
 
 // ============================================================================
 // Transactions

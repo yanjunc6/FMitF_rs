@@ -1,6 +1,6 @@
 use crate::verification::Boogie::{
     BoogieBinOp, BoogieExpr, BoogieExprKind, BoogieLine, BoogieProcedure, BoogieProgram,
-    BoogieType, BoogieUnOp, BoogieVarDecl,
+    BoogieQuantifierKind, BoogieType, BoogieUnOp, BoogieVarDecl,
 };
 use std::fmt::{self, Display, Formatter};
 
@@ -139,11 +139,11 @@ impl Display for BoogieLine {
             BoogieLine::Assign(lhs, rhs) => writeln!(f, "    {} := {};", lhs, rhs),
             BoogieLine::Assert(e, msg) => writeln!(
                 f,
-                "    assert {{:msg \"{}\"}} {};",
+                "    assert {{:msg \"{}\"}} ({});",
                 msg.to_boogie_string(),
                 e
             ),
-            BoogieLine::Assume(e) => writeln!(f, "    assume {};", e),
+            BoogieLine::Assume(e) => writeln!(f, "    assume ({});", e),
             BoogieLine::Havoc(var) => writeln!(f, "    havoc {};", var),
             BoogieLine::If {
                 cond,
@@ -247,6 +247,24 @@ impl Display for BoogieExprKind {
                     // Final outermost store
                     write!(f, "{}[{} := {}]", base, indices[0], inner_value)
                 }
+            }
+            BoogieExprKind::Quantifier {
+                kind,
+                bound_vars,
+                body,
+            } => {
+                let keyword = match kind {
+                    BoogieQuantifierKind::Forall => "forall",
+                    BoogieQuantifierKind::Exists => "exists",
+                };
+                write!(f, "{} ", keyword)?;
+                for (i, (name, ty)) in bound_vars.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}: {}", name, ty)?;
+                }
+                write!(f, " :: {}", body)
             }
         }
     }

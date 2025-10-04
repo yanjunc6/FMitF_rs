@@ -681,17 +681,15 @@ impl TypeChecker {
         expr_span: Span,
     ) {
         let table_decl = &prog.table_decls[table_id];
-        
+
         // Build a map of field names to their types in the table schema
         let mut table_fields: HashMap<String, (FieldId, ResolvedType)> = HashMap::new();
         for element in &table_decl.elements {
             if let TableElement::Field(field_id) = element {
                 let field = &prog.fields[*field_id];
                 if let Some(ref resolved_type) = field.resolved_type {
-                    table_fields.insert(
-                        field.name.name.clone(),
-                        (*field_id, resolved_type.clone())
-                    );
+                    table_fields
+                        .insert(field.name.name.clone(), (*field_id, resolved_type.clone()));
                 }
             }
         }
@@ -699,45 +697,46 @@ impl TypeChecker {
         // Check each field in the row literal
         for kv in key_values {
             let field_name = &kv.key.name;
-            
+
             if let Some((_field_id, expected_type)) = table_fields.get(field_name) {
                 // Get the actual type of the value expression
                 let actual_type = prog.expressions[kv.value]
                     .resolved_type()
                     .cloned()
                     .unwrap_or_else(|| self.fresh_infer_var());
-                
+
                 // Check if types are compatible before unifying
                 let expected_resolved = self.apply_substitution(expected_type);
                 let actual_resolved = self.apply_substitution(&actual_type);
-                
+
                 // Provide better error message for row literal field type mismatch
                 if !self.types_potentially_unifiable(&expected_resolved, &actual_resolved) {
-                    let value_span = prog.expressions[kv.value]
-                        .span()
-                        .unwrap_or(expr_span);
-                    
+                    let value_span = prog.expressions[kv.value].span().unwrap_or(expr_span);
+
                     self.errors.push(CompilerError::new(
                         FrontEndErrorKind::TypeMismatch {
                             expected: self.format_type_for_error(prog, &expected_resolved),
                             found: self.format_type_for_error(prog, &actual_resolved),
-                            context: format!("field '{}' in table '{}'", field_name, table_decl.name.name),
+                            context: format!(
+                                "field '{}' in table '{}'",
+                                field_name, table_decl.name.name
+                            ),
                         },
                         value_span,
                     ));
                 } else {
                     // Types might be unifiable, proceed with unification
-                    let value_span = prog.expressions[kv.value]
-                        .span()
-                        .unwrap_or(expr_span);
+                    let value_span = prog.expressions[kv.value].span().unwrap_or(expr_span);
                     self.unify(expected_type, &actual_type, value_span);
                 }
             } else {
                 // Field not found in table schema
                 self.errors.push(CompilerError::new(
                     FrontEndErrorKind::UndefinedIdentifier {
-                        name: format!("field '{}' not found in table '{}'", 
-                            field_name, table_decl.name.name),
+                        name: format!(
+                            "field '{}' not found in table '{}'",
+                            field_name, table_decl.name.name
+                        ),
                     },
                     expr_span,
                 ));
@@ -754,7 +753,7 @@ impl TypeChecker {
         expr_span: Span,
     ) {
         let table_decl = &prog.table_decls[table_id];
-        
+
         // Find primary key fields in the table
         let mut primary_keys: HashMap<String, (FieldId, ResolvedType)> = HashMap::new();
         for element in &table_decl.elements {
@@ -762,10 +761,8 @@ impl TypeChecker {
                 let field = &prog.fields[*field_id];
                 if field.is_primary {
                     if let Some(ref resolved_type) = field.resolved_type {
-                        primary_keys.insert(
-                            field.name.name.clone(),
-                            (*field_id, resolved_type.clone())
-                        );
+                        primary_keys
+                            .insert(field.name.name.clone(), (*field_id, resolved_type.clone()));
                     }
                 }
             }
@@ -774,45 +771,46 @@ impl TypeChecker {
         // Check each key in the table row access
         for kv in key_values {
             let key_name = &kv.key.name;
-            
+
             if let Some((_field_id, expected_type)) = primary_keys.get(key_name) {
                 // Get the actual type of the key value expression
                 let actual_type = prog.expressions[kv.value]
                     .resolved_type()
                     .cloned()
                     .unwrap_or_else(|| self.fresh_infer_var());
-                
+
                 // Check if types are compatible before unifying
                 let expected_resolved = self.apply_substitution(expected_type);
                 let actual_resolved = self.apply_substitution(&actual_type);
-                
+
                 // Provide better error message for primary key type mismatch
                 if !self.types_potentially_unifiable(&expected_resolved, &actual_resolved) {
-                    let value_span = prog.expressions[kv.value]
-                        .span()
-                        .unwrap_or(expr_span);
-                    
+                    let value_span = prog.expressions[kv.value].span().unwrap_or(expr_span);
+
                     self.errors.push(CompilerError::new(
                         FrontEndErrorKind::TypeMismatch {
                             expected: self.format_type_for_error(prog, &expected_resolved),
                             found: self.format_type_for_error(prog, &actual_resolved),
-                            context: format!("primary key '{}' in table row access for table '{}'", key_name, table_decl.name.name),
+                            context: format!(
+                                "primary key '{}' in table row access for table '{}'",
+                                key_name, table_decl.name.name
+                            ),
                         },
                         value_span,
                     ));
                 } else {
                     // Types might be unifiable, proceed with unification
-                    let value_span = prog.expressions[kv.value]
-                        .span()
-                        .unwrap_or(expr_span);
+                    let value_span = prog.expressions[kv.value].span().unwrap_or(expr_span);
                     self.unify(expected_type, &actual_type, value_span);
                 }
             } else {
                 // Key not found in primary keys - report error
                 self.errors.push(CompilerError::new(
                     FrontEndErrorKind::UndefinedIdentifier {
-                        name: format!("'{}' is not a primary key in table '{}'", 
-                            key_name, table_decl.name.name),
+                        name: format!(
+                            "'{}' is not a primary key in table '{}'",
+                            key_name, table_decl.name.name
+                        ),
                     },
                     expr_span,
                 ));
@@ -828,19 +826,44 @@ impl TypeChecker {
             // Generic params can unify with themselves
             (ResolvedType::GenericParam(id1), ResolvedType::GenericParam(id2)) => id1 == id2,
             // Declared types must match in ID and args
-            (ResolvedType::Declared { decl_id: id1, args: args1 }, 
-             ResolvedType::Declared { decl_id: id2, args: args2 }) => {
-                id1 == id2 && args1.len() == args2.len() &&
-                args1.iter().zip(args2.iter()).all(|(a1, a2)| self.types_potentially_unifiable(a1, a2))
+            (
+                ResolvedType::Declared {
+                    decl_id: id1,
+                    args: args1,
+                },
+                ResolvedType::Declared {
+                    decl_id: id2,
+                    args: args2,
+                },
+            ) => {
+                id1 == id2
+                    && args1.len() == args2.len()
+                    && args1
+                        .iter()
+                        .zip(args2.iter())
+                        .all(|(a1, a2)| self.types_potentially_unifiable(a1, a2))
             }
             // Tables must match
-            (ResolvedType::Table { table_id: id1 }, ResolvedType::Table { table_id: id2 }) => id1 == id2,
+            (ResolvedType::Table { table_id: id1 }, ResolvedType::Table { table_id: id2 }) => {
+                id1 == id2
+            }
             // Functions must have matching structure
-            (ResolvedType::Function { param_types: p1, return_type: r1 },
-             ResolvedType::Function { param_types: p2, return_type: r2 }) => {
-                p1.len() == p2.len() &&
-                p1.iter().zip(p2.iter()).all(|(a1, a2)| self.types_potentially_unifiable(a1, a2)) &&
-                self.types_potentially_unifiable(r1, r2)
+            (
+                ResolvedType::Function {
+                    param_types: p1,
+                    return_type: r1,
+                },
+                ResolvedType::Function {
+                    param_types: p2,
+                    return_type: r2,
+                },
+            ) => {
+                p1.len() == p2.len()
+                    && p1
+                        .iter()
+                        .zip(p2.iter())
+                        .all(|(a1, a2)| self.types_potentially_unifiable(a1, a2))
+                    && self.types_potentially_unifiable(r1, r2)
             }
             // Otherwise not unifiable
             _ => false,
@@ -1995,7 +2018,11 @@ impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
                 self.unify(&left_type, &right_type, expr_span);
 
                 // Special handling: If RHS is a RowLiteral and LHS provides table type info, validate fields
-                if let Expression::Literal { value: Literal::RowLiteral(key_values), .. } = &prog.expressions[rhs] {
+                if let Expression::Literal {
+                    value: Literal::RowLiteral(key_values),
+                    ..
+                } = &prog.expressions[rhs]
+                {
                     // Try to extract table ID from the left type
                     let left_type_resolved = self.apply_substitution(&left_type);
                     if let ResolvedType::Declared { decl_id, args } = left_type_resolved {
@@ -2005,7 +2032,9 @@ impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
                                 // Extract the table type from Row<Table<...>>
                                 if let ResolvedType::Table { table_id } = &args[0] {
                                     // Validate the row literal fields against the table schema
-                                    self.validate_row_literal_fields(prog, key_values, *table_id, expr_span);
+                                    self.validate_row_literal_fields(
+                                        prog, key_values, *table_id, expr_span,
+                                    );
                                 }
                             }
                         }

@@ -6,7 +6,9 @@ use std::collections::HashMap;
 use super::Boogie::{
     gen_Boogie::BoogieProgramGenerator, BoogieExpr, BoogieExprKind, BoogieLine, BoogieProgram,
 };
-use crate::cfg::{BasicBlock, Instruction, InstructionKind, Operand, Program as CfgProgram};
+use crate::cfg::{
+    BasicBlock, FunctionId, Instruction, InstructionKind, Operand, Program as CfgProgram,
+};
 use crate::verification::{
     errors::Results,
     scope::{ExecutionScope, SliceId},
@@ -62,6 +64,20 @@ impl BaseVerificationGenerator {
     pub fn add_lines(&mut self, lines: Vec<BoogieLine>) {
         if let Some(p) = self.generator.get_current_procedure_mut() {
             p.lines.extend(lines);
+        }
+    }
+
+    pub fn resolve_function_name(&self, cfg_program: &CfgProgram, func_id: FunctionId) -> String {
+        let func_decl = &cfg_program.functions[func_id];
+        if func_decl.decorators.iter().any(|d| d.name == "rename") {
+            format!("{}#{}", func_decl.name, func_id.index())
+        } else if func_decl.decorators.iter().any(|d| d.name == "Boogie") {
+            self.Boogie_func_map
+                .get(func_decl.name.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| func_decl.name.clone())
+        } else {
+            func_decl.name.clone()
         }
     }
 
@@ -144,20 +160,7 @@ impl BaseVerificationGenerator {
                 lines.push(BoogieLine::Assign(dest_name, un_expr));
             }
             InstructionKind::Call { dest, func, args } => {
-                let func_decl = &cfg_program.functions[*func];
-                let mut func_name = func_decl.name.clone();
-
-                // Check for @rename or @Boogie decorator to map to builtin functions, @rename will take precedence
-                if func_decl.decorators.iter().any(|d| d.name == "rename") {
-                    func_name = format!("{}#{}", func_decl.name, func.index());
-                } else if func_decl.decorators.iter().any(|d| d.name == "Boogie") {
-                    // Map to Boogie func if decorated as @Boogie (only if not renamed)
-                    func_name = self
-                        .Boogie_func_map
-                        .get(func_name.as_str())
-                        .unwrap_or(&func_name.as_str())
-                        .to_string();
-                }
+                let func_name = self.resolve_function_name(cfg_program, *func);
 
                 let mut boogie_args = Vec::new();
 
