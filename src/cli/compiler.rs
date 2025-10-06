@@ -249,6 +249,9 @@ impl Compiler {
                 // Ensure output directory exists
                 fs::create_dir_all(output_dir)?;
                 let boogie_dir = output_dir.join("Boogie");
+                if boogie_dir.exists() {
+                    fs::remove_dir_all(&boogie_dir)?;
+                }
                 fs::create_dir_all(&boogie_dir)?;
 
                 // 2) Write each Boogie program to a .bpl file and run Boogie in parallel with progress
