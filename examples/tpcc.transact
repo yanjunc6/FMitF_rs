@@ -170,6 +170,16 @@ transaction newOrder(
     assume length(itemIDs) == O_OL_CNT;
     assume length(supplierWarehouseIDs) == O_OL_CNT;
     assume length(orderQuantities) == O_OL_CNT;
+    assume orderQuantities.get(0) >= 0 && orderQuantities.get(0) <= 10;
+    assume orderQuantities.get(1) >= 0 && orderQuantities.get(1) <= 10;
+    assume orderQuantities.get(2) >= 0 && orderQuantities.get(2) <= 10;
+    assume orderQuantities.get(3) >= 0 && orderQuantities.get(3) <= 10;
+    assume orderQuantities.get(4) >= 0 && orderQuantities.get(4) <= 10;
+    assume orderQuantities.get(5) >= 0 && orderQuantities.get(5) <= 10;
+    assume orderQuantities.get(6) >= 0 && orderQuantities.get(6) <= 10;
+    assume orderQuantities.get(7) >= 0 && orderQuantities.get(7) <= 10;
+    assume orderQuantities.get(8) >= 0 && orderQuantities.get(8) <= 10;
+    assume orderQuantities.get(9) >= 0 && orderQuantities.get(9) <= 10;
 {
     // Get warehouse tax (and any other per-warehouse data)
     hop {
@@ -182,6 +192,7 @@ transaction newOrder(
         var i_id: int = itemIDs.get(ol_number);
         var sup_w_id: int = supplierWarehouseIDs.get(ol_number);
         var qty: int = orderQuantities.get(ol_number);
+        assert qty >= 0 && qty <= 10;
 
         // Read and update stock
         var s: Row<Stock> = Stock[S_W_ID: sup_w_id, S_I_ID: i_id];
