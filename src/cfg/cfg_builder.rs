@@ -988,12 +988,18 @@ impl<'a> FunctionContext<'a> {
                 let decl = self.builder.ast.var_decls[var_id].clone();
                 let resolved_type = decl.resolved_type.as_ref().unwrap();
                 let ty = self.builder.convert_resolved_type(resolved_type).unwrap();
+                let var_name = decl.name.name.clone();
 
                 // For Row<T> variables, treat them as regular variables initially
                 // Decomposition will happen dynamically when member access is encountered
-                let new_var_id =
-                    self.new_variable(decl.name.name.clone(), ty, cfg::VariableKind::Local);
+                let new_var_id = self.new_variable(var_name.clone(), ty, cfg::VariableKind::Local);
                 self.builder.var_map.insert(var_id, new_var_id);
+
+                if let Some(table_id) = self.is_row_type(resolved_type) {
+                    if !self.row_field_map.contains_key(&var_id) {
+                        self.create_row_field_variables(var_id, &var_name, table_id);
+                    }
+                }
 
                 if let Some(init_expr_id) = decl.init {
                     let src_operand = self.build_expression(init_expr_id);
@@ -1005,6 +1011,20 @@ impl<'a> FunctionContext<'a> {
                         },
                         span,
                     });
+
+                    if let ast::Expression::TableRowAccess { .. } =
+                        &self.builder.ast.expressions[init_expr_id]
+                    {
+                        if self.is_row_type(resolved_type).is_some() {
+                            // Ensure field variables exist before populating them
+                            if let Some(table_id) = self.is_row_type(resolved_type) {
+                                if !self.row_field_map.contains_key(&var_id) {
+                                    self.create_row_field_variables(var_id, &var_name, table_id);
+                                }
+                            }
+                            self.handle_row_assignment(var_id, init_expr_id);
+                        }
+                    }
                 }
             }
             ast::Statement::If {
