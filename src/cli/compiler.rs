@@ -105,11 +105,8 @@ impl Compiler {
             loop_unroll, timeout_secs
         ))?;
 
-        let total_stages = 4 + if enable_verification { 1 } else { 0 } + if enable_optimization {
-            1
-        } else {
-            0
-        };
+        let total_stages =
+            4 + if enable_verification { 1 } else { 0 } + if enable_optimization { 1 } else { 0 };
         let mut current_stage = 0;
         let mut summary = RunSummary::new(instances);
         summary.boogie_loop_unroll = loop_unroll as usize;
@@ -180,7 +177,7 @@ impl Compiler {
         )?;
 
         // Stage 3: Optimization (optional)
-        
+
         let optimized_or_cfg_program = if enable_optimization {
             current_stage += 1;
             execute_stage(
@@ -514,7 +511,7 @@ impl Compiler {
             total_stages,
             || -> Result<(), Box<dyn std::error::Error>> {
                 let generated_go_programs = codegen::generate_go_code(&optimized_or_cfg_program)?;
-                
+
                 let go_dir = output_dir.join("go");
                 if go_dir.exists() {
                     fs::remove_dir_all(&go_dir)?;
@@ -527,11 +524,10 @@ impl Compiler {
                 }
 
                 self.logger
-                        .line(format!("📄 Go code written to: {}", go_dir.display()))?;
+                    .line(format!("📄 Go code written to: {}", go_dir.display()))?;
                 Ok(())
             },
         )?;
-
 
         println!("{}", "Completed".green().bold());
         emit_summary(&summary, &mut self.logger);
