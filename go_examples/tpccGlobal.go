@@ -168,7 +168,7 @@ func getStock(tx *bolt.Tx, params map[string]string) ([]byte, Stock) {
 	}
 
 	stockKeyBytes, _ := json.Marshal(stockKey)
-	var stock stock
+	var stock Stock
 	json.Unmarshal(stocks.Get(stockKeyBytes), &stock)
 
 	return stockKeyBytes, stock

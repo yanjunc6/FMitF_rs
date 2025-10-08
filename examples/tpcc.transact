@@ -183,7 +183,7 @@ transaction newOrder(
 {
     // Get warehouse tax (and any other per-warehouse data)
     hop {
-        var w_tax: float = Warehouse[W_ID: w_id].W_TAX;
+        var w_tax: float = Warehouse[W_ID: w_id].W_TAX; // TODO: why read w_tax?
         // Note: retained for parity with original; not used later in this snippet.
     }
 
