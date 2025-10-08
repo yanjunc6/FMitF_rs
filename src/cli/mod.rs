@@ -37,12 +37,16 @@ pub struct Args {
     pub timeout: u32,
 
     /// Skip optimization passes
-    #[arg(long)]
+    #[arg(long, default_value_t = false)]
     pub no_optimize: bool,
 
     /// Disable colored output
-    #[arg(long)]
+    #[arg(long, default_value_t = false)]
     pub no_color: bool,
+
+    /// Skip commutative verification stage
+    #[arg(long, default_value_t = false)]
+    pub no_verify: bool,
 }
 
 impl Args {
@@ -69,6 +73,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         &output_dir,
         args.instances,
         !args.no_optimize,
+        !args.no_verify,
         args.loop_unroll,
         args.timeout,
     )
