@@ -3,6 +3,7 @@
 pub mod ast;
 pub mod cfg;
 pub mod cli;
+pub mod codegen;
 pub mod dataflow;
 pub mod frontend;
 pub mod optimization;

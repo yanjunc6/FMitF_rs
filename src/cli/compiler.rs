@@ -7,6 +7,7 @@ use crate::ast::Program;
 use crate::cfg;
 use crate::cli::log::Logger;
 use crate::cli::summary::{emit_summary, RunSummary};
+use crate::codegen;
 use crate::frontend::parse_and_analyze_program;
 use crate::optimization::CfgOptimizer;
 use crate::util::{CompilerError, DiagnosticReporter};
@@ -103,7 +104,7 @@ impl Compiler {
             loop_unroll, timeout_secs
         ))?;
 
-        const TOTAL_STAGES: usize = 5; // Added Verification stage
+        const TOTAL_STAGES: usize = 6; // Added Verification + Codegen stages
         let mut current_stage = 0;
         let mut summary = RunSummary::new(instances);
         summary.boogie_loop_unroll = loop_unroll as usize;
@@ -491,6 +492,23 @@ impl Compiler {
                 Ok(())
             },
         )?;
+
+        // Stage 6: Go code generation
+        current_stage += 1;
+        let generated_go_files = execute_stage(
+            "Codegen",
+            current_stage,
+            TOTAL_STAGES,
+            || -> Result<Vec<std::path::PathBuf>, Box<dyn std::error::Error>> {
+                let files = codegen::generate_go_files(&optimized_or_cfg_program, output_dir)?;
+                Ok(files)
+            },
+        )?;
+
+        for path in generated_go_files {
+            self.logger
+                .line(format!("📄 Go code written to: {}", path.display()))?;
+        }
 
         println!("{}", "Completed".green().bold());
         emit_summary(&summary, &mut self.logger);
