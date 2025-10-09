@@ -79,6 +79,34 @@ fn build_converters_source() -> Result<String, std::fmt::Error> {
     writeln!(out, "func fromBool(b bool) string {{")?;
     writeln!(out, "\treturn strconv.FormatBool(b)")?;
     writeln!(out, "}}")?;
+    writeln!(out)?;
+
+    writeln!(
+        out,
+        "// concat joins any number of string parts without additional separators."
+    )?;
+    writeln!(out, "func concat(parts ...string) string {{")?;
+    writeln!(out, "\tif len(parts) == 0 {{")?;
+    writeln!(out, "\t\treturn \"\"")?;
+    writeln!(out, "\t}}")?;
+    writeln!(out, "\tresult := parts[0]")?;
+    writeln!(out, "\tfor i := 1; i < len(parts); i++ {{")?;
+    writeln!(out, "\t\tresult += parts[i]")?;
+    writeln!(out, "\t}}")?;
+    writeln!(out, "\treturn result")?;
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+
+    writeln!(
+        out,
+        "// listGet retrieves an item from a slice, panicking if the index is out of range."
+    )?;
+    writeln!(out, "func listGet[T any](list []T, idx int) T {{")?;
+    writeln!(out, "\tif idx < 0 || idx >= len(list) {{")?;
+    writeln!(out, "\t\tpanic(\"listGet: index out of range\")")?;
+    writeln!(out, "\t}}")?;
+    writeln!(out, "\treturn list[idx]")?;
+    writeln!(out, "}}")?;
 
     Ok(out)
 }

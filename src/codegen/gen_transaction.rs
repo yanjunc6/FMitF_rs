@@ -1,12 +1,13 @@
 use super::{
-    util::{go_var_name, pascal_case, snake_case, write_go_file_header},
+    util::{go_type_string, go_var_name, pascal_case, snake_case, write_go_file_header},
     GoProgram,
 };
 use crate::cfg::{
-    self, BinaryOp, FunctionKind, Instruction, InstructionKind, Operand, Terminator, UnaryOp,
+    self, BinaryOp, ConstantValue, FunctionKind, Instruction, InstructionKind, Operand, Terminator,
+    UnaryOp,
 };
 use crate::dataflow::{analyze_live_variables, DataflowResults, LiveVar, SetLattice};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::Write;
 
@@ -95,15 +96,16 @@ fn generate_hop_function(
 
     // Get live-in variables for this hop's entry block
     let entry_block = hop.entry_block.expect("Hop must have entry block");
-    let live_in_set = liveness
+    let mut live_in_set = liveness
         .block_entry
         .get(&entry_block)
         .and_then(|lattice| lattice.as_set())
         .map(|set| set.iter().map(|LiveVar(v)| *v).collect::<Vec<_>>())
         .unwrap_or_default();
+    live_in_set.sort_by_key(|var_id| var_id.index());
 
     // Get live-in variables for the next hop (these are the live-out of current hop)
-    let next_hop_live_in = if let Some(next_id) = next_hop_id {
+    let mut next_hop_live_in = if let Some(next_id) = next_hop_id {
         let next_hop = &program.hops[next_id];
         if let Some(next_entry) = next_hop.entry_block {
             liveness
@@ -118,6 +120,10 @@ fn generate_hop_function(
     } else {
         Vec::new()
     };
+    next_hop_live_in.sort_by_key(|var_id| var_id.index());
+
+    let mut var_decls: HashMap<cfg::VariableId, bool> = HashMap::new();
+    let mut initialized_vars: HashSet<cfg::VariableId> = HashSet::new();
 
     // Extract live-in variables from params
     for var_id in &live_in_set {
@@ -138,6 +144,15 @@ fn generate_hop_function(
             cfg::Type::Primitive(cfg::PrimitiveType::String) => {
                 writeln!(out, "\t{} := params[\"{}\"]", var_name, var_name)?;
             }
+            cfg::Type::List(_) => {
+                let go_type = go_type_string(program, var.ty);
+                writeln!(out, "\tvar {} {}", var_name, go_type)?;
+                writeln!(
+                    out,
+                    "\tjson.Unmarshal([]byte(params[\"{}\"]), &{})",
+                    var_name, var_name
+                )?;
+            }
             _ => {
                 // For complex types, deserialize from JSON
                 writeln!(out, "\tvar {} interface{{}}", var_name)?;
@@ -148,6 +163,9 @@ fn generate_hop_function(
                 )?;
             }
         }
+
+        var_decls.insert(*var_id, true);
+        initialized_vars.insert(*var_id);
     }
 
     if !live_in_set.is_empty() {
@@ -157,14 +175,7 @@ fn generate_hop_function(
     // Track if we need to generate basic block labels
     let needs_labels = hop.blocks.len() > 1;
 
-    // Generate variables map to track locals
-    let mut var_decls = HashMap::new();
     let mut table_access_count = 0;
-
-    // Mark live-in variables as already declared
-    for var_id in &live_in_set {
-        var_decls.insert(*var_id, true);
-    }
 
     // Process each basic block
     for (_bb_idx, &block_id) in hop.blocks.iter().enumerate() {
@@ -178,7 +189,14 @@ fn generate_hop_function(
 
         // Lower each instruction
         for inst in &block.instructions {
-            lower_instruction(out, program, inst, &mut var_decls, &mut table_access_count)?;
+            lower_instruction(
+                out,
+                program,
+                inst,
+                &mut var_decls,
+                &mut initialized_vars,
+                &mut table_access_count,
+            )?;
         }
 
         // Lower terminator
@@ -189,6 +207,7 @@ fn generate_hop_function(
             needs_labels,
             &liveness,
             block_id,
+            &initialized_vars,
             &next_hop_live_in,
         )?;
         writeln!(out)?;
@@ -205,6 +224,7 @@ fn lower_instruction(
     program: &cfg::Program,
     inst: &Instruction,
     var_decls: &mut HashMap<cfg::VariableId, bool>,
+    initialized_vars: &mut HashSet<cfg::VariableId>,
     table_access_count: &mut usize,
 ) -> Result<(), std::fmt::Error> {
     match &inst.kind {
@@ -215,6 +235,7 @@ fn lower_instruction(
             if !var_decls.contains_key(dest) {
                 writeln!(out, "\t{} := {}", dest_name, src_go)?;
                 var_decls.insert(*dest, true);
+                initialized_vars.insert(*dest);
             } else {
                 writeln!(out, "\t{} = {}", dest_name, src_go)?;
             }
@@ -238,6 +259,7 @@ fn lower_instruction(
                     dest_name, left_go, op_str, right_go
                 )?;
                 var_decls.insert(*dest, true);
+                initialized_vars.insert(*dest);
             } else {
                 writeln!(out, "\t{} = {} {} {}", dest_name, left_go, op_str, right_go)?;
             }
@@ -251,6 +273,7 @@ fn lower_instruction(
             if !var_decls.contains_key(dest) {
                 writeln!(out, "\t{} := {}{}", dest_name, op_str, operand_go)?;
                 var_decls.insert(*dest, true);
+                initialized_vars.insert(*dest);
             } else {
                 writeln!(out, "\t{} = {}{}", dest_name, op_str, operand_go)?;
             }
@@ -289,21 +312,23 @@ fn lower_instruction(
 
             if let Some(field_id) = field {
                 // Getting specific field
-                let field_info = &program.table_fields[*field_id];
                 let row_var = format!("row{}", table_access_count);
                 writeln!(out, "\t_, {} := {}", row_var, call)?;
 
+                let field_access = table_field_accessor(program, table_info, *field_id, &row_var);
                 if !var_decls.contains_key(dest) {
-                    writeln!(out, "\t{} := {}.{}", dest_name, row_var, field_info.name)?;
+                    writeln!(out, "\t{} := {}", dest_name, field_access)?;
                     var_decls.insert(*dest, true);
+                    initialized_vars.insert(*dest);
                 } else {
-                    writeln!(out, "\t{} = {}.{}", dest_name, row_var, field_info.name)?;
+                    writeln!(out, "\t{} = {}", dest_name, field_access)?;
                 }
             } else {
                 // Getting entire row
                 if !var_decls.contains_key(dest) {
                     writeln!(out, "\t_, {} := {}", dest_name, call)?;
                     var_decls.insert(*dest, true);
+                    initialized_vars.insert(*dest);
                 } else {
                     writeln!(out, "\t_, {} = {}", dest_name, call)?;
                 }
@@ -348,12 +373,11 @@ fn lower_instruction(
 
             if let Some(field_id) = field {
                 // Setting specific field
-                let field_info = &program.table_fields[*field_id];
+                let field_target = table_field_accessor(program, table_info, *field_id, &row_var);
                 writeln!(
                     out,
-                    "\t{}.{} = {}",
-                    row_var,
-                    field_info.name,
+                    "\t{} = {}",
+                    field_target,
                     operand_to_go(program, value)
                 )?;
             }
@@ -374,16 +398,41 @@ fn lower_instruction(
         }
 
         InstructionKind::Call { dest, func, args } => {
-            let func_name = go_function_name(program, *func);
-            let call_args = args
+            let func_info = &program.functions[*func];
+            let func_name = func_info.name.as_str();
+            let has_go_decorator = func_info
+                .decorators
                 .iter()
-                .map(|arg| operand_to_go(program, arg))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let call_expr = if call_args.is_empty() {
-                format!("{}()", func_name)
+                .any(|decorator| decorator.name == "go");
+            let go_name = go_function_name(program, *func);
+
+            let call_expr = if has_go_decorator && func_name == "+" {
+                let parts: Vec<String> = args
+                    .iter()
+                    .map(|operand| operand_to_string(program, operand))
+                    .collect();
+                if parts.is_empty() {
+                    format!("{}()", go_name)
+                } else {
+                    format!("{}({})", go_name, parts.join(", "))
+                }
+            } else if has_go_decorator && func_name == "get" {
+                assert!(args.len() == 2, "list get expects list and index arguments");
+                let list_expr = operand_to_go(program, &args[0]);
+                let index_expr = operand_to_go(program, &args[1]);
+                format!("{}({}, int({}))", go_name, list_expr, index_expr)
+            } else if func_name == "str" {
+                args.first()
+                    .map(|operand| operand_to_string(program, operand))
+                    .unwrap_or_else(|| "\"\"".to_string())
             } else {
-                format!("{}({})", func_name, call_args)
+                let arg_exprs: Vec<String> =
+                    args.iter().map(|arg| operand_to_go(program, arg)).collect();
+                if arg_exprs.is_empty() {
+                    format!("{}()", go_name)
+                } else {
+                    format!("{}({})", go_name, arg_exprs.join(", "))
+                }
             };
 
             if let Some(dest_var) = dest {
@@ -391,9 +440,12 @@ fn lower_instruction(
                 if !var_decls.contains_key(dest_var) {
                     writeln!(out, "\t{} := {}", dest_name, call_expr)?;
                     var_decls.insert(*dest_var, true);
+                    initialized_vars.insert(*dest_var);
                 } else {
                     writeln!(out, "\t{} = {}", dest_name, call_expr)?;
                 }
+            } else if func_name == "str" {
+                writeln!(out, "\t_ = {}", call_expr)?;
             } else {
                 writeln!(out, "\t{}", call_expr)?;
             }
@@ -410,6 +462,7 @@ fn lower_terminator(
     use_goto: bool,
     _liveness: &DataflowResults<SetLattice<LiveVar>>,
     _block_id: cfg::BasicBlockId,
+    initialized_vars: &HashSet<cfg::VariableId>,
     next_hop_live_in: &[cfg::VariableId],
 ) -> Result<(), std::fmt::Error> {
     match term {
@@ -456,10 +509,16 @@ fn lower_terminator(
             // Collect variables that are live-in at the next hop (these are live-out of current hop)
             if !next_hop_live_in.is_empty() {
                 writeln!(out, "\t// Collect live-out variables to results")?;
-                let results: Vec<String> = next_hop_live_in
-                    .iter()
-                    .map(|var_id| go_var_to_string(program, *var_id))
-                    .collect();
+                let mut results = Vec::new();
+                for var_id in next_hop_live_in {
+                    let var_name = go_var_name(program, *var_id);
+                    let expr = if initialized_vars.contains(var_id) {
+                        go_var_to_string(program, *var_id)
+                    } else {
+                        format!("params[\"{}\"]", var_name)
+                    };
+                    results.push(expr);
+                }
                 writeln!(out, "\treturn &proto.TrxRes{{")?;
                 writeln!(out, "\t\tStatus: proto.Status_Success,")?;
                 writeln!(out, "\t\tInfo:   in.Info,")?;
@@ -524,6 +583,20 @@ fn unary_op_to_go(op: UnaryOp) -> &'static str {
     }
 }
 
+fn table_field_accessor(
+    program: &cfg::Program,
+    table: &cfg::Table,
+    field_id: cfg::FieldId,
+    row_var: &str,
+) -> String {
+    let field_info = &program.table_fields[field_id];
+    if table.primary_key_fields.contains(&field_id) {
+        format!("{}.Key.{}", row_var, field_info.name)
+    } else {
+        format!("{}.{}", row_var, field_info.name)
+    }
+}
+
 fn go_function_name(program: &cfg::Program, func_id: cfg::FunctionId) -> String {
     let function = &program.functions[func_id];
     if function
@@ -539,7 +612,13 @@ fn go_function_name(program: &cfg::Program, func_id: cfg::FunctionId) -> String 
     }
 }
 
-const GO_FUNCTION_RENAMES: &[(&str, &str)] = &[("length", "len")];
+const GO_FUNCTION_RENAMES: &[(&str, &str)] = &[
+    ("length", "len"),
+    ("float", "float32"),
+    ("int", "uint64"),
+    ("+", "concat"),
+    ("get", "listGet"),
+];
 
 fn go_function_rename(name: &str) -> Option<&'static str> {
     GO_FUNCTION_RENAMES
@@ -588,6 +667,18 @@ fn go_string_literal(value: &str) -> String {
     format!("\"{}\"", value.escape_default())
 }
 
+fn partition_operand_to_u64(program: &cfg::Program, operand: &Operand) -> String {
+    match operand {
+        Operand::Variable(var_id) => {
+            let var_name = go_var_name(program, *var_id);
+            format!("toUint64(params[\"{}\"])", var_name)
+        }
+        Operand::Constant(ConstantValue::Int(value)) => format!("uint64({})", value),
+        Operand::Constant(ConstantValue::Float(value)) => format!("uint64({})", value),
+        other => panic!("unsupported partition operand: {:?}", other),
+    }
+}
+
 fn generate_next_req(
     out: &mut String,
     program: &cfg::Program,
@@ -622,7 +713,9 @@ fn generate_next_req(
             if let Some(next_entry) = next_hop.entry_block {
                 if let Some(live_in_lattice) = liveness.block_entry.get(&next_entry) {
                     if let Some(live_in_set) = live_in_lattice.as_set() {
-                        let live_vars: Vec<_> = live_in_set.iter().map(|LiveVar(v)| *v).collect();
+                        let mut live_vars: Vec<_> =
+                            live_in_set.iter().map(|LiveVar(v)| *v).collect();
+                        live_vars.sort_by_key(|var_id| var_id.index());
                         if !live_vars.is_empty() {
                             writeln!(out, "\t\t// Extract live-out variables from results and put into params")?;
                             for (idx, var_id) in live_vars.iter().enumerate() {
@@ -646,88 +739,79 @@ fn generate_next_req(
         'block_loop: for &block_id in &hop.blocks {
             let block = &program.basic_blocks[block_id];
             for inst in &block.instructions {
-                if let InstructionKind::TableGet { table, .. }
-                | InstructionKind::TableSet { table, .. } = &inst.kind
-                {
-                    let table_info = &program.tables[*table];
+                let (table_id, keys) =
+                    if let InstructionKind::TableGet { table, keys, .. } = &inst.kind {
+                        (*table, keys)
+                    } else if let InstructionKind::TableSet { table, keys, .. } = &inst.kind {
+                        (*table, keys)
+                    } else {
+                        continue;
+                    };
 
-                    // If table has a partition function, evaluate it
-                    if let Some(part_func_id) = table_info.node_partition {
-                        let part_func = &program.functions[part_func_id];
+                let table_info = &program.tables[table_id];
 
-                        // Generate partition evaluation code
-                        writeln!(out, "\t\t// Partition using {}", part_func.name)?;
+                if let Some(part_func_id) = table_info.node_partition {
+                    let part_func = &program.functions[part_func_id];
+                    writeln!(out, "\t\t// Partition using {}", part_func.name)?;
 
-                        // Build partition function call based on partition arguments
-                        match part_func.name.as_str() {
-                            "f" => {
-                                // f(x) = 10 * x
-                                let key_field = table_info.node_partition_args[0];
-                                let field_info = &program.table_fields[key_field];
-                                writeln!(
-                                    out,
-                                    "\t\t{} := toUint64(params[\"{}\"])",
-                                    field_info.name, field_info.name
-                                )?;
-                                writeln!(out, "\t\tnextShard = int({} * 10)", field_info.name)?;
-                            }
-                            "g" => {
-                                // g(x, y) = 10 * x + y
-                                let key_field_0 = table_info.node_partition_args[0];
-                                let key_field_1 = table_info.node_partition_args[1];
-                                let field_info_0 = &program.table_fields[key_field_0];
-                                let field_info_1 = &program.table_fields[key_field_1];
-                                writeln!(
-                                    out,
-                                    "\t\t{} := toUint64(params[\"{}\"])",
-                                    field_info_0.name, field_info_0.name
-                                )?;
-                                writeln!(
-                                    out,
-                                    "\t\t{} := toUint64(params[\"{}\"])",
-                                    field_info_1.name, field_info_1.name
-                                )?;
-                                writeln!(
-                                    out,
-                                    "\t\tnextShard = int({} * 10 + {})",
-                                    field_info_0.name, field_info_1.name
-                                )?;
-                            }
-                            "h" => {
-                                // h(x, y) = 10 * x + (y % 10)
-                                let key_field_0 = table_info.node_partition_args[0];
-                                let key_field_1 = table_info.node_partition_args[1];
-                                let field_info_0 = &program.table_fields[key_field_0];
-                                let field_info_1 = &program.table_fields[key_field_1];
-                                writeln!(
-                                    out,
-                                    "\t\t{} := toUint64(params[\"{}\"])",
-                                    field_info_0.name, field_info_0.name
-                                )?;
-                                writeln!(
-                                    out,
-                                    "\t\t{} := toUint64(params[\"{}\"])",
-                                    field_info_1.name, field_info_1.name
-                                )?;
-                                writeln!(
-                                    out,
-                                    "\t\tnextShard = int({} * 10 + ({} % 10))",
-                                    field_info_0.name, field_info_1.name
-                                )?;
-                            }
-                            _ => {
-                                writeln!(
-                                    out,
-                                    "\t\t// Unknown partition function: {}",
-                                    part_func.name
-                                )?;
-                                writeln!(out, "\t\tnextShard = 0")?;
-                            }
-                        }
-
-                        found_partition = true;
-                        break 'block_loop;
+                    let mut key_exprs = HashMap::new();
+                    for (field_id, key_operand) in
+                        table_info.primary_key_fields.iter().zip(keys.iter())
+                    {
+                        key_exprs.insert(*field_id, partition_operand_to_u64(program, key_operand));
                     }
+
+                    let mut arg_vars = Vec::new();
+                    for (idx, field_id) in table_info.node_partition_args.iter().enumerate() {
+                        let expr = key_exprs.get(field_id).cloned().unwrap_or_else(|| {
+                            panic!(
+                                "missing partition key for field {}",
+                                program.table_fields[*field_id].name
+                            )
+                        });
+                        let local_name = format!("partArg{}", idx);
+                        writeln!(out, "\t\t{} := {}", local_name, expr)?;
+                        arg_vars.push(local_name);
+                    }
+
+                    match part_func.name.as_str() {
+                        "f" => {
+                            let arg0 = arg_vars
+                                .get(0)
+                                .expect("partition f expected at least one argument");
+                            writeln!(out, "\t\tnextShard = int({} * 10)", arg0)?;
+                        }
+                        "g" => {
+                            let arg0 = arg_vars
+                                .get(0)
+                                .expect("partition g expected first argument");
+                            let arg1 = arg_vars
+                                .get(1)
+                                .expect("partition g expected second argument");
+                            writeln!(out, "\t\tnextShard = int({} * 10 + {})", arg0, arg1)?;
+                        }
+                        "h" => {
+                            let arg0 = arg_vars
+                                .get(0)
+                                .expect("partition h expected first argument");
+                            let arg1 = arg_vars
+                                .get(1)
+                                .expect("partition h expected second argument");
+                            writeln!(out, "\t\tnextShard = int({} * 10 + ({} % 10))", arg0, arg1)?;
+                        }
+                        _ => {
+                            let go_name = go_function_name(program, part_func_id);
+                            let call_expr = if arg_vars.is_empty() {
+                                format!("{}()", go_name)
+                            } else {
+                                format!("{}({})", go_name, arg_vars.join(", "))
+                            };
+                            writeln!(out, "\t\tnextShard = int({})", call_expr)?;
+                        }
+                    }
+
+                    found_partition = true;
+                    break 'block_loop;
                 }
             }
         }

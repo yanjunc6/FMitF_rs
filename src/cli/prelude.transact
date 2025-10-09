@@ -74,7 +74,7 @@
 // String Operators
 // ===========================================
 
-@intrinsic @infix @Boogie operator +(a: string, b: string) -> string;
+@intrinsic @infix @Boogie @go operator +(a: string, b: string) -> string;
 
 // ===========================================
 // General Operators
@@ -92,13 +92,13 @@
 // @intrinsic function reduce<T, U>(list: List<T>, func: (U, T) -> U, initial: U) -> U;
 
 @intrinsic @Boogie @go function length<T>(list: List<T>) -> int;
-@intrinsic @Boogie function get<T>(list: List<T>, idx: int) -> T;
+@intrinsic @Boogie @go function get<T>(list: List<T>, idx: int) -> T;
 @intrinsic @Boogie function append<T>(list: List<T>, elem: T) -> List<T>;
 @intrinsic @Boogie function emptyList<T>() -> List<T>;
 
 // Type conversion functions
-@intrinsic @Boogie function float(x: int) -> float;
-@intrinsic @Boogie function int(x: float) -> int; // truncating conversion
+@intrinsic @Boogie @go function float(x: int) -> float;
+@intrinsic @Boogie @go function int(x: float) -> int; // truncating conversion
 @intrinsic @Boogie function str<T>(x: T) -> string;
 
 const __slice__: int = 0;
