@@ -232,13 +232,9 @@ fn lower_instruction(
             let dest_name = go_var_name(program, *dest);
             let src_go = operand_to_go(program, src);
 
-            if !var_decls.contains_key(dest) {
-                writeln!(out, "\t{} := {}", dest_name, src_go)?;
-                var_decls.insert(*dest, true);
-                initialized_vars.insert(*dest);
-            } else {
-                writeln!(out, "\t{} = {}", dest_name, src_go)?;
-            }
+            ensure_var_decl(out, program, var_decls, *dest)?;
+            writeln!(out, "\t{} = {}", dest_name, src_go)?;
+            initialized_vars.insert(*dest);
         }
 
         InstructionKind::BinaryOp {
@@ -252,17 +248,9 @@ fn lower_instruction(
             let right_go = operand_to_go(program, right);
             let op_str = binary_op_to_go(*op);
 
-            if !var_decls.contains_key(dest) {
-                writeln!(
-                    out,
-                    "\t{} := {} {} {}",
-                    dest_name, left_go, op_str, right_go
-                )?;
-                var_decls.insert(*dest, true);
-                initialized_vars.insert(*dest);
-            } else {
-                writeln!(out, "\t{} = {} {} {}", dest_name, left_go, op_str, right_go)?;
-            }
+            ensure_var_decl(out, program, var_decls, *dest)?;
+            writeln!(out, "\t{} = {} {} {}", dest_name, left_go, op_str, right_go)?;
+            initialized_vars.insert(*dest);
         }
 
         InstructionKind::UnaryOp { dest, op, operand } => {
@@ -270,13 +258,9 @@ fn lower_instruction(
             let operand_go = operand_to_go(program, operand);
             let op_str = unary_op_to_go(*op);
 
-            if !var_decls.contains_key(dest) {
-                writeln!(out, "\t{} := {}{}", dest_name, op_str, operand_go)?;
-                var_decls.insert(*dest, true);
-                initialized_vars.insert(*dest);
-            } else {
-                writeln!(out, "\t{} = {}{}", dest_name, op_str, operand_go)?;
-            }
+            ensure_var_decl(out, program, var_decls, *dest)?;
+            writeln!(out, "\t{} = {}{}", dest_name, op_str, operand_go)?;
+            initialized_vars.insert(*dest);
         }
 
         InstructionKind::TableGet {
@@ -316,22 +300,14 @@ fn lower_instruction(
                 writeln!(out, "\t_, {} := {}", row_var, call)?;
 
                 let field_access = table_field_accessor(program, table_info, *field_id, &row_var);
-                if !var_decls.contains_key(dest) {
-                    writeln!(out, "\t{} := {}", dest_name, field_access)?;
-                    var_decls.insert(*dest, true);
-                    initialized_vars.insert(*dest);
-                } else {
-                    writeln!(out, "\t{} = {}", dest_name, field_access)?;
-                }
+                ensure_var_decl(out, program, var_decls, *dest)?;
+                writeln!(out, "\t{} = {}", dest_name, field_access)?;
+                initialized_vars.insert(*dest);
             } else {
                 // Getting entire row
-                if !var_decls.contains_key(dest) {
-                    writeln!(out, "\t_, {} := {}", dest_name, call)?;
-                    var_decls.insert(*dest, true);
-                    initialized_vars.insert(*dest);
-                } else {
-                    writeln!(out, "\t_, {} = {}", dest_name, call)?;
-                }
+                ensure_var_decl(out, program, var_decls, *dest)?;
+                writeln!(out, "\t_, {} = {}", dest_name, call)?;
+                initialized_vars.insert(*dest);
             }
         }
 
@@ -437,13 +413,9 @@ fn lower_instruction(
 
             if let Some(dest_var) = dest {
                 let dest_name = go_var_name(program, *dest_var);
-                if !var_decls.contains_key(dest_var) {
-                    writeln!(out, "\t{} := {}", dest_name, call_expr)?;
-                    var_decls.insert(*dest_var, true);
-                    initialized_vars.insert(*dest_var);
-                } else {
-                    writeln!(out, "\t{} = {}", dest_name, call_expr)?;
-                }
+                ensure_var_decl(out, program, var_decls, *dest_var)?;
+                writeln!(out, "\t{} = {}", dest_name, call_expr)?;
+                initialized_vars.insert(*dest_var);
             } else if func_name == "str" {
                 writeln!(out, "\t_ = {}", call_expr)?;
             } else {
@@ -595,6 +567,21 @@ fn table_field_accessor(
     } else {
         format!("{}.{}", row_var, field_info.name)
     }
+}
+
+fn ensure_var_decl(
+    out: &mut String,
+    program: &cfg::Program,
+    var_decls: &mut HashMap<cfg::VariableId, bool>,
+    var_id: cfg::VariableId,
+) -> Result<(), std::fmt::Error> {
+    if !var_decls.contains_key(&var_id) {
+        let var_name = go_var_name(program, var_id);
+        let go_type = go_type_string(program, program.variables[var_id].ty);
+        writeln!(out, "\tvar {} {}", var_name, go_type)?;
+        var_decls.insert(var_id, true);
+    }
+    Ok(())
 }
 
 fn go_function_name(program: &cfg::Program, func_id: cfg::FunctionId) -> String {
