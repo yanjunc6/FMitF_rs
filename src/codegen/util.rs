@@ -74,7 +74,3 @@ pub fn go_var_name(program: &cfg::Program, var_id: VariableId) -> String {
     name.replace('#', "_")
 }
 
-/// Get the Go variable name for a temporary with 'tmp_v' prefix
-pub fn go_tmp_name(var_id: VariableId) -> String {
-    format!("tmp_v{}", var_id.index())
-}
