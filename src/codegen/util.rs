@@ -73,4 +73,3 @@ pub fn go_var_name(program: &cfg::Program, var_id: VariableId) -> String {
     // Sanitize variable names - replace # with underscore
     name.replace('#', "_")
 }
-

@@ -122,8 +122,9 @@ fn generate_hop_function(
     };
     next_hop_live_in.sort_by_key(|var_id| var_id.index());
 
-    let mut var_decls: HashMap<cfg::VariableId, bool> = HashMap::new();
+    let mut var_decls: HashMap<cfg::VariableId, String> = HashMap::new();
     let mut initialized_vars: HashSet<cfg::VariableId> = HashSet::new();
+    let mut pre_state_init: Vec<String> = Vec::new();
 
     // Extract live-in variables from params
     for var_id in &live_in_set {
@@ -131,87 +132,120 @@ fn generate_hop_function(
         let var_name = go_var_name(program, *var_id);
         let var_type = &program.types[var.ty];
 
+        let decl_type = match var_type {
+            cfg::Type::Primitive(cfg::PrimitiveType::Int)
+            | cfg::Type::Primitive(cfg::PrimitiveType::Float)
+            | cfg::Type::Primitive(cfg::PrimitiveType::Bool)
+            | cfg::Type::Primitive(cfg::PrimitiveType::String)
+            | cfg::Type::List(_) => go_type_string(program, var.ty),
+            _ => String::from("interface{}"),
+        };
+        var_decls
+            .entry(*var_id)
+            .or_insert_with(|| decl_type.clone());
+
         match var_type {
             cfg::Type::Primitive(cfg::PrimitiveType::Int) => {
-                writeln!(out, "\t{} := toUint64(params[\"{}\"])", var_name, var_name)?;
+                pre_state_init.push(format!(
+                    "\t{} = toUint64(params[\"{}\"])",
+                    var_name, var_name
+                ));
             }
             cfg::Type::Primitive(cfg::PrimitiveType::Float) => {
-                writeln!(out, "\t{} := toFloat32(params[\"{}\"])", var_name, var_name)?;
+                pre_state_init.push(format!(
+                    "\t{} = toFloat32(params[\"{}\"])",
+                    var_name, var_name
+                ));
             }
             cfg::Type::Primitive(cfg::PrimitiveType::Bool) => {
-                writeln!(out, "\t{} := toBool(params[\"{}\"])", var_name, var_name)?;
+                pre_state_init.push(format!("\t{} = toBool(params[\"{}\"])", var_name, var_name));
             }
             cfg::Type::Primitive(cfg::PrimitiveType::String) => {
-                writeln!(out, "\t{} := params[\"{}\"]", var_name, var_name)?;
+                pre_state_init.push(format!("\t{} = params[\"{}\"]", var_name, var_name));
             }
             cfg::Type::List(_) => {
-                let go_type = go_type_string(program, var.ty);
-                writeln!(out, "\tvar {} {}", var_name, go_type)?;
-                writeln!(
-                    out,
+                pre_state_init.push(format!(
                     "\tjson.Unmarshal([]byte(params[\"{}\"]), &{})",
                     var_name, var_name
-                )?;
+                ));
             }
             _ => {
-                // For complex types, deserialize from JSON
-                writeln!(out, "\tvar {} interface{{}}", var_name)?;
-                writeln!(
-                    out,
+                pre_state_init.push(format!(
                     "\tjson.Unmarshal([]byte(params[\"{}\"]), &{})",
                     var_name, var_name
-                )?;
+                ));
             }
         }
 
-        var_decls.insert(*var_id, true);
         initialized_vars.insert(*var_id);
     }
 
-    if !live_in_set.is_empty() {
-        writeln!(out)?;
-    }
-
-    // Track if we need to generate basic block labels
-    let needs_labels = hop.blocks.len() > 1;
-
     let mut table_access_count = 0;
+    let mut state_cases = String::new();
 
     // Process each basic block
     for (_bb_idx, &block_id) in hop.blocks.iter().enumerate() {
         let block = &program.basic_blocks[block_id];
 
-        // Generate label for blocks (except first if it's the only one)
-        if needs_labels {
-            writeln!(out, "\tgoto bb{}", block_id.index())?;
-            writeln!(out, "bb{}:", block_id.index())?;
-        }
+        writeln!(state_cases, "\t\tcase {}:", block_id.index())?;
 
         // Lower each instruction
         for inst in &block.instructions {
             lower_instruction(
-                out,
+                &mut state_cases,
                 program,
                 inst,
                 &mut var_decls,
                 &mut initialized_vars,
                 &mut table_access_count,
+                "\t\t\t",
             )?;
         }
 
         // Lower terminator
         lower_terminator(
-            out,
+            &mut state_cases,
             program,
             &block.terminator,
-            needs_labels,
+            "\t\t\t",
             &liveness,
             block_id,
             &initialized_vars,
             &next_hop_live_in,
         )?;
+        writeln!(state_cases)?;
+    }
+
+    writeln!(state_cases, "\t\tdefault:")?;
+    writeln!(state_cases, "\t\t\tpanic(\"invalid state\")")?;
+
+    if !var_decls.is_empty() {
+        let mut decls: Vec<_> = var_decls
+            .iter()
+            .map(|(var_id, ty)| (*var_id, ty.clone()))
+            .collect();
+        decls.sort_by_key(|(var_id, _)| var_id.index());
+        for (var_id, ty) in decls {
+            let var_name = go_var_name(program, var_id);
+            writeln!(out, "\tvar {} {}", var_name, ty)?;
+        }
         writeln!(out)?;
     }
+
+    if !pre_state_init.is_empty() {
+        for line in &pre_state_init {
+            writeln!(out, "{}", line)?;
+        }
+        writeln!(out)?;
+    }
+
+    writeln!(out, "\tcurrentState := {}", entry_block.index())?;
+    writeln!(out, "\tfor {{")?;
+    writeln!(out, "\t\tswitch currentState {{")?;
+    write!(out, "{}", state_cases)?;
+    writeln!(out, "\t\t}}")?;
+    writeln!(out, "\t}}")?;
+    writeln!(out)?;
 
     writeln!(out, "}}")?;
     writeln!(out)?;
@@ -223,17 +257,18 @@ fn lower_instruction(
     out: &mut String,
     program: &cfg::Program,
     inst: &Instruction,
-    var_decls: &mut HashMap<cfg::VariableId, bool>,
+    var_decls: &mut HashMap<cfg::VariableId, String>,
     initialized_vars: &mut HashSet<cfg::VariableId>,
     table_access_count: &mut usize,
+    indent: &str,
 ) -> Result<(), std::fmt::Error> {
     match &inst.kind {
         InstructionKind::Assign { dest, src } => {
             let dest_name = go_var_name(program, *dest);
             let src_go = operand_to_go(program, src);
 
-            ensure_var_decl(out, program, var_decls, *dest)?;
-            writeln!(out, "\t{} = {}", dest_name, src_go)?;
+            ensure_var_decl(var_decls, program, *dest);
+            writeln!(out, "{}{} = {}", indent, dest_name, src_go)?;
             initialized_vars.insert(*dest);
         }
 
@@ -248,8 +283,12 @@ fn lower_instruction(
             let right_go = operand_to_go(program, right);
             let op_str = binary_op_to_go(*op);
 
-            ensure_var_decl(out, program, var_decls, *dest)?;
-            writeln!(out, "\t{} = {} {} {}", dest_name, left_go, op_str, right_go)?;
+            ensure_var_decl(var_decls, program, *dest);
+            writeln!(
+                out,
+                "{}{} = {} {} {}",
+                indent, dest_name, left_go, op_str, right_go
+            )?;
             initialized_vars.insert(*dest);
         }
 
@@ -258,8 +297,8 @@ fn lower_instruction(
             let operand_go = operand_to_go(program, operand);
             let op_str = unary_op_to_go(*op);
 
-            ensure_var_decl(out, program, var_decls, *dest)?;
-            writeln!(out, "\t{} = {}{}", dest_name, op_str, operand_go)?;
+            ensure_var_decl(var_decls, program, *dest);
+            writeln!(out, "{}{} = {}{}", indent, dest_name, op_str, operand_go)?;
             initialized_vars.insert(*dest);
         }
 
@@ -274,7 +313,7 @@ fn lower_instruction(
             let dest_name = go_var_name(program, *dest);
 
             // Build key struct
-            writeln!(out, "\t\t// TableGet: {}", table_name)?;
+            writeln!(out, "{}// TableGet: {}", indent, table_name)?;
             let key_args: Vec<String> = table_info
                 .primary_key_fields
                 .iter()
@@ -297,16 +336,16 @@ fn lower_instruction(
             if let Some(field_id) = field {
                 // Getting specific field
                 let row_var = format!("row{}", table_access_count);
-                writeln!(out, "\t_, {} := {}", row_var, call)?;
+                writeln!(out, "{}_, {} := {}", indent, row_var, call)?;
 
                 let field_access = table_field_accessor(program, table_info, *field_id, &row_var);
-                ensure_var_decl(out, program, var_decls, *dest)?;
-                writeln!(out, "\t{} = {}", dest_name, field_access)?;
+                ensure_var_decl(var_decls, program, *dest);
+                writeln!(out, "{}{} = {}", indent, dest_name, field_access)?;
                 initialized_vars.insert(*dest);
             } else {
                 // Getting entire row
-                ensure_var_decl(out, program, var_decls, *dest)?;
-                writeln!(out, "\t_, {} = {}", dest_name, call)?;
+                ensure_var_decl(var_decls, program, *dest);
+                writeln!(out, "{}_, {} = {}", indent, dest_name, call)?;
                 initialized_vars.insert(*dest);
             }
         }
@@ -320,7 +359,7 @@ fn lower_instruction(
             let table_info = &program.tables[*table];
             let table_name = pascal_case(&table_info.name);
 
-            writeln!(out, "\t\t// TableSet: {}", table_name)?;
+            writeln!(out, "{}// TableSet: {}", indent, table_name)?;
             let key_args: Vec<String> = table_info
                 .primary_key_fields
                 .iter()
@@ -339,7 +378,8 @@ fn lower_instruction(
             // First get the row
             writeln!(
                 out,
-                "\t{}, {} := get{}(tx, {}Key{{ {} }})",
+                "{}{}, {} := get{}(tx, {}Key{{ {} }})",
+                indent,
                 key_var,
                 row_var,
                 table_name,
@@ -352,7 +392,8 @@ fn lower_instruction(
                 let field_target = table_field_accessor(program, table_info, *field_id, &row_var);
                 writeln!(
                     out,
-                    "\t{} = {}",
+                    "{}{} = {}",
+                    indent,
                     field_target,
                     operand_to_go(program, value)
                 )?;
@@ -361,16 +402,21 @@ fn lower_instruction(
             // Write back
             writeln!(
                 out,
-                "\tputData(tx.Bucket([]byte(\"t{}\")), {}, mustJSON({}))",
-                table_name, key_var, row_var
+                "{}putData(tx.Bucket([]byte(\"t{}\")), {}, mustJSON({}))",
+                indent, table_name, key_var, row_var
             )?;
         }
 
         InstructionKind::Assert { condition, message } => {
             let cond_go = operand_to_go(program, condition);
-            writeln!(out, "\tif !({}) {{", cond_go)?;
-            writeln!(out, "\t\tpanic(\"{}\")", message.replace('"', "\\\""))?;
-            writeln!(out, "\t}}")?;
+            writeln!(out, "{}if !({}) {{", indent, cond_go)?;
+            writeln!(
+                out,
+                "{}\tpanic(\"{}\")",
+                indent,
+                message.replace('"', "\\\"")
+            )?;
+            writeln!(out, "{}}}", indent)?;
         }
 
         InstructionKind::Call { dest, func, args } => {
@@ -413,13 +459,13 @@ fn lower_instruction(
 
             if let Some(dest_var) = dest {
                 let dest_name = go_var_name(program, *dest_var);
-                ensure_var_decl(out, program, var_decls, *dest_var)?;
-                writeln!(out, "\t{} = {}", dest_name, call_expr)?;
+                ensure_var_decl(var_decls, program, *dest_var);
+                writeln!(out, "{}{} = {}", indent, dest_name, call_expr)?;
                 initialized_vars.insert(*dest_var);
             } else if func_name == "str" {
-                writeln!(out, "\t_ = {}", call_expr)?;
+                writeln!(out, "{}_ = {}", indent, call_expr)?;
             } else {
-                writeln!(out, "\t{}", call_expr)?;
+                writeln!(out, "{}{}", indent, call_expr)?;
             }
         }
     }
@@ -431,7 +477,7 @@ fn lower_terminator(
     out: &mut String,
     program: &cfg::Program,
     term: &Terminator,
-    use_goto: bool,
+    indent: &str,
     _liveness: &DataflowResults<SetLattice<LiveVar>>,
     _block_id: cfg::BasicBlockId,
     initialized_vars: &HashSet<cfg::VariableId>,
@@ -439,9 +485,8 @@ fn lower_terminator(
 ) -> Result<(), std::fmt::Error> {
     match term {
         Terminator::Jump(target) => {
-            if use_goto {
-                writeln!(out, "\tgoto bb{}", target.index())?;
-            }
+            writeln!(out, "{}currentState = {}", indent, target.index())?;
+            writeln!(out, "{}continue", indent)?;
         }
 
         Terminator::Branch {
@@ -450,37 +495,35 @@ fn lower_terminator(
             if_false,
         } => {
             let cond_go = operand_to_go(program, condition);
-            if use_goto {
-                writeln!(out, "\tif {} {{", cond_go)?;
-                writeln!(out, "\t\tgoto bb{}", if_true.index())?;
-                writeln!(out, "\t}} else {{")?;
-                writeln!(out, "\t\tgoto bb{}", if_false.index())?;
-                writeln!(out, "\t}}")?;
-            } else {
-                writeln!(out, "\t// Branch without goto")?;
-            }
+            writeln!(out, "{}if {} {{", indent, cond_go)?;
+            writeln!(out, "{}\tcurrentState = {}", indent, if_true.index())?;
+            writeln!(out, "{}\tcontinue", indent)?;
+            writeln!(out, "{}}} else {{", indent)?;
+            writeln!(out, "{}\tcurrentState = {}", indent, if_false.index())?;
+            writeln!(out, "{}\tcontinue", indent)?;
+            writeln!(out, "{}}}", indent)?;
         }
 
         Terminator::Return(value) => {
             if let Some(val) = value {
                 let result_expr = operand_to_string(program, val);
-                writeln!(out, "\treturn &proto.TrxRes{{")?;
-                writeln!(out, "\t\tStatus: proto.Status_Success,")?;
-                writeln!(out, "\t\tInfo:   in.Info,")?;
-                writeln!(out, "\t\tResults: []string{{{}}},", result_expr)?;
-                writeln!(out, "\t}}, nil")?;
+                writeln!(out, "{}return &proto.TrxRes{{", indent)?;
+                writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
+                writeln!(out, "{}\tInfo:   in.Info,", indent)?;
+                writeln!(out, "{}\tResults: []string{{{}}},", indent, result_expr)?;
+                writeln!(out, "{}}}, nil", indent)?;
             } else {
-                writeln!(out, "\treturn &proto.TrxRes{{")?;
-                writeln!(out, "\t\tStatus: proto.Status_Success,")?;
-                writeln!(out, "\t\tInfo:   in.Info,")?;
-                writeln!(out, "\t}}, nil")?;
+                writeln!(out, "{}return &proto.TrxRes{{", indent)?;
+                writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
+                writeln!(out, "{}\tInfo:   in.Info,", indent)?;
+                writeln!(out, "{}}}, nil", indent)?;
             }
         }
 
         Terminator::HopExit { .. } => {
             // Collect variables that are live-in at the next hop (these are live-out of current hop)
             if !next_hop_live_in.is_empty() {
-                writeln!(out, "\t// Collect live-out variables to results")?;
+                writeln!(out, "{}// Collect live-out variables to results", indent)?;
                 let mut results = Vec::new();
                 for var_id in next_hop_live_in {
                     let var_name = go_var_name(program, *var_id);
@@ -491,22 +534,27 @@ fn lower_terminator(
                     };
                     results.push(expr);
                 }
-                writeln!(out, "\treturn &proto.TrxRes{{")?;
-                writeln!(out, "\t\tStatus: proto.Status_Success,")?;
-                writeln!(out, "\t\tInfo:   in.Info,")?;
-                writeln!(out, "\t\tResults: []string{{{}}},", results.join(", "))?;
-                writeln!(out, "\t}}, nil")?;
+                writeln!(out, "{}return &proto.TrxRes{{", indent)?;
+                writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
+                writeln!(out, "{}\tInfo:   in.Info,", indent)?;
+                writeln!(
+                    out,
+                    "{}\tResults: []string{{{}}},",
+                    indent,
+                    results.join(", ")
+                )?;
+                writeln!(out, "{}}}, nil", indent)?;
                 return Ok(());
             }
             // Fallback: no live-out variables (last hop or no inter-hop dependencies)
-            writeln!(out, "\treturn &proto.TrxRes{{")?;
-            writeln!(out, "\t\tStatus: proto.Status_Success,")?;
-            writeln!(out, "\t\tInfo:   in.Info,")?;
-            writeln!(out, "\t}}, nil")?;
+            writeln!(out, "{}return &proto.TrxRes{{", indent)?;
+            writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
+            writeln!(out, "{}\tInfo:   in.Info,", indent)?;
+            writeln!(out, "{}}}, nil", indent)?;
         }
 
         Terminator::Abort => {
-            writeln!(out, "\tpanic(\"transaction aborted\")")?;
+            writeln!(out, "{}panic(\"transaction aborted\")", indent)?;
         }
     }
 
@@ -570,18 +618,13 @@ fn table_field_accessor(
 }
 
 fn ensure_var_decl(
-    out: &mut String,
+    var_decls: &mut HashMap<cfg::VariableId, String>,
     program: &cfg::Program,
-    var_decls: &mut HashMap<cfg::VariableId, bool>,
     var_id: cfg::VariableId,
-) -> Result<(), std::fmt::Error> {
-    if !var_decls.contains_key(&var_id) {
-        let var_name = go_var_name(program, var_id);
-        let go_type = go_type_string(program, program.variables[var_id].ty);
-        writeln!(out, "\tvar {} {}", var_name, go_type)?;
-        var_decls.insert(var_id, true);
-    }
-    Ok(())
+) {
+    var_decls
+        .entry(var_id)
+        .or_insert_with(|| go_type_string(program, program.variables[var_id].ty));
 }
 
 fn go_function_name(program: &cfg::Program, func_id: cfg::FunctionId) -> String {
