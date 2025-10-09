@@ -1,16 +1,33 @@
+mod gen_converters;
 mod gen_global;
+mod gen_transaction;
+mod util;
 
 use crate::cfg;
 use std::error::Error;
-use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone)]
+pub struct GoProgram {
+    pub filename: String,
+    pub content: String,
+}
+
+impl GoProgram {
+    pub fn new(filename: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            filename: filename.into(),
+            content: content.into(),
+        }
+    }
+}
 
 /// Generate Go artifacts for the optimized CFG.
 ///
-/// Currently emits `global.go` containing table definitions and helpers.
-pub fn generate_go_files(
-    program: &cfg::Program,
-    output_dir: &Path,
-) -> Result<Vec<PathBuf>, Box<dyn Error>> {
-    let global_path = gen_global::generate_global(program, output_dir)?;
-    Ok(vec![global_path])
+/// Returns an in-memory collection of files to be written by the caller.
+pub fn generate_go_code(program: &cfg::Program) -> Result<Vec<GoProgram>, Box<dyn Error>> {
+    let mut files = Vec::new();
+    files.push(gen_converters::generate_converters()?);
+    files.push(gen_global::generate_global(program)?);
+    files.extend(gen_transaction::generate_transactions(program)?);
+    Ok(files)
 }
