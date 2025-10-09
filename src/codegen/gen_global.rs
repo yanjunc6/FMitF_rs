@@ -38,6 +38,17 @@ fn build_global_source(program: &cfg::Program) -> Result<String, std::fmt::Error
     writeln!(out, "}}")?;
     writeln!(out)?;
 
+    if program.global_consts.len() > 0 {
+        writeln!(out, "const (")?;
+        for (_, global_const) in &program.global_consts {
+            let go_type = go_type_string(program, global_const.ty);
+            let literal = go_constant_literal(&global_const.init);
+            writeln!(out, "\t{} {} = {}", global_const.name, go_type, literal)?;
+        }
+        writeln!(out, ")")?;
+        writeln!(out)?;
+    }
+
     for table_id in &program.all_tables {
         let table = &program.tables[*table_id];
         let struct_name = go_type_name(&table.name);
@@ -114,4 +125,13 @@ fn go_type_name(name: &str) -> String {
 fn go_field_name(name: &str) -> String {
     // Field identifiers can remain as-is as they are already exported (upper-case)
     name.to_string()
+}
+
+fn go_constant_literal(value: &cfg::ConstantValue) -> String {
+    match value {
+        cfg::ConstantValue::Int(i) => i.to_string(),
+        cfg::ConstantValue::Float(f) => f.into_inner().to_string(),
+        cfg::ConstantValue::Bool(b) => b.to_string(),
+        cfg::ConstantValue::String(s) => format!("\"{}\"", s.escape_default()),
+    }
 }
