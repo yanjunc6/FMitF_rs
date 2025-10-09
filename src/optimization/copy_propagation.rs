@@ -4,9 +4,7 @@
 //! is known to hold the same value as another variable.
 
 use super::OptimizationPass;
-use crate::cfg::{
-    FunctionId, Instruction, InstructionKind, Operand, Program, VariableId,
-};
+use crate::cfg::{FunctionId, Instruction, InstructionKind, Operand, Program, VariableId};
 use crate::dataflow::{analyze_copies, CopyTransfer, Flat, MapLattice, StmtLoc, TransferFunction};
 
 pub struct CopyPropagationPass;
