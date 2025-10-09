@@ -4,8 +4,10 @@
 //! is known to hold the same value as another variable.
 
 use super::OptimizationPass;
-use crate::cfg::{FunctionId, Instruction, InstructionKind, Operand, Program, VariableId};
-use crate::dataflow::{analyze_copies, Flat, MapLattice, StmtLoc};
+use crate::cfg::{
+    FunctionId, Instruction, InstructionKind, Operand, Program, VariableId,
+};
+use crate::dataflow::{analyze_copies, CopyTransfer, Flat, MapLattice, StmtLoc, TransferFunction};
 
 pub struct CopyPropagationPass;
 
@@ -102,34 +104,29 @@ impl OptimizationPass for CopyPropagationPass {
     fn optimize_function(&self, program: &mut Program, func_id: FunctionId) -> bool {
         let function = &program.functions[func_id];
 
-        // Skip abstract functions (like operators)
         if matches!(function.kind, crate::cfg::FunctionKind::Operator) {
             return false;
         }
 
-        // Run copy analysis first
         let analysis_result = analyze_copies(function, program);
         let mut changed = false;
+        let transfer = CopyTransfer;
 
-        // Process each block in the function
         for &block_id in &function.all_blocks {
+            let mut state = analysis_result.block_entry.get(&block_id).cloned().unwrap();
+
             let block = &mut program.basic_blocks[block_id];
 
-            // Process each instruction
             for (idx, inst) in block.instructions.iter_mut().enumerate() {
-                // Get copy analysis result for this instruction (use entry state)
+                if Self::replace_vars_in_instruction(inst, &state) {
+                    changed = true;
+                }
+
                 let stmt_loc = StmtLoc {
                     block: block_id,
                     index: idx,
                 };
-
-                let copies = match analysis_result.stmt_entry.get(&stmt_loc) {
-                    Some(lattice) => lattice,
-                    None => continue, // Skip if no analysis result
-                };
-
-                // Replace variables with their copies in this instruction
-                changed |= Self::replace_vars_in_instruction(inst, copies);
+                state = transfer.transfer_instruction(inst, stmt_loc, &state);
             }
         }
 
