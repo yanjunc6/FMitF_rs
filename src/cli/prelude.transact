@@ -91,7 +91,7 @@
 // @intrinsic function filter<T>(list: List<T>, predicate: (T) -> bool) -> List<T>;
 // @intrinsic function reduce<T, U>(list: List<T>, func: (U, T) -> U, initial: U) -> U;
 
-@intrinsic @Boogie function length<T>(list: List<T>) -> int;
+@intrinsic @Boogie @go function length<T>(list: List<T>) -> int;
 @intrinsic @Boogie function get<T>(list: List<T>, idx: int) -> T;
 @intrinsic @Boogie function append<T>(list: List<T>, elem: T) -> List<T>;
 @intrinsic @Boogie function emptyList<T>() -> List<T>;

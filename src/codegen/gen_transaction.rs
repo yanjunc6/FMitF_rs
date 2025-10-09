@@ -25,7 +25,12 @@ pub fn generate_transactions(program: &cfg::Program) -> Result<Vec<GoProgram>, B
         let mut content = String::new();
         write_go_file_header(
             &mut content,
-            &["github.com/boltdb/bolt", "ShardDB/proto", "strconv", "fmt"],
+            &[
+                "encoding/json",
+                "github.com/boltdb/bolt",
+                "ShardDB/proto",
+                "fmt",
+            ],
         )?;
 
         writeln!(content, "type {} struct {{", struct_name)?;
@@ -122,25 +127,13 @@ fn generate_hop_function(
 
         match var_type {
             cfg::Type::Primitive(cfg::PrimitiveType::Int) => {
-                writeln!(
-                    out,
-                    "\t{}, _ := strconv.ParseUint(params[\"{}\"], 10, 64)",
-                    var_name, var_name
-                )?;
+                writeln!(out, "\t{} := toUint64(params[\"{}\"])", var_name, var_name)?;
             }
             cfg::Type::Primitive(cfg::PrimitiveType::Float) => {
-                writeln!(
-                    out,
-                    "\t{}, _ := strconv.ParseFloat(params[\"{}\"], 32)",
-                    var_name, var_name
-                )?;
+                writeln!(out, "\t{} := toFloat32(params[\"{}\"])", var_name, var_name)?;
             }
             cfg::Type::Primitive(cfg::PrimitiveType::Bool) => {
-                writeln!(
-                    out,
-                    "\t{}, _ := strconv.ParseBool(params[\"{}\"])",
-                    var_name, var_name
-                )?;
+                writeln!(out, "\t{} := toBool(params[\"{}\"])", var_name, var_name)?;
             }
             cfg::Type::Primitive(cfg::PrimitiveType::String) => {
                 writeln!(out, "\t{} := params[\"{}\"]", var_name, var_name)?;
@@ -179,6 +172,7 @@ fn generate_hop_function(
 
         // Generate label for blocks (except first if it's the only one)
         if needs_labels {
+            writeln!(out, "\tgoto bb{}", block_id.index())?;
             writeln!(out, "bb{}:", block_id.index())?;
         }
 
@@ -286,21 +280,18 @@ fn lower_instruction(
 
             // Generate unique variable names for each table access
             *table_access_count += 1;
-            let key_var = format!("keyBytes{}", table_access_count);
+            let call = format!(
+                "get{}(tx, {}Key{{ {} }})",
+                table_name,
+                table_name,
+                key_args.join(", ")
+            );
 
             if let Some(field_id) = field {
                 // Getting specific field
                 let field_info = &program.table_fields[*field_id];
                 let row_var = format!("row{}", table_access_count);
-                writeln!(
-                    out,
-                    "\t{}, {} := get{}(tx, {}Key{{ {} }})",
-                    key_var,
-                    row_var,
-                    table_name,
-                    table_name,
-                    key_args.join(", ")
-                )?;
+                writeln!(out, "\t_, {} := {}", row_var, call)?;
 
                 if !var_decls.contains_key(dest) {
                     writeln!(out, "\t{} := {}.{}", dest_name, row_var, field_info.name)?;
@@ -311,26 +302,10 @@ fn lower_instruction(
             } else {
                 // Getting entire row
                 if !var_decls.contains_key(dest) {
-                    writeln!(
-                        out,
-                        "\t{}, {} := get{}(tx, {}Key{{ {} }})",
-                        key_var,
-                        dest_name,
-                        table_name,
-                        table_name,
-                        key_args.join(", ")
-                    )?;
+                    writeln!(out, "\t_, {} := {}", dest_name, call)?;
                     var_decls.insert(*dest, true);
                 } else {
-                    writeln!(
-                        out,
-                        "\t{}, {} = get{}(tx, {}Key{{ {} }})",
-                        key_var,
-                        dest_name,
-                        table_name,
-                        table_name,
-                        key_args.join(", ")
-                    )?;
+                    writeln!(out, "\t_, {} = {}", dest_name, call)?;
                 }
             }
         }
@@ -398,20 +373,29 @@ fn lower_instruction(
             writeln!(out, "\t}}")?;
         }
 
-        InstructionKind::Call {
-            dest,
-            func,
-            args: _,
-        } => {
-            let func_info = &program.functions[*func];
-            writeln!(out, "\t\t// Call: {}", func_info.name)?;
-            writeln!(out, "\t\t// TODO: implement function call lowering")?;
+        InstructionKind::Call { dest, func, args } => {
+            let func_name = go_function_name(program, *func);
+            let call_args = args
+                .iter()
+                .map(|arg| operand_to_go(program, arg))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let call_expr = if call_args.is_empty() {
+                format!("{}()", func_name)
+            } else {
+                format!("{}({})", func_name, call_args)
+            };
+
             if let Some(dest_var) = dest {
                 let dest_name = go_var_name(program, *dest_var);
                 if !var_decls.contains_key(dest_var) {
-                    writeln!(out, "\tvar {} interface{{}}", dest_name)?;
+                    writeln!(out, "\t{} := {}", dest_name, call_expr)?;
                     var_decls.insert(*dest_var, true);
+                } else {
+                    writeln!(out, "\t{} = {}", dest_name, call_expr)?;
                 }
+            } else {
+                writeln!(out, "\t{}", call_expr)?;
             }
         }
     }
@@ -424,8 +408,8 @@ fn lower_terminator(
     program: &cfg::Program,
     term: &Terminator,
     use_goto: bool,
-    liveness: &DataflowResults<SetLattice<LiveVar>>,
-    block_id: cfg::BasicBlockId,
+    _liveness: &DataflowResults<SetLattice<LiveVar>>,
+    _block_id: cfg::BasicBlockId,
     next_hop_live_in: &[cfg::VariableId],
 ) -> Result<(), std::fmt::Error> {
     match term {
@@ -454,11 +438,11 @@ fn lower_terminator(
 
         Terminator::Return(value) => {
             if let Some(val) = value {
-                let val_go = operand_to_go(program, val);
+                let result_expr = operand_to_string(program, val);
                 writeln!(out, "\treturn &proto.TrxRes{{")?;
                 writeln!(out, "\t\tStatus: proto.Status_Success,")?;
                 writeln!(out, "\t\tInfo:   in.Info,")?;
-                writeln!(out, "\t\tResults: []string{{fmt.Sprint({})}},", val_go)?;
+                writeln!(out, "\t\tResults: []string{{{}}},", result_expr)?;
                 writeln!(out, "\t}}, nil")?;
             } else {
                 writeln!(out, "\treturn &proto.TrxRes{{")?;
@@ -474,10 +458,7 @@ fn lower_terminator(
                 writeln!(out, "\t// Collect live-out variables to results")?;
                 let results: Vec<String> = next_hop_live_in
                     .iter()
-                    .map(|var_id| {
-                        let var_name = go_var_name(program, *var_id);
-                        format!("fmt.Sprint({})", var_name)
-                    })
+                    .map(|var_id| go_var_to_string(program, *var_id))
                     .collect();
                 writeln!(out, "\treturn &proto.TrxRes{{")?;
                 writeln!(out, "\t\tStatus: proto.Status_Success,")?;
@@ -541,6 +522,70 @@ fn unary_op_to_go(op: UnaryOp) -> &'static str {
         UnaryOp::NegInt | UnaryOp::NegFloat => "-",
         UnaryOp::NotBool => "!",
     }
+}
+
+fn go_function_name(program: &cfg::Program, func_id: cfg::FunctionId) -> String {
+    let function = &program.functions[func_id];
+    if function
+        .decorators
+        .iter()
+        .any(|decorator| decorator.name == "go")
+    {
+        go_function_rename(&function.name)
+            .unwrap_or_else(|| function.name.as_str())
+            .to_string()
+    } else {
+        function.name.clone()
+    }
+}
+
+const GO_FUNCTION_RENAMES: &[(&str, &str)] = &[("length", "len")];
+
+fn go_function_rename(name: &str) -> Option<&'static str> {
+    GO_FUNCTION_RENAMES
+        .iter()
+        .find(|(from, _)| *from == name)
+        .map(|(_, to)| *to)
+}
+
+fn go_var_to_string(program: &cfg::Program, var_id: cfg::VariableId) -> String {
+    let expr = go_var_name(program, var_id);
+    let ty_id = program.variables[var_id].ty;
+    go_value_to_string(program, ty_id, &expr)
+}
+
+fn go_value_to_string(program: &cfg::Program, ty_id: cfg::TypeId, expr: &str) -> String {
+    match &program.types[ty_id] {
+        cfg::Type::Primitive(cfg::PrimitiveType::Int) => format!("fromUint64({})", expr),
+        cfg::Type::Primitive(cfg::PrimitiveType::Float) => format!("fromFloat32({})", expr),
+        cfg::Type::Primitive(cfg::PrimitiveType::Bool) => format!("fromBool({})", expr),
+        cfg::Type::Primitive(cfg::PrimitiveType::String) => expr.to_string(),
+        _ => format!("fmt.Sprint({})", expr),
+    }
+}
+
+fn operand_to_string(program: &cfg::Program, operand: &Operand) -> String {
+    match operand {
+        Operand::Variable(var_id) => go_var_to_string(program, *var_id),
+        Operand::Constant(const_val) => match const_val {
+            cfg::ConstantValue::Int(i) => format!("fromUint64(uint64({}))", i),
+            cfg::ConstantValue::Float(f) => format!("fromFloat32(float32({}))", f),
+            cfg::ConstantValue::Bool(b) => format!("fromBool({})", b),
+            cfg::ConstantValue::String(s) => go_string_literal(s),
+        },
+        Operand::Global(global_id) => {
+            let global = &program.global_consts[*global_id];
+            go_value_to_string(program, global.ty, &global.name)
+        }
+        Operand::Table(table_id) => {
+            let table = &program.tables[*table_id];
+            go_string_literal(&table.name)
+        }
+    }
+}
+
+fn go_string_literal(value: &str) -> String {
+    format!("\"{}\"", value.escape_default())
 }
 
 fn generate_next_req(
