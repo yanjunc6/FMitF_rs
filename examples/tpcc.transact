@@ -11,7 +11,9 @@ partition g(x: int, y: int) -> int {
 }
 
 // Implementation of partition is optional. It is 10 * x + (y % 10).
-partition h(x: int, y: int) -> int;
+partition h(x: int, y: int) -> int {
+    return 10 * x + (y % 10);
+}
 
 // ============================================================================
 // Tables

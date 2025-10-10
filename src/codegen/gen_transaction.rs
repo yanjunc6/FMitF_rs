@@ -1,4 +1,5 @@
 use super::{
+    state_machine::GoStateMachine,
     util::{go_type_string, go_var_name, pascal_case, snake_case, write_go_file_header},
     GoProgram,
 };
@@ -122,9 +123,8 @@ fn generate_hop_function(
     };
     next_hop_live_in.sort_by_key(|var_id| var_id.index());
 
-    let mut var_decls: HashMap<cfg::VariableId, String> = HashMap::new();
+    let mut state_machine = GoStateMachine::new(program);
     let mut initialized_vars: HashSet<cfg::VariableId> = HashSet::new();
-    let mut pre_state_init: Vec<String> = Vec::new();
 
     // Extract live-in variables from params
     for var_id in &live_in_set {
@@ -140,37 +140,36 @@ fn generate_hop_function(
             | cfg::Type::List(_) => go_type_string(program, var.ty),
             _ => String::from("interface{}"),
         };
-        var_decls
-            .entry(*var_id)
-            .or_insert_with(|| decl_type.clone());
+        state_machine.ensure_var_decl(*var_id, Some(decl_type.clone()));
 
         match var_type {
             cfg::Type::Primitive(cfg::PrimitiveType::Int) => {
-                pre_state_init.push(format!(
+                state_machine.add_pre_stmt(format!(
                     "\t{} = toUint64(params[\"{}\"])",
                     var_name, var_name
                 ));
             }
             cfg::Type::Primitive(cfg::PrimitiveType::Float) => {
-                pre_state_init.push(format!(
+                state_machine.add_pre_stmt(format!(
                     "\t{} = toFloat32(params[\"{}\"])",
                     var_name, var_name
                 ));
             }
             cfg::Type::Primitive(cfg::PrimitiveType::Bool) => {
-                pre_state_init.push(format!("\t{} = toBool(params[\"{}\"])", var_name, var_name));
+                state_machine
+                    .add_pre_stmt(format!("\t{} = toBool(params[\"{}\"])", var_name, var_name));
             }
             cfg::Type::Primitive(cfg::PrimitiveType::String) => {
-                pre_state_init.push(format!("\t{} = params[\"{}\"]", var_name, var_name));
+                state_machine.add_pre_stmt(format!("\t{} = params[\"{}\"]", var_name, var_name));
             }
             cfg::Type::List(_) => {
-                pre_state_init.push(format!(
+                state_machine.add_pre_stmt(format!(
                     "\tjson.Unmarshal([]byte(params[\"{}\"]), &{})",
                     var_name, var_name
                 ));
             }
             _ => {
-                pre_state_init.push(format!(
+                state_machine.add_pre_stmt(format!(
                     "\tjson.Unmarshal([]byte(params[\"{}\"]), &{})",
                     var_name, var_name
                 ));
@@ -181,30 +180,26 @@ fn generate_hop_function(
     }
 
     let mut table_access_count = 0;
-    let mut state_cases = String::new();
 
     // Process each basic block
     for (_bb_idx, &block_id) in hop.blocks.iter().enumerate() {
         let block = &program.basic_blocks[block_id];
+        let mut case_body = String::new();
 
-        writeln!(state_cases, "\t\tcase {}:", block_id.index())?;
-
-        // Lower each instruction
         for inst in &block.instructions {
             lower_instruction(
-                &mut state_cases,
+                &mut case_body,
                 program,
                 inst,
-                &mut var_decls,
+                &mut state_machine,
                 &mut initialized_vars,
                 &mut table_access_count,
                 "\t\t\t",
             )?;
         }
 
-        // Lower terminator
         lower_terminator(
-            &mut state_cases,
+            &mut case_body,
             program,
             &block.terminator,
             "\t\t\t",
@@ -213,39 +208,11 @@ fn generate_hop_function(
             &initialized_vars,
             &next_hop_live_in,
         )?;
-        writeln!(state_cases)?;
+        case_body.push('\n');
+        state_machine.add_case(block_id.index(), case_body);
     }
 
-    writeln!(state_cases, "\t\tdefault:")?;
-    writeln!(state_cases, "\t\t\tpanic(\"invalid state\")")?;
-
-    if !var_decls.is_empty() {
-        let mut decls: Vec<_> = var_decls
-            .iter()
-            .map(|(var_id, ty)| (*var_id, ty.clone()))
-            .collect();
-        decls.sort_by_key(|(var_id, _)| var_id.index());
-        for (var_id, ty) in decls {
-            let var_name = go_var_name(program, var_id);
-            writeln!(out, "\tvar {} {}", var_name, ty)?;
-        }
-        writeln!(out)?;
-    }
-
-    if !pre_state_init.is_empty() {
-        for line in &pre_state_init {
-            writeln!(out, "{}", line)?;
-        }
-        writeln!(out)?;
-    }
-
-    writeln!(out, "\tcurrentState := {}", entry_block.index())?;
-    writeln!(out, "\tfor {{")?;
-    writeln!(out, "\t\tswitch currentState {{")?;
-    write!(out, "{}", state_cases)?;
-    writeln!(out, "\t\t}}")?;
-    writeln!(out, "\t}}")?;
-    writeln!(out)?;
+    state_machine.render(out, entry_block.index())?;
 
     writeln!(out, "}}")?;
     writeln!(out)?;
@@ -253,11 +220,11 @@ fn generate_hop_function(
     Ok(())
 }
 
-fn lower_instruction(
+pub(super) fn lower_instruction(
     out: &mut String,
     program: &cfg::Program,
     inst: &Instruction,
-    var_decls: &mut HashMap<cfg::VariableId, String>,
+    state_machine: &mut GoStateMachine,
     initialized_vars: &mut HashSet<cfg::VariableId>,
     table_access_count: &mut usize,
     indent: &str,
@@ -267,7 +234,7 @@ fn lower_instruction(
             let dest_name = go_var_name(program, *dest);
             let src_go = operand_to_go(program, src);
 
-            ensure_var_decl(var_decls, program, *dest);
+            state_machine.ensure_var_decl(*dest, None);
             writeln!(out, "{}{} = {}", indent, dest_name, src_go)?;
             initialized_vars.insert(*dest);
         }
@@ -283,7 +250,7 @@ fn lower_instruction(
             let right_go = operand_to_go(program, right);
             let op_str = binary_op_to_go(*op);
 
-            ensure_var_decl(var_decls, program, *dest);
+            state_machine.ensure_var_decl(*dest, None);
             writeln!(
                 out,
                 "{}{} = {} {} {}",
@@ -297,7 +264,7 @@ fn lower_instruction(
             let operand_go = operand_to_go(program, operand);
             let op_str = unary_op_to_go(*op);
 
-            ensure_var_decl(var_decls, program, *dest);
+            state_machine.ensure_var_decl(*dest, None);
             writeln!(out, "{}{} = {}{}", indent, dest_name, op_str, operand_go)?;
             initialized_vars.insert(*dest);
         }
@@ -339,12 +306,12 @@ fn lower_instruction(
                 writeln!(out, "{}_, {} := {}", indent, row_var, call)?;
 
                 let field_access = table_field_accessor(program, table_info, *field_id, &row_var);
-                ensure_var_decl(var_decls, program, *dest);
+                state_machine.ensure_var_decl(*dest, None);
                 writeln!(out, "{}{} = {}", indent, dest_name, field_access)?;
                 initialized_vars.insert(*dest);
             } else {
                 // Getting entire row
-                ensure_var_decl(var_decls, program, *dest);
+                state_machine.ensure_var_decl(*dest, None);
                 writeln!(out, "{}_, {} = {}", indent, dest_name, call)?;
                 initialized_vars.insert(*dest);
             }
@@ -459,7 +426,7 @@ fn lower_instruction(
 
             if let Some(dest_var) = dest {
                 let dest_name = go_var_name(program, *dest_var);
-                ensure_var_decl(var_decls, program, *dest_var);
+                state_machine.ensure_var_decl(*dest_var, None);
                 writeln!(out, "{}{} = {}", indent, dest_name, call_expr)?;
                 initialized_vars.insert(*dest_var);
             } else if func_name == "str" {
@@ -473,7 +440,7 @@ fn lower_instruction(
     Ok(())
 }
 
-fn lower_terminator(
+pub(super) fn lower_terminator(
     out: &mut String,
     program: &cfg::Program,
     term: &Terminator,
@@ -561,7 +528,7 @@ fn lower_terminator(
     Ok(())
 }
 
-fn operand_to_go(program: &cfg::Program, operand: &Operand) -> String {
+pub(super) fn operand_to_go(program: &cfg::Program, operand: &Operand) -> String {
     match operand {
         Operand::Variable(var_id) => go_var_name(program, *var_id),
         Operand::Constant(const_val) => match const_val {
@@ -578,7 +545,7 @@ fn operand_to_go(program: &cfg::Program, operand: &Operand) -> String {
     }
 }
 
-fn binary_op_to_go(op: BinaryOp) -> &'static str {
+pub(super) fn binary_op_to_go(op: BinaryOp) -> &'static str {
     match op {
         BinaryOp::AddInt | BinaryOp::AddFloat => "+",
         BinaryOp::SubInt | BinaryOp::SubFloat => "-",
@@ -596,7 +563,7 @@ fn binary_op_to_go(op: BinaryOp) -> &'static str {
     }
 }
 
-fn unary_op_to_go(op: UnaryOp) -> &'static str {
+pub(super) fn unary_op_to_go(op: UnaryOp) -> &'static str {
     match op {
         UnaryOp::NegInt | UnaryOp::NegFloat => "-",
         UnaryOp::NotBool => "!",
@@ -617,17 +584,7 @@ fn table_field_accessor(
     }
 }
 
-fn ensure_var_decl(
-    var_decls: &mut HashMap<cfg::VariableId, String>,
-    program: &cfg::Program,
-    var_id: cfg::VariableId,
-) {
-    var_decls
-        .entry(var_id)
-        .or_insert_with(|| go_type_string(program, program.variables[var_id].ty));
-}
-
-fn go_function_name(program: &cfg::Program, func_id: cfg::FunctionId) -> String {
+pub(super) fn go_function_name(program: &cfg::Program, func_id: cfg::FunctionId) -> String {
     let function = &program.functions[func_id];
     if function
         .decorators
@@ -804,41 +761,14 @@ fn generate_next_req(
                         arg_vars.push(local_name);
                     }
 
-                    match part_func.name.as_str() {
-                        "f" => {
-                            let arg0 = arg_vars
-                                .get(0)
-                                .expect("partition f expected at least one argument");
-                            writeln!(out, "\t\tnextShard = int({} * 10)", arg0)?;
-                        }
-                        "g" => {
-                            let arg0 = arg_vars
-                                .get(0)
-                                .expect("partition g expected first argument");
-                            let arg1 = arg_vars
-                                .get(1)
-                                .expect("partition g expected second argument");
-                            writeln!(out, "\t\tnextShard = int({} * 10 + {})", arg0, arg1)?;
-                        }
-                        "h" => {
-                            let arg0 = arg_vars
-                                .get(0)
-                                .expect("partition h expected first argument");
-                            let arg1 = arg_vars
-                                .get(1)
-                                .expect("partition h expected second argument");
-                            writeln!(out, "\t\tnextShard = int({} * 10 + ({} % 10))", arg0, arg1)?;
-                        }
-                        _ => {
-                            let go_name = go_function_name(program, part_func_id);
-                            let call_expr = if arg_vars.is_empty() {
-                                format!("{}()", go_name)
-                            } else {
-                                format!("{}({})", go_name, arg_vars.join(", "))
-                            };
-                            writeln!(out, "\t\tnextShard = int({})", call_expr)?;
-                        }
-                    }
+                    let go_name = go_function_name(program, part_func_id);
+                    let call_expr = if arg_vars.is_empty() {
+                        format!("{}()", go_name)
+                    } else {
+                        format!("{}({})", go_name, arg_vars.join(", "))
+                    };
+                    writeln!(out, "\t\tpartitionValue := {}", call_expr)?;
+                    writeln!(out, "\t\tnextShard = int(partitionValue)")?;
 
                     found_partition = true;
                     break 'block_loop;

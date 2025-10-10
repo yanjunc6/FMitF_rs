@@ -1,8 +1,11 @@
 use super::{
-    util::{go_type_string, pascal_case, write_go_file_header},
+    gen_transaction::{go_function_name, lower_instruction, operand_to_go},
+    state_machine::GoStateMachine,
+    util::{go_type_string, go_var_name, pascal_case, write_go_file_header},
     GoProgram,
 };
-use crate::cfg;
+use crate::cfg::{self, FunctionKind};
+use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::Write;
 
@@ -115,7 +118,147 @@ fn build_global_source(program: &cfg::Program) -> Result<String, std::fmt::Error
         writeln!(out)?;
     }
 
+    generate_partition_functions(&mut out, program)?;
+
     Ok(out)
+}
+
+fn generate_partition_functions(
+    out: &mut String,
+    program: &cfg::Program,
+) -> Result<(), std::fmt::Error> {
+    for &function_id in &program.all_functions {
+        if matches!(program.functions[function_id].kind, FunctionKind::Partition) {
+            write_partition_function(out, program, function_id)?;
+        }
+    }
+    Ok(())
+}
+
+fn write_partition_function(
+    out: &mut String,
+    program: &cfg::Program,
+    function_id: cfg::FunctionId,
+) -> Result<(), std::fmt::Error> {
+    let function = &program.functions[function_id];
+    let go_name = go_function_name(program, function_id);
+
+    let function_type = &program.types[function.signature.ty];
+    let (param_types, return_type) = match function_type {
+        cfg::Type::Function {
+            param_types,
+            return_type,
+        } => (param_types, return_type.as_ref()),
+        other => panic!("expected function type for partition, found {:?}", other),
+    };
+
+    let params: Vec<String> = function
+        .params
+        .iter()
+        .zip(param_types.iter())
+        .map(|(var_id, ty_id)| {
+            let name = go_var_name(program, *var_id);
+            let ty = go_type_string(program, *ty_id);
+            format!("{} {}", name, ty)
+        })
+        .collect();
+
+    let return_ty = go_type_string(program, *return_type);
+
+    writeln!(
+        out,
+        "func {}({}) {} {{",
+        go_name,
+        params.join(", "),
+        return_ty
+    )?;
+
+    let entry_block = function
+        .entry_block
+        .expect("partition must have entry block");
+    let mut state_machine = GoStateMachine::new(program);
+    for &param_id in &function.params {
+        state_machine.skip_declaration(param_id);
+    }
+
+    let mut initialized_vars: HashSet<cfg::VariableId> = HashSet::new();
+    let mut table_access_count = 0usize;
+
+    for &block_id in &function.all_blocks {
+        let block = &program.basic_blocks[block_id];
+        let mut case_body = String::new();
+
+        for inst in &block.instructions {
+            lower_instruction(
+                &mut case_body,
+                program,
+                inst,
+                &mut state_machine,
+                &mut initialized_vars,
+                &mut table_access_count,
+                "\t\t\t",
+            )?;
+        }
+
+        lower_partition_terminator(&mut case_body, program, &block.terminator, "\t\t\t")?;
+        case_body.push('\n');
+        state_machine.add_case(block_id.index(), case_body);
+    }
+
+    state_machine.render(out, entry_block.index())?;
+
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+
+    Ok(())
+}
+
+fn lower_partition_terminator(
+    out: &mut String,
+    program: &cfg::Program,
+    term: &cfg::Terminator,
+    indent: &str,
+) -> Result<(), std::fmt::Error> {
+    match term {
+        cfg::Terminator::Jump(target) => {
+            writeln!(out, "{}currentState = {}", indent, target.index())?;
+            writeln!(out, "{}continue", indent)?;
+        }
+
+        cfg::Terminator::Branch {
+            condition,
+            if_true,
+            if_false,
+        } => {
+            let cond_go = operand_to_go(program, condition);
+            writeln!(out, "{}if {} {{", indent, cond_go)?;
+            writeln!(out, "{}\tcurrentState = {}", indent, if_true.index())?;
+            writeln!(out, "{}\tcontinue", indent)?;
+            writeln!(out, "{}}} else {{", indent)?;
+            writeln!(out, "{}\tcurrentState = {}", indent, if_false.index())?;
+            writeln!(out, "{}\tcontinue", indent)?;
+            writeln!(out, "{}}}", indent)?;
+        }
+
+        cfg::Terminator::Return(value) => {
+            if let Some(val) = value {
+                let expr = operand_to_go(program, val);
+                writeln!(out, "{}return {}", indent, expr)?;
+            } else {
+                writeln!(out, "{}return", indent)?;
+            }
+        }
+
+        cfg::Terminator::Abort => {
+            writeln!(out, "{}panic(\"partition aborted\")", indent)?;
+        }
+
+        cfg::Terminator::HopExit { .. } => {
+            writeln!(out, "{}panic(\"unexpected hop exit in partition\")", indent)?;
+        }
+    }
+
+    Ok(())
 }
 
 fn go_type_name(name: &str) -> String {
