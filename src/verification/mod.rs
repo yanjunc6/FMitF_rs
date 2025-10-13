@@ -2,6 +2,7 @@ pub mod Boogie;
 mod base_generator;
 pub mod commutative;
 pub mod errors;
+pub mod partition;
 mod scope;
 mod strategy;
 pub mod verify_result_process;
@@ -17,6 +18,8 @@ use errors::Results;
 pub enum VerificationType {
     /// Slice commutativity verification
     Commutative,
+    /// Hop partition consistency verification
+    HopPartition,
 }
 
 /// Simple verification manager for Boogie generation (commutative-only)
@@ -34,10 +37,14 @@ impl VerificationManager {
         sc_graph: &SCGraph,
         verification_type: VerificationType,
     ) -> Results<Vec<Boogie::BoogieProgram>> {
-        let mut commutative_manager = commutative::CommutativeVerificationManager::new();
         match verification_type {
             VerificationType::Commutative => {
+                let mut commutative_manager = commutative::CommutativeVerificationManager::new();
                 commutative_manager.generate_commutative_verification(cfg_program, sc_graph)
+            }
+            VerificationType::HopPartition => {
+                let mut partition_manager = partition::HopPartitionVerificationManager::new();
+                partition_manager.generate_partition_verification(cfg_program)
             }
         }
     }

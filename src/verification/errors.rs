@@ -14,6 +14,7 @@ pub enum VerificationErrorKind {
         function_name: String,
         table_name: String,
         partition_function_name: String,
+        hop_index: usize,
     },
     NotYetImplemented(String),
 }
@@ -78,9 +79,10 @@ impl VerificationErrorKind {
                 function_name,
                 table_name,
                 partition_function_name,
+                hop_index,
             } => format!(
-                "Function '{}' uses table '{}' with partition function '{}' with inconsistent arguments",
-                function_name, table_name, partition_function_name
+                "Function '{}' uses table '{}' within hop #{} and partition function '{}' with inconsistent arguments",
+                function_name, table_name, hop_index, partition_function_name
             ),
             VerificationErrorKind::NotYetImplemented(feature) => {
                 format!("Feature not yet implemented in verification: {}", feature)

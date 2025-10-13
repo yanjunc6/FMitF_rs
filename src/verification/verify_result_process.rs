@@ -23,31 +23,33 @@ impl VerifyResultProcessor {
                     function_id,
                     table_id,
                     partition_function_id,
+                    hop_id,
                     span,
                 } => {
                     // Get function name from CFG by finding the item at the given index
                     let function_name = cfg_program
                         .functions
                         .iter()
-                        .nth(function_id)
-                        .map(|(_, f)| f.name.clone())
+                        .find_map(|(id, f)| (id.index() == function_id).then(|| f.name.clone()))
                         .unwrap_or_else(|| format!("function_{}", function_id));
 
                     // Get table name from CFG by finding the item at the given index
                     let table_name = cfg_program
                         .tables
                         .iter()
-                        .nth(table_id)
-                        .map(|(_, t)| t.name.clone())
+                        .find_map(|(id, t)| (id.index() == table_id).then(|| t.name.clone()))
                         .unwrap_or_else(|| format!("table_{}", table_id));
 
                     // Get partition function name from CFG by finding the item at the given index
                     let partition_name = cfg_program
                         .functions
                         .iter()
-                        .nth(partition_function_id)
-                        .map(|(_, p)| p.name.clone())
+                        .find_map(|(id, p)| {
+                            (id.index() == partition_function_id).then(|| p.name.clone())
+                        })
                         .unwrap_or_else(|| format!("partition_{}", partition_function_id));
+
+                    let hop_index = hop_id;
 
                     let span = span.unwrap_or(Span::new(0, 0, "<boogie>"));
                     verification_errors.push(CompilerError::new(
@@ -55,6 +57,7 @@ impl VerifyResultProcessor {
                             function_name,
                             table_name,
                             partition_function_name: partition_name,
+                            hop_index,
                         },
                         span,
                     ));
