@@ -60,6 +60,9 @@ pub trait VerificationStrategy {
                 };
 
                 for &block_id in &block_ids {
+                    self.base()
+                        .get_mut_scope()
+                        .set_current_slice(current_hop_id.index());
                     let block = cfg_program.basic_blocks[block_id].clone();
                     let label;
                     {

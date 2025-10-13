@@ -73,6 +73,7 @@ pub enum BoogieError {
     PartitionFunctionInconsistency {
         partition_function_id: usize,
         function_id: usize,
+        hop_id: usize,
         table_id: usize,
         span: Option<Span>,
     },

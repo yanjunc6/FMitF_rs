@@ -231,9 +231,27 @@ impl Compiler {
                 current_stage,
                 total_stages,
                 || -> Result<(), Box<dyn std::error::Error>> {
-                    // 1) Generate Boogie programs for commutative verification
+                    // 1) Generate Boogie programs for all configured verification types
                     let verifier = VerificationManager::new();
-                    let programs: Vec<BoogieProgram> = verifier
+                    let mut programs: Vec<BoogieProgram> = Vec::new();
+
+                    let partition_programs = verifier
+                        .generate_verification_programs(
+                            &optimized_or_cfg_program,
+                            &sc,
+                            VerificationType::HopPartition,
+                        )
+                        .map_err(|errs| {
+                            let _ = self.reporter.report_all(&errs);
+                            let msg = format!(
+                                "Verification generation failed with {} errors",
+                                errs.len()
+                            );
+                            Box::<dyn std::error::Error>::from(msg)
+                        })?;
+                    programs.extend(partition_programs);
+
+                    let commutative_programs = verifier
                         .generate_verification_programs(
                             &optimized_or_cfg_program,
                             &sc,
@@ -248,6 +266,7 @@ impl Compiler {
                             );
                             Box::<dyn std::error::Error>::from(msg)
                         })?;
+                    programs.extend(commutative_programs);
 
                     summary.verification_total = programs.len();
                     summary.verification_pass = 0;
