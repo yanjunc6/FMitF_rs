@@ -1,6 +1,7 @@
 //! CFG Optimization Framework
 //!
 //! This module provides various optimization passes for CFG programs:
+//! - Basic block compaction (maximal blocks)
 //! - Constant propagation and folding
 //! - Dead code elimination  
 //! - Copy propagation
@@ -8,11 +9,13 @@
 
 use crate::cfg::{FunctionId, Program};
 
+mod basic_block_compaction;
 mod common_subexpression_elimination;
 mod constant_folding;
 mod copy_propagation;
 mod dead_code_elimination;
 
+pub use basic_block_compaction::BasicBlockCompactionPass;
 pub use common_subexpression_elimination::CommonSubexpressionElimination;
 pub use constant_folding::ConstantFoldingPass;
 pub use copy_propagation::CopyPropagationPass;
@@ -50,6 +53,7 @@ impl CfgOptimizer {
     /// Create a default optimizer with standard passes in recommended order
     pub fn default_passes() -> Self {
         Self::new()
+            .add_pass(Box::new(BasicBlockCompactionPass::new()))
             .add_pass(Box::new(ConstantFoldingPass::new()))
             .add_pass(Box::new(CopyPropagationPass::new()))
             .add_pass(Box::new(CommonSubexpressionElimination::new()))
