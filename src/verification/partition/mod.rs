@@ -1,8 +1,8 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::cfg::{
-    FunctionId, FunctionKind, HopId, Instruction, InstructionKind, Operand, Program as CfgProgram,
-    TableId,
+    FieldId, FunctionId, FunctionKind, HopId, Instruction, InstructionKind, Operand,
+    Program as CfgProgram, TableId, VariableId,
 };
 use crate::util::Span;
 use crate::verification::base_generator::BaseVerificationGenerator;
@@ -40,12 +40,7 @@ impl HopPartitionVerificationManager {
             let mut base = BaseVerificationGenerator::new(cfg_program);
             base.generator.program.name = format!("hop_partition_{}", function.name);
 
-            let modifies: Vec<String> = collect_modified_field_names(cfg_program, function_id)
-                .into_iter()
-                .collect();
-
-            let mut verifier =
-                HopPartitionVerifier::new(&mut base, cfg_program, function_id, modifies);
+            let mut verifier = HopPartitionVerifier::new(&mut base, cfg_program, function_id);
             let procedure = verifier.run()?;
             base.generator.program.procedures.push(procedure);
 
@@ -56,13 +51,22 @@ impl HopPartitionVerificationManager {
     }
 }
 
+#[derive(Clone)]
+struct PartitionAccess {
+    table_id: TableId,
+    operands: Vec<Operand>,
+    variable_ids: Vec<Option<VariableId>>,
+    first_span: Span,
+}
+
 struct HopPartitionVerifier<'a> {
     base: &'a mut BaseVerificationGenerator,
     cfg_program: &'a CfgProgram,
     function_id: FunctionId,
     hop_index_to_id: HashMap<SliceId, HopId>,
-    hop_partition_state: HashMap<SliceId, HashMap<FunctionId, Vec<Operand>>>,
-    modifies: Vec<String>,
+    current_slice: Option<SliceId>,
+    current_accesses: HashMap<FunctionId, PartitionAccess>,
+    modifies: BTreeSet<String>,
 }
 
 impl<'a> HopPartitionVerifier<'a> {
@@ -70,7 +74,6 @@ impl<'a> HopPartitionVerifier<'a> {
         base: &'a mut BaseVerificationGenerator,
         cfg_program: &'a CfgProgram,
         function_id: FunctionId,
-        modifies: Vec<String>,
     ) -> Self {
         let mut hop_index_to_id = HashMap::new();
         let function = &cfg_program.functions[function_id];
@@ -83,21 +86,21 @@ impl<'a> HopPartitionVerifier<'a> {
             cfg_program,
             function_id,
             hop_index_to_id,
-            hop_partition_state: HashMap::new(),
-            modifies,
+            current_slice: None,
+            current_accesses: HashMap::new(),
+            modifies: BTreeSet::new(),
         }
     }
 
     fn run(&mut self) -> Results<BoogieProcedure> {
         let function = &self.cfg_program.functions[self.function_id];
         let params = generate_procedure_params(self.cfg_program, function);
-        let modifies = self.modifies.clone();
 
         let procedure = BoogieProcedure {
             name: format!("verify_hop_partitions_{}", function.name),
             params,
             local_vars: Vec::new(),
-            modifies,
+            modifies: Vec::new(),
             lines: Vec::new(),
         };
 
@@ -112,6 +115,7 @@ impl<'a> HopPartitionVerifier<'a> {
 
         self.walk_and_verify(function, self.cfg_program)?;
 
+        // Emit epilogue labels for each hop we visited so control-flow terminators remain valid.
         let mut slice_ids: Vec<_> = self.hop_index_to_id.keys().copied().collect();
         slice_ids.sort_unstable();
         for slice_id in slice_ids {
@@ -120,26 +124,73 @@ impl<'a> HopPartitionVerifier<'a> {
             self.base.add_line(BoogieLine::Label(epilogue_label));
         }
 
+        if let Some(proc) = self.base.generator.program.procedures.last_mut() {
+            proc.modifies = self.modifies.iter().cloned().collect();
+        }
+
         self.base.generator.clear_current_procedure();
+        self.current_slice = None;
+        self.current_accesses.clear();
+        self.modifies.clear();
         let finalized = self.base.generator.program.procedures.pop().unwrap();
         Ok(finalized)
     }
 
     fn process_instruction(&mut self, instruction: &Instruction, slice_id: SliceId) -> Results<()> {
+        self.ensure_hop_context(slice_id);
         match &instruction.kind {
-            InstructionKind::TableGet { table, keys, .. }
-            | InstructionKind::TableSet { table, keys, .. } => {
-                self.record_table_access(*table, keys, slice_id, &instruction.span)
+            InstructionKind::TableGet { table, keys, .. } => {
+                self.handle_table_access(slice_id, *table, keys, &instruction.span)
+            }
+            InstructionKind::TableSet {
+                table, keys, field, ..
+            } => {
+                self.record_table_write(*table, *field);
+                self.handle_table_access(slice_id, *table, keys, &instruction.span)
             }
             _ => Ok(()),
         }
     }
 
-    fn record_table_access(
+    fn record_table_write(&mut self, table_id: TableId, field: Option<FieldId>) {
+        let table_decl = &self.cfg_program.tables[table_id];
+        let push_field = |field_id: FieldId, modifies: &mut BTreeSet<String>| {
+            let field_decl = &self.cfg_program.table_fields[field_id];
+            let name = BoogieProgramGenerator::gen_table_field_var_name(
+                &table_decl.name,
+                &field_decl.name,
+            );
+            modifies.insert(name);
+        };
+
+        match field {
+            Some(field_id) => {
+                push_field(field_id, &mut self.modifies);
+            }
+            None => {
+                for &field_id in table_decl
+                    .primary_key_fields
+                    .iter()
+                    .chain(table_decl.other_fields.iter())
+                {
+                    push_field(field_id, &mut self.modifies);
+                }
+            }
+        }
+    }
+
+    fn ensure_hop_context(&mut self, slice_id: SliceId) {
+        if self.current_slice != Some(slice_id) {
+            self.current_slice = Some(slice_id);
+            self.current_accesses.clear();
+        }
+    }
+
+    fn handle_table_access(
         &mut self,
+        slice_id: SliceId,
         table_id: TableId,
         keys: &[Operand],
-        slice_id: SliceId,
         span: &Span,
     ) -> Results<()> {
         let table = &self.cfg_program.tables[table_id];
@@ -152,27 +203,33 @@ impl<'a> HopPartitionVerifier<'a> {
             return Ok(());
         }
 
-        let previous_operands = self
-            .hop_partition_state
-            .get(&slice_id)
-            .and_then(|entries| entries.get(&partition_function_id))
-            .cloned();
-
-        if let Some(prev_ops) = previous_operands.as_ref() {
+        if let Some(previous) = self.current_accesses.get(&partition_function_id).cloned() {
             self.emit_partition_check(
                 slice_id,
                 partition_function_id,
+                &previous,
                 table_id,
-                prev_ops,
                 &partition_operands,
                 span,
             )?;
+        } else {
+            let variable_ids = partition_operands
+                .iter()
+                .map(|operand| match operand {
+                    Operand::Variable(var_id) => Some(*var_id),
+                    _ => None,
+                })
+                .collect();
+            self.current_accesses.insert(
+                partition_function_id,
+                PartitionAccess {
+                    table_id,
+                    operands: partition_operands.clone(),
+                    variable_ids,
+                    first_span: span.clone(),
+                },
+            );
         }
-
-        self.hop_partition_state
-            .entry(slice_id)
-            .or_insert_with(HashMap::new)
-            .insert(partition_function_id, partition_operands);
         Ok(())
     }
 
@@ -180,21 +237,32 @@ impl<'a> HopPartitionVerifier<'a> {
         &mut self,
         slice_id: SliceId,
         partition_function_id: FunctionId,
+        previous: &PartitionAccess,
         table_id: TableId,
-        previous_operands: &[Operand],
         current_operands: &[Operand],
         span: &Span,
     ) -> Results<()> {
-        if previous_operands.len() != current_operands.len() {
+        if previous.operands.len() != current_operands.len() {
             return Ok(());
         }
 
-        self.base.get_mut_scope().set_current_slice(slice_id);
-
         let mut comparisons = Vec::new();
-        for (prev, curr) in previous_operands.iter().zip(current_operands.iter()) {
-            let prev_expr = self.operand_expr(prev, slice_id)?;
-            let curr_expr = self.operand_expr(curr, slice_id)?;
+        for (prev, curr) in previous.operands.iter().zip(current_operands.iter()) {
+            let prev_name = self
+                .base
+                .get_operand_name(prev, slice_id, self.cfg_program)?;
+            let prev_expr =
+                self.base
+                    .generator
+                    .convert_operand(self.cfg_program, prev, prev_name)?;
+
+            let curr_name = self
+                .base
+                .get_operand_name(curr, slice_id, self.cfg_program)?;
+            let curr_expr =
+                self.base
+                    .generator
+                    .convert_operand(self.cfg_program, curr, curr_name)?;
             comparisons.push(BoogieExpr {
                 kind: BoogieExprKind::BinOp(
                     Box::new(prev_expr),
@@ -220,14 +288,32 @@ impl<'a> HopPartitionVerifier<'a> {
             None => return Ok(()),
         };
 
+        let previous_table = &self.cfg_program.tables[previous.table_id];
         let table = &self.cfg_program.tables[table_id];
         let partition_func = &self.cfg_program.functions[partition_function_id];
+        let variable_summary = previous
+            .variable_ids
+            .iter()
+            .enumerate()
+            .map(|(idx, opt_id)| match opt_id {
+                Some(var_id) => {
+                    let var = &self.cfg_program.variables[*var_id];
+                    format!("k{}={}", idx, var.name)
+                }
+                None => format!("k{}_literal", idx),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
 
         self.base.add_comment_to_current_procedure(format!(
-            "Partition check: hop {}, partition '{}', table '{}'",
+            "Partition check hop {} func '{}' tables '{}'=>'{}' keys [{}] first_span {:?} current_span {:?}",
             hop_id.index(),
             partition_func.name,
-            table.name
+            previous_table.name,
+            table.name,
+            variable_summary,
+            previous.first_span,
+            span
         ));
 
         let error_msg = ErrorMessage {
@@ -244,47 +330,6 @@ impl<'a> HopPartitionVerifier<'a> {
             .add_assertion_to_current_procedure(combined, error_msg);
 
         Ok(())
-    }
-
-    fn operand_expr(&mut self, operand: &Operand, slice_id: SliceId) -> Results<BoogieExpr> {
-        self.base.get_mut_scope().set_current_slice(slice_id);
-        match operand {
-            Operand::Variable(var_id) => {
-                let name = {
-                    let scope = self.base.get_mut_scope();
-                    scope.get_scoped_variable_name(self.cfg_program, *var_id)
-                };
-                let var_type = BoogieProgramGenerator::convert_type_id(
-                    self.cfg_program,
-                    &self.cfg_program.variables[*var_id].ty,
-                );
-                self.base
-                    .generator
-                    .ensure_local_variable_exists(&name, var_type);
-                Ok(BoogieExpr {
-                    kind: BoogieExprKind::Var(name),
-                })
-            }
-            Operand::Constant(constant) => self.base.generator.convert_constant(constant),
-            Operand::Global(global_id) => {
-                let global_const = &self.cfg_program.global_consts[*global_id];
-                if global_const.name == "__slice__" {
-                    Ok(BoogieExpr {
-                        kind: BoogieExprKind::IntConst(slice_id as i64),
-                    })
-                } else {
-                    Ok(BoogieExpr {
-                        kind: BoogieExprKind::Var(global_const.name.clone()),
-                    })
-                }
-            }
-            Operand::Table(table_id) => {
-                let table = &self.cfg_program.tables[*table_id];
-                Ok(BoogieExpr {
-                    kind: BoogieExprKind::Var(format!("TBL_{}", table.name)),
-                })
-            }
-        }
     }
 }
 
@@ -338,34 +383,4 @@ fn extract_partition_operands(
     }
 
     operands
-}
-
-fn collect_modified_field_names(
-    cfg_program: &CfgProgram,
-    function_id: FunctionId,
-) -> BTreeSet<String> {
-    let mut modifies = BTreeSet::new();
-    let function = &cfg_program.functions[function_id];
-
-    for &hop_id in &function.hops {
-        let hop = &cfg_program.hops[hop_id];
-        for &block_id in &hop.blocks {
-            let block = &cfg_program.basic_blocks[block_id];
-            for instruction in &block.instructions {
-                if let InstructionKind::TableSet { table, field, .. } = &instruction.kind {
-                    if let Some(field_id) = field {
-                        let table_decl = &cfg_program.tables[*table];
-                        let field_decl = &cfg_program.table_fields[*field_id];
-                        let name = BoogieProgramGenerator::gen_table_field_var_name(
-                            &table_decl.name,
-                            &field_decl.name,
-                        );
-                        modifies.insert(name);
-                    }
-                }
-            }
-        }
-    }
-
-    modifies
 }
