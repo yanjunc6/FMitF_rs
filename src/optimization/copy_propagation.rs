@@ -6,6 +6,7 @@
 use super::OptimizationPass;
 use crate::cfg::{FunctionId, Instruction, InstructionKind, Operand, Program, VariableId};
 use crate::dataflow::{analyze_copies, CopyTransfer, Flat, MapLattice, StmtLoc, TransferFunction};
+use std::collections::HashMap;
 
 pub struct CopyPropagationPass;
 
@@ -14,22 +15,42 @@ impl CopyPropagationPass {
         Self
     }
 
+    /// Build an inverse map from source variables to destination variables
+    /// Given the copy map stores dest -> src, we want to find src -> dest
+    fn build_inverse_map(
+        copies: &MapLattice<VariableId, VariableId>,
+    ) -> HashMap<VariableId, VariableId> {
+        let mut inverse = HashMap::new();
+        if copies.is_top() {
+            return inverse;
+        }
+
+        for (dest, flat_src) in copies.iter() {
+            if let Flat::Value(src) = flat_src {
+                // Map from source to destination
+                // Only add if src is not already mapped (keep first occurrence)
+                inverse.entry(*src).or_insert(*dest);
+            }
+        }
+        inverse
+    }
+
     fn replace_var_in_operand(
         operand: &mut Operand,
-        copies: &MapLattice<VariableId, VariableId>,
+        inverse_copies: &HashMap<VariableId, VariableId>,
     ) -> bool {
         match operand {
             Operand::Variable(var_id) => {
-                // Look for this variable in the copy relations
-                match copies.get(var_id) {
-                    Flat::Value(source_var_id) => {
-                        *operand = Operand::Variable(source_var_id);
-                        true
-                    }
-                    _ => false,
+                // Look for this variable in the inverse copy relations
+                // If this var is a source that was copied to a dest, replace with dest
+                if let Some(&dest_var_id) = inverse_copies.get(var_id) {
+                    *operand = Operand::Variable(dest_var_id);
+                    true
+                } else {
+                    false
                 }
             }
-            Operand::Constant(_) | Operand::Global(_) | Operand::Table(_) => false, // Non-variables don't need copy propagation
+            Operand::Constant(_) | Operand::Global(_) | Operand::Table(_) => false,
         }
     }
 
@@ -37,33 +58,36 @@ impl CopyPropagationPass {
         instruction: &mut Instruction,
         copies: &MapLattice<VariableId, VariableId>,
     ) -> bool {
+        // Build inverse map: src -> dest
+        let inverse_copies = Self::build_inverse_map(copies);
+
         let mut changed = false;
         match instruction {
             Instruction {
                 kind: InstructionKind::Assign { src, .. },
                 ..
             } => {
-                changed |= Self::replace_var_in_operand(src, copies);
+                changed |= Self::replace_var_in_operand(src, &inverse_copies);
             }
             Instruction {
                 kind: InstructionKind::BinaryOp { left, right, .. },
                 ..
             } => {
-                changed |= Self::replace_var_in_operand(left, copies);
-                changed |= Self::replace_var_in_operand(right, copies);
+                changed |= Self::replace_var_in_operand(left, &inverse_copies);
+                changed |= Self::replace_var_in_operand(right, &inverse_copies);
             }
             Instruction {
                 kind: InstructionKind::UnaryOp { operand, .. },
                 ..
             } => {
-                changed |= Self::replace_var_in_operand(operand, copies);
+                changed |= Self::replace_var_in_operand(operand, &inverse_copies);
             }
             Instruction {
                 kind: InstructionKind::Call { args, .. },
                 ..
             } => {
                 for arg in args.iter_mut() {
-                    changed |= Self::replace_var_in_operand(arg, copies);
+                    changed |= Self::replace_var_in_operand(arg, &inverse_copies);
                 }
             }
             Instruction {
@@ -71,7 +95,7 @@ impl CopyPropagationPass {
                 ..
             } => {
                 for key in keys.iter_mut() {
-                    changed |= Self::replace_var_in_operand(key, copies);
+                    changed |= Self::replace_var_in_operand(key, &inverse_copies);
                 }
             }
             Instruction {
@@ -79,15 +103,15 @@ impl CopyPropagationPass {
                 ..
             } => {
                 for key in keys.iter_mut() {
-                    changed |= Self::replace_var_in_operand(key, copies);
+                    changed |= Self::replace_var_in_operand(key, &inverse_copies);
                 }
-                changed |= Self::replace_var_in_operand(value, copies);
+                changed |= Self::replace_var_in_operand(value, &inverse_copies);
             }
             Instruction {
                 kind: InstructionKind::Assert { condition, .. },
                 ..
             } => {
-                changed |= Self::replace_var_in_operand(condition, copies);
+                changed |= Self::replace_var_in_operand(condition, &inverse_copies);
             }
         }
         changed
