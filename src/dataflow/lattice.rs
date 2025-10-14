@@ -184,6 +184,11 @@ where
             }
         }
     }
+
+    /// Iterate over the key-value pairs in the map
+    pub fn iter(&self) -> impl Iterator<Item = (&K, &Flat<V>)> {
+        self.map.iter()
+    }
 }
 
 /// Implementation of the generic `Lattice` trait
