@@ -369,7 +369,7 @@ impl BaseVerificationGenerator {
         Ok(lines)
     }
 
-    fn get_operand_name(
+    pub fn get_operand_name(
         &mut self,
         operand: &Operand,
         slice_id: SliceId,
