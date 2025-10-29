@@ -13,12 +13,47 @@ import (
 
 const numOrderLine = 10
 
-// --- define a chain struct for each chain
-type TPCCNewOrderChain struct {
-	db   *bolt.DB
-	hops []*Hop
+func TPCCNewOrderChainImpl(db *bolt.DB, scheds map[string]*Scheduler) *Chain {
+	// Create the list of hops
+	hops := make([]*Hop, 12)
+
+	hops[0] = &Hop{
+		id:         0,
+		hopType:    util.NormalHop,
+		isReadOnly: true,
+		process:    TPCCNewOrderWareHouseHop,
+		lock:       []*Scheduler{},
+		access:     []*Scheduler{},
+		waitHop:    map[int32]int32{},
+	}
+
+	for i := 1; i < 11; i++ {
+		hop := strconv.FormatUint(uint64(i), 10)
+		hops[i] = &Hop{
+			id:         int32(i),
+			hopType:    util.MergedHop,
+			isReadOnly: false,
+			process:    TPCCNewOrderStockHop,
+			lock:       []*Scheduler{scheds["ItemLock"+hop]}, // One scheduler for each table it access,
+			access:     []*Scheduler{scheds["ItemAccess"+hop]},
+			waitHop:    map[int32]int32{0: 1}, // key: chainId, value: hopId that it is waiting for
+		}
+	}
+	hops[1].hopType = util.MergedHopBegin
+	hops[10].hopType = util.MergedHopEnd
+
+	hops[11] = &Hop{
+		id:         11,
+		hopType:    util.NormalHop,
+		isReadOnly: false,
+		process:    TPCCNewOrderDistrictHop,
+		lock:       []*Scheduler{scheds["DistrictLock"]},
+		access:     []*Scheduler{},
+		waitHop:    map[int32]int32{0: 11},
+	}
+
+	return &Chain{db, hops, TPCCNewOrderNextReq}
 }
-// --- 
 
 
 // Define the function for each hop
@@ -142,7 +177,7 @@ func TPCCNewOrderDistrictHop(tx *bolt.Tx, in *proto.TrxReq) (*proto.TrxRes, erro
 // params: 
 // history: used for concurrency contorl, will be set with fixed steps so you don't need to care
 // shards: the number of total partitions, can be used for modular operation, like id%shards to get the corresponding nodeId
-func (_chain *TPCCNewOrderChain) NextReq(in *proto.TrxRes, params map[string]string, history []uint32,
+func TPCCNewOrderNextReq(in *proto.TrxRes, params map[string]string, history []uint32,
 	shards int) (*proto.TrxReq, map[string]string, []uint32, int) {
 	// --- Fixed steps to set up the transaction request for the next hop
 	hopId := in.Info.Hopid
@@ -205,6 +240,8 @@ func (_chain *TPCCNewOrderChain) NextReq(in *proto.TrxRes, params map[string]str
 		w, _ := strconv.ParseUint(params["wid"], 10, 64)
 		d, _ := strconv.ParseUint(params["did"], 10, 64)
 		nextShard = int(w*10 + d)
+	default:
+		return nil, params, history, 0
 	}
 
 	// Fixed steps
