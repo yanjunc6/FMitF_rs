@@ -92,6 +92,47 @@ type Stock struct {
 	S_REMOTE_CNT uint64
 }
 
+func TPCCScheds(scheds map[string]*Scheduler) {
+	// Create a sync Map for each table
+	// i.e., each table has a lock
+	itemLock := &sync.Map{}
+	districtLock := &sync.Map{}
+
+	// For each hop, create a lock scheduler for each table it access
+	// schedKey is the parameter name for that hop
+	for i := 1; i <= 10; i++ {
+		hop := strconv.FormatUint(uint64(i), 10)
+		scheds["ItemLock"+hop] = &Scheduler{
+			Name:     "ItemLock" + hop,
+			schedKey: []string{"iid" + hop, "iwid" + hop},
+			maps:     itemLock,
+		}
+	}
+
+	scheds["DistrictLock"] = &Scheduler{
+		Name:     "DistrictLock",
+		schedKey: []string{"did", "wid"},
+		maps:     districtLock,
+	}
+
+	// For IC3 approach
+	// Similar to lock, each table has an access list
+	// For hops that has conflicts, create an access scheduler for each conflict
+	itemAccess := &sync.Map{}
+	for i := 1; i <= 10; i++ {
+		hop := strconv.FormatUint(uint64(i), 10)
+		scheds["ItemAccess"+hop] = &Scheduler{
+			Name:     "ItemAccess" + hop,
+			schedKey: []string{"iid" + hop, "iwid" + hop},
+			maps:     itemAccess,
+		}
+	}
+}
+
+func TPCCChains(db *bolt.DB, scheds map[string]*Scheduler) []*Chain {
+	return []*Chain{TPCCNewOrderChainImpl(db, scheds)}
+}
+
 // Function to read a column from the database
 // tx: the pointer to the database
 // params: a map of all input parameters --- everything in string
@@ -124,8 +165,8 @@ func getDistrict(tx *bolt.Tx, params map[string]string) ([]byte, District) {
 
 	// To get the composite key
 	// First cast the string parameters back to the original type
-	wid, _ := strconv.ParseUint(in.Params["wid"], 10, 64)
-	did, _ := strconv.ParseUint(in.Params["did"], 10, 64)
+	wid, _ := strconv.ParseUint(params["wid"], 10, 64)
+	did, _ := strconv.ParseUint(params["did"], 10, 64)
 	// Then construct the composite key struct
 	dKey := DistrictKey{
 		D_ID:   did,
