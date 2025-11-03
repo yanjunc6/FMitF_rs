@@ -92,45 +92,27 @@ type Stock struct {
 	S_REMOTE_CNT uint64
 }
 
-func TPCCScheds(scheds map[string]*Scheduler) {
-	// Create a sync Map for each table
-	// i.e., each table has a lock
-	itemLock := &sync.Map{}
-	districtLock := &sync.Map{}
+func TPCCScheds() {
+	// Create one lock scheduler for each table
+	LockSchedulers["Warehouse"] = NewScheduler()
+	LockSchedulers["Item"] = NewScheduler()
+	LockSchedulers["Stock"] = NewScheduler()
+	LockSchedulers["District"] = NewScheduler()
+	LockSchedulers["NewOrder"] = NewScheduler()
+	LockSchedulers["Order"] = NewScheduler()
+	LockSchedulers["OrderLine"] = NewScheduler()
+	LockSchedulers["Customer"] = NewScheduler()
 
-	// For each hop, create a lock scheduler for each table it access
-	// schedKey is the parameter name for that hop
-	for i := 1; i <= 10; i++ {
-		hop := strconv.FormatUint(uint64(i), 10)
-		scheds["ItemLock"+hop] = &Scheduler{
-			Name:     "ItemLock" + hop,
-			schedKey: []string{"iid" + hop, "iwid" + hop},
-			maps:     itemLock,
-		}
-	}
-
-	scheds["DistrictLock"] = &Scheduler{
-		Name:     "DistrictLock",
-		schedKey: []string{"did", "wid"},
-		maps:     districtLock,
-	}
-
-	// For IC3 approach
-	// Similar to lock, each table has an access list
-	// For hops that has conflicts, create an access scheduler for each conflict
-	itemAccess := &sync.Map{}
-	for i := 1; i <= 10; i++ {
-		hop := strconv.FormatUint(uint64(i), 10)
-		scheds["ItemAccess"+hop] = &Scheduler{
-			Name:     "ItemAccess" + hop,
-			schedKey: []string{"iid" + hop, "iwid" + hop},
-			maps:     itemAccess,
-		}
-	}
+	// Create one access schedueler for each table in hops that has C-edges
+	AccessSchedulers["Item"] = NewScheduler()
+	AccessSchedulers["Stock"] = NewScheduler()
+	// I ignored district/newOrder ... here since they are in the last hop of a transaction
+	// No dependency is needed to be recorded.
 }
 
-func TPCCChains(db *bolt.DB, scheds map[string]*Scheduler) []*Chain {
-	return []*Chain{TPCCNewOrderChainImpl(db, scheds)}
+func TPCCChains(db *bolt.DB) []*Chain {
+	// Remove schedulers in this function
+	return []*Chain{TPCCNewOrderChainImpl(db)}
 }
 
 // Function to read a column from the database
