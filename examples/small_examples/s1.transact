@@ -9,25 +9,28 @@ table ACCOUNTS {
     POINTS: int;
 }
 
-transaction redeem_points(id: int)
+transaction redeem_points(id: int, points: int)
 {
     hop {
-        ACCOUNTS[ID: id].POINTS = ACCOUNTS[ID: id].POINTS - 10;
+        ACCOUNTS[ID: id].POINTS = ACCOUNTS[ID: id].POINTS - points;
     }
 }
 
-transaction apply_bonus(primary_id: int, affiliate_id: int)
+transaction apply_bonus(primary_id: int, affiliate_id: int, points: int)
 assume primary_id != affiliate_id;
+assume points > 0 && points <= 100;
 {
     hop {
-        // Check if a standard 10-point transaction would push the customer over 100 points.
-        // If so, award them an extra 10-point "milestone bonus" for becoming a premium member.
-        if (ACCOUNTS[ID: primary_id].POINTS + 10 > 100) {
-            ACCOUNTS[ID: primary_id].POINTS = ACCOUNTS[ID: primary_id].POINTS + 100;
+        // Check if a points transaction would push the customer over 100 points.
+        // If so, auto redeem 100 points.
+        ACCOUNTS[ID: primary_id].POINTS = ACCOUNTS[ID: primary_id].POINTS + points;
+        if (ACCOUNTS[ID: primary_id].POINTS >= 100) {
+            ACCOUNTS[ID: primary_id].POINTS = ACCOUNTS[ID: primary_id].POINTS - 100;
         }
     }
     hop {
         // The affiliate who brought in the customer always gets a standard 10-point commission.
-        ACCOUNTS[ID: affiliate_id].POINTS = ACCOUNTS[ID: affiliate_id].POINTS + 10;
+        ACCOUNTS[ID: affiliate_id].POINTS = ACCOUNTS[ID: affiliate_id].POINTS + points;
     }
 }
+
