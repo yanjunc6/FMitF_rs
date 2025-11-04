@@ -13,7 +13,7 @@ import (
 
 const numOrderLine = 10
 
-func TPCCNewOrderChainImpl(db *bolt.DB, scheds map[string]*Scheduler) *Chain {
+func TPCCNewOrderChainImpl(db *bolt.DB) *Chain {
 	// Create the list of hops
 	hops := make([]*Hop, 12)
 
@@ -21,9 +21,8 @@ func TPCCNewOrderChainImpl(db *bolt.DB, scheds map[string]*Scheduler) *Chain {
 		id:         0,
 		hopType:    util.NormalHop,
 		isReadOnly: true,
+		isRecordDep:false,	// Don't have c-edge, false
 		process:    TPCCNewOrderWareHouseHop,
-		lock:       []*Scheduler{},
-		access:     []*Scheduler{},
 		waitHop:    map[int32]int32{},
 	}
 
@@ -33,9 +32,8 @@ func TPCCNewOrderChainImpl(db *bolt.DB, scheds map[string]*Scheduler) *Chain {
 			id:         int32(i),
 			hopType:    util.MergedHop,
 			isReadOnly: false,
+			isRecordDep:true, // Has c-edge and not the last hop, true
 			process:    TPCCNewOrderStockHop,
-			lock:       []*Scheduler{scheds["ItemLock"+hop]}, // One scheduler for each table it access,
-			access:     []*Scheduler{scheds["ItemAccess"+hop]},
 			waitHop:    map[int32]int32{0: 1}, // key: chainId, value: hopId that it is waiting for
 		}
 	}
@@ -46,13 +44,13 @@ func TPCCNewOrderChainImpl(db *bolt.DB, scheds map[string]*Scheduler) *Chain {
 		id:         11,
 		hopType:    util.NormalHop,
 		isReadOnly: false,
+		isRecordDep:false, // Last hop of a transaction, false
 		process:    TPCCNewOrderDistrictHop,
-		lock:       []*Scheduler{scheds["DistrictLock"]},
-		access:     []*Scheduler{},
 		waitHop:    map[int32]int32{0: 11},
 	}
 
-	return &Chain{db, hops, TPCCNewOrderNextReq}
+	// add field names
+	return &Chain{db: db, hops: hops, NextReq: TPCCNewOrderNextReq}
 }
 
 
@@ -60,9 +58,15 @@ func TPCCNewOrderChainImpl(db *bolt.DB, scheds map[string]*Scheduler) *Chain {
 // tx: the database pointer
 // in: the request, mostly use "in.Params" to get parameter, or "hopId := in.Info.Hopid" to get current hop id
 func TPCCNewOrderWareHouseHop(tx *bolt.Tx, in *proto.TrxReq) (*proto.TrxRes, error) {
+	// Fixed step to setup a list of objects being accessed
+	var rwSet []*proto.RWSet
 	// Get the warehouse using function defined in global file
 	// If don't need to write back the object, ignore the first return value
-	_, warehouse := getWareHouse(tx, in.Params)
+	key, warehouse := getWareHouse(tx, in.Params)
+	// For each object/row accessed, add it to rwSet
+	// second param is the schdeuler name in TPCCScheds(), basically the table name
+	// Third param is the seriliazed key of the row, []byte
+	rwSet = AddRWSet(rwSet, "Warehouse", key)
 
 	// To return a value
 	// Convert the return value to a string and then append to result
@@ -72,14 +76,18 @@ func TPCCNewOrderWareHouseHop(tx *bolt.Tx, in *proto.TrxReq) (*proto.TrxRes, err
 
 	// Last line is basically the same
 	// If no return results, just remove "Results: results"
-	return &proto.TrxRes{Status: proto.Status_Success, Info: in.Info, Results: results}, nil
+	// Also add the rwSet to the response
+	return &proto.TrxRes{Status: proto.Status_Success, Info: in.Info, Results: results, RWSets: rwSet}, nil
 }
 
 func TPCCNewOrderStockHop(tx *bolt.Tx, in *proto.TrxReq) (*proto.TrxRes, error) {
+	var rwSet []*proto.RWSet
 	// Get item and stock
 	// We will write stock so get the first return as the key to write
-	_, item := getItem(tx, in.Params)
+	itemKeyBytes, item := getItem(tx, in.Params)
+	rwSet = AddRWSet(rwSet, "Item", itemKeyBytes)
 	stockKeyBytes, stock := getStock(tx, in.Params)
+	rwSet = AddRWSet(rwSet, "Stock", stockKeyBytes)
 
 	// Get the qty and convert it to string
 	qty, _ := strconv.ParseUint(in.Params["qty"], 10, 64)
@@ -107,15 +115,18 @@ func TPCCNewOrderStockHop(tx *bolt.Tx, in *proto.TrxReq) (*proto.TrxRes, error) 
 	var results []string
 	results = append(results, strconv.FormatFloat(float64(item.I_PRICE), 'f', 2, 32))
 
-	return &proto.TrxRes{Status: proto.Status_Success, Info: in.Info, Results: results}, nil
+	return &proto.TrxRes{Status: proto.Status_Success, Info: in.Info, Results: results, RWSets: rwSet}, nil
 }
 
 func TPCCNewOrderDistrictHop(tx *bolt.Tx, in *proto.TrxReq) (*proto.TrxRes, error) {
+	var rwSet []*proto.RWSet
+
 	wid, _ := strconv.ParseUint(in.Params["wid"], 10, 64)
 	did, _ := strconv.ParseUint(in.Params["did"], 10, 64)
 	cid, _ := strconv.ParseUint(in.Params["cid"], 10, 64)
 
 	dKey, d := getDistrict(tx, in.Params)
+	rwSet = AddRWSet(rwSet, "District", dKey)
 
 	oid := d.D_NEXT_O_ID
 	d.D_NEXT_O_ID += 1
@@ -130,6 +141,7 @@ func TPCCNewOrderDistrictHop(tx *bolt.Tx, in *proto.TrxReq) (*proto.TrxRes, erro
 	}
 	newOrderBytes, _ := json.Marshal(newOrder)
 	putData(tx.Bucket([]byte("tNewOrder")), newOrderBytes, newOrderBytes)
+	rwSet = AddRWSet(rwSet, "NewOrder", newOrderBytes)
 
 	order := Order{
 		O_KEY:       newOrder,
@@ -139,6 +151,7 @@ func TPCCNewOrderDistrictHop(tx *bolt.Tx, in *proto.TrxReq) (*proto.TrxRes, erro
 	}
 	orderBytes, _ := json.Marshal(order)
 	putData(tx.Bucket([]byte("tOrder")), newOrderBytes, orderBytes)
+	rwSet = AddRWSet(rwSet, "Order", newOrderBytes)
 
 
 	for i := 0; i < numOrderLine; i++ {
@@ -166,9 +179,10 @@ func TPCCNewOrderDistrictHop(tx *bolt.Tx, in *proto.TrxReq) (*proto.TrxRes, erro
 		orderLineKeyBytes, _ := json.Marshal(orderLineKey)
 		orderLineBytes, _ := json.Marshal(orderLine)
 		putData(tx.Bucket([]byte("tOrderLine")), orderLineKeyBytes, orderLineBytes)
+		rwSet = AddRWSet(rwSet, "OrderLine", orderLineKeyBytes)
 	}
 
-	return &proto.TrxRes{Status: proto.Status_Success, Info: in.Info}, nil
+	return &proto.TrxRes{Status: proto.Status_Success, Info: in.Info, RWSets: rwSet}, nil
 }
 
 
