@@ -55,7 +55,7 @@ pub fn generate_transactions(program: &cfg::Program) -> Result<Vec<GoProgram>, B
         }
 
         // Generate NextReq function
-        generate_next_req(&mut content, program, function_id, &struct_name)?;
+        generate_next_req(&mut content, program, function_id)?;
 
         files.push(GoProgram::new(file_name, content));
     }
@@ -670,14 +670,14 @@ fn generate_next_req(
     out: &mut String,
     program: &cfg::Program,
     function_id: cfg::FunctionId,
-    struct_name: &str,
 ) -> Result<(), std::fmt::Error> {
     let function = &program.functions[function_id];
 
+    let func_name = format!("{}NextReq", pascal_case(&function.name));
     writeln!(
         out,
-        "func (chain *{}) NextReq(in *proto.TrxRes, params map[string]string, history []uint32, shards int) (*proto.TrxReq, map[string]string, []uint32, int) {{",
-        struct_name
+        "func {}NextReq(in *proto.TrxRes, params map[string]string, history []uint32, shards int) (*proto.TrxReq, map[string]string, []uint32, int) {{",
+        func_name
     )?;
 
     writeln!(out, "\thopId := in.Info.Hopid")?;
@@ -786,7 +786,7 @@ fn generate_next_req(
     }
 
     writeln!(out, "\tdefault:")?;
-    writeln!(out, "\t\tpanic(\"invalid hop id\")")?;
+    writeln!(out, "\t\treturn nil, params, history, 0")?;
     writeln!(out, "\t}}")?;
     writeln!(out)?;
 
