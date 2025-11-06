@@ -27,7 +27,7 @@ func TPCCNewOrderChainImpl(db *bolt.DB) *Chain {
 	}
 
 	for i := 1; i < 11; i++ {
-		hop := strconv.FormatUint(uint64(i), 10)
+		// hop := strconv.FormatUint(uint64(i), 10)
 		hops[i] = &Hop{
 			id:         int32(i),
 			hopType:    util.MergedHop,
