@@ -324,6 +324,7 @@ pub enum UnaryOp {
 #[derive(Debug, Clone)]
 pub struct Table {
     pub name: String,
+    pub schedule_key_fields: Vec<FieldId>, // subset of primary key fields, used for scheduling/partitioning
     pub primary_key_fields: Vec<FieldId>,
     pub other_fields: Vec<FieldId>,
     pub node_partition: Option<FunctionId>,
