@@ -1,4 +1,4 @@
-use crate::cfg::{FunctionId, HopId};
+use crate::cfg::{FunctionId, HopId, Program};
 use std::collections::HashSet;
 
 mod sc_graph_builder;
@@ -70,5 +70,21 @@ impl Default for SCGraph {
             nodes: HashSet::new(),
             edges: Vec::new(),
         }
+    }
+}
+
+impl SCGraph {
+    /// Determines if a specific hop has any C-edges (conflict edges) in this SC-Graph.
+    /// 
+    /// This is used by codegen to set the `isRecordDep` field correctly:
+    /// - If a hop has C-edges AND is not the last hop in a transaction, isRecordDep = true
+    /// - Otherwise, isRecordDep = false
+    pub fn hop_has_c_edges(&self, function_id: FunctionId, hop_id: HopId) -> bool {
+        // Check if any edge involving this hop (across any instance) is a C-edge
+        self.edges.iter().any(|edge| {
+            matches!(edge.edge_type, EdgeType::C)
+                && ((edge.source.function_id == function_id && edge.source.hop_id == hop_id)
+                    || (edge.target.function_id == function_id && edge.target.hop_id == hop_id))
+        })
     }
 }

@@ -61,3 +61,8 @@ func putData(tx *bolt.Bucket, key []byte, value any) {
 	valueBytes, _ := json.Marshal(value)
 	tx.Put(key, valueBytes)
 }
+
+const NormalHop = 0
+const MergedHop = 1
+const MergedHopBegin = 2
+const MergedHopEnd = 3
