@@ -5,16 +5,17 @@ use super::{
     GoProgram,
 };
 use crate::cfg::{self, FunctionKind};
+use crate::sc_graph::SCGraph;
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::Write;
 
-pub(super) fn generate_global(program: &cfg::Program) -> Result<GoProgram, Box<dyn Error>> {
-    let content = build_global_source(program)?;
+pub(super) fn generate_global(program: &cfg::Program, sc_graph: &SCGraph) -> Result<GoProgram, Box<dyn Error>> {
+    let content = build_global_source(program, sc_graph)?;
     Ok(GoProgram::new("global.go", content))
 }
 
-fn build_global_source(program: &cfg::Program) -> Result<String, std::fmt::Error> {
+fn build_global_source(program: &cfg::Program, sc_graph: &SCGraph) -> Result<String, std::fmt::Error> {
     let mut out = String::new();
 
     write_go_file_header(&mut out, &["encoding/json", "github.com/boltdb/bolt"])?;
@@ -119,6 +120,9 @@ fn build_global_source(program: &cfg::Program) -> Result<String, std::fmt::Error
     }
 
     generate_partition_functions(&mut out, program)?;
+
+    generate_scheds_function(&mut out, program, sc_graph)?;
+    generate_chains_function(&mut out, program)?;
 
     Ok(out)
 }
@@ -277,4 +281,100 @@ fn go_constant_literal(value: &cfg::ConstantValue) -> String {
         cfg::ConstantValue::Bool(b) => b.to_string(),
         cfg::ConstantValue::String(s) => format!("\"{}\"", s.escape_default()),
     }
+}
+
+fn generate_scheds_function(
+    out: &mut String,
+    program: &cfg::Program,
+    sc_graph: &SCGraph,
+) -> Result<(), std::fmt::Error> {
+    // Determine which tables have C-edges
+    let mut tables_with_c_edges: HashSet<cfg::TableId> = HashSet::new();
+    
+    for &function_id in &program.all_transactions {
+        let function = &program.functions[function_id];
+        for &hop_id in &function.hops {
+            let hop = &program.hops[hop_id];
+            
+            // Check if this hop has C-edges
+            if sc_graph.hop_has_c_edges(function_id, hop_id) {
+                // Find all tables accessed in this hop
+                for &block_id in &hop.blocks {
+                    let block = &program.basic_blocks[block_id];
+                    for inst in &block.instructions {
+                        match &inst.kind {
+                            cfg::InstructionKind::TableGet { table, .. }
+                            | cfg::InstructionKind::TableSet { table, .. } => {
+                                tables_with_c_edges.insert(*table);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    writeln!(out, "func Scheds() {{")?;
+    writeln!(out, "\t// Initialize scheduler maps")?;
+    writeln!(out, "\tLockSchedulers = make(map[string]*Scheduler)")?;
+    writeln!(out, "\tAccessSchedulers = make(map[string]*Scheduler)")?;
+    writeln!(out, "\tAccessDSchedulers = make(map[string]*Scheduler)")?;
+    writeln!(out)?;
+    
+    writeln!(out, "\t// Create one lock scheduler for each table")?;
+    for &table_id in &program.all_tables {
+        let table = &program.tables[table_id];
+        let table_name = go_type_name(&table.name);
+        writeln!(out, "\tLockSchedulers[\"{}\"] = NewScheduler()", table_name)?;
+    }
+    writeln!(out)?;
+
+    if !tables_with_c_edges.is_empty() {
+        writeln!(out, "\t// Create one access scheduler for each table in hops that has C-edges")?;
+        for &table_id in &program.all_tables {
+            if tables_with_c_edges.contains(&table_id) {
+                let table = &program.tables[table_id];
+                let table_name = go_type_name(&table.name);
+                writeln!(out, "\tAccessSchedulers[\"{}\"] = NewScheduler()", table_name)?;
+            }
+        }
+    }
+    
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+
+    Ok(())
+}
+
+fn generate_chains_function(
+    out: &mut String,
+    program: &cfg::Program,
+) -> Result<(), std::fmt::Error> {
+    writeln!(out, "func Chains(db *bolt.DB) []*Chain {{")?;
+    
+    let chain_calls: Vec<String> = program
+        .all_transactions
+        .iter()
+        .map(|&function_id| {
+            let function = &program.functions[function_id];
+            let func_name = pascal_case(&function.name);
+            format!("{}ChainImpl(db)", func_name)
+        })
+        .collect();
+    
+    if chain_calls.is_empty() {
+        writeln!(out, "\treturn []*Chain{{}}")?;
+    } else {
+        writeln!(out, "\treturn []*Chain{{")?;
+        for call in chain_calls {
+            writeln!(out, "\t\t{},", call)?;
+        }
+        writeln!(out, "\t}}")?;
+    }
+    
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+
+    Ok(())
 }

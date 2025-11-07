@@ -8,11 +8,12 @@ use crate::cfg::{
     UnaryOp,
 };
 use crate::dataflow::{analyze_live_variables, DataflowResults, LiveVar, SetLattice};
+use crate::sc_graph::SCGraph;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::Write;
 
-pub fn generate_transactions(program: &cfg::Program) -> Result<Vec<GoProgram>, Box<dyn Error>> {
+pub fn generate_transactions(program: &cfg::Program, sc_graph: &SCGraph) -> Result<Vec<GoProgram>, Box<dyn Error>> {
     let mut files = Vec::new();
 
     for &function_id in &program.all_transactions {
@@ -57,6 +58,9 @@ pub fn generate_transactions(program: &cfg::Program) -> Result<Vec<GoProgram>, B
         // Generate NextReq function
         generate_next_req(&mut content, program, function_id)?;
 
+        // Generate ChainImpl function
+        generate_chain_impl(&mut content, program, sc_graph, function_id)?;
+
         files.push(GoProgram::new(file_name, content));
     }
 
@@ -89,6 +93,7 @@ fn generate_hop_function(
         hop_name
     )?;
 
+    writeln!(out, "\tvar rwSet []*proto.RWSet")?;
     writeln!(out, "\tparams := in.Params")?;
     writeln!(out)?;
 
@@ -303,7 +308,10 @@ pub(super) fn lower_instruction(
             if let Some(field_id) = field {
                 // Getting specific field
                 let row_var = format!("row{}", table_access_count);
-                writeln!(out, "{}_, {} := {}", indent, row_var, call)?;
+                let key_var = format!("keyBytes{}", table_access_count);
+                writeln!(out, "{}{}, {} := {}", indent, key_var, row_var, call)?;
+                // Add to rwSet
+                writeln!(out, "{}rwSet = AddRWSet(rwSet, \"{}\", {})", indent, table_name, key_var)?;
 
                 let field_access = table_field_accessor(program, table_info, *field_id, &row_var);
                 state_machine.ensure_var_decl(*dest, None);
@@ -311,8 +319,11 @@ pub(super) fn lower_instruction(
                 initialized_vars.insert(*dest);
             } else {
                 // Getting entire row
+                let key_var = format!("keyBytes{}", table_access_count);
                 state_machine.ensure_var_decl(*dest, None);
-                writeln!(out, "{}_, {} = {}", indent, dest_name, call)?;
+                writeln!(out, "{}{}, {} = {}", indent, key_var, dest_name, call)?;
+                // Add to rwSet
+                writeln!(out, "{}rwSet = AddRWSet(rwSet, \"{}\", {})", indent, table_name, key_var)?;
                 initialized_vars.insert(*dest);
             }
         }
@@ -353,6 +364,9 @@ pub(super) fn lower_instruction(
                 table_name,
                 key_args.join(", ")
             )?;
+            
+            // Add to rwSet
+            writeln!(out, "{}rwSet = AddRWSet(rwSet, \"{}\", {})", indent, table_name, key_var)?;
 
             if let Some(field_id) = field {
                 // Setting specific field
@@ -478,11 +492,13 @@ pub(super) fn lower_terminator(
                 writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
                 writeln!(out, "{}\tInfo:   in.Info,", indent)?;
                 writeln!(out, "{}\tResults: []string{{{}}},", indent, result_expr)?;
+                writeln!(out, "{}\tRWSets: rwSet,", indent)?;
                 writeln!(out, "{}}}, nil", indent)?;
             } else {
                 writeln!(out, "{}return &proto.TrxRes{{", indent)?;
                 writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
                 writeln!(out, "{}\tInfo:   in.Info,", indent)?;
+                writeln!(out, "{}\tRWSets: rwSet,", indent)?;
                 writeln!(out, "{}}}, nil", indent)?;
             }
         }
@@ -510,6 +526,7 @@ pub(super) fn lower_terminator(
                     indent,
                     results.join(", ")
                 )?;
+                writeln!(out, "{}\tRWSets: rwSet,", indent)?;
                 writeln!(out, "{}}}, nil", indent)?;
                 return Ok(());
             }
@@ -517,6 +534,7 @@ pub(super) fn lower_terminator(
             writeln!(out, "{}return &proto.TrxRes{{", indent)?;
             writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
             writeln!(out, "{}\tInfo:   in.Info,", indent)?;
+            writeln!(out, "{}\tRWSets: rwSet,", indent)?;
             writeln!(out, "{}}}, nil", indent)?;
         }
 
@@ -673,7 +691,7 @@ fn generate_next_req(
 ) -> Result<(), std::fmt::Error> {
     let function = &program.functions[function_id];
 
-    let func_name = format!("{}NextReq", pascal_case(&function.name));
+    let func_name = pascal_case(&function.name);
     writeln!(
         out,
         "func {}NextReq(in *proto.TrxRes, params map[string]string, history []uint32, shards int) (*proto.TrxReq, map[string]string, []uint32, int) {{",
@@ -797,6 +815,61 @@ fn generate_next_req(
     writeln!(out, "\treq.Dependency = in.Dependency")?;
     writeln!(out, "\treturn req, params, history, nextShard")?;
     writeln!(out, "}}")?;
+    writeln!(out)?;
+
+    Ok(())
+}
+
+fn generate_chain_impl(
+    out: &mut String,
+    program: &cfg::Program,
+    sc_graph: &SCGraph,
+    function_id: cfg::FunctionId,
+) -> Result<(), std::fmt::Error> {
+    let function = &program.functions[function_id];
+    let func_name = pascal_case(&function.name);
+
+    writeln!(out, "func {}ChainImpl(db *bolt.DB) *Chain {{", func_name)?;
+    writeln!(out, "\t// Create the list of hops")?;
+    writeln!(out, "\thops := make([]*Hop, {})", function.hops.len())?;
+    writeln!(out)?;
+
+    // For each hop, determine its type
+    for (hop_index, &hop_id) in function.hops.iter().enumerate() {
+        let is_read_only = sc_graph.hop_is_read_only(program, function_id, hop_id);
+        let has_c_edges = sc_graph.hop_has_c_edges(function_id, hop_id);
+        let is_last_hop = hop_index == function.hops.len() - 1;
+        let is_record_dep = has_c_edges && !is_last_hop;
+
+        // Determine hop type
+        let hop_type = "util.NormalHop"; // Default to NormalHop for now
+        
+        // Process function name
+        let process_func = format!("{}Hop{}", func_name, hop_index);
+
+        // waitHop map - for now, empty for first hop, otherwise based on previous hop
+        let wait_hop = if hop_index == 0 {
+            "map[int32]int32{}".to_string()
+        } else {
+            // For now, wait for the same chain at the previous hop
+            format!("map[int32]int32{{0: {}}}", hop_index)
+        };
+
+        writeln!(out, "\thops[{}] = &Hop{{", hop_index)?;
+        writeln!(out, "\t\tid:         {},", hop_index)?;
+        writeln!(out, "\t\thopType:    {},", hop_type)?;
+        writeln!(out, "\t\tisReadOnly: {},", is_read_only)?;
+        writeln!(out, "\t\tisRecordDep:{},", is_record_dep)?;
+        writeln!(out, "\t\tprocess:    {},", process_func)?;
+        writeln!(out, "\t\twaitHop:    {},", wait_hop)?;
+        writeln!(out, "\t}}")?;
+        writeln!(out)?;
+    }
+
+    writeln!(out, "\t// add field names")?;
+    writeln!(out, "\treturn &Chain{{db: db, hops: hops, NextReq: {}NextReq}}", func_name)?;
+    writeln!(out, "}}")?;
+    writeln!(out)?;
 
     Ok(())
 }
