@@ -9,7 +9,7 @@ use crate::ast::{self, CallableDecl};
 use crate::cfg;
 use crate::util::Span;
 use ordered_float::OrderedFloat;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // ============================================================================
 // --- Main Builder Entry Point
@@ -182,6 +182,7 @@ impl CfgBuilder {
             // Create the CFG table shell with empty invariants; fields will be populated below
             let cfg_table = cfg::Table {
                 name: ast_table.name.name.clone(),
+                schedule_key_fields: Vec::new(),
                 primary_key_fields: Vec::new(),
                 other_fields: Vec::new(),
                 node_partition: None,
@@ -413,6 +414,8 @@ impl CfgBuilder {
                     let cfg_part_func_id = self.func_map[ast_part_func_id];
                     self.cfg.tables[cfg_table_id].node_partition = Some(cfg_part_func_id);
 
+                    let mut schedule_fields: HashSet<cfg::FieldId> = HashSet::new();
+
                     for arg_expr_id in &node.args {
                         match &self.ast.expressions[*arg_expr_id] {
                             ast::Expression::Identifier {
@@ -425,6 +428,7 @@ impl CfgBuilder {
                                     self.cfg.tables[cfg_table_id]
                                         .node_partition_args
                                         .push(self.field_map[field_id]);
+                                    schedule_fields.insert(self.field_map[field_id]);
                                 } else {
                                     // For now, just skip non-field identifiers
                                     // This could be expanded to handle other identifier types
@@ -440,6 +444,9 @@ impl CfgBuilder {
                             }
                         }
                     }
+
+                    self.cfg.tables[cfg_table_id].schedule_key_fields =
+                        schedule_fields.into_iter().collect();
                 }
             }
         }

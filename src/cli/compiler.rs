@@ -529,7 +529,7 @@ impl Compiler {
             current_stage,
             total_stages,
             || -> Result<(), Box<dyn std::error::Error>> {
-                let generated_go_programs = codegen::generate_go_code(&optimized_or_cfg_program)?;
+                let generated_go_programs = codegen::generate_go_code(&optimized_or_cfg_program, &sc)?;
 
                 let go_dir = output_dir.join("go");
                 if go_dir.exists() {
