@@ -57,11 +57,6 @@ func AddRWSet(rwSet []*proto.RWSet, tableName string, key []byte) []*proto.RWSet
 	return append(rwSet, &proto.RWSet{TableName: tableName, Key: string(key)})
 }
 
-func putData(tx *bolt.Bucket, key []byte, value any) {
-	valueBytes, _ := json.Marshal(value)
-	tx.Put(key, valueBytes)
-}
-
 const NormalHop = 0
 const MergedHop = 1
 const MergedHopBegin = 2
