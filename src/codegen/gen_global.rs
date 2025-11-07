@@ -116,6 +116,39 @@ fn build_global_source(program: &cfg::Program, sc_graph: &SCGraph) -> Result<Str
         writeln!(out, "\tputData(bucket, mustJSON(key), mustJSON(row))")?;
         writeln!(out, "}}")?;
         writeln!(out)?;
+
+        // Generate partition versions of table access functions
+        if let Some(part_func_id) = table.node_partition {
+            // getPar function - returns partition instead of reading data
+            writeln!(
+                out,
+                "func get{}Par(key {}) uint64 {{",
+                struct_name, key_struct_name
+            )?;
+            writeln!(out, "\t// Call partition function to determine shard")?;
+            
+            // Build call arguments using node_partition_args
+            let call_args: Vec<String> = table.node_partition_args.iter().map(|field_id| {
+                let field = &program.table_fields[*field_id];
+                format!("key.{}", field.name)
+            }).collect();
+            
+            let go_part_func_name = go_function_name(program, part_func_id);
+            writeln!(out, "\treturn {}({})", go_part_func_name, call_args.join(", "))?;
+            writeln!(out, "}}")?;
+            writeln!(out)?;
+
+            // putPar function - also just returns partition (no difference for partition calculation)
+            writeln!(
+                out,
+                "func put{}Par(key {}) uint64 {{",
+                struct_name, key_struct_name
+            )?;
+            writeln!(out, "\t// Call partition function to determine shard")?;
+            writeln!(out, "\treturn {}({})", go_part_func_name, call_args.join(", "))?;
+            writeln!(out, "}}")?;
+            writeln!(out)?;
+        }
     }
 
     generate_partition_functions(&mut out, program)?;
@@ -214,6 +247,10 @@ fn write_partition_function(
 
     // Collect used labels
     let used_labels = collect_used_labels_partition(program, function);
+
+    // Add initial goto to entry block to ensure all labels are reachable
+    writeln!(out, "\tgoto BB{}", entry_block.index())?;
+    writeln!(out)?;
 
     // Generate basic blocks with goto labels
     for &block_id in &function.all_blocks {
