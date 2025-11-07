@@ -21,9 +21,8 @@ func TPCCNewOrderChainImpl(db *bolt.DB) *Chain {
 		id:         0,
 		hopType:    util.NormalHop,
 		isReadOnly: true,
-		isRecordDep:false,	// Don't have c-edge, false
 		process:    TPCCNewOrderWareHouseHop,
-		waitHop:    map[int32]int32{},
+		conflicts:  map[int32]int32{},
 	}
 
 	for i := 1; i < 11; i++ {
@@ -32,9 +31,8 @@ func TPCCNewOrderChainImpl(db *bolt.DB) *Chain {
 			id:         int32(i),
 			hopType:    util.MergedHop,
 			isReadOnly: false,
-			isRecordDep:true, // Has c-edge and not the last hop, true
 			process:    TPCCNewOrderStockHop,
-			waitHop:    map[int32]int32{0: 1}, // key: chainId, value: hopId that it is waiting for
+			conflicts:    map[int32]int32{0: int32(i)},
 		}
 	}
 	hops[1].hopType = util.MergedHopBegin
@@ -44,9 +42,8 @@ func TPCCNewOrderChainImpl(db *bolt.DB) *Chain {
 		id:         11,
 		hopType:    util.NormalHop,
 		isReadOnly: false,
-		isRecordDep:false, // Last hop of a transaction, false
 		process:    TPCCNewOrderDistrictHop,
-		waitHop:    map[int32]int32{0: 11},
+		conflicts:  map[int32]int32{0: 11},
 	}
 
 	// add field names
