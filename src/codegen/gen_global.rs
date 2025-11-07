@@ -1,10 +1,9 @@
 use super::{
-    gen_transaction::{go_function_name, lower_instruction, operand_to_go},
-    state_machine::GoStateMachine,
+    gen_transaction::{go_function_name, lower_instruction_goto, operand_to_go},
     util::{go_type_string, go_var_name, pascal_case, write_go_file_header},
     GoProgram,
 };
-use crate::cfg::{self, FunctionKind};
+use crate::cfg::{self, FunctionKind, InstructionKind};
 use crate::sc_graph::SCGraph;
 use std::collections::HashSet;
 use std::error::Error;
@@ -180,36 +179,59 @@ fn write_partition_function(
     let entry_block = function
         .entry_block
         .expect("partition must have entry block");
-    let mut state_machine = GoStateMachine::new(program);
-    for &param_id in &function.params {
-        state_machine.skip_declaration(param_id);
-    }
 
-    let mut initialized_vars: HashSet<cfg::VariableId> = HashSet::new();
-    let mut table_access_count = 0usize;
-
+    // Collect all variable declarations (excluding parameters)
+    let mut var_decls: HashSet<cfg::VariableId> = HashSet::new();
     for &block_id in &function.all_blocks {
         let block = &program.basic_blocks[block_id];
-        let mut case_body = String::new();
-
         for inst in &block.instructions {
-            lower_instruction(
-                &mut case_body,
-                program,
-                inst,
-                &mut state_machine,
-                &mut initialized_vars,
-                &mut table_access_count,
-                "\t\t\t",
-            )?;
+            match &inst.kind {
+                InstructionKind::Assign { dest, .. }
+                | InstructionKind::BinaryOp { dest, .. }
+                | InstructionKind::UnaryOp { dest, .. }
+                | InstructionKind::TableGet { dest, .. } => {
+                    if !function.params.contains(dest) {
+                        var_decls.insert(*dest);
+                    }
+                }
+                InstructionKind::Call { dest: Some(dest), .. } => {
+                    if !function.params.contains(dest) {
+                        var_decls.insert(*dest);
+                    }
+                }
+                _ => {}
+            }
         }
-
-        lower_partition_terminator(&mut case_body, program, &block.terminator, "\t\t\t")?;
-        case_body.push('\n');
-        state_machine.add_case(block_id.index(), case_body);
     }
 
-    state_machine.render(out, entry_block.index())?;
+    // Emit variable declarations
+    for &var_id in &var_decls {
+        let var_name = go_var_name(program, var_id);
+        let var_type = &program.variables[var_id].ty;
+        let type_str = go_type_string(program, *var_type);
+        writeln!(out, "\tvar {} {}", var_name, type_str)?;
+    }
+
+    // Collect used labels
+    let used_labels = collect_used_labels_partition(program, function);
+
+    // Generate basic blocks with goto labels
+    for &block_id in &function.all_blocks {
+        let block = &program.basic_blocks[block_id];
+        
+        // Only emit label if it's used or it's the entry block
+        if used_labels.contains(&block_id.index()) || block_id == entry_block {
+            writeln!(out, "BB{}:", block_id.index())?;
+        }
+
+        // Emit instructions
+        for inst in &block.instructions {
+            lower_instruction_partition(out, program, inst, "\t")?;
+        }
+
+        // Emit terminator
+        lower_partition_terminator_goto(out, program, &block.terminator, "\t")?;
+    }
 
     writeln!(out, "}}")?;
     writeln!(out)?;
@@ -217,7 +239,65 @@ fn write_partition_function(
     Ok(())
 }
 
-fn lower_partition_terminator(
+// Helper to collect used labels for partition functions
+fn collect_used_labels_partition(
+    program: &cfg::Program,
+    function: &cfg::Function,
+) -> HashSet<usize> {
+    let mut used: HashSet<usize> = HashSet::new();
+    for &block_id in &function.all_blocks {
+        let block = &program.basic_blocks[block_id];
+        match &block.terminator {
+            cfg::Terminator::Jump(target) => {
+                used.insert(target.index());
+            }
+            cfg::Terminator::Branch { if_true, if_false, .. } => {
+                used.insert(if_true.index());
+                used.insert(if_false.index());
+            }
+            _ => {}
+        }
+    }
+    used
+}
+
+// Lower instruction for partition functions (no table access tracking)
+fn lower_instruction_partition(
+    out: &mut String,
+    program: &cfg::Program,
+    inst: &cfg::Instruction,
+    indent: &str,
+) -> Result<(), std::fmt::Error> {
+    // For partition functions, we stop at the first table access and return
+    match &inst.kind {
+        InstructionKind::TableGet { .. } | InstructionKind::TableSet { .. } => {
+            // At first table access, calculate partition and return
+            // This will be filled in properly when we know the partition logic
+            writeln!(out, "{}// First table access - calculate partition", indent)?;
+            writeln!(out, "{}if true {{", indent)?;
+            writeln!(out, "{}\treturn 0 // TODO: call partition function", indent)?;
+            writeln!(out, "{}}}", indent)?;
+        }
+        _ => {
+            // For other instructions, use the goto-based lowering without table access tracking
+            let mut temp_out = String::new();
+            let mut initialized_vars = HashSet::new();
+            let mut table_access_count = 0usize;
+            lower_instruction_goto(
+                &mut temp_out,
+                program,
+                inst,
+                &mut initialized_vars,
+                &mut table_access_count,
+                indent,
+            )?;
+            out.push_str(&temp_out);
+        }
+    }
+    Ok(())
+}
+
+fn lower_partition_terminator_goto(
     out: &mut String,
     program: &cfg::Program,
     term: &cfg::Terminator,
@@ -225,8 +305,7 @@ fn lower_partition_terminator(
 ) -> Result<(), std::fmt::Error> {
     match term {
         cfg::Terminator::Jump(target) => {
-            writeln!(out, "{}currentState = {}", indent, target.index())?;
-            writeln!(out, "{}continue", indent)?;
+            writeln!(out, "{}goto BB{}", indent, target.index())?;
         }
 
         cfg::Terminator::Branch {
@@ -236,11 +315,9 @@ fn lower_partition_terminator(
         } => {
             let cond_go = operand_to_go(program, condition);
             writeln!(out, "{}if {} {{", indent, cond_go)?;
-            writeln!(out, "{}\tcurrentState = {}", indent, if_true.index())?;
-            writeln!(out, "{}\tcontinue", indent)?;
+            writeln!(out, "{}\tgoto BB{}", indent, if_true.index())?;
             writeln!(out, "{}}} else {{", indent)?;
-            writeln!(out, "{}\tcurrentState = {}", indent, if_false.index())?;
-            writeln!(out, "{}\tcontinue", indent)?;
+            writeln!(out, "{}\tgoto BB{}", indent, if_false.index())?;
             writeln!(out, "{}}}", indent)?;
         }
 

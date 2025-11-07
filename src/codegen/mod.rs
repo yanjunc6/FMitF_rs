@@ -2,7 +2,6 @@ mod gen_converters;
 mod gen_global;
 mod gen_transaction;
 mod gen_util;
-mod state_machine;
 mod util;
 
 use crate::cfg;

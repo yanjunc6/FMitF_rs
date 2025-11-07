@@ -1,5 +1,4 @@
 use super::{
-    state_machine::GoStateMachine,
     util::{go_type_string, go_var_name, pascal_case, snake_case, write_go_file_header},
     GoProgram,
 };
@@ -7,7 +6,7 @@ use crate::cfg::{
     self, BinaryOp, ConstantValue, FunctionKind, Instruction, InstructionKind, Operand, Terminator,
     UnaryOp,
 };
-use crate::dataflow::{analyze_live_variables, DataflowResults, LiveVar, SetLattice};
+use crate::dataflow::{analyze_live_variables, analyze_table_mod_ref, AccessType, LiveVar};
 use crate::sc_graph::SCGraph;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -128,13 +127,13 @@ fn generate_hop_function(
     };
     next_hop_live_in.sort_by_key(|var_id| var_id.index());
 
-    let mut state_machine = GoStateMachine::new(program);
+    // Collect all variables that need declaration
+    let mut var_decls: HashMap<cfg::VariableId, String> = HashMap::new();
     let mut initialized_vars: HashSet<cfg::VariableId> = HashSet::new();
 
-    // Extract live-in variables from params
+    // Declare live-in variables
     for var_id in &live_in_set {
         let var = &program.variables[*var_id];
-        let var_name = go_var_name(program, *var_id);
         let var_type = &program.types[var.ty];
 
         let decl_type = match var_type {
@@ -145,79 +144,126 @@ fn generate_hop_function(
             | cfg::Type::List(_) => go_type_string(program, var.ty),
             _ => String::from("interface{}"),
         };
-        state_machine.ensure_var_decl(*var_id, Some(decl_type.clone()));
+        var_decls.insert(*var_id, decl_type);
+    }
+
+    // Collect variables from all instructions in the hop
+    for &block_id in &hop.blocks {
+        let block = &program.basic_blocks[block_id];
+        for inst in &block.instructions {
+            collect_var_decls_from_instruction(program, inst, &mut var_decls);
+        }
+    }
+
+    // Output variable declarations
+    if !var_decls.is_empty() {
+        let mut decls: Vec<_> = var_decls.iter().collect();
+        decls.sort_by_key(|(var_id, _)| var_id.index());
+        for (var_id, ty) in decls {
+            let var_name = go_var_name(program, *var_id);
+            writeln!(out, "\tvar {} {}", var_name, ty)?;
+        }
+        writeln!(out)?;
+    }
+
+    // Extract live-in variables from params
+    for var_id in &live_in_set {
+        let var = &program.variables[*var_id];
+        let var_name = go_var_name(program, *var_id);
+        let var_type = &program.types[var.ty];
 
         match var_type {
             cfg::Type::Primitive(cfg::PrimitiveType::Int) => {
-                state_machine.add_pre_stmt(format!(
-                    "\t{} = toUint64(params[\"{}\"])",
-                    var_name, var_name
-                ));
+                writeln!(out, "\t{} = toUint64(params[\"{}\"])", var_name, var_name)?;
             }
             cfg::Type::Primitive(cfg::PrimitiveType::Float) => {
-                state_machine.add_pre_stmt(format!(
-                    "\t{} = toFloat32(params[\"{}\"])",
-                    var_name, var_name
-                ));
+                writeln!(out, "\t{} = toFloat32(params[\"{}\"])", var_name, var_name)?;
             }
             cfg::Type::Primitive(cfg::PrimitiveType::Bool) => {
-                state_machine
-                    .add_pre_stmt(format!("\t{} = toBool(params[\"{}\"])", var_name, var_name));
+                writeln!(out, "\t{} = toBool(params[\"{}\"])", var_name, var_name)?;
             }
             cfg::Type::Primitive(cfg::PrimitiveType::String) => {
-                state_machine.add_pre_stmt(format!("\t{} = params[\"{}\"]", var_name, var_name));
+                writeln!(out, "\t{} = params[\"{}\"]", var_name, var_name)?;
             }
             cfg::Type::List(_) => {
-                state_machine.add_pre_stmt(format!(
-                    "\tjson.Unmarshal([]byte(params[\"{}\"]), &{})",
-                    var_name, var_name
-                ));
+                writeln!(out, "\tjson.Unmarshal([]byte(params[\"{}\"]), &{})", var_name, var_name)?;
             }
             _ => {
-                state_machine.add_pre_stmt(format!(
-                    "\tjson.Unmarshal([]byte(params[\"{}\"]), &{})",
-                    var_name, var_name
-                ));
+                writeln!(out, "\tjson.Unmarshal([]byte(params[\"{}\"]), &{})", var_name, var_name)?;
             }
         }
 
         initialized_vars.insert(*var_id);
     }
+    
+    if !live_in_set.is_empty() {
+        writeln!(out)?;
+    }
 
     let mut table_access_count = 0;
 
-    // Process each basic block
-    for (_bb_idx, &block_id) in hop.blocks.iter().enumerate() {
+    // Track which labels are actually used (targets of goto statements)
+    let mut used_labels = HashSet::new();
+    for &block_id in &hop.blocks {
         let block = &program.basic_blocks[block_id];
-        let mut case_body = String::new();
+        collect_used_labels(&block.terminator, &mut used_labels);
+    }
 
+    // Generate code for entry block with label
+    writeln!(out, "BB{}:", entry_block.index())?;
+    let entry_block_obj = &program.basic_blocks[entry_block];
+    for inst in &entry_block_obj.instructions {
+        lower_instruction_goto(
+            out,
+            program,
+            inst,
+            &mut initialized_vars,
+            &mut table_access_count,
+            "\t",
+        )?;
+    }
+    lower_terminator_goto(
+        out,
+        program,
+        &entry_block_obj.terminator,
+        "\t",
+        &initialized_vars,
+        &next_hop_live_in,
+    )?;
+
+    // Generate code for other blocks in the hop (only with label if used)
+    for &block_id in &hop.blocks {
+        if block_id == entry_block {
+            continue; // Already generated
+        }
+
+        let block = &program.basic_blocks[block_id];
+        
+        // Only generate label if it's used
+        if used_labels.contains(&block_id) {
+            writeln!(out, "BB{}:", block_id.index())?;
+        }
+        
         for inst in &block.instructions {
-            lower_instruction(
-                &mut case_body,
+            lower_instruction_goto(
+                out,
                 program,
                 inst,
-                &mut state_machine,
                 &mut initialized_vars,
                 &mut table_access_count,
-                "\t\t\t",
+                "\t",
             )?;
         }
 
-        lower_terminator(
-            &mut case_body,
+        lower_terminator_goto(
+            out,
             program,
             &block.terminator,
-            "\t\t\t",
-            &liveness,
-            block_id,
+            "\t",
             &initialized_vars,
             &next_hop_live_in,
         )?;
-        case_body.push('\n');
-        state_machine.add_case(block_id.index(), case_body);
     }
-
-    state_machine.render(out, entry_block.index())?;
 
     writeln!(out, "}}")?;
     writeln!(out)?;
@@ -225,11 +271,46 @@ fn generate_hop_function(
     Ok(())
 }
 
-pub(super) fn lower_instruction(
+// Helper function to collect variable declarations from an instruction
+fn collect_var_decls_from_instruction(
+    program: &cfg::Program,
+    inst: &Instruction,
+    var_decls: &mut HashMap<cfg::VariableId, String>,
+) {
+    match &inst.kind {
+        InstructionKind::Assign { dest, .. }
+        | InstructionKind::BinaryOp { dest, .. }
+        | InstructionKind::UnaryOp { dest, .. }
+        | InstructionKind::TableGet { dest, .. } => {
+            let ty = go_type_string(program, program.variables[*dest].ty);
+            var_decls.insert(*dest, ty);
+        }
+        InstructionKind::Call { dest: Some(dest), .. } => {
+            let ty = go_type_string(program, program.variables[*dest].ty);
+            var_decls.insert(*dest, ty);
+        }
+        _ => {}
+    }
+}
+
+// Helper function to collect labels that are actually used
+fn collect_used_labels(term: &Terminator, used_labels: &mut HashSet<cfg::BasicBlockId>) {
+    match term {
+        Terminator::Jump(target) => {
+            used_labels.insert(*target);
+        }
+        Terminator::Branch { if_true, if_false, .. } => {
+            used_labels.insert(*if_true);
+            used_labels.insert(*if_false);
+        }
+        _ => {}
+    }
+}
+
+pub(super) fn lower_instruction_goto(
     out: &mut String,
     program: &cfg::Program,
     inst: &Instruction,
-    state_machine: &mut GoStateMachine,
     initialized_vars: &mut HashSet<cfg::VariableId>,
     table_access_count: &mut usize,
     indent: &str,
@@ -239,7 +320,6 @@ pub(super) fn lower_instruction(
             let dest_name = go_var_name(program, *dest);
             let src_go = operand_to_go(program, src);
 
-            state_machine.ensure_var_decl(*dest, None);
             writeln!(out, "{}{} = {}", indent, dest_name, src_go)?;
             initialized_vars.insert(*dest);
         }
@@ -255,7 +335,6 @@ pub(super) fn lower_instruction(
             let right_go = operand_to_go(program, right);
             let op_str = binary_op_to_go(*op);
 
-            state_machine.ensure_var_decl(*dest, None);
             writeln!(
                 out,
                 "{}{} = {} {} {}",
@@ -269,7 +348,6 @@ pub(super) fn lower_instruction(
             let operand_go = operand_to_go(program, operand);
             let op_str = unary_op_to_go(*op);
 
-            state_machine.ensure_var_decl(*dest, None);
             writeln!(out, "{}{} = {}{}", indent, dest_name, op_str, operand_go)?;
             initialized_vars.insert(*dest);
         }
@@ -314,13 +392,11 @@ pub(super) fn lower_instruction(
                 writeln!(out, "{}rwSet = AddRWSet(rwSet, \"{}\", {})", indent, table_name, key_var)?;
 
                 let field_access = table_field_accessor(program, table_info, *field_id, &row_var);
-                state_machine.ensure_var_decl(*dest, None);
                 writeln!(out, "{}{} = {}", indent, dest_name, field_access)?;
                 initialized_vars.insert(*dest);
             } else {
                 // Getting entire row
                 let key_var = format!("keyBytes{}", table_access_count);
-                state_machine.ensure_var_decl(*dest, None);
                 writeln!(out, "{}{}, {} = {}", indent, key_var, dest_name, call)?;
                 // Add to rwSet
                 writeln!(out, "{}rwSet = AddRWSet(rwSet, \"{}\", {})", indent, table_name, key_var)?;
@@ -440,7 +516,6 @@ pub(super) fn lower_instruction(
 
             if let Some(dest_var) = dest {
                 let dest_name = go_var_name(program, *dest_var);
-                state_machine.ensure_var_decl(*dest_var, None);
                 writeln!(out, "{}{} = {}", indent, dest_name, call_expr)?;
                 initialized_vars.insert(*dest_var);
             } else if func_name == "str" {
@@ -454,20 +529,17 @@ pub(super) fn lower_instruction(
     Ok(())
 }
 
-pub(super) fn lower_terminator(
+pub(super) fn lower_terminator_goto(
     out: &mut String,
     program: &cfg::Program,
     term: &Terminator,
     indent: &str,
-    _liveness: &DataflowResults<SetLattice<LiveVar>>,
-    _block_id: cfg::BasicBlockId,
     initialized_vars: &HashSet<cfg::VariableId>,
     next_hop_live_in: &[cfg::VariableId],
 ) -> Result<(), std::fmt::Error> {
     match term {
         Terminator::Jump(target) => {
-            writeln!(out, "{}currentState = {}", indent, target.index())?;
-            writeln!(out, "{}continue", indent)?;
+            writeln!(out, "{}goto BB{}", indent, target.index())?;
         }
 
         Terminator::Branch {
@@ -477,11 +549,9 @@ pub(super) fn lower_terminator(
         } => {
             let cond_go = operand_to_go(program, condition);
             writeln!(out, "{}if {} {{", indent, cond_go)?;
-            writeln!(out, "{}\tcurrentState = {}", indent, if_true.index())?;
-            writeln!(out, "{}\tcontinue", indent)?;
+            writeln!(out, "{}\tgoto BB{}", indent, if_true.index())?;
             writeln!(out, "{}}} else {{", indent)?;
-            writeln!(out, "{}\tcurrentState = {}", indent, if_false.index())?;
-            writeln!(out, "{}\tcontinue", indent)?;
+            writeln!(out, "{}\tgoto BB{}", indent, if_false.index())?;
             writeln!(out, "{}}}", indent)?;
         }
 
@@ -545,6 +615,7 @@ pub(super) fn lower_terminator(
 
     Ok(())
 }
+
 
 pub(super) fn operand_to_go(program: &cfg::Program, operand: &Operand) -> String {
     match operand {
@@ -834,9 +905,32 @@ fn generate_chain_impl(
     writeln!(out, "\thops := make([]*Hop, {})", function.hops.len())?;
     writeln!(out)?;
 
+    // Run table mod/ref analysis once for the entire function
+    let table_analysis = analyze_table_mod_ref(function, program);
+
     // For each hop, determine its type
     for (hop_index, &hop_id) in function.hops.iter().enumerate() {
-        let is_read_only = sc_graph.hop_is_read_only(program, function_id, hop_id);
+        // Determine if hop is read-only using dataflow analysis
+        let hop = &program.hops[hop_id];
+        let mut is_read_only = true;
+        
+        // Check all blocks in the hop for write accesses
+        for &block_id in &hop.blocks {
+            if let Some(exit_state) = table_analysis.block_exit.get(&block_id) {
+                if let Some(accesses) = exit_state.as_set() {
+                    for access in accesses {
+                        if access.access_type == AccessType::Write {
+                            is_read_only = false;
+                            break;
+                        }
+                    }
+                }
+            }
+            if !is_read_only {
+                break;
+            }
+        }
+        
         let has_c_edges = sc_graph.hop_has_c_edges(function_id, hop_id);
         let is_last_hop = hop_index == function.hops.len() - 1;
         let is_record_dep = has_c_edges && !is_last_hop;

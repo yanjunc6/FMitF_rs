@@ -1,4 +1,4 @@
-use crate::cfg::{FunctionId, HopId, Program};
+use crate::cfg::{FunctionId, HopId};
 use std::collections::HashSet;
 
 mod sc_graph_builder;
