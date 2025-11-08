@@ -75,7 +75,7 @@ impl Default for SCGraph {
 
 impl SCGraph {
     /// Determines if a specific hop has any C-edges (conflict edges) in this SC-Graph.
-    /// 
+    ///
     /// This is used by codegen to set the `isRecordDep` field correctly:
     /// - If a hop has C-edges AND is not the last hop in a transaction, isRecordDep = true
     /// - Otherwise, isRecordDep = false

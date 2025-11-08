@@ -52,20 +52,22 @@ fn build_util_source() -> Result<String, std::fmt::Error> {
     writeln!(out)?;
 
     // ProcessFunc type
-    writeln!(out, "type ProcessFunc func(tx *bolt.Tx, in *proto.TrxReq) (*proto.TrxRes, error)")?;
+    writeln!(
+        out,
+        "type ProcessFunc func(tx *bolt.Tx, in *proto.TrxReq) (*proto.TrxRes, error)"
+    )?;
     writeln!(out)?;
 
     // Hop type
     writeln!(out, "type Hop struct {{")?;
-    writeln!(out, "\tid          int32")?;
-    writeln!(out, "\tisReadOnly  bool")?;
+    writeln!(out, "\tid         int32")?;
+    writeln!(out, "\tisReadOnly bool")?;
+    writeln!(out, "\thopType    int")?;
+    writeln!(out, "\tconflicts  map[int32]int32")?;
+    writeln!(out, "\tprocess    ProcessFunc")?;
+    writeln!(out)?;
+    writeln!(out, "\tisWaitTx    bool")?;
     writeln!(out, "\tisRecordDep bool")?;
-    writeln!(out, "\thopType     int")?;
-    writeln!(out)?;
-    writeln!(out, "\twaitHop map[int32]int32")?;
-    writeln!(out)?;
-    writeln!(out, "\tprocess ProcessFunc")?;
-    writeln!(out, "\taccessD []*Scheduler")?;
     writeln!(out, "}}")?;
     writeln!(out)?;
 
@@ -96,7 +98,6 @@ fn build_util_source() -> Result<String, std::fmt::Error> {
     )?;
     writeln!(out, "}}")?;
     writeln!(out)?;
-
 
     Ok(out)
 }
