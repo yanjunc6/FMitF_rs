@@ -3,7 +3,7 @@ use super::{
     GoProgram,
 };
 use crate::cfg::{
-    self, BinaryOp, ConstantValue, FunctionKind, Instruction, InstructionKind, Operand, Terminator,
+    self, BinaryOp, FunctionKind, Instruction, InstructionKind, Operand, Terminator,
     UnaryOp,
 };
 use crate::dataflow::{analyze_live_variables, analyze_table_mod_ref, AccessType, LiveVar};
@@ -12,7 +12,10 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::Write;
 
-pub fn generate_transactions(program: &cfg::Program, sc_graph: &SCGraph) -> Result<Vec<GoProgram>, Box<dyn Error>> {
+pub fn generate_transactions(
+    program: &cfg::Program,
+    sc_graph: &SCGraph,
+) -> Result<Vec<GoProgram>, Box<dyn Error>> {
     let mut files = Vec::new();
 
     for &function_id in &program.all_transactions {
@@ -53,7 +56,7 @@ pub fn generate_transactions(program: &cfg::Program, sc_graph: &SCGraph) -> Resu
                 next_hop_id,
             )?;
         }
- 
+
         // Generate partition hop functions
         for (hop_index, hop_id) in function.hops.iter().enumerate() {
             generate_partition_hop_function(
@@ -166,6 +169,23 @@ fn generate_hop_function(
         }
     }
 
+    // Count table accesses to pre-declare keyBytes and row variables
+    let mut table_access_types: Vec<String> = Vec::new();
+    for &block_id in &hop.blocks {
+        let block = &program.basic_blocks[block_id];
+        for inst in &block.instructions {
+            match &inst.kind {
+                InstructionKind::TableGet { table, .. }
+                | InstructionKind::TableSet { table, .. } => {
+                    let table_info = &program.tables[*table];
+                    let table_name = pascal_case(&table_info.name);
+                    table_access_types.push(table_name);
+                }
+                _ => {}
+            }
+        }
+    }
+
     // Output variable declarations
     if !var_decls.is_empty() {
         let mut decls: Vec<_> = var_decls.iter().collect();
@@ -173,6 +193,16 @@ fn generate_hop_function(
         for (var_id, ty) in decls {
             let var_name = go_var_name(program, *var_id);
             writeln!(out, "\tvar {} {}", var_name, ty)?;
+        }
+        writeln!(out)?;
+    }
+
+    // Declare keyBytes and row variables for table accesses
+    if !table_access_types.is_empty() {
+        for (i, table_name) in table_access_types.iter().enumerate() {
+            let idx = i + 1;
+            writeln!(out, "\tvar keyBytes{} []byte", idx)?;
+            writeln!(out, "\tvar row{} {}", idx, table_name)?;
         }
         writeln!(out)?;
     }
@@ -197,16 +227,24 @@ fn generate_hop_function(
                 writeln!(out, "\t{} = params[\"{}\"]", var_name, var_name)?;
             }
             cfg::Type::List(_) => {
-                writeln!(out, "\tjson.Unmarshal([]byte(params[\"{}\"]), &{})", var_name, var_name)?;
+                writeln!(
+                    out,
+                    "\tjson.Unmarshal([]byte(params[\"{}\"]), &{})",
+                    var_name, var_name
+                )?;
             }
             _ => {
-                writeln!(out, "\tjson.Unmarshal([]byte(params[\"{}\"]), &{})", var_name, var_name)?;
+                writeln!(
+                    out,
+                    "\tjson.Unmarshal([]byte(params[\"{}\"]), &{})",
+                    var_name, var_name
+                )?;
             }
         }
 
         initialized_vars.insert(*var_id);
     }
-    
+
     if !live_in_set.is_empty() {
         writeln!(out)?;
     }
@@ -253,12 +291,12 @@ fn generate_hop_function(
         }
 
         let block = &program.basic_blocks[block_id];
-        
+
         // Only generate label if it's used
         if used_labels.contains(&block_id) {
             writeln!(out, "BB{}:", block_id.index())?;
         }
-        
+
         for inst in &block.instructions {
             lower_instruction_goto(
                 out,
@@ -301,16 +339,11 @@ fn generate_partition_hop_function(
     writeln!(
         out,
         "// {} calculates the partition for hop {} without database access.",
-        hop_name,
-        hop_index
+        hop_name, hop_index
     )?;
 
     // Function signature - takes a map of parameters, returns uint64 shard
-    writeln!(
-        out,
-        "func {}(params map[string]string) uint64 {{",
-        hop_name
-    )?;
+    writeln!(out, "func {}(params map[string]string) uint64 {{", hop_name)?;
 
     // Run liveness analysis
     let liveness = analyze_live_variables(function, program);
@@ -352,6 +385,23 @@ fn generate_partition_hop_function(
         }
     }
 
+    // Count table accesses to pre-declare keyBytes and row variables
+    let mut table_access_types_par: Vec<String> = Vec::new();
+    for &block_id in &hop.blocks {
+        let block = &program.basic_blocks[block_id];
+        for inst in &block.instructions {
+            match &inst.kind {
+                InstructionKind::TableGet { table, .. }
+                | InstructionKind::TableSet { table, .. } => {
+                    let table_info = &program.tables[*table];
+                    let table_name = pascal_case(&table_info.name);
+                    table_access_types_par.push(table_name);
+                }
+                _ => {}
+            }
+        }
+    }
+
     // Output variable declarations
     if !var_decls.is_empty() {
         let mut decls: Vec<_> = var_decls.iter().collect();
@@ -359,6 +409,16 @@ fn generate_partition_hop_function(
         for (var_id, ty) in decls {
             let var_name = go_var_name(program, *var_id);
             writeln!(out, "\tvar {} {}", var_name, ty)?;
+        }
+        writeln!(out)?;
+    }
+
+    // Declare keyBytes and row variables for table accesses (needed for unreachable code)
+    if !table_access_types_par.is_empty() {
+        for (i, table_name) in table_access_types_par.iter().enumerate() {
+            let idx = i + 1;
+            writeln!(out, "\tvar keyBytes{} []byte", idx)?;
+            writeln!(out, "\tvar row{} {}", idx, table_name)?;
         }
         writeln!(out)?;
     }
@@ -383,14 +443,22 @@ fn generate_partition_hop_function(
                 writeln!(out, "\t{} = params[\"{}\"]", var_name, var_name)?;
             }
             cfg::Type::List(_) => {
-                writeln!(out, "\tjson.Unmarshal([]byte(params[\"{}\"]), &{})", var_name, var_name)?;
+                writeln!(
+                    out,
+                    "\tjson.Unmarshal([]byte(params[\"{}\"]), &{})",
+                    var_name, var_name
+                )?;
             }
             _ => {
-                writeln!(out, "\tjson.Unmarshal([]byte(params[\"{}\"]), &{})", var_name, var_name)?;
+                writeln!(
+                    out,
+                    "\tjson.Unmarshal([]byte(params[\"{}\"]), &{})",
+                    var_name, var_name
+                )?;
             }
         }
     }
-    
+
     if !live_in_set.is_empty() {
         writeln!(out)?;
     }
@@ -401,6 +469,19 @@ fn generate_partition_hop_function(
         let block = &program.basic_blocks[block_id];
         collect_used_labels(&block.terminator, &mut used_labels);
     }
+
+    // Create fake variables for unreachable code (will never be used since we return early)
+    writeln!(
+        out,
+        "\tvar tx *bolt.Tx = nil // Fake tx for unreachable code"
+    )?;
+    writeln!(
+        out,
+        "\tvar rwSet []*proto.RWSet // Fake rwSet for unreachable code"
+    )?;
+    writeln!(out, "\t_ = tx // Suppress unused variable warning")?;
+    writeln!(out, "\t_ = rwSet // Suppress unused variable warning")?;
+    writeln!(out)?;
 
     // Add initial goto to entry block to ensure all labels are reachable
     writeln!(out, "\tgoto BB{}", entry_block.index())?;
@@ -418,10 +499,26 @@ fn generate_partition_hop_function(
     writeln!(out, "BB{}:", entry_block.index())?;
     let entry_block_obj = &program.basic_blocks[entry_block];
     for inst in &entry_block_obj.instructions {
-        if let Some(shard) = lower_instruction_partition(out, program, inst, "\t", &mut initialized_vars, &mut table_access_count)? {
+        if let Some(shard) = lower_instruction_partition(
+            out,
+            program,
+            inst,
+            "\t",
+            &mut initialized_vars,
+            &mut table_access_count,
+        )? {
             // First table access found - return the shard
             writeln!(out, "\tif true {{ return {} }}", shard)?;
         }
+        // Continue generating unreachable code to use variables (prevents Go compiler errors)
+        lower_instruction_goto(
+            out,
+            program,
+            inst,
+            &mut initialized_vars,
+            &mut table_access_count,
+            "\t",
+        )?;
     }
     lower_terminator_partition_goto(out, program, &entry_block_obj.terminator, "\t")?;
 
@@ -432,22 +529,38 @@ fn generate_partition_hop_function(
         }
 
         let block = &program.basic_blocks[block_id];
-        
+
         if used_labels.contains(&block_id) {
             writeln!(out, "BB{}:", block_id.index())?;
         }
-        
+
         for inst in &block.instructions {
-            if let Some(shard) = lower_instruction_partition(out, program, inst, "\t", &mut initialized_vars, &mut table_access_count)? {
+            if let Some(shard) = lower_instruction_partition(
+                out,
+                program,
+                inst,
+                "\t",
+                &mut initialized_vars,
+                &mut table_access_count,
+            )? {
                 writeln!(out, "\tif true {{ return {} }}", shard)?;
             }
+            // Continue generating unreachable code to use variables
+            lower_instruction_goto(
+                out,
+                program,
+                inst,
+                &mut initialized_vars,
+                &mut table_access_count,
+                "\t",
+            )?;
         }
 
         lower_terminator_partition_goto(out, program, &block.terminator, "\t")?;
     }
 
     // Fallback return
-    writeln!(out, "\treturn 0 // Default shard if no table access found")?;
+    // writeln!(out, "\treturn 0 // Default shard if no table access found")?;
     writeln!(out, "}}")?;
     writeln!(out)?;
 
@@ -468,7 +581,9 @@ fn collect_var_decls_from_instruction(
             let ty = go_type_string(program, program.variables[*dest].ty);
             var_decls.insert(*dest, ty);
         }
-        InstructionKind::Call { dest: Some(dest), .. } => {
+        InstructionKind::Call {
+            dest: Some(dest), ..
+        } => {
             let ty = go_type_string(program, program.variables[*dest].ty);
             var_decls.insert(*dest, ty);
         }
@@ -482,7 +597,9 @@ fn collect_used_labels(term: &Terminator, used_labels: &mut HashSet<cfg::BasicBl
         Terminator::Jump(target) => {
             used_labels.insert(*target);
         }
-        Terminator::Branch { if_true, if_false, .. } => {
+        Terminator::Branch {
+            if_true, if_false, ..
+        } => {
             used_labels.insert(*if_true);
             used_labels.insert(*if_false);
         }
@@ -570,9 +687,13 @@ pub(super) fn lower_instruction_goto(
                 // Getting specific field
                 let row_var = format!("row{}", table_access_count);
                 let key_var = format!("keyBytes{}", table_access_count);
-                writeln!(out, "{}{}, {} := {}", indent, key_var, row_var, call)?;
+                writeln!(out, "{}{}, {} = {}", indent, key_var, row_var, call)?;
                 // Add to rwSet
-                writeln!(out, "{}rwSet = AddRWSet(rwSet, \"{}\", {})", indent, table_name, key_var)?;
+                writeln!(
+                    out,
+                    "{}rwSet = AddRWSet(rwSet, \"{}\", {})",
+                    indent, table_name, key_var
+                )?;
 
                 let field_access = table_field_accessor(program, table_info, *field_id, &row_var);
                 writeln!(out, "{}{} = {}", indent, dest_name, field_access)?;
@@ -582,7 +703,11 @@ pub(super) fn lower_instruction_goto(
                 let key_var = format!("keyBytes{}", table_access_count);
                 writeln!(out, "{}{}, {} = {}", indent, key_var, dest_name, call)?;
                 // Add to rwSet
-                writeln!(out, "{}rwSet = AddRWSet(rwSet, \"{}\", {})", indent, table_name, key_var)?;
+                writeln!(
+                    out,
+                    "{}rwSet = AddRWSet(rwSet, \"{}\", {})",
+                    indent, table_name, key_var
+                )?;
                 initialized_vars.insert(*dest);
             }
         }
@@ -615,7 +740,7 @@ pub(super) fn lower_instruction_goto(
             // First get the row
             writeln!(
                 out,
-                "{}{}, {} := get{}(tx, {}Key{{ {} }})",
+                "{}{}, {} = get{}(tx, {}Key{{ {} }})",
                 indent,
                 key_var,
                 row_var,
@@ -623,9 +748,13 @@ pub(super) fn lower_instruction_goto(
                 table_name,
                 key_args.join(", ")
             )?;
-            
+
             // Add to rwSet
-            writeln!(out, "{}rwSet = AddRWSet(rwSet, \"{}\", {})", indent, table_name, key_var)?;
+            writeln!(
+                out,
+                "{}rwSet = AddRWSet(rwSet, \"{}\", {})",
+                indent, table_name, key_var
+            )?;
 
             if let Some(field_id) = field {
                 // Setting specific field
@@ -810,13 +939,18 @@ fn lower_instruction_partition(
 ) -> Result<Option<String>, std::fmt::Error> {
     // Check if this is a table access
     match &inst.kind {
-        InstructionKind::TableGet { table, keys, .. } | InstructionKind::TableSet { table, keys, .. } => {
+        InstructionKind::TableGet { table, keys, .. }
+        | InstructionKind::TableSet { table, keys, .. } => {
             // First table access found - call the partition function
             let table_info = &program.tables[*table];
             let table_name = pascal_case(&table_info.name);
 
-            writeln!(out, "{}// First table access: {} - calculate partition", indent, table_name)?;
-            
+            writeln!(
+                out,
+                "{}// First table access: {} - calculate partition",
+                indent, table_name
+            )?;
+
             let key_args: Vec<String> = table_info
                 .primary_key_fields
                 .iter()
@@ -829,9 +963,19 @@ fn lower_instruction_partition(
 
             // Determine which function to call (get or put - both return partition)
             let call = if matches!(&inst.kind, InstructionKind::TableGet { .. }) {
-                format!("get{}Par({}Key{{ {} }})", table_name, table_name, key_args.join(", "))
+                format!(
+                    "get{}Par({}Key{{ {} }})",
+                    table_name,
+                    table_name,
+                    key_args.join(", ")
+                )
             } else {
-                format!("put{}Par({}Key{{ {} }})", table_name, table_name, key_args.join(", "))
+                format!(
+                    "put{}Par({}Key{{ {} }})",
+                    table_name,
+                    table_name,
+                    key_args.join(", ")
+                )
             };
 
             // Return the partition shard
@@ -839,7 +983,14 @@ fn lower_instruction_partition(
         }
         _ => {
             // For non-table-access instructions, use the normal lowering
-            lower_instruction_goto(out, program, inst, initialized_vars, table_access_count, indent)?;
+            lower_instruction_goto(
+                out,
+                program,
+                inst,
+                initialized_vars,
+                table_access_count,
+                indent,
+            )?;
             Ok(None)
         }
     }
@@ -882,7 +1033,6 @@ fn lower_terminator_partition_goto(
 
     Ok(())
 }
-
 
 pub(super) fn operand_to_go(program: &cfg::Program, operand: &Operand) -> String {
     match operand {
@@ -1010,18 +1160,6 @@ fn go_string_literal(value: &str) -> String {
     format!("\"{}\"", value.escape_default())
 }
 
-fn partition_operand_to_u64(program: &cfg::Program, operand: &Operand) -> String {
-    match operand {
-        Operand::Variable(var_id) => {
-            let var_name = go_var_name(program, *var_id);
-            format!("toUint64(params[\"{}\"])", var_name)
-        }
-        Operand::Constant(ConstantValue::Int(value)) => format!("uint64({})", value),
-        Operand::Constant(ConstantValue::Float(value)) => format!("uint64({})", value),
-        other => panic!("unsupported partition operand: {:?}", other),
-    }
-}
-
 fn generate_next_req(
     out: &mut String,
     program: &cfg::Program,
@@ -1081,8 +1219,15 @@ fn generate_next_req(
         writeln!(out, "\t\tfor k, v := range params {{")?;
         writeln!(out, "\t\t\tparamsCopy[k] = v")?;
         writeln!(out, "\t\t}}")?;
-        writeln!(out, "\t\t// Calculate partition using partition hop function")?;
-        writeln!(out, "\t\tnextShard = int({}Hop{}Par(paramsCopy))", func_name, hop_idx)?;
+        writeln!(
+            out,
+            "\t\t// Calculate partition using partition hop function"
+        )?;
+        writeln!(
+            out,
+            "\t\tnextShard = int({}Hop{}Par(paramsCopy))",
+            func_name, hop_idx
+        )?;
     }
 
     writeln!(out, "\tdefault:")?;
@@ -1105,7 +1250,7 @@ fn generate_next_req(
 fn generate_chain_impl(
     out: &mut String,
     program: &cfg::Program,
-    sc_graph: &SCGraph,
+    _sc_graph: &SCGraph,
     function_id: cfg::FunctionId,
 ) -> Result<(), std::fmt::Error> {
     let function = &program.functions[function_id];
@@ -1124,7 +1269,7 @@ fn generate_chain_impl(
         // Determine if hop is read-only using dataflow analysis
         let hop = &program.hops[hop_id];
         let mut is_read_only = true;
-        
+
         // Check all blocks in the hop for write accesses
         for &block_id in &hop.blocks {
             if let Some(exit_state) = table_analysis.block_exit.get(&block_id) {
@@ -1141,19 +1286,18 @@ fn generate_chain_impl(
                 break;
             }
         }
-        
-        let has_c_edges = sc_graph.hop_has_c_edges(function_id, hop_id);
-        let is_last_hop = hop_index == function.hops.len() - 1;
-        let is_record_dep = has_c_edges && !is_last_hop;
+
+        // let has_c_edges = sc_graph.hop_has_c_edges(function_id, hop_id);
+        // let is_last_hop = hop_index == function.hops.len() - 1;
 
         // Determine hop type
         let hop_type = "util.NormalHop"; // Default to NormalHop for now
-        
+
         // Process function name
         let process_func = format!("{}Hop{}", func_name, hop_index);
 
-        // waitHop map - for now, empty for first hop, otherwise based on previous hop
-        let wait_hop = if hop_index == 0 {
+        // conflicts map - for now, empty for first hop, otherwise based on previous hop
+        let conflicts = if hop_index == 0 {
             "map[int32]int32{}".to_string()
         } else {
             // For now, wait for the same chain at the previous hop
@@ -1164,15 +1308,18 @@ fn generate_chain_impl(
         writeln!(out, "\t\tid:         {},", hop_index)?;
         writeln!(out, "\t\thopType:    {},", hop_type)?;
         writeln!(out, "\t\tisReadOnly: {},", is_read_only)?;
-        writeln!(out, "\t\tisRecordDep:{},", is_record_dep)?;
         writeln!(out, "\t\tprocess:    {},", process_func)?;
-        writeln!(out, "\t\twaitHop:    {},", wait_hop)?;
+        writeln!(out, "\t\tconflicts:  {},", conflicts)?;
         writeln!(out, "\t}}")?;
         writeln!(out)?;
     }
 
     writeln!(out, "\t// add field names")?;
-    writeln!(out, "\treturn &Chain{{db: db, hops: hops, NextReq: {}NextReq}}", func_name)?;
+    writeln!(
+        out,
+        "\treturn &Chain{{db: db, hops: hops, NextReq: {}NextReq}}",
+        func_name
+    )?;
     writeln!(out, "}}")?;
     writeln!(out)?;
 

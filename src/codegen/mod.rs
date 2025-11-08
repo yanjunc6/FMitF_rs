@@ -26,7 +26,10 @@ impl GoProgram {
 /// Generate Go artifacts for the optimized CFG.
 ///
 /// Returns an in-memory collection of files to be written by the caller.
-pub fn generate_go_code(program: &cfg::Program, sc_graph: &SCGraph) -> Result<Vec<GoProgram>, Box<dyn Error>> {
+pub fn generate_go_code(
+    program: &cfg::Program,
+    sc_graph: &SCGraph,
+) -> Result<Vec<GoProgram>, Box<dyn Error>> {
     let mut files = Vec::new();
     files.push(gen_util::generate_util()?);
     files.push(gen_converters::generate_converters()?);

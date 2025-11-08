@@ -30,15 +30,14 @@ type ChainManager struct {
 type ProcessFunc func(tx *bolt.Tx, in *proto.TrxReq) (*proto.TrxRes, error)
 
 type Hop struct {
-	id          int32
-	isReadOnly  bool
+	id         int32
+	isReadOnly bool
+	hopType    int
+	conflicts  map[int32]int32
+	process    ProcessFunc
+
+	isWaitTx    bool
 	isRecordDep bool
-	hopType     int
-
-	waitHop map[int32]int32
-
-	process ProcessFunc
-	accessD []*Scheduler
 }
 
 type Scheduler struct {

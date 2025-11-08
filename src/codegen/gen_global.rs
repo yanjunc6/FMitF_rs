@@ -9,12 +9,18 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::Write;
 
-pub(super) fn generate_global(program: &cfg::Program, sc_graph: &SCGraph) -> Result<GoProgram, Box<dyn Error>> {
+pub(super) fn generate_global(
+    program: &cfg::Program,
+    sc_graph: &SCGraph,
+) -> Result<GoProgram, Box<dyn Error>> {
     let content = build_global_source(program, sc_graph)?;
     Ok(GoProgram::new("global.go", content))
 }
 
-fn build_global_source(program: &cfg::Program, sc_graph: &SCGraph) -> Result<String, std::fmt::Error> {
+fn build_global_source(
+    program: &cfg::Program,
+    sc_graph: &SCGraph,
+) -> Result<String, std::fmt::Error> {
     let mut out = String::new();
 
     write_go_file_header(&mut out, &["encoding/json", "github.com/boltdb/bolt"])?;
@@ -126,15 +132,24 @@ fn build_global_source(program: &cfg::Program, sc_graph: &SCGraph) -> Result<Str
                 struct_name, key_struct_name
             )?;
             writeln!(out, "\t// Call partition function to determine shard")?;
-            
+
             // Build call arguments using node_partition_args
-            let call_args: Vec<String> = table.node_partition_args.iter().map(|field_id| {
-                let field = &program.table_fields[*field_id];
-                format!("key.{}", field.name)
-            }).collect();
-            
+            let call_args: Vec<String> = table
+                .node_partition_args
+                .iter()
+                .map(|field_id| {
+                    let field = &program.table_fields[*field_id];
+                    format!("key.{}", field.name)
+                })
+                .collect();
+
             let go_part_func_name = go_function_name(program, part_func_id);
-            writeln!(out, "\treturn {}({})", go_part_func_name, call_args.join(", "))?;
+            writeln!(
+                out,
+                "\treturn {}({})",
+                go_part_func_name,
+                call_args.join(", ")
+            )?;
             writeln!(out, "}}")?;
             writeln!(out)?;
 
@@ -145,7 +160,12 @@ fn build_global_source(program: &cfg::Program, sc_graph: &SCGraph) -> Result<Str
                 struct_name, key_struct_name
             )?;
             writeln!(out, "\t// Call partition function to determine shard")?;
-            writeln!(out, "\treturn {}({})", go_part_func_name, call_args.join(", "))?;
+            writeln!(
+                out,
+                "\treturn {}({})",
+                go_part_func_name,
+                call_args.join(", ")
+            )?;
             writeln!(out, "}}")?;
             writeln!(out)?;
         }
@@ -227,7 +247,9 @@ fn write_partition_function(
                         var_decls.insert(*dest);
                     }
                 }
-                InstructionKind::Call { dest: Some(dest), .. } => {
+                InstructionKind::Call {
+                    dest: Some(dest), ..
+                } => {
                     if !function.params.contains(dest) {
                         var_decls.insert(*dest);
                     }
@@ -255,7 +277,7 @@ fn write_partition_function(
     // Generate basic blocks with goto labels
     for &block_id in &function.all_blocks {
         let block = &program.basic_blocks[block_id];
-        
+
         // Only emit label if it's used or it's the entry block
         if used_labels.contains(&block_id.index()) || block_id == entry_block {
             writeln!(out, "BB{}:", block_id.index())?;
@@ -288,7 +310,9 @@ fn collect_used_labels_partition(
             cfg::Terminator::Jump(target) => {
                 used.insert(target.index());
             }
-            cfg::Terminator::Branch { if_true, if_false, .. } => {
+            cfg::Terminator::Branch {
+                if_true, if_false, ..
+            } => {
                 used.insert(if_true.index());
                 used.insert(if_false.index());
             }
@@ -404,12 +428,12 @@ fn generate_scheds_function(
 ) -> Result<(), std::fmt::Error> {
     // Determine which tables have C-edges
     let mut tables_with_c_edges: HashSet<cfg::TableId> = HashSet::new();
-    
+
     for &function_id in &program.all_transactions {
         let function = &program.functions[function_id];
         for &hop_id in &function.hops {
             let hop = &program.hops[hop_id];
-            
+
             // Check if this hop has C-edges
             if sc_graph.hop_has_c_edges(function_id, hop_id) {
                 // Find all tables accessed in this hop
@@ -435,7 +459,7 @@ fn generate_scheds_function(
     writeln!(out, "\tAccessSchedulers = make(map[string]*Scheduler)")?;
     writeln!(out, "\tAccessDSchedulers = make(map[string]*Scheduler)")?;
     writeln!(out)?;
-    
+
     writeln!(out, "\t// Create one lock scheduler for each table")?;
     for &table_id in &program.all_tables {
         let table = &program.tables[table_id];
@@ -445,16 +469,23 @@ fn generate_scheds_function(
     writeln!(out)?;
 
     if !tables_with_c_edges.is_empty() {
-        writeln!(out, "\t// Create one access scheduler for each table in hops that has C-edges")?;
+        writeln!(
+            out,
+            "\t// Create one access scheduler for each table in hops that has C-edges"
+        )?;
         for &table_id in &program.all_tables {
             if tables_with_c_edges.contains(&table_id) {
                 let table = &program.tables[table_id];
                 let table_name = go_type_name(&table.name);
-                writeln!(out, "\tAccessSchedulers[\"{}\"] = NewScheduler()", table_name)?;
+                writeln!(
+                    out,
+                    "\tAccessSchedulers[\"{}\"] = NewScheduler()",
+                    table_name
+                )?;
             }
         }
     }
-    
+
     writeln!(out, "}}")?;
     writeln!(out)?;
 
@@ -466,7 +497,7 @@ fn generate_chains_function(
     program: &cfg::Program,
 ) -> Result<(), std::fmt::Error> {
     writeln!(out, "func Chains(db *bolt.DB) []*Chain {{")?;
-    
+
     let chain_calls: Vec<String> = program
         .all_transactions
         .iter()
@@ -476,7 +507,7 @@ fn generate_chains_function(
             format!("{}ChainImpl(db)", func_name)
         })
         .collect();
-    
+
     if chain_calls.is_empty() {
         writeln!(out, "\treturn []*Chain{{}}")?;
     } else {
@@ -486,7 +517,7 @@ fn generate_chains_function(
         }
         writeln!(out, "\t}}")?;
     }
-    
+
     writeln!(out, "}}")?;
     writeln!(out)?;
 
