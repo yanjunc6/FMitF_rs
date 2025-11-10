@@ -201,7 +201,7 @@ impl Compiler {
 
         // Stage 4: SC-Graph (Build + Combine + DOT Outputs)
         current_stage += 1;
-        let (sc, _combined) = execute_stage(
+        let (mut sc, mut combined) = execute_stage(
             "SC-Graph",
             current_stage,
             total_stages,
@@ -226,11 +226,11 @@ impl Compiler {
             summary.simplified_sc_c_edges = summary.sc_c_edges;
         } else {
             current_stage += 1;
-            let _ = execute_stage(
+            let (simplified_sc, simplified_combined) = execute_stage(
                 "Verification",
                 current_stage,
                 total_stages,
-                || -> Result<(), Box<dyn std::error::Error>> {
+                || -> Result<(crate::sc_graph::SCGraph, crate::sc_graph::CombinedSCGraph), Box<dyn std::error::Error>> {
                     // 1) Generate Boogie programs for all configured verification types
                     let verifier = VerificationManager::new();
                     let mut programs: Vec<BoogieProgram> = Vec::new();
@@ -503,6 +503,9 @@ impl Compiler {
                         "simplified",
                     )?;
 
+                    // Compute the simplified combined graph
+                    let simplified_combined = crate::sc_graph::combine_for_deadlock_elimination(&simplified);
+
                     // After logging all results, check if there were any errors
                     if !exec_errors.is_empty() {
                         return Err(Box::from(format!(
@@ -517,9 +520,14 @@ impl Compiler {
                         let _ = self.reporter.report_all(&verification_errors);
                     }
 
-                    Ok(())
+                    // Return the simplified graphs
+                    Ok((simplified, simplified_combined))
                 },
             )?;
+            
+            // Use the simplified graphs for code generation
+            sc = simplified_sc;
+            combined = simplified_combined;
         }
 
         // Stage 6: Go code generation
@@ -530,7 +538,7 @@ impl Compiler {
             total_stages,
             || -> Result<(), Box<dyn std::error::Error>> {
                 let generated_go_programs =
-                    codegen::generate_go_code(&optimized_or_cfg_program, &sc)?;
+                    codegen::generate_go_code(&optimized_or_cfg_program, &sc, &combined)?;
 
                 let go_dir = output_dir.join("go");
                 if go_dir.exists() {
