@@ -7,7 +7,7 @@ use crate::cfg::{
     UnaryOp,
 };
 use crate::dataflow::{analyze_live_variables, analyze_table_mod_ref, AccessType, LiveVar};
-use crate::sc_graph::SCGraph;
+use crate::sc_graph::{calculate_conflicts, determine_hop_types, CombinedSCGraph, HopType, SCGraph};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::Write;
@@ -15,8 +15,15 @@ use std::fmt::Write;
 pub fn generate_transactions(
     program: &cfg::Program,
     sc_graph: &SCGraph,
+    combined_graph: &CombinedSCGraph,
 ) -> Result<Vec<GoProgram>, Box<dyn Error>> {
     let mut files = Vec::new();
+
+    // Determine hop types from the combined (merged) graph
+    let hop_types = determine_hop_types(combined_graph);
+    
+    // Calculate conflicts from the normal SC-graph
+    let conflicts = calculate_conflicts(sc_graph, program);
 
     for &function_id in &program.all_transactions {
         let function = &program.functions[function_id];
@@ -72,7 +79,7 @@ pub fn generate_transactions(
         generate_next_req(&mut content, program, function_id)?;
 
         // Generate ChainImpl function
-        generate_chain_impl(&mut content, program, sc_graph, function_id)?;
+        generate_chain_impl(&mut content, program, sc_graph, function_id, &hop_types, &conflicts)?;
 
         files.push(GoProgram::new(file_name, content));
     }
@@ -1252,6 +1259,8 @@ fn generate_chain_impl(
     program: &cfg::Program,
     _sc_graph: &SCGraph,
     function_id: cfg::FunctionId,
+    hop_types: &HashMap<(cfg::FunctionId, cfg::HopId), HopType>,
+    conflicts: &HashMap<(cfg::FunctionId, cfg::HopId), HashMap<i32, i32>>,
 ) -> Result<(), std::fmt::Error> {
     let function = &program.functions[function_id];
     let func_name = pascal_case(&function.name);
@@ -1287,21 +1296,32 @@ fn generate_chain_impl(
             }
         }
 
-        // let has_c_edges = sc_graph.hop_has_c_edges(function_id, hop_id);
-        // let is_last_hop = hop_index == function.hops.len() - 1;
-
-        // Determine hop type
-        let hop_type = "util.NormalHop"; // Default to NormalHop for now
+        // Get hop type from the computed map
+        let hop_type_enum = hop_types.get(&(function_id, hop_id)).copied().unwrap_or(HopType::NormalHop);
+        let hop_type = match hop_type_enum {
+            HopType::NormalHop => "util.NormalHop",
+            HopType::MergedHopBegin => "util.MergedHopBegin",
+            HopType::MergedHop => "util.MergedHop",
+            HopType::MergedHopEnd => "util.MergedHopEnd",
+        };
 
         // Process function name
         let process_func = format!("{}Hop{}", func_name, hop_index);
 
-        // conflicts map - for now, empty for first hop, otherwise based on previous hop
-        let conflicts = if hop_index == 0 {
-            "map[int32]int32{}".to_string()
+        // Get conflicts map for this hop
+        let conflicts_map = if let Some(hop_conflicts) = conflicts.get(&(function_id, hop_id)) {
+            if hop_conflicts.is_empty() {
+                "map[int32]int32{}".to_string()
+            } else {
+                // Build the conflicts map string
+                let mut parts: Vec<String> = hop_conflicts.iter()
+                    .map(|(chain_idx, hop_idx)| format!("{}: {}", chain_idx, hop_idx))
+                    .collect();
+                parts.sort(); // Sort for consistent output
+                format!("map[int32]int32{{{}}}", parts.join(", "))
+            }
         } else {
-            // For now, wait for the same chain at the previous hop
-            format!("map[int32]int32{{0: {}}}", hop_index)
+            "map[int32]int32{}".to_string()
         };
 
         writeln!(out, "\thops[{}] = &Hop{{", hop_index)?;
@@ -1309,7 +1329,7 @@ fn generate_chain_impl(
         writeln!(out, "\t\thopType:    {},", hop_type)?;
         writeln!(out, "\t\tisReadOnly: {},", is_read_only)?;
         writeln!(out, "\t\tprocess:    {},", process_func)?;
-        writeln!(out, "\t\tconflicts:  {},", conflicts)?;
+        writeln!(out, "\t\tconflicts:  {},", conflicts_map)?;
         writeln!(out, "\t}}")?;
         writeln!(out)?;
     }

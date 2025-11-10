@@ -5,7 +5,7 @@ mod gen_util;
 mod util;
 
 use crate::cfg;
-use crate::sc_graph::SCGraph;
+use crate::sc_graph::{CombinedSCGraph, SCGraph};
 use std::error::Error;
 
 #[derive(Debug, Clone)]
@@ -29,11 +29,12 @@ impl GoProgram {
 pub fn generate_go_code(
     program: &cfg::Program,
     sc_graph: &SCGraph,
+    combined_graph: &CombinedSCGraph,
 ) -> Result<Vec<GoProgram>, Box<dyn Error>> {
     let mut files = Vec::new();
     files.push(gen_util::generate_util()?);
     files.push(gen_converters::generate_converters()?);
     files.push(gen_global::generate_global(program, sc_graph)?);
-    files.extend(gen_transaction::generate_transactions(program, sc_graph)?);
+    files.extend(gen_transaction::generate_transactions(program, sc_graph, combined_graph)?);
     Ok(files)
 }
