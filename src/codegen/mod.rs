@@ -1,5 +1,6 @@
 mod gen_converters;
 mod gen_global;
+mod gen_table_optimizer;
 mod gen_transaction;
 mod gen_util;
 mod util;

@@ -1,5 +1,5 @@
 use super::{
-    gen_transaction::{go_function_name, lower_instruction_goto, operand_to_go},
+    gen_transaction::{go_function_name, lower_single_instruction, operand_to_go},
     util::{go_type_string, go_var_name, pascal_case, write_go_file_header},
     GoProgram,
 };
@@ -344,7 +344,7 @@ fn lower_instruction_partition(
             let mut temp_out = String::new();
             let mut initialized_vars = HashSet::new();
             let mut table_access_count = 0usize;
-            lower_instruction_goto(
+            lower_single_instruction(
                 &mut temp_out,
                 program,
                 inst,
