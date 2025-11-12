@@ -1,5 +1,5 @@
 use super::{
-    gen_table_optimizer::{group_table_accesses, create_instruction_to_group_map, TableAccess, TableAccessGroup},
+    gen_table_optimizer::{optimize_instructions, OptimizedOp, TableAccess, TableAccessGroup},
     util::{go_type_string, go_var_name, pascal_case, snake_case, write_go_file_header},
     GoProgram,
 };
@@ -177,23 +177,32 @@ fn generate_hop_function(
         }
     }
 
-    // Group table accesses across ALL blocks to determine what we'll actually generate
-    let mut all_groups = Vec::new();
+    // OPTIMIZATION PREPROCESSING: Transform instructions into optimized operations
+    let mut all_optimized_ops: Vec<(cfg::BasicBlockId, Vec<OptimizedOp>)> = Vec::new();
     let mut table_var_count = 0;
+    
     for &block_id in &hop.blocks {
         let block = &program.basic_blocks[block_id];
-        let groups = group_table_accesses(&block.instructions);
+        let optimized_ops = optimize_instructions(&block.instructions);
         
-        // Count how many table access variables we'll actually need for this block
-        for group in &groups {
-            if group.is_worth_combining() && group.all_field_accesses() {
-                table_var_count += 1; // One get/put pair for the optimized group
-            } else {
-                table_var_count += group.accesses.len(); // Individual accesses
+        // Count table variables needed for this block
+        for op in &optimized_ops {
+            match op {
+                OptimizedOp::CombinedTableAccess(_) => {
+                    table_var_count += 1; // One get/put pair for optimized group
+                }
+                OptimizedOp::Single(inst) => {
+                    if matches!(
+                        inst.kind,
+                        InstructionKind::TableGet { .. } | InstructionKind::TableSet { .. }
+                    ) {
+                        table_var_count += 1; // Individual table access
+                    }
+                }
             }
         }
         
-        all_groups.push((block_id, groups));
+        all_optimized_ops.push((block_id, optimized_ops));
     }
 
     // Output variable declarations
@@ -209,18 +218,22 @@ fn generate_hop_function(
 
     // Declare keyBytes and row variables based on actual count needed
     if table_var_count > 0 {
-        // We'll declare variables dynamically as needed, but we need to know the table types
-        // For now, collect all unique table types that will be accessed
+        // Collect table types needed across all optimized operations
         let mut table_types_needed: Vec<String> = Vec::new();
-        for (_, groups) in &all_groups {
-            for group in groups {
-                if group.is_worth_combining() && group.all_field_accesses() {
-                    let table_info = &program.tables[group.table_id];
-                    table_types_needed.push(pascal_case(&table_info.name));
-                } else {
-                    for _ in &group.accesses {
+        for (_, ops) in &all_optimized_ops {
+            for op in ops {
+                match op {
+                    OptimizedOp::CombinedTableAccess(group) => {
                         let table_info = &program.tables[group.table_id];
                         table_types_needed.push(pascal_case(&table_info.name));
+                    }
+                    OptimizedOp::Single(inst) => {
+                        if let InstructionKind::TableGet { table, .. }
+                        | InstructionKind::TableSet { table, .. } = &inst.kind
+                        {
+                            let table_info = &program.tables[*table];
+                            table_types_needed.push(pascal_case(&table_info.name));
+                        }
                     }
                 }
             }
@@ -293,16 +306,13 @@ fn generate_hop_function(
     writeln!(out, "BB{}:", entry_block.index())?;
     let entry_block_obj = &program.basic_blocks[entry_block];
     
-    // Find the groups for the entry block
-    let (_, entry_groups) = all_groups.iter().find(|(bid, _)| *bid == entry_block).unwrap();
-    let inst_to_group = create_instruction_to_group_map(entry_groups);
+    // Find the optimized ops for the entry block
+    let (_, entry_ops) = all_optimized_ops.iter().find(|(bid, _)| *bid == entry_block).unwrap();
     
-    lower_instructions_with_optimization(
+    lower_optimized_ops(
         out,
         program,
-        &entry_block_obj.instructions,
-        entry_groups,
-        &inst_to_group,
+        entry_ops,
         &mut initialized_vars,
         &mut table_access_count,
         "\t",
@@ -330,16 +340,13 @@ fn generate_hop_function(
             writeln!(out, "BB{}:", block_id.index())?;
         }
 
-        // Find the groups for this block
-        let (_, block_groups) = all_groups.iter().find(|(bid, _)| *bid == block_id).unwrap();
-        let inst_to_group = create_instruction_to_group_map(block_groups);
+        // Find the optimized ops for this block
+        let (_, block_ops) = all_optimized_ops.iter().find(|(bid, _)| *bid == block_id).unwrap();
         
-        lower_instructions_with_optimization(
+        lower_optimized_ops(
             out,
             program,
-            &block.instructions,
-            block_groups,
-            &inst_to_group,
+            block_ops,
             &mut initialized_vars,
             &mut table_access_count,
             "\t",
@@ -422,40 +429,13 @@ fn generate_partition_hop_function(
         }
     }
 
-    // Count table accesses to pre-declare keyBytes and row variables
-    let mut table_access_types_par: Vec<String> = Vec::new();
-    for &block_id in &hop.blocks {
-        let block = &program.basic_blocks[block_id];
-        for inst in &block.instructions {
-            match &inst.kind {
-                InstructionKind::TableGet { table, .. }
-                | InstructionKind::TableSet { table, .. } => {
-                    let table_info = &program.tables[*table];
-                    let table_name = pascal_case(&table_info.name);
-                    table_access_types_par.push(table_name);
-                }
-                _ => {}
-            }
-        }
-    }
-
-    // Output variable declarations
+    // Output variable declarations (NO keyBytes/row variables - they're never used in partition functions)
     if !var_decls.is_empty() {
         let mut decls: Vec<_> = var_decls.iter().collect();
         decls.sort_by_key(|(var_id, _)| var_id.index());
         for (var_id, ty) in decls {
             let var_name = go_var_name(program, *var_id);
             writeln!(out, "\tvar {} {}", var_name, ty)?;
-        }
-        writeln!(out)?;
-    }
-
-    // Declare keyBytes and row variables for table accesses (needed for unreachable code)
-    if !table_access_types_par.is_empty() {
-        for (i, table_name) in table_access_types_par.iter().enumerate() {
-            let idx = i + 1;
-            writeln!(out, "\tvar keyBytes{} []byte", idx)?;
-            writeln!(out, "\tvar row{} {}", idx, table_name)?;
         }
         writeln!(out)?;
     }
@@ -507,19 +487,6 @@ fn generate_partition_hop_function(
         collect_used_labels(&block.terminator, &mut used_labels);
     }
 
-    // Create fake variables for unreachable code (will never be used since we return early)
-    writeln!(
-        out,
-        "\tvar tx *bolt.Tx = nil // Fake tx for unreachable code"
-    )?;
-    writeln!(
-        out,
-        "\tvar rwSet []*proto.RWSet // Fake rwSet for unreachable code"
-    )?;
-    writeln!(out, "\t_ = tx // Suppress unused variable warning")?;
-    writeln!(out, "\t_ = rwSet // Suppress unused variable warning")?;
-    writeln!(out)?;
-
     // Add initial goto to entry block to ensure all labels are reachable
     writeln!(out, "\tgoto BB{}", entry_block.index())?;
     writeln!(out)?;
@@ -532,35 +499,30 @@ fn generate_partition_hop_function(
         initialized_vars.insert(*var_id);
     }
 
+    // OPTIMIZATION PREPROCESSING for partition functions too
+    let mut all_partition_ops: Vec<(cfg::BasicBlockId, Vec<OptimizedOp>)> = Vec::new();
+    for &block_id in &hop.blocks {
+        let block = &program.basic_blocks[block_id];
+        let optimized_ops = optimize_instructions(&block.instructions);
+        all_partition_ops.push((block_id, optimized_ops));
+    }
+
     // Generate code for entry block with label
     writeln!(out, "BB{}:", entry_block.index())?;
-    let entry_block_obj = &program.basic_blocks[entry_block];
     
-    // For partition functions, we iterate through instructions normally
-    // The first table access determines the partition, rest is unreachable code
-    for inst in &entry_block_obj.instructions {
-        if let Some(shard) = lower_instruction_partition(
-            out,
-            program,
-            inst,
-            "\t",
-            &mut initialized_vars,
-            &mut table_access_count,
-        )? {
-            // First table access found - return the shard
+    // Find the optimized ops for the entry block
+    let (_, entry_ops) = all_partition_ops.iter().find(|(bid, _)| *bid == entry_block).unwrap();
+    
+    // For partition functions, the first table access returns the partition, rest is unreachable
+    for op in entry_ops {
+        if let Some(shard) = check_partition_from_op(out, program, op, "\t", &mut initialized_vars, &mut table_access_count)? {
             writeln!(out, "\tif true {{ return {} }}", shard)?;
         }
-        // Continue generating unreachable code to use variables (prevents Go compiler errors)
-        lower_single_instruction(
-            out,
-            program,
-            inst,
-            &mut initialized_vars,
-            &mut table_access_count,
-            "\t",
-        )?;
+        // Continue generating unreachable code
+        lower_op_partition_unreachable(out, program, op, &mut initialized_vars, &mut table_access_count, "\t")?;
     }
-    lower_terminator_partition_goto(out, program, &entry_block_obj.terminator, "\t")?;
+    
+    lower_terminator_partition_goto(out, program, &program.basic_blocks[entry_block].terminator, "\t")?;
 
     // Generate code for other blocks in the hop
     for &block_id in &hop.blocks {
@@ -568,36 +530,21 @@ fn generate_partition_hop_function(
             continue;
         }
 
-        let block = &program.basic_blocks[block_id];
-
         if used_labels.contains(&block_id) {
             writeln!(out, "BB{}:", block_id.index())?;
         }
 
-        // For partition functions, iterate through instructions normally
-        for inst in &block.instructions {
-            if let Some(shard) = lower_instruction_partition(
-                out,
-                program,
-                inst,
-                "\t",
-                &mut initialized_vars,
-                &mut table_access_count,
-            )? {
+        // Find the optimized ops for this block
+        let (_, block_ops) = all_partition_ops.iter().find(|(bid, _)| *bid == block_id).unwrap();
+        
+        for op in block_ops {
+            if let Some(shard) = check_partition_from_op(out, program, op, "\t", &mut initialized_vars, &mut table_access_count)? {
                 writeln!(out, "\tif true {{ return {} }}", shard)?;
             }
-            // Continue generating unreachable code to use variables
-            lower_single_instruction(
-                out,
-                program,
-                inst,
-                &mut initialized_vars,
-                &mut table_access_count,
-                "\t",
-            )?;
+            lower_op_partition_unreachable(out, program, op, &mut initialized_vars, &mut table_access_count, "\t")?;
         }
 
-        lower_terminator_partition_goto(out, program, &block.terminator, "\t")?;
+        lower_terminator_partition_goto(out, program, &program.basic_blocks[block_id].terminator, "\t")?;
     }
 
     // Fallback return
@@ -605,6 +552,429 @@ fn generate_partition_hop_function(
     writeln!(out, "}}")?;
     writeln!(out)?;
 
+    Ok(())
+}
+
+/// Lower a sequence of optimized operations (main code generation entry point)
+/// This function handles both single instructions and combined table accesses uniformly
+fn lower_optimized_ops(
+    out: &mut String,
+    program: &cfg::Program,
+    ops: &[OptimizedOp],
+    initialized_vars: &mut HashSet<cfg::VariableId>,
+    table_access_count: &mut usize,
+    indent: &str,
+) -> Result<(), std::fmt::Error> {
+    for op in ops {
+        match op {
+            OptimizedOp::Single(inst) => {
+                lower_instruction(out, program, inst, initialized_vars, table_access_count, indent)?;
+            }
+            OptimizedOp::CombinedTableAccess(group) => {
+                lower_combined_table_access(out, program, group, initialized_vars, table_access_count, indent)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Lower a single instruction (public API for other modules)
+pub(super) fn lower_single_instruction(
+    out: &mut String,
+    program: &cfg::Program,
+    inst: &Instruction,
+    initialized_vars: &mut HashSet<cfg::VariableId>,
+    table_access_count: &mut usize,
+    indent: &str,
+) -> Result<(), std::fmt::Error> {
+    lower_instruction(out, program, inst, initialized_vars, table_access_count, indent)
+}
+
+/// Lower a single instruction
+fn lower_instruction(
+    out: &mut String,
+    program: &cfg::Program,
+    inst: &Instruction,
+    initialized_vars: &mut HashSet<cfg::VariableId>,
+    table_access_count: &mut usize,
+    indent: &str,
+) -> Result<(), std::fmt::Error> {
+    match &inst.kind {
+        InstructionKind::Assign { dest, src } => {
+            let dest_name = go_var_name(program, *dest);
+            let src_go = operand_to_go(program, src);
+            writeln!(out, "{}{} = {}", indent, dest_name, src_go)?;
+            initialized_vars.insert(*dest);
+        }
+
+        InstructionKind::BinaryOp {
+            dest,
+            op,
+            left,
+            right,
+        } => {
+            let dest_name = go_var_name(program, *dest);
+            let left_go = operand_to_go(program, left);
+            let right_go = operand_to_go(program, right);
+            let op_str = binary_op_to_go(*op);
+            writeln!(
+                out,
+                "{}{} = {} {} {}",
+                indent, dest_name, left_go, op_str, right_go
+            )?;
+            initialized_vars.insert(*dest);
+        }
+
+        InstructionKind::UnaryOp { dest, op, operand } => {
+            let dest_name = go_var_name(program, *dest);
+            let operand_go = operand_to_go(program, operand);
+            let op_str = unary_op_to_go(*op);
+            writeln!(out, "{}{} = {}{}", indent, dest_name, op_str, operand_go)?;
+            initialized_vars.insert(*dest);
+        }
+
+        InstructionKind::TableGet {
+            dest,
+            table,
+            keys,
+            field,
+        } => {
+            let table_info = &program.tables[*table];
+            let table_name = pascal_case(&table_info.name);
+            let dest_name = go_var_name(program, *dest);
+
+            writeln!(out, "{}// TableGet: {}", indent, table_name)?;
+            let key_args: Vec<String> = table_info
+                .primary_key_fields
+                .iter()
+                .zip(keys.iter())
+                .map(|(field_id, operand)| {
+                    let field = &program.table_fields[*field_id];
+                    let value = operand_to_go(program, operand);
+                    format!("{}: {}", field.name, value)
+                })
+                .collect();
+
+            *table_access_count += 1;
+            let key_var = format!("keyBytes{}", table_access_count);
+            let row_var = format!("row{}", table_access_count);
+
+            writeln!(
+                out,
+                "{}{}, {} = get{}(tx, {}Key{{{}}})",
+                indent,
+                key_var,
+                row_var,
+                table_name,
+                table_name,
+                key_args.join(", ")
+            )?;
+            writeln!(
+                out,
+                "{}rwSet = AddRWSet(rwSet, \"{}\", {})",
+                indent, table_name, key_var
+            )?;
+
+            if let Some(field_id) = field {
+                let accessor = table_field_accessor(program, table_info, *field_id, &row_var);
+                writeln!(out, "{}{} = {}", indent, dest_name, accessor)?;
+                initialized_vars.insert(*dest);
+            } else {
+                writeln!(out, "{}{} = {}", indent, dest_name, row_var)?;
+                initialized_vars.insert(*dest);
+            }
+        }
+
+        InstructionKind::TableSet {
+            table,
+            keys,
+            field,
+            value,
+        } => {
+            let table_info = &program.tables[*table];
+            let table_name = pascal_case(&table_info.name);
+
+            writeln!(out, "{}// TableSet: {}", indent, table_name)?;
+            let key_args: Vec<String> = table_info
+                .primary_key_fields
+                .iter()
+                .zip(keys.iter())
+                .map(|(field_id, operand)| {
+                    let field = &program.table_fields[*field_id];
+                    let value = operand_to_go(program, operand);
+                    format!("{}: {}", field.name, value)
+                })
+                .collect();
+
+            *table_access_count += 1;
+            let key_var = format!("keyBytes{}", table_access_count);
+            let row_var = format!("row{}", table_access_count);
+
+            writeln!(
+                out,
+                "{}{}, {} = get{}(tx, {}Key{{{}}})",
+                indent,
+                key_var,
+                row_var,
+                table_name,
+                table_name,
+                key_args.join(", ")
+            )?;
+            writeln!(
+                out,
+                "{}rwSet = AddRWSet(rwSet, \"{}\", {})",
+                indent, table_name, key_var
+            )?;
+
+            if let Some(field_id) = field {
+                let accessor = table_field_accessor(program, table_info, *field_id, &row_var);
+                let value_go = operand_to_go(program, value);
+                writeln!(out, "{}{} = {}", indent, accessor, value_go)?;
+            } else {
+                let value_go = operand_to_go(program, value);
+                writeln!(out, "{}{} = {}", indent, row_var, value_go)?;
+            }
+
+            writeln!(
+                out,
+                "{}put{}(tx, {}Key{{{}}}, {})",
+                indent, table_name, table_name, key_args.join(", "), row_var
+            )?;
+        }
+
+        InstructionKind::Assert { condition, message } => {
+            let cond_go = operand_to_go(program, condition);
+            writeln!(out, "{}if !({}) {{", indent, cond_go)?;
+            writeln!(
+                out,
+                "{}\tpanic(\"{}\")",
+                indent,
+                message.replace('"', "\\\"")
+            )?;
+            writeln!(out, "{}}}", indent)?;
+        }
+
+        InstructionKind::Call { dest, func, args } => {
+            let func_info = &program.functions[*func];
+            let func_name = func_info.name.as_str();
+            let has_go_decorator = func_info
+                .decorators
+                .iter()
+                .any(|decorator| decorator.name == "go");
+            let go_name = go_function_name(program, *func);
+
+            let call_expr = if has_go_decorator && func_name == "+" {
+                let list_expr = operand_to_go(program, &args[0]);
+                let elem_expr = operand_to_go(program, &args[1]);
+                format!("append({}, {})", list_expr, elem_expr)
+            } else if has_go_decorator && func_name == "get" {
+                let list_expr = operand_to_go(program, &args[0]);
+                let index_expr = operand_to_go(program, &args[1]);
+                format!("{}({}, int({}))", go_name, list_expr, index_expr)
+            } else if func_name == "str" {
+                operand_to_string(program, &args[0])
+            } else {
+                let args_go: Vec<String> = args.iter().map(|arg| operand_to_go(program, arg)).collect();
+                format!("{}({})", go_name, args_go.join(", "))
+            };
+
+            if let Some(dest_var) = dest {
+                let dest_name = go_var_name(program, *dest_var);
+                writeln!(out, "{}{} = {}", indent, dest_name, call_expr)?;
+                initialized_vars.insert(*dest_var);
+            } else if func_name == "str" {
+                writeln!(out, "{}_ = {}", indent, call_expr)?;
+            } else {
+                writeln!(out, "{}{}", indent, call_expr)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Lower a combined table access group into a single get/put operation
+fn lower_combined_table_access(
+    out: &mut String,
+    program: &cfg::Program,
+    group: &TableAccessGroup,
+    initialized_vars: &mut HashSet<cfg::VariableId>,
+    table_access_count: &mut usize,
+    indent: &str,
+) -> Result<(), std::fmt::Error> {
+    let table_info = &program.tables[group.table_id];
+    let table_name = pascal_case(&table_info.name);
+    
+    writeln!(out, "{}// Optimized combined table access: {}", indent, table_name)?;
+    
+    let key_args: Vec<String> = table_info
+        .primary_key_fields
+        .iter()
+        .zip(group.keys.iter())
+        .map(|(field_id, operand)| {
+            let field = &program.table_fields[*field_id];
+            let value = operand_to_go(program, operand);
+            format!("{}: {}", field.name, value)
+        })
+        .collect();
+    
+    *table_access_count += 1;
+    let key_var = format!("keyBytes{}", table_access_count);
+    let row_var = format!("row{}", table_access_count);
+    
+    writeln!(
+        out,
+        "{}{}, {} = get{}(tx, {}Key{{{}}})",
+        indent, key_var, row_var, table_name, table_name,
+        key_args.join(", ")
+    )?;
+    writeln!(
+        out,
+        "{}rwSet = AddRWSet(rwSet, \"{}\", {})",
+        indent, table_name, key_var
+    )?;
+    
+    for access in &group.accesses {
+        match access {
+            TableAccess::Get { dest, field, .. } => {
+                if let Some(field_id) = field {
+                    let dest_name = go_var_name(program, *dest);
+                    let accessor = table_field_accessor(program, table_info, *field_id, &row_var);
+                    writeln!(out, "{}{} = {}", indent, dest_name, accessor)?;
+                    initialized_vars.insert(*dest);
+                }
+            }
+            TableAccess::Set { field, value, .. } => {
+                if let Some(field_id) = field {
+                    let accessor = table_field_accessor(program, table_info, *field_id, &row_var);
+                    let value_go = operand_to_go(program, value);
+                    writeln!(out, "{}{} = {}", indent, accessor, value_go)?;
+                }
+            }
+        }
+    }
+    
+    if group.has_writes {
+        writeln!(
+            out,
+            "{}put{}(tx, {}Key{{{}}}, {})",
+            indent, table_name, table_name, key_args.join(", "), row_var
+        )?;
+    }
+    
+    Ok(())
+}
+
+/// Check if an optimized op contains a table access for partition calculation
+fn check_partition_from_op(
+    out: &mut String,
+    program: &cfg::Program,
+    op: &OptimizedOp,
+    indent: &str,
+    _initialized_vars: &mut HashSet<cfg::VariableId>,
+    _table_access_count: &mut usize,
+) -> Result<Option<String>, std::fmt::Error> {
+    match op {
+        OptimizedOp::Single(inst) => {
+            // Check if it's a table access
+            match &inst.kind {
+                InstructionKind::TableGet { table, keys, .. }
+                | InstructionKind::TableSet { table, keys, .. } => {
+                    let table_info = &program.tables[*table];
+                    let table_name = pascal_case(&table_info.name);
+
+                    writeln!(out, "{}// First table access - calculate partition: {}", indent, table_name)?;
+
+                    let key_args: Vec<String> = table_info
+                        .primary_key_fields
+                        .iter()
+                        .zip(keys.iter())
+                        .map(|(field_id, operand)| {
+                            let field = &program.table_fields[*field_id];
+                            let value = operand_to_go(program, operand);
+                            format!("{}: {}", field.name, value)
+                        })
+                        .collect();
+
+                    let call = if matches!(&inst.kind, InstructionKind::TableGet { .. }) {
+                        format!("get{}Par({}Key{{{}}})", table_name, table_name, key_args.join(", "))
+                    } else {
+                        format!("put{}Par({}Key{{{}}})", table_name, table_name, key_args.join(", "))
+                    };
+
+                    Ok(Some(call))
+                }
+                _ => Ok(None),
+            }
+        }
+        OptimizedOp::CombinedTableAccess(group) => {
+            // Combined access - use the first access for partition
+            let table_info = &program.tables[group.table_id];
+            let table_name = pascal_case(&table_info.name);
+
+            writeln!(out, "{}// First table access (optimized group) - calculate partition: {}", indent, table_name)?;
+
+            let key_args: Vec<String> = table_info
+                .primary_key_fields
+                .iter()
+                .zip(group.keys.iter())
+                .map(|(field_id, operand)| {
+                    let field = &program.table_fields[*field_id];
+                    let value = operand_to_go(program, operand);
+                    format!("{}: {}", field.name, value)
+                })
+                .collect();
+
+            // Use getPar for reads, putPar for writes (both return same partition)
+            let call = if group.has_writes {
+                format!("put{}Par({}Key{{{}}})", table_name, table_name, key_args.join(", "))
+            } else {
+                format!("get{}Par({}Key{{{}}})", table_name, table_name, key_args.join(", "))
+            };
+
+            Ok(Some(call))
+        }
+    }
+}
+
+/// Lower an optimized op for partition function unreachable code
+/// Since this code is unreachable (we return early on first table access),
+/// we only need to mark destination variables as "initialized" to avoid warnings
+fn lower_op_partition_unreachable(
+    _out: &mut String,
+    _program: &cfg::Program,
+    op: &OptimizedOp,
+    initialized_vars: &mut HashSet<cfg::VariableId>,
+    _table_access_count: &mut usize,
+    _indent: &str,
+) -> Result<(), std::fmt::Error> {
+    // For unreachable code, just mark destination variables as initialized
+    // No actual code generation needed since it will never execute
+    match op {
+        OptimizedOp::Single(inst) => {
+            // Mark destination variable as initialized if it exists
+            match &inst.kind {
+                InstructionKind::Assign { dest, .. }
+                | InstructionKind::BinaryOp { dest, .. }
+                | InstructionKind::UnaryOp { dest, .. }
+                | InstructionKind::TableGet { dest, .. } => {
+                    initialized_vars.insert(*dest);
+                }
+                InstructionKind::Call { dest: Some(dest), .. } => {
+                    initialized_vars.insert(*dest);
+                }
+                _ => {}
+            }
+        }
+        OptimizedOp::CombinedTableAccess(group) => {
+            // Mark all get destinations as initialized
+            for access in &group.accesses {
+                if let TableAccess::Get { dest, .. } = access {
+                    initialized_vars.insert(*dest);
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -646,408 +1016,6 @@ fn collect_used_labels(term: &Terminator, used_labels: &mut HashSet<cfg::BasicBl
         }
         _ => {}
     }
-}
-
-/// Internal instruction lowering implementation
-/// This should not be called directly - use lower_single_instruction instead
-fn lower_instruction_impl(
-    out: &mut String,
-    program: &cfg::Program,
-    inst: &Instruction,
-    initialized_vars: &mut HashSet<cfg::VariableId>,
-    table_access_count: &mut usize,
-    indent: &str,
-) -> Result<(), std::fmt::Error> {
-    match &inst.kind {
-        InstructionKind::Assign { dest, src } => {
-            let dest_name = go_var_name(program, *dest);
-            let src_go = operand_to_go(program, src);
-
-            writeln!(out, "{}{} = {}", indent, dest_name, src_go)?;
-            initialized_vars.insert(*dest);
-        }
-
-        InstructionKind::BinaryOp {
-            dest,
-            op,
-            left,
-            right,
-        } => {
-            let dest_name = go_var_name(program, *dest);
-            let left_go = operand_to_go(program, left);
-            let right_go = operand_to_go(program, right);
-            let op_str = binary_op_to_go(*op);
-
-            writeln!(
-                out,
-                "{}{} = {} {} {}",
-                indent, dest_name, left_go, op_str, right_go
-            )?;
-            initialized_vars.insert(*dest);
-        }
-
-        InstructionKind::UnaryOp { dest, op, operand } => {
-            let dest_name = go_var_name(program, *dest);
-            let operand_go = operand_to_go(program, operand);
-            let op_str = unary_op_to_go(*op);
-
-            writeln!(out, "{}{} = {}{}", indent, dest_name, op_str, operand_go)?;
-            initialized_vars.insert(*dest);
-        }
-
-        InstructionKind::TableGet {
-            dest,
-            table,
-            keys,
-            field,
-        } => {
-            let table_info = &program.tables[*table];
-            let table_name = pascal_case(&table_info.name);
-            let dest_name = go_var_name(program, *dest);
-
-            // Build key struct
-            writeln!(out, "{}// TableGet: {}", indent, table_name)?;
-            let key_args: Vec<String> = table_info
-                .primary_key_fields
-                .iter()
-                .zip(keys.iter())
-                .map(|(field_id, key_operand)| {
-                    let field = &program.table_fields[*field_id];
-                    format!("{}: {}", field.name, operand_to_go(program, key_operand))
-                })
-                .collect();
-
-            // Generate unique variable names for each table access
-            *table_access_count += 1;
-            let call = format!(
-                "get{}(tx, {}Key{{ {} }})",
-                table_name,
-                table_name,
-                key_args.join(", ")
-            );
-
-            if let Some(field_id) = field {
-                // Getting specific field
-                let row_var = format!("row{}", table_access_count);
-                let key_var = format!("keyBytes{}", table_access_count);
-                writeln!(out, "{}{}, {} = {}", indent, key_var, row_var, call)?;
-                // Add to rwSet
-                writeln!(
-                    out,
-                    "{}rwSet = AddRWSet(rwSet, \"{}\", {})",
-                    indent, table_name, key_var
-                )?;
-
-                let field_access = table_field_accessor(program, table_info, *field_id, &row_var);
-                writeln!(out, "{}{} = {}", indent, dest_name, field_access)?;
-                initialized_vars.insert(*dest);
-            } else {
-                // Getting entire row
-                let key_var = format!("keyBytes{}", table_access_count);
-                writeln!(out, "{}{}, {} = {}", indent, key_var, dest_name, call)?;
-                // Add to rwSet
-                writeln!(
-                    out,
-                    "{}rwSet = AddRWSet(rwSet, \"{}\", {})",
-                    indent, table_name, key_var
-                )?;
-                initialized_vars.insert(*dest);
-            }
-        }
-
-        InstructionKind::TableSet {
-            table,
-            keys,
-            field,
-            value,
-        } => {
-            let table_info = &program.tables[*table];
-            let table_name = pascal_case(&table_info.name);
-
-            writeln!(out, "{}// TableSet: {}", indent, table_name)?;
-            let key_args: Vec<String> = table_info
-                .primary_key_fields
-                .iter()
-                .zip(keys.iter())
-                .map(|(field_id, key_operand)| {
-                    let field = &program.table_fields[*field_id];
-                    format!("{}: {}", field.name, operand_to_go(program, key_operand))
-                })
-                .collect();
-
-            // Generate unique variable names for each table access
-            *table_access_count += 1;
-            let key_var = format!("keyBytes{}", table_access_count);
-            let row_var = format!("row{}", table_access_count);
-
-            // First get the row
-            writeln!(
-                out,
-                "{}{}, {} = get{}(tx, {}Key{{ {} }})",
-                indent,
-                key_var,
-                row_var,
-                table_name,
-                table_name,
-                key_args.join(", ")
-            )?;
-
-            // Add to rwSet
-            writeln!(
-                out,
-                "{}rwSet = AddRWSet(rwSet, \"{}\", {})",
-                indent, table_name, key_var
-            )?;
-
-            if let Some(field_id) = field {
-                // Setting specific field
-                let field_target = table_field_accessor(program, table_info, *field_id, &row_var);
-                writeln!(
-                    out,
-                    "{}{} = {}",
-                    indent,
-                    field_target,
-                    operand_to_go(program, value)
-                )?;
-            }
-
-            // Write back
-            writeln!(
-                out,
-                "{}putData(tx.Bucket([]byte(\"t{}\")), {}, mustJSON({}))",
-                indent, table_name, key_var, row_var
-            )?;
-        }
-
-        InstructionKind::Assert { condition, message } => {
-            let cond_go = operand_to_go(program, condition);
-            writeln!(out, "{}if !({}) {{", indent, cond_go)?;
-            writeln!(
-                out,
-                "{}\tpanic(\"{}\")",
-                indent,
-                message.replace('"', "\\\"")
-            )?;
-            writeln!(out, "{}}}", indent)?;
-        }
-
-        InstructionKind::Call { dest, func, args } => {
-            let func_info = &program.functions[*func];
-            let func_name = func_info.name.as_str();
-            let has_go_decorator = func_info
-                .decorators
-                .iter()
-                .any(|decorator| decorator.name == "go");
-            let go_name = go_function_name(program, *func);
-
-            let call_expr = if has_go_decorator && func_name == "+" {
-                let parts: Vec<String> = args
-                    .iter()
-                    .map(|operand| operand_to_string(program, operand))
-                    .collect();
-                if parts.is_empty() {
-                    format!("{}()", go_name)
-                } else {
-                    format!("{}({})", go_name, parts.join(", "))
-                }
-            } else if has_go_decorator && func_name == "get" {
-                assert!(args.len() == 2, "list get expects list and index arguments");
-                let list_expr = operand_to_go(program, &args[0]);
-                let index_expr = operand_to_go(program, &args[1]);
-                format!("{}({}, int({}))", go_name, list_expr, index_expr)
-            } else if func_name == "str" {
-                args.first()
-                    .map(|operand| operand_to_string(program, operand))
-                    .unwrap_or_else(|| "\"\"".to_string())
-            } else {
-                let arg_exprs: Vec<String> =
-                    args.iter().map(|arg| operand_to_go(program, arg)).collect();
-                if arg_exprs.is_empty() {
-                    format!("{}()", go_name)
-                } else {
-                    format!("{}({})", go_name, arg_exprs.join(", "))
-                }
-            };
-
-            if let Some(dest_var) = dest {
-                let dest_name = go_var_name(program, *dest_var);
-                writeln!(out, "{}{} = {}", indent, dest_name, call_expr)?;
-                initialized_vars.insert(*dest_var);
-            } else if func_name == "str" {
-                writeln!(out, "{}_ = {}", indent, call_expr)?;
-            } else {
-                writeln!(out, "{}{}", indent, call_expr)?;
-            }
-        }
-    }
-
-    Ok(())
-}
-
-/// Lower a sequence of instructions with table access optimization
-fn lower_instructions_with_optimization(
-    out: &mut String,
-    program: &cfg::Program,
-    instructions: &[Instruction],
-    groups: &[TableAccessGroup],
-    inst_to_group: &HashMap<usize, (usize, usize)>,
-    initialized_vars: &mut HashSet<cfg::VariableId>,
-    table_access_count: &mut usize,
-    indent: &str,
-) -> Result<(), std::fmt::Error> {
-    let mut processed_groups: HashSet<usize> = HashSet::new();
-    
-    for (inst_idx, inst) in instructions.iter().enumerate() {
-        // Check if this instruction is part of a group
-        if let Some(&(group_idx, access_idx_in_group)) = inst_to_group.get(&inst_idx) {
-            // Only process the group once (at the first access)
-            if access_idx_in_group == 0 && !processed_groups.contains(&group_idx) {
-                processed_groups.insert(group_idx);
-                let group = &groups[group_idx];
-                
-                // Only optimize if worth combining and all are field accesses
-                if group.is_worth_combining() && group.all_field_accesses() {
-                    lower_table_access_group(
-                        out,
-                        program,
-                        group,
-                        initialized_vars,
-                        table_access_count,
-                        indent,
-                    )?;
-                } else {
-                    // Not worth optimizing, but still part of a group - process the single instruction
-                    lower_single_instruction(
-                        out,
-                        program,
-                        inst,
-                        initialized_vars,
-                        table_access_count,
-                        indent,
-                    )?;
-                }
-            } else if processed_groups.contains(&group_idx) {
-                // This instruction was already handled as part of an optimized group, skip it
-                continue;
-            } else {
-                // Part of a group but not the first access - shouldn't happen with proper grouping
-                // Process individually as fallback
-                lower_single_instruction(
-                    out,
-                    program,
-                    inst,
-                    initialized_vars,
-                    table_access_count,
-                    indent,
-                )?;
-            }
-        } else {
-            // Not part of any group, process normally
-            lower_single_instruction(
-                out,
-                program,
-                inst,
-                initialized_vars,
-                table_access_count,
-                indent,
-            )?;
-        }
-    }
-    
-    Ok(())
-}
-
-/// Lower a single instruction (wrapper around internal implementation)
-/// Public for use by other codegen modules like gen_global
-pub(super) fn lower_single_instruction(
-    out: &mut String,
-    program: &cfg::Program,
-    inst: &Instruction,
-    initialized_vars: &mut HashSet<cfg::VariableId>,
-    table_access_count: &mut usize,
-    indent: &str,
-) -> Result<(), std::fmt::Error> {
-    // Calls the internal implementation
-    lower_instruction_impl(out, program, inst, initialized_vars, table_access_count, indent)
-}
-
-/// Lower a grouped set of table accesses into a single get/put operation
-fn lower_table_access_group(
-    out: &mut String,
-    program: &cfg::Program,
-    group: &TableAccessGroup,
-    initialized_vars: &mut HashSet<cfg::VariableId>,
-    table_access_count: &mut usize,
-    indent: &str,
-) -> Result<(), std::fmt::Error> {
-    let table_info = &program.tables[group.table_id];
-    let table_name = pascal_case(&table_info.name);
-    
-    writeln!(out, "{}// Optimized combined table access: {}", indent, table_name)?;
-    
-    // Build key struct arguments
-    let key_args: Vec<String> = table_info
-        .primary_key_fields
-        .iter()
-        .zip(group.keys.iter())
-        .map(|(field_id, operand)| {
-            let field = &program.table_fields[*field_id];
-            let value = operand_to_go(program, operand);
-            format!("{}: {}", field.name, value)
-        })
-        .collect();
-    
-    // Generate unique variable names
-    *table_access_count += 1;
-    let key_var = format!("keyBytes{}", table_access_count);
-    let row_var = format!("row{}", table_access_count);
-    
-    // Get the whole row
-    writeln!(
-        out,
-        "{}{}, {} = get{}(tx, {}Key{{{}}})",
-        indent, key_var, row_var, table_name, table_name,
-        key_args.join(", ")
-    )?;
-    
-    // Add to rwSet
-    writeln!(
-        out,
-        "{}rwSet = AddRWSet(rwSet, \"{}\", {})",
-        indent, table_name, key_var
-    )?;
-    
-    // Process all accesses in the group
-    for access in &group.accesses {
-        match access {
-            TableAccess::Get { dest, field, .. } => {
-                if let Some(field_id) = field {
-                    let dest_name = go_var_name(program, *dest);
-                    let accessor = table_field_accessor(program, table_info, *field_id, &row_var);
-                    writeln!(out, "{}{} = {}", indent, dest_name, accessor)?;
-                    initialized_vars.insert(*dest);
-                }
-            }
-            TableAccess::Set { field, value, .. } => {
-                if let Some(field_id) = field {
-                    let accessor = table_field_accessor(program, table_info, *field_id, &row_var);
-                    let value_go = operand_to_go(program, value);
-                    writeln!(out, "{}{} = {}", indent, accessor, value_go)?;
-                }
-            }
-        }
-    }
-    
-    // If there were any writes, write the row back
-    if group.has_writes {
-        writeln!(
-            out,
-            "{}put{}(tx, {}Key{{{}}}, {})",
-            indent, table_name, table_name, key_args.join(", "), row_var
-        )?;
-    }
-    
-    Ok(())
 }
 
 pub(super) fn lower_terminator_goto(
@@ -1135,74 +1103,6 @@ pub(super) fn lower_terminator_goto(
     }
 
     Ok(())
-}
-
-// Lower instruction for partition calculation - returns Some(shard) if table access is found
-fn lower_instruction_partition(
-    out: &mut String,
-    program: &cfg::Program,
-    inst: &Instruction,
-    indent: &str,
-    initialized_vars: &mut HashSet<cfg::VariableId>,
-    table_access_count: &mut usize,
-) -> Result<Option<String>, std::fmt::Error> {
-    // Check if this is a table access
-    match &inst.kind {
-        InstructionKind::TableGet { table, keys, .. }
-        | InstructionKind::TableSet { table, keys, .. } => {
-            // First table access found - call the partition function
-            let table_info = &program.tables[*table];
-            let table_name = pascal_case(&table_info.name);
-
-            writeln!(
-                out,
-                "{}// First table access: {} - calculate partition",
-                indent, table_name
-            )?;
-
-            let key_args: Vec<String> = table_info
-                .primary_key_fields
-                .iter()
-                .zip(keys.iter())
-                .map(|(field_id, key_operand)| {
-                    let field = &program.table_fields[*field_id];
-                    format!("{}: {}", field.name, operand_to_go(program, key_operand))
-                })
-                .collect();
-
-            // Determine which function to call (get or put - both return partition)
-            let call = if matches!(&inst.kind, InstructionKind::TableGet { .. }) {
-                format!(
-                    "get{}Par({}Key{{ {} }})",
-                    table_name,
-                    table_name,
-                    key_args.join(", ")
-                )
-            } else {
-                format!(
-                    "put{}Par({}Key{{ {} }})",
-                    table_name,
-                    table_name,
-                    key_args.join(", ")
-                )
-            };
-
-            // Return the partition shard
-            Ok(Some(call))
-        }
-        _ => {
-            // For non-table-access instructions, use the normal lowering
-            lower_single_instruction(
-                out,
-                program,
-                inst,
-                initialized_vars,
-                table_access_count,
-                indent,
-            )?;
-            Ok(None)
-        }
-    }
 }
 
 // Lower terminator for partition calculation - just reuse the normal one
