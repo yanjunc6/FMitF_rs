@@ -23,6 +23,7 @@
 
 @intrinsic type Iterator<T>; // An iterator over table Activity is of type Iterator<Activity>
 @intrinsic type UUID;
+@intrinsic type unit; // unit type has only one value: ()
 // ===========================================
 // Arithmetic Operators
 // ===========================================
@@ -109,7 +110,7 @@ const __slice__: int = 0;
 @intrinsic @Boogie function hasNext<T>(iter: Iterator<T>) -> bool;
 
 // vague function
-@intrinsic @Boogie @go function print<T>(x: T) -> void; // it does nothing at runtime
+@intrinsic @Boogie @go function to_unit<T>(x: T) -> unit; // it does nothing at runtime
 
 
 // ===========================================

@@ -30,6 +30,7 @@ impl BoogieProgramGenerator {
         generator.gen_list_axioms();
         generator.gen_uuid_axioms();
         generator.gen_iterator_axioms();
+        generator.gen_unit_axioms();
         generator.gen_global_constants(cfg_program);
         generator.gen_iterator_function_declarations(cfg_program);
         generator.gen_table_variables(cfg_program);
@@ -57,6 +58,23 @@ impl BoogieProgramGenerator {
     pub fn get_current_procedure_mut(&mut self) -> Option<&mut BoogieProcedure> {
         self.current_procedure_index
             .and_then(move |i| self.program.procedures.get_mut(i))
+    }
+
+
+    /// Generate unit type and axioms
+    pub fn gen_unit_axioms(&mut self) {
+        let mut decls = Vec::new();
+        // Type
+        decls.push("type unit;".to_string());
+        // Constant
+        decls.push("const c_unit: unit;".to_string());
+        // Axiom: All unit values are equal
+        decls.push("axiom (forall u1: unit, u2: unit :: u1 == u2);".to_string());
+
+        // function to_unit<T>(x: T): unit;
+        decls.push("function to_unit<a>(x: a): unit;".to_string());
+
+        self.program.other_declarations.extend(decls);
     }
 
     /// Generate string axioms and add to other_declarations
