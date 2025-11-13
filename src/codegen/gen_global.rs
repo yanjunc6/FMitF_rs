@@ -1,11 +1,14 @@
 use super::{
-    gen_transaction::{go_function_name, lower_single_instruction, operand_to_go},
+    gen_transaction::{
+        collect_used_labels, collect_var_decls_from_instruction, go_function_name,
+        lower_single_instruction, lower_terminator_goto, CodeGenContext,
+    },
     util::{go_type_string, go_var_name, pascal_case, write_go_file_header},
     GoProgram,
 };
 use crate::cfg::{self, FunctionKind, InstructionKind};
 use crate::sc_graph::SCGraph;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::Write;
 
@@ -31,19 +34,6 @@ fn build_global_source(
     writeln!(out, "\t\tpanic(err)")?;
     writeln!(out, "\t}}")?;
     writeln!(out, "\treturn bytes")?;
-    writeln!(out, "}}")?;
-    writeln!(out)?;
-
-    writeln!(
-        out,
-        "func putData(bucket *bolt.Bucket, key []byte, value []byte) {{"
-    )?;
-    writeln!(out, "\tif bucket == nil {{")?;
-    writeln!(out, "\t\tpanic(\"nil bucket\")")?;
-    writeln!(out, "\t}}")?;
-    writeln!(out, "\tif err := bucket.Put(key, value); err != nil {{")?;
-    writeln!(out, "\t\tpanic(err)")?;
-    writeln!(out, "\t}}")?;
     writeln!(out, "}}")?;
     writeln!(out)?;
 
@@ -234,41 +224,35 @@ fn write_partition_function(
         .expect("partition must have entry block");
 
     // Collect all variable declarations (excluding parameters)
-    let mut var_decls: HashSet<cfg::VariableId> = HashSet::new();
+    let mut var_decls: HashMap<cfg::VariableId, String> = HashMap::new();
     for &block_id in &function.all_blocks {
         let block = &program.basic_blocks[block_id];
         for inst in &block.instructions {
-            match &inst.kind {
-                InstructionKind::Assign { dest, .. }
-                | InstructionKind::BinaryOp { dest, .. }
-                | InstructionKind::UnaryOp { dest, .. }
-                | InstructionKind::TableGet { dest, .. } => {
-                    if !function.params.contains(dest) {
-                        var_decls.insert(*dest);
-                    }
+            if let InstructionKind::Assign { dest, .. }
+            | InstructionKind::BinaryOp { dest, .. }
+            | InstructionKind::UnaryOp { dest, .. }
+            | InstructionKind::TableGet { dest, .. }
+            | InstructionKind::Call { dest: Some(dest), .. } = &inst.kind
+            {
+                if !function.params.contains(dest) {
+                    collect_var_decls_from_instruction(program, inst, &mut var_decls);
                 }
-                InstructionKind::Call {
-                    dest: Some(dest), ..
-                } => {
-                    if !function.params.contains(dest) {
-                        var_decls.insert(*dest);
-                    }
-                }
-                _ => {}
             }
         }
     }
 
     // Emit variable declarations
-    for &var_id in &var_decls {
+    for (&var_id, type_str) in &var_decls {
         let var_name = go_var_name(program, var_id);
-        let var_type = &program.variables[var_id].ty;
-        let type_str = go_type_string(program, *var_type);
         writeln!(out, "\tvar {} {}", var_name, type_str)?;
     }
 
     // Collect used labels
-    let used_labels = collect_used_labels_partition(program, function);
+    let mut used_labels: HashSet<cfg::BasicBlockId> = HashSet::new();
+    for &block_id in &function.all_blocks {
+        let block = &program.basic_blocks[block_id];
+        collect_used_labels(&block.terminator, &mut used_labels);
+    }
 
     // Add initial goto to entry block to ensure all labels are reachable
     writeln!(out, "\tgoto BB{}", entry_block.index())?;
@@ -279,7 +263,7 @@ fn write_partition_function(
         let block = &program.basic_blocks[block_id];
 
         // Only emit label if it's used or it's the entry block
-        if used_labels.contains(&block_id.index()) || block_id == entry_block {
+        if used_labels.contains(&block_id) || block_id == entry_block {
             writeln!(out, "BB{}:", block_id.index())?;
         }
 
@@ -289,37 +273,13 @@ fn write_partition_function(
         }
 
         // Emit terminator
-        lower_partition_terminator_goto(out, program, &block.terminator, "\t")?;
+        lower_terminator_goto(out, program, &block.terminator, "\t", None, CodeGenContext::partition())?;
     }
 
     writeln!(out, "}}")?;
     writeln!(out)?;
 
     Ok(())
-}
-
-// Helper to collect used labels for partition functions
-fn collect_used_labels_partition(
-    program: &cfg::Program,
-    function: &cfg::Function,
-) -> HashSet<usize> {
-    let mut used: HashSet<usize> = HashSet::new();
-    for &block_id in &function.all_blocks {
-        let block = &program.basic_blocks[block_id];
-        match &block.terminator {
-            cfg::Terminator::Jump(target) => {
-                used.insert(target.index());
-            }
-            cfg::Terminator::Branch {
-                if_true, if_false, ..
-            } => {
-                used.insert(if_true.index());
-                used.insert(if_false.index());
-            }
-            _ => {}
-        }
-    }
-    used
 }
 
 // Lower instruction for partition functions (no table access tracking)
@@ -355,51 +315,6 @@ fn lower_instruction_partition(
             out.push_str(&temp_out);
         }
     }
-    Ok(())
-}
-
-fn lower_partition_terminator_goto(
-    out: &mut String,
-    program: &cfg::Program,
-    term: &cfg::Terminator,
-    indent: &str,
-) -> Result<(), std::fmt::Error> {
-    match term {
-        cfg::Terminator::Jump(target) => {
-            writeln!(out, "{}goto BB{}", indent, target.index())?;
-        }
-
-        cfg::Terminator::Branch {
-            condition,
-            if_true,
-            if_false,
-        } => {
-            let cond_go = operand_to_go(program, condition);
-            writeln!(out, "{}if {} {{", indent, cond_go)?;
-            writeln!(out, "{}\tgoto BB{}", indent, if_true.index())?;
-            writeln!(out, "{}}} else {{", indent)?;
-            writeln!(out, "{}\tgoto BB{}", indent, if_false.index())?;
-            writeln!(out, "{}}}", indent)?;
-        }
-
-        cfg::Terminator::Return(value) => {
-            if let Some(val) = value {
-                let expr = operand_to_go(program, val);
-                writeln!(out, "{}return {}", indent, expr)?;
-            } else {
-                writeln!(out, "{}return", indent)?;
-            }
-        }
-
-        cfg::Terminator::Abort => {
-            writeln!(out, "{}panic(\"partition aborted\")", indent)?;
-        }
-
-        cfg::Terminator::HopExit { .. } => {
-            writeln!(out, "{}panic(\"unexpected hop exit in partition\")", indent)?;
-        }
-    }
-
     Ok(())
 }
 

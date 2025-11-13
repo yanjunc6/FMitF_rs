@@ -42,7 +42,7 @@ pub fn generate_transactions(
                 "encoding/json",
                 "github.com/boltdb/bolt",
                 "ShardDB/proto",
-                "fmt",
+                "ShardDB/util",
             ],
         )?;
 
@@ -88,6 +88,23 @@ pub fn generate_transactions(
     Ok(files)
 }
 
+/// Context for code generation - controls whether we generate normal or partition code
+#[derive(Debug, Clone, Copy)]
+pub(super) struct CodeGenContext {
+    /// If true, generate partition calculation code (with early returns after table access)
+    pub is_partition: bool,
+}
+
+impl CodeGenContext {
+    pub fn normal() -> Self {
+        Self { is_partition: false }
+    }
+
+    pub fn partition() -> Self {
+        Self { is_partition: true }
+    }
+}
+
 fn generate_hop_function(
     out: &mut String,
     program: &cfg::Program,
@@ -96,27 +113,77 @@ fn generate_hop_function(
     hop_id: cfg::HopId,
     next_hop_id: Option<cfg::HopId>,
 ) -> Result<(), std::fmt::Error> {
+    generate_hop_function_impl(
+        out,
+        program,
+        function_id,
+        hop_index,
+        hop_id,
+        next_hop_id,
+        CodeGenContext::normal(),
+    )
+}
+
+fn generate_partition_hop_function(
+    out: &mut String,
+    program: &cfg::Program,
+    function_id: cfg::FunctionId,
+    hop_index: usize,
+    hop_id: cfg::HopId,
+) -> Result<(), std::fmt::Error> {
+    generate_hop_function_impl(
+        out,
+        program,
+        function_id,
+        hop_index,
+        hop_id,
+        None,
+        CodeGenContext::partition(),
+    )
+}
+
+fn generate_hop_function_impl(
+    out: &mut String,
+    program: &cfg::Program,
+    function_id: cfg::FunctionId,
+    hop_index: usize,
+    hop_id: cfg::HopId,
+    next_hop_id: Option<cfg::HopId>,
+    ctx: CodeGenContext,
+) -> Result<(), std::fmt::Error> {
     let function = &program.functions[function_id];
     let hop = &program.hops[hop_id];
-    let hop_name = format!("{}Hop{}", pascal_case(&function.name), hop_index);
+    
+    let hop_name = if ctx.is_partition {
+        format!("{}Hop{}Par", pascal_case(&function.name), hop_index)
+    } else {
+        format!("{}Hop{}", pascal_case(&function.name), hop_index)
+    };
 
-    writeln!(
-        out,
-        "// {} lowers hop {} containing {} basic block(s).",
-        hop_name,
-        hop_index,
-        hop.blocks.len()
-    )?;
-
-    writeln!(
-        out,
-        "func {}(tx *bolt.Tx, in *proto.TrxReq) (*proto.TrxRes, error) {{",
-        hop_name
-    )?;
-
-    writeln!(out, "\tvar rwSet []*proto.RWSet")?;
-    writeln!(out, "\tparams := in.Params")?;
-    writeln!(out)?;
+    if ctx.is_partition {
+        writeln!(
+            out,
+            "// {} calculates the partition for hop {} without database access.",
+            hop_name, hop_index
+        )?;
+        writeln!(out, "func {}(params map[string]string) uint64 {{", hop_name)?;
+    } else {
+        writeln!(
+            out,
+            "// {} lowers hop {} containing {} basic block(s).",
+            hop_name,
+            hop_index,
+            hop.blocks.len()
+        )?;
+        writeln!(
+            out,
+            "func {}(tx *bolt.Tx, in *proto.TrxReq) (*proto.TrxRes, error) {{",
+            hop_name
+        )?;
+        writeln!(out, "\tvar rwSet []*proto.RWSet")?;
+        writeln!(out, "\tparams := in.Params")?;
+        writeln!(out)?;
+    }
 
     // Run liveness analysis on the entire function
     let liveness = analyze_live_variables(function, program);
@@ -289,6 +356,21 @@ fn generate_hop_function(
         writeln!(out)?;
     }
 
+    // For partition mode, create fake variables for unreachable code
+    if ctx.is_partition {
+        writeln!(
+            out,
+            "\tvar tx *bolt.Tx = nil // Fake tx for unreachable code"
+        )?;
+        writeln!(
+            out,
+            "\tvar rwSet []*proto.RWSet // Fake rwSet for unreachable code"
+        )?;
+        writeln!(out, "\t_ = tx // Suppress unused variable warning")?;
+        writeln!(out, "\t_ = rwSet // Suppress unused variable warning")?;
+        writeln!(out)?;
+    }
+
     let mut table_access_count = 0;
 
     // Track which labels are actually used (targets of goto statements)
@@ -309,22 +391,34 @@ fn generate_hop_function(
     // Find the optimized ops for the entry block
     let (_, entry_ops) = all_optimized_ops.iter().find(|(bid, _)| *bid == entry_block).unwrap();
     
-    lower_optimized_ops(
-        out,
-        program,
-        entry_ops,
-        &mut initialized_vars,
-        &mut table_access_count,
-        "\t",
-    )?;
+    if ctx.is_partition {
+        // Partition mode: generate code with early returns after table accesses
+        for op in entry_ops {
+            if let Some(shard) = check_partition_from_op(out, program, op, "\t", &mut initialized_vars, &mut table_access_count)? {
+                writeln!(out, "\tif true {{ return {} }}", shard)?;
+            }
+            // Generate unreachable code (for Go compiler variable usage)
+            lower_instruction_or_combined(out, program, op, &mut initialized_vars, &mut table_access_count, "\t")?;
+        }
+    } else {
+        // Normal mode: generate regular code
+        lower_optimized_ops(
+            out,
+            program,
+            entry_ops,
+            &mut initialized_vars,
+            &mut table_access_count,
+            "\t",
+        )?;
+    }
     
     lower_terminator_goto(
         out,
         program,
         &entry_block_obj.terminator,
         "\t",
-        &initialized_vars,
-        &next_hop_live_in,
+        Some((&initialized_vars, &next_hop_live_in)),
+        ctx,
     )?;
 
     // Generate code for other blocks in the hop (only with label if used)
@@ -343,212 +437,37 @@ fn generate_hop_function(
         // Find the optimized ops for this block
         let (_, block_ops) = all_optimized_ops.iter().find(|(bid, _)| *bid == block_id).unwrap();
         
-        lower_optimized_ops(
-            out,
-            program,
-            block_ops,
-            &mut initialized_vars,
-            &mut table_access_count,
-            "\t",
-        )?;
+        if ctx.is_partition {
+            // Partition mode: generate code with early returns after table accesses
+            for op in block_ops {
+                if let Some(shard) = check_partition_from_op(out, program, op, "\t", &mut initialized_vars, &mut table_access_count)? {
+                    writeln!(out, "\tif true {{ return {} }}", shard)?;
+                }
+                // Generate unreachable code (for Go compiler variable usage)
+                lower_instruction_or_combined(out, program, op, &mut initialized_vars, &mut table_access_count, "\t")?;
+            }
+        } else {
+            // Normal mode: generate regular code
+            lower_optimized_ops(
+                out,
+                program,
+                block_ops,
+                &mut initialized_vars,
+                &mut table_access_count,
+                "\t",
+            )?;
+        }
 
         lower_terminator_goto(
             out,
             program,
             &block.terminator,
             "\t",
-            &initialized_vars,
-            &next_hop_live_in,
+            Some((&initialized_vars, &next_hop_live_in)),
+            ctx,
         )?;
     }
 
-    writeln!(out, "}}")?;
-    writeln!(out)?;
-
-    Ok(())
-}
-
-// Generate partition calculation hop function
-fn generate_partition_hop_function(
-    out: &mut String,
-    program: &cfg::Program,
-    function_id: cfg::FunctionId,
-    hop_index: usize,
-    hop_id: cfg::HopId,
-) -> Result<(), std::fmt::Error> {
-    let function = &program.functions[function_id];
-    let hop = &program.hops[hop_id];
-    let hop_name = format!("{}Hop{}Par", pascal_case(&function.name), hop_index);
-
-    writeln!(
-        out,
-        "// {} calculates the partition for hop {} without database access.",
-        hop_name, hop_index
-    )?;
-
-    // Function signature - takes a map of parameters, returns uint64 shard
-    writeln!(out, "func {}(params map[string]string) uint64 {{", hop_name)?;
-
-    // Run liveness analysis
-    let liveness = analyze_live_variables(function, program);
-
-    // Get live-in variables for this hop's entry block
-    let entry_block = hop.entry_block.expect("Hop must have entry block");
-    let mut live_in_set = liveness
-        .block_entry
-        .get(&entry_block)
-        .and_then(|lattice| lattice.as_set())
-        .map(|set| set.iter().map(|LiveVar(v)| *v).collect::<Vec<_>>())
-        .unwrap_or_default();
-    live_in_set.sort_by_key(|var_id| var_id.index());
-
-    // Collect all variables that need declaration
-    let mut var_decls: HashMap<cfg::VariableId, String> = HashMap::new();
-
-    // Declare live-in variables
-    for var_id in &live_in_set {
-        let var = &program.variables[*var_id];
-        let var_type = &program.types[var.ty];
-
-        let decl_type = match var_type {
-            cfg::Type::Primitive(cfg::PrimitiveType::Int)
-            | cfg::Type::Primitive(cfg::PrimitiveType::Float)
-            | cfg::Type::Primitive(cfg::PrimitiveType::Bool)
-            | cfg::Type::Primitive(cfg::PrimitiveType::String)
-            | cfg::Type::List(_) => go_type_string(program, var.ty),
-            _ => String::from("interface{}"),
-        };
-        var_decls.insert(*var_id, decl_type);
-    }
-
-    // Collect variables from all instructions in the hop
-    for &block_id in &hop.blocks {
-        let block = &program.basic_blocks[block_id];
-        for inst in &block.instructions {
-            collect_var_decls_from_instruction(program, inst, &mut var_decls);
-        }
-    }
-
-    // Output variable declarations (NO keyBytes/row variables - they're never used in partition functions)
-    if !var_decls.is_empty() {
-        let mut decls: Vec<_> = var_decls.iter().collect();
-        decls.sort_by_key(|(var_id, _)| var_id.index());
-        for (var_id, ty) in decls {
-            let var_name = go_var_name(program, *var_id);
-            writeln!(out, "\tvar {} {}", var_name, ty)?;
-        }
-        writeln!(out)?;
-    }
-
-    // Extract live-in variables from params
-    for var_id in &live_in_set {
-        let var = &program.variables[*var_id];
-        let var_name = go_var_name(program, *var_id);
-        let var_type = &program.types[var.ty];
-
-        match var_type {
-            cfg::Type::Primitive(cfg::PrimitiveType::Int) => {
-                writeln!(out, "\t{} = toUint64(params[\"{}\"])", var_name, var_name)?;
-            }
-            cfg::Type::Primitive(cfg::PrimitiveType::Float) => {
-                writeln!(out, "\t{} = toFloat32(params[\"{}\"])", var_name, var_name)?;
-            }
-            cfg::Type::Primitive(cfg::PrimitiveType::Bool) => {
-                writeln!(out, "\t{} = toBool(params[\"{}\"])", var_name, var_name)?;
-            }
-            cfg::Type::Primitive(cfg::PrimitiveType::String) => {
-                writeln!(out, "\t{} = params[\"{}\"]", var_name, var_name)?;
-            }
-            cfg::Type::List(_) => {
-                writeln!(
-                    out,
-                    "\tjson.Unmarshal([]byte(params[\"{}\"]), &{})",
-                    var_name, var_name
-                )?;
-            }
-            _ => {
-                writeln!(
-                    out,
-                    "\tjson.Unmarshal([]byte(params[\"{}\"]), &{})",
-                    var_name, var_name
-                )?;
-            }
-        }
-    }
-
-    if !live_in_set.is_empty() {
-        writeln!(out)?;
-    }
-
-    // Track which labels are actually used
-    let mut used_labels = HashSet::new();
-    for &block_id in &hop.blocks {
-        let block = &program.basic_blocks[block_id];
-        collect_used_labels(&block.terminator, &mut used_labels);
-    }
-
-    // Add initial goto to entry block to ensure all labels are reachable
-    writeln!(out, "\tgoto BB{}", entry_block.index())?;
-    writeln!(out)?;
-
-    let mut initialized_vars: HashSet<cfg::VariableId> = HashSet::new();
-    let mut table_access_count = 0usize;
-
-    // Mark live-in variables as initialized
-    for var_id in &live_in_set {
-        initialized_vars.insert(*var_id);
-    }
-
-    // OPTIMIZATION PREPROCESSING for partition functions too
-    let mut all_partition_ops: Vec<(cfg::BasicBlockId, Vec<OptimizedOp>)> = Vec::new();
-    for &block_id in &hop.blocks {
-        let block = &program.basic_blocks[block_id];
-        let optimized_ops = optimize_instructions(&block.instructions);
-        all_partition_ops.push((block_id, optimized_ops));
-    }
-
-    // Generate code for entry block with label
-    writeln!(out, "BB{}:", entry_block.index())?;
-    
-    // Find the optimized ops for the entry block
-    let (_, entry_ops) = all_partition_ops.iter().find(|(bid, _)| *bid == entry_block).unwrap();
-    
-    // For partition functions, the first table access returns the partition, rest is unreachable
-    for op in entry_ops {
-        if let Some(shard) = check_partition_from_op(out, program, op, "\t", &mut initialized_vars, &mut table_access_count)? {
-            writeln!(out, "\tif true {{ return {} }}", shard)?;
-        }
-        // Continue generating unreachable code
-        lower_op_partition_unreachable(out, program, op, &mut initialized_vars, &mut table_access_count, "\t")?;
-    }
-    
-    lower_terminator_partition_goto(out, program, &program.basic_blocks[entry_block].terminator, "\t")?;
-
-    // Generate code for other blocks in the hop
-    for &block_id in &hop.blocks {
-        if block_id == entry_block {
-            continue;
-        }
-
-        if used_labels.contains(&block_id) {
-            writeln!(out, "BB{}:", block_id.index())?;
-        }
-
-        // Find the optimized ops for this block
-        let (_, block_ops) = all_partition_ops.iter().find(|(bid, _)| *bid == block_id).unwrap();
-        
-        for op in block_ops {
-            if let Some(shard) = check_partition_from_op(out, program, op, "\t", &mut initialized_vars, &mut table_access_count)? {
-                writeln!(out, "\tif true {{ return {} }}", shard)?;
-            }
-            lower_op_partition_unreachable(out, program, op, &mut initialized_vars, &mut table_access_count, "\t")?;
-        }
-
-        lower_terminator_partition_goto(out, program, &program.basic_blocks[block_id].terminator, "\t")?;
-    }
-
-    // Fallback return
-    // writeln!(out, "\treturn 0 // Default shard if no table access found")?;
     writeln!(out, "}}")?;
     writeln!(out)?;
 
@@ -766,11 +685,13 @@ fn lower_instruction(
             let call_expr = if has_go_decorator && func_name == "+" {
                 let list_expr = operand_to_go(program, &args[0]);
                 let elem_expr = operand_to_go(program, &args[1]);
-                format!("append({}, {})", list_expr, elem_expr)
+                format!("concat({}, {})", list_expr, elem_expr)
             } else if has_go_decorator && func_name == "get" {
                 let list_expr = operand_to_go(program, &args[0]);
                 let index_expr = operand_to_go(program, &args[1]);
                 format!("{}({}, int({}))", go_name, list_expr, index_expr)
+            } else if has_go_decorator && func_name == "emptyList" {
+                "nil".to_string()
             } else if func_name == "str" {
                 operand_to_string(program, &args[0])
             } else {
@@ -866,6 +787,8 @@ fn lower_combined_table_access(
 }
 
 /// Check if an optimized op contains a table access for partition calculation
+/// For partition mode: check if op is a table access and generate partition calculation + unreachable code
+/// Returns Some(partition_expr) if this is a table access, None otherwise
 fn check_partition_from_op(
     out: &mut String,
     program: &cfg::Program,
@@ -937,49 +860,29 @@ fn check_partition_from_op(
     }
 }
 
-/// Lower an optimized op for partition function unreachable code
-/// Since this code is unreachable (we return early on first table access),
-/// we only need to mark destination variables as "initialized" to avoid warnings
-fn lower_op_partition_unreachable(
-    _out: &mut String,
-    _program: &cfg::Program,
+/// Helper to lower a single OptimizedOp (either instruction or combined access)
+/// Used for unreachable code generation in partition functions
+fn lower_instruction_or_combined(
+    out: &mut String,
+    program: &cfg::Program,
     op: &OptimizedOp,
     initialized_vars: &mut HashSet<cfg::VariableId>,
-    _table_access_count: &mut usize,
-    _indent: &str,
+    table_access_count: &mut usize,
+    indent: &str,
 ) -> Result<(), std::fmt::Error> {
-    // For unreachable code, just mark destination variables as initialized
-    // No actual code generation needed since it will never execute
     match op {
         OptimizedOp::Single(inst) => {
-            // Mark destination variable as initialized if it exists
-            match &inst.kind {
-                InstructionKind::Assign { dest, .. }
-                | InstructionKind::BinaryOp { dest, .. }
-                | InstructionKind::UnaryOp { dest, .. }
-                | InstructionKind::TableGet { dest, .. } => {
-                    initialized_vars.insert(*dest);
-                }
-                InstructionKind::Call { dest: Some(dest), .. } => {
-                    initialized_vars.insert(*dest);
-                }
-                _ => {}
-            }
+            lower_instruction(out, program, inst, initialized_vars, table_access_count, indent)?;
         }
         OptimizedOp::CombinedTableAccess(group) => {
-            // Mark all get destinations as initialized
-            for access in &group.accesses {
-                if let TableAccess::Get { dest, .. } = access {
-                    initialized_vars.insert(*dest);
-                }
-            }
+            lower_combined_table_access(out, program, group, initialized_vars, table_access_count, indent)?;
         }
     }
     Ok(())
 }
 
 // Helper function to collect variable declarations from an instruction
-fn collect_var_decls_from_instruction(
+pub(super) fn collect_var_decls_from_instruction(
     program: &cfg::Program,
     inst: &Instruction,
     var_decls: &mut HashMap<cfg::VariableId, String>,
@@ -1003,7 +906,7 @@ fn collect_var_decls_from_instruction(
 }
 
 // Helper function to collect labels that are actually used
-fn collect_used_labels(term: &Terminator, used_labels: &mut HashSet<cfg::BasicBlockId>) {
+pub(super) fn collect_used_labels(term: &Terminator, used_labels: &mut HashSet<cfg::BasicBlockId>) {
     match term {
         Terminator::Jump(target) => {
             used_labels.insert(*target);
@@ -1018,13 +921,16 @@ fn collect_used_labels(term: &Terminator, used_labels: &mut HashSet<cfg::BasicBl
     }
 }
 
+/// Lower terminator - works for both normal and partition modes
+/// For hop functions, pass Some((initialized_vars, next_hop_live_in))
+/// For standalone partition functions, pass None
 pub(super) fn lower_terminator_goto(
     out: &mut String,
     program: &cfg::Program,
     term: &Terminator,
     indent: &str,
-    initialized_vars: &HashSet<cfg::VariableId>,
-    next_hop_live_in: &[cfg::VariableId],
+    hop_context: Option<(&HashSet<cfg::VariableId>, &[cfg::VariableId])>,
+    ctx: CodeGenContext,
 ) -> Result<(), std::fmt::Error> {
     match term {
         Terminator::Jump(target) => {
@@ -1045,98 +951,76 @@ pub(super) fn lower_terminator_goto(
         }
 
         Terminator::Return(value) => {
-            if let Some(val) = value {
-                let result_expr = operand_to_string(program, val);
-                writeln!(out, "{}return &proto.TrxRes{{", indent)?;
-                writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
-                writeln!(out, "{}\tInfo:   in.Info,", indent)?;
-                writeln!(out, "{}\tResults: []string{{{}}},", indent, result_expr)?;
-                writeln!(out, "{}\tRWSets: rwSet,", indent)?;
-                writeln!(out, "{}}}, nil", indent)?;
+            if ctx.is_partition {
+                // For partition mode, just return the value directly
+                writeln!(out, "{}panic(\"partition cannot be calculated due to return statement\")", indent)?;
             } else {
-                writeln!(out, "{}return &proto.TrxRes{{", indent)?;
-                writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
-                writeln!(out, "{}\tInfo:   in.Info,", indent)?;
-                writeln!(out, "{}\tRWSets: rwSet,", indent)?;
-                writeln!(out, "{}}}, nil", indent)?;
+                // For normal hop mode, wrap in TrxRes
+                if let Some(val) = value {
+                    let result_expr = operand_to_string(program, val);
+                    writeln!(out, "{}return &proto.TrxRes{{", indent)?;
+                    writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
+                    writeln!(out, "{}\tInfo:   in.Info,", indent)?;
+                    writeln!(out, "{}\tResults: []string{{{}}},", indent, result_expr)?;
+                    writeln!(out, "{}\tRWSets: rwSet,", indent)?;
+                    writeln!(out, "{}}}, nil", indent)?;
+                } else {
+                    writeln!(out, "{}return &proto.TrxRes{{", indent)?;
+                    writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
+                    writeln!(out, "{}\tInfo:   in.Info,", indent)?;
+                    writeln!(out, "{}\tRWSets: rwSet,", indent)?;
+                    writeln!(out, "{}}}, nil", indent)?;
+                }
             }
         }
 
         Terminator::HopExit { .. } => {
-            // Collect variables that are live-in at the next hop (these are live-out of current hop)
-            if !next_hop_live_in.is_empty() {
-                writeln!(out, "{}// Collect live-out variables to results", indent)?;
-                let mut results = Vec::new();
-                for var_id in next_hop_live_in {
-                    let var_name = go_var_name(program, *var_id);
-                    let expr = if initialized_vars.contains(var_id) {
-                        go_var_to_string(program, *var_id)
-                    } else {
-                        format!("params[\"{}\"]", var_name)
-                    };
-                    results.push(expr);
+            if ctx.is_partition {
+                writeln!(out, "{}panic(\"unexpected hop exit in partition\")", indent)?;
+            } else {
+                // Collect variables that are live-in at the next hop
+                if let Some((initialized_vars, next_hop_live_in)) = hop_context {
+                    if !next_hop_live_in.is_empty() {
+                        writeln!(out, "{}// Collect live-out variables to results", indent)?;
+                        let mut results = Vec::new();
+                        for var_id in next_hop_live_in {
+                            let var_name = go_var_name(program, *var_id);
+                            let expr = if initialized_vars.contains(var_id) {
+                                go_var_to_string(program, *var_id)
+                            } else {
+                                format!("params[\"{}\"]", var_name)
+                            };
+                            results.push(expr);
+                        }
+                        writeln!(out, "{}return &proto.TrxRes{{", indent)?;
+                        writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
+                        writeln!(out, "{}\tInfo:   in.Info,", indent)?;
+                        writeln!(
+                            out,
+                            "{}\tResults: []string{{{}}},",
+                            indent,
+                            results.join(", ")
+                        )?;
+                        writeln!(out, "{}\tRWSets: rwSet,", indent)?;
+                        writeln!(out, "{}}}, nil", indent)?;
+                        return Ok(());
+                    }
                 }
+                // Fallback: no live-out variables (last hop or no inter-hop dependencies)
                 writeln!(out, "{}return &proto.TrxRes{{", indent)?;
                 writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
                 writeln!(out, "{}\tInfo:   in.Info,", indent)?;
-                writeln!(
-                    out,
-                    "{}\tResults: []string{{{}}},",
-                    indent,
-                    results.join(", ")
-                )?;
                 writeln!(out, "{}\tRWSets: rwSet,", indent)?;
                 writeln!(out, "{}}}, nil", indent)?;
-                return Ok(());
             }
-            // Fallback: no live-out variables (last hop or no inter-hop dependencies)
-            writeln!(out, "{}return &proto.TrxRes{{", indent)?;
-            writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
-            writeln!(out, "{}\tInfo:   in.Info,", indent)?;
-            writeln!(out, "{}\tRWSets: rwSet,", indent)?;
-            writeln!(out, "{}}}, nil", indent)?;
         }
 
         Terminator::Abort => {
-            writeln!(out, "{}panic(\"transaction aborted\")", indent)?;
-        }
-    }
-
-    Ok(())
-}
-
-// Lower terminator for partition calculation - just reuse the normal one
-fn lower_terminator_partition_goto(
-    out: &mut String,
-    program: &cfg::Program,
-    term: &Terminator,
-    indent: &str,
-) -> Result<(), std::fmt::Error> {
-    match term {
-        Terminator::Jump(target) => {
-            writeln!(out, "{}goto BB{}", indent, target.index())?;
-        }
-
-        Terminator::Branch {
-            condition,
-            if_true,
-            if_false,
-        } => {
-            let cond_go = operand_to_go(program, condition);
-            writeln!(out, "{}if {} {{", indent, cond_go)?;
-            writeln!(out, "{}\tgoto BB{}", indent, if_true.index())?;
-            writeln!(out, "{}}} else {{", indent)?;
-            writeln!(out, "{}\tgoto BB{}", indent, if_false.index())?;
-            writeln!(out, "{}}}", indent)?;
-        }
-
-        Terminator::Return(_) | Terminator::HopExit { .. } => {
-            // For partition calculation, should not reach here
-            writeln!(out, "{}return 0 // Unexpected return in partition", indent)?;
-        }
-
-        Terminator::Abort => {
-            writeln!(out, "{}return 0 // Abort in partition", indent)?;
+            if ctx.is_partition {
+                writeln!(out, "{}panic(\"partition aborted\")", indent)?;
+            } else {
+                writeln!(out, "{}panic(\"transaction aborted\")", indent)?;
+            }
         }
     }
 
@@ -1218,7 +1102,6 @@ const GO_FUNCTION_RENAMES: &[(&str, &str)] = &[
     ("length", "len"),
     ("float", "float32"),
     ("int", "uint64"),
-    ("+", "concat"),
     ("get", "listGet"),
 ];
 
@@ -1241,7 +1124,8 @@ fn go_value_to_string(program: &cfg::Program, ty_id: cfg::TypeId, expr: &str) ->
         cfg::Type::Primitive(cfg::PrimitiveType::Float) => format!("fromFloat32({})", expr),
         cfg::Type::Primitive(cfg::PrimitiveType::Bool) => format!("fromBool({})", expr),
         cfg::Type::Primitive(cfg::PrimitiveType::String) => expr.to_string(),
-        _ => format!("fmt.Sprint({})", expr),
+        cfg::Type::List(_) => format!("string(mustJSON({}))", expr),
+        _ => format!("string(mustJSON({}))", expr),
     }
 }
 
@@ -1279,7 +1163,7 @@ fn generate_next_req(
     let func_name = pascal_case(&function.name);
     writeln!(
         out,
-        "func {}NextReq(in *proto.TrxRes, params map[string]string, history []uint32, shards int) (*proto.TrxReq, map[string]string, []uint32, int) {{",
+        "func {}NextReq(in *proto.TrxRes, params map[string]string, shards int) (*proto.TrxReq, map[string]string, int) {{",
         func_name
     )?;
 
@@ -1297,32 +1181,7 @@ fn generate_next_req(
     for (hop_idx, _hop_id) in function.hops.iter().enumerate() {
         writeln!(out, "\tcase {}:", hop_idx)?;
 
-        // If there's a next hop, extract its live-in variables from results and put into params
-        if let Some(&next_hop_id) = function.hops.get(hop_idx + 1) {
-            let next_hop = &program.hops[next_hop_id];
-            if let Some(next_entry) = next_hop.entry_block {
-                if let Some(live_in_lattice) = liveness.block_entry.get(&next_entry) {
-                    if let Some(live_in_set) = live_in_lattice.as_set() {
-                        let mut live_vars: Vec<_> =
-                            live_in_set.iter().map(|LiveVar(v)| *v).collect();
-                        live_vars.sort_by_key(|var_id| var_id.index());
-                        if !live_vars.is_empty() {
-                            writeln!(out, "\t\t// Extract live-out variables from results and put into params")?;
-                            for (idx, var_id) in live_vars.iter().enumerate() {
-                                let var_name = go_var_name(program, *var_id);
-                                writeln!(
-                                    out,
-                                    "\t\tparams[\"{}\"] = in.Results[{}]",
-                                    var_name, idx
-                                )?;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Call the partition hop function to calculate nextShard
+        // Calculate partition for the NEXT hop (hop_idx)
         writeln!(out, "\t\t// Deep copy params to avoid modification")?;
         writeln!(out, "\t\tparamsCopy := make(map[string]string)")?;
         writeln!(out, "\t\tfor k, v := range params {{")?;
@@ -1330,33 +1189,57 @@ fn generate_next_req(
         writeln!(out, "\t\t}}")?;
         writeln!(
             out,
-            "\t\t// Calculate partition using partition hop function"
+            "\t\t// Calculate partition for next hop using partition function"
         )?;
         writeln!(
             out,
             "\t\tnextShard = int({}Hop{}Par(paramsCopy))",
             func_name, hop_idx
         )?;
+
+        // Extract live-out variables from the CURRENT hop (hop_idx - 1) if this is not hop 0
+        if hop_idx > 0 {
+            // Get live-in variables for THIS hop (which are live-out of previous hop)
+            if let Some(&this_hop_id) = function.hops.get(hop_idx) {
+                let this_hop = &program.hops[this_hop_id];
+                if let Some(this_entry) = this_hop.entry_block {
+                    if let Some(live_in_lattice) = liveness.block_entry.get(&this_entry) {
+                        if let Some(live_in_set) = live_in_lattice.as_set() {
+                            let mut live_vars: Vec<_> =
+                                live_in_set.iter().map(|LiveVar(v)| *v).collect();
+                            live_vars.sort_by_key(|var_id| var_id.index());
+                            if !live_vars.is_empty() {
+                                writeln!(out, "\t\t// Extract live-out variables from previous hop results")?;
+                                for (idx, var_id) in live_vars.iter().enumerate() {
+                                    let var_name = go_var_name(program, *var_id);
+                                    writeln!(
+                                        out,
+                                        "\t\tparams[\"{}\"] = in.Results[{}]",
+                                        var_name, idx
+                                    )?;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     writeln!(out, "\tdefault:")?;
-    writeln!(out, "\t\treturn nil, params, history, 0")?;
+    writeln!(out, "\t\treturn nil, params, 0")?;
     writeln!(out, "\t}}")?;
     writeln!(out)?;
 
-    writeln!(out, "\thistory = append(history, uint32(nextShard))")?;
     writeln!(out, "\treq.Params = params")?;
-    writeln!(out, "\treq.History = history")?;
     writeln!(out, "\treq.Info.Hopid += 1")?;
     writeln!(out, "\treq.Dependency = in.Dependency")?;
-    writeln!(out, "\treturn req, params, history, nextShard")?;
+    writeln!(out, "\treturn req, params, nextShard")?;
     writeln!(out, "}}")?;
     writeln!(out)?;
 
     Ok(())
-}
-
-fn generate_chain_impl(
+}fn generate_chain_impl(
     out: &mut String,
     program: &cfg::Program,
     _sc_graph: &SCGraph,
