@@ -61,7 +61,9 @@ pub fn go_type_string(program: &cfg::Program, ty_id: TypeId) -> String {
         Type::List(inner_ty) => {
             format!("[]{}", go_type_string(program, *inner_ty))
         }
-        other => panic!("Unsupported type in Go codegen: {:?}", other),
+        //TODO: Implement support for other types
+        //other => panic!("Unsupported type in Go codegen: {:?}", other),
+        other => format!("/* Unsupported type */ interface{{}} /* {:?} */", other),
     }
 }
 
