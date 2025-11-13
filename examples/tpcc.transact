@@ -168,7 +168,7 @@ transaction newOrder(
     itemIDs: List<int>,
     supplierWarehouseIDs: List<int>,
     orderQuantities: List<int>
-) 
+)
     assume length(itemIDs) == O_OL_CNT;
     assume length(supplierWarehouseIDs) == O_OL_CNT;
     assume length(orderQuantities) == O_OL_CNT;
@@ -186,7 +186,9 @@ transaction newOrder(
     // Get warehouse tax (and any other per-warehouse data)
     hop {
         var w_tax: float = Warehouse[W_ID: w_id].W_TAX; // TODO: why read w_tax?
+        // keep this table access for partitioning
         // Note: retained for parity with original; not used later in this snippet.
+        var prices: List<float> = emptyList();
     }
 
     // Read item and update stock across partitions
@@ -198,6 +200,8 @@ transaction newOrder(
 
         // Read and update stock
         var s: Row<Stock> = Stock[S_W_ID: sup_w_id, S_I_ID: i_id];
+        var price: float = Item[I_ID: i_id, W_ID: sup_w_id].I_PRICE;
+        prices = append(prices, price);
 
         if s.S_QUANTITY - qty >= 10 {
             s.S_QUANTITY = s.S_QUANTITY - qty;
@@ -241,7 +245,8 @@ transaction newOrder(
             var qty: int = orderQuantities.get(ol_number);
 
             // Re-read item price here (instead of storing itemPrices from prior hops)
-            var price: float = Item[I_ID: i_id, W_ID: sup_w_id].I_PRICE;
+            // var price: float = Item[I_ID: i_id, W_ID: sup_w_id].I_PRICE;
+            var price: float = prices.get(ol_number);
 
             Order_Line[OL_W_ID: w_id, OL_D_ID: d_id, OL_O_ID: d_next_oid, OL_NUMBER: ol_number] = {
                 OL_I_ID: i_id,
@@ -250,6 +255,7 @@ transaction newOrder(
                 OL_AMOUNT: int(price * float(qty)) // TODO: rounding
             };
         }
+        print(w_tax);
     }
 }
 

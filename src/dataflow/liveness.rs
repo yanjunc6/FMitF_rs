@@ -153,3 +153,5 @@ pub fn analyze_live_variables(
     );
     analysis.analyze(func, program)
 }
+
+//TODO: we need to mod-ref analysis to detect whether variable is modified in a hop

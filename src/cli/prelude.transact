@@ -93,8 +93,8 @@
 
 @intrinsic @Boogie @go function length<T>(list: List<T>) -> int;
 @intrinsic @Boogie @go function get<T>(list: List<T>, idx: int) -> T;
-@intrinsic @Boogie function append<T>(list: List<T>, elem: T) -> List<T>;
-@intrinsic @Boogie function emptyList<T>() -> List<T>;
+@intrinsic @Boogie @go function append<T>(list: List<T>, elem: T) -> List<T>;
+@intrinsic @Boogie @go function emptyList<T>() -> List<T>;
 
 // Type conversion functions
 @intrinsic @Boogie @go function float(x: int) -> float;
@@ -107,6 +107,10 @@ const __slice__: int = 0;
 @intrinsic @global @Boogie function scan<T>(t: Table<T>, n: int, m: int) -> Iterator<T>;
 @intrinsic @Boogie function next<T>(iter: Iterator<T>) -> Iterator<T>;
 @intrinsic @Boogie function hasNext<T>(iter: Iterator<T>) -> bool;
+
+// vague function
+@intrinsic @Boogie @go function print<T>(x: T) -> void; // it does nothing at runtime
+
 
 // ===========================================
 //  Generated Functions for Iterator
