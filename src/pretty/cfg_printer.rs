@@ -3,17 +3,20 @@
 //! This module provides pretty printing for the Control Flow Graph (CFG) representation.
 
 use crate::cfg::*;
+use crate::dataflow::{analyze_live_variables, DataflowResults, LiveVar, SetLattice};
 use crate::pretty::PrettyPrint;
 use std::io::{self, Write};
 
 // Debug options - simple constants for development
 const SHOW_VAR_IDS: bool = true;
 const SHOW_TYPE_INFO: bool = false;
+const SHOW_LIVENESS: bool = false;
 
 /// A pretty printer for CFG nodes.
 pub struct CfgPrinter<W: Write> {
     writer: W,
     indent_level: usize,
+    liveness: Option<DataflowResults<SetLattice<LiveVar>>>,
 }
 
 impl<W: Write> CfgPrinter<W> {
@@ -21,6 +24,7 @@ impl<W: Write> CfgPrinter<W> {
         Self {
             writer,
             indent_level: 0,
+            liveness: None,
         }
     }
 
@@ -226,6 +230,15 @@ impl<W: Write> CfgPrinter<W> {
         id: FunctionId,
         function: &Function,
     ) -> io::Result<()> {
+        if SHOW_LIVENESS {
+            if !matches!(function.kind, crate::cfg::FunctionKind::Operator) {
+                let liveness_results = analyze_live_variables(function, program);
+                self.liveness = Some(liveness_results);
+            } else {
+                self.liveness = None;
+            }
+        }
+
         // Print decorators
         for decorator in &function.decorators {
             self.write_indent()?;
@@ -417,6 +430,21 @@ impl<W: Write> CfgPrinter<W> {
         writeln!(self.writer, ":")?;
         self.indent();
 
+        // Print liveness info
+        if SHOW_LIVENESS {
+            let live_in_set = if let Some(liveness) = &self.liveness {
+                liveness.block_entry.get(&id).cloned()
+            } else {
+                None
+            };
+            if let Some(live_in) = live_in_set {
+                self.write_indent()?;
+                write!(self.writer, "livein: ")?;
+                self.print_liveness_set(program, &live_in)?;
+                writeln!(self.writer)?;
+            }
+        }
+
         // Print instructions
         for instruction in &block.instructions {
             self.print_instruction(program, instruction)?;
@@ -424,6 +452,21 @@ impl<W: Write> CfgPrinter<W> {
 
         // Print terminator
         self.print_terminator(program, &block.terminator)?;
+
+        // Print liveness info
+        if SHOW_LIVENESS {
+            let live_out_set = if let Some(liveness) = &self.liveness {
+                liveness.block_exit.get(&id).cloned()
+            } else {
+                None
+            };
+            if let Some(live_out) = live_out_set {
+                self.write_indent()?;
+                write!(self.writer, "liveout: ")?;
+                self.print_liveness_set(program, &live_out)?;
+                writeln!(self.writer)?;
+            }
+        }
 
         self.dedent();
         Ok(())
@@ -561,12 +604,37 @@ impl<W: Write> CfgPrinter<W> {
                 writeln!(self.writer, ";")?;
             }
             Terminator::HopExit { next_hop } => {
-                writeln!(self.writer, "hop_exit hop{};", next_hop.index())?;
+                write!(self.writer, "hop_exit hop{}", next_hop.index())?;
+                writeln!(self.writer, ";")?;
             }
             Terminator::Abort => {
                 writeln!(self.writer, "abort;")?;
             }
         }
+        Ok(())
+    }
+
+    fn print_liveness_set(
+        &mut self,
+        program: &Program,
+        liveness: &SetLattice<LiveVar>,
+    ) -> io::Result<()> {
+        write!(self.writer, "{{")?;
+        if let Some(set) = liveness.as_set() {
+            for (i, live_var) in set.iter().enumerate() {
+                if i > 0 {
+                    write!(self.writer, ", ")?;
+                }
+                let var = &program.variables[live_var.0];
+                write!(self.writer, "{}", var.name)?;
+                if SHOW_VAR_IDS {
+                    write!(self.writer, "[v{}]", live_var.0.index())?;
+                }
+            }
+        } else {
+            write!(self.writer, "TOP")?;
+        }
+        write!(self.writer, "}}")?;
         Ok(())
     }
 

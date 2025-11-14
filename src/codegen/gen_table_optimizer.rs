@@ -167,10 +167,10 @@ pub fn group_table_accesses(instructions: &[Instruction]) -> Vec<TableAccessGrou
 pub fn optimize_instructions(instructions: &[Instruction]) -> Vec<OptimizedOp> {
     let groups = group_table_accesses(instructions);
     let inst_to_group = create_instruction_to_group_map(&groups);
-    
+
     let mut result = Vec::new();
     let mut processed_groups = std::collections::HashSet::new();
-    
+
     for (inst_idx, inst) in instructions.iter().enumerate() {
         if let Some(&(group_idx, access_idx_in_group)) = inst_to_group.get(&inst_idx) {
             // This instruction is part of a group
@@ -178,7 +178,7 @@ pub fn optimize_instructions(instructions: &[Instruction]) -> Vec<OptimizedOp> {
                 // First instruction in the group - emit the optimized op
                 processed_groups.insert(group_idx);
                 let group = &groups[group_idx];
-                
+
                 if group.is_worth_combining() && group.all_field_accesses() {
                     // Worth optimizing - emit combined operation
                     result.push(OptimizedOp::CombinedTableAccess(group.clone()));
@@ -196,7 +196,7 @@ pub fn optimize_instructions(instructions: &[Instruction]) -> Vec<OptimizedOp> {
             result.push(OptimizedOp::Single(inst.clone()));
         }
     }
-    
+
     result
 }
 

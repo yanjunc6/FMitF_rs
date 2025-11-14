@@ -60,7 +60,6 @@ impl BoogieProgramGenerator {
             .and_then(move |i| self.program.procedures.get_mut(i))
     }
 
-
     /// Generate unit type and axioms
     pub fn gen_unit_axioms(&mut self) {
         let mut decls = Vec::new();

@@ -30,56 +30,56 @@ impl TransferFunction<SetLattice<LiveVar>> for LivenessTransfer {
 
         match &inst.kind {
             InstructionKind::Assign { dest, src } => {
-                // Add used variables (gen)
-                self.add_operand_vars(&mut result_set, src);
                 // Remove defined variable (kill)
                 result_set.remove(&LiveVar(*dest));
+                // Add used variables (gen)
+                self.add_operand_vars(&mut result_set, src);
             }
             InstructionKind::BinaryOp {
                 dest, left, right, ..
             } => {
+                // Remove defined variable (kill)
+                result_set.remove(&LiveVar(*dest));
                 // Add used variables (gen)
                 self.add_operand_vars(&mut result_set, left);
                 self.add_operand_vars(&mut result_set, right);
-                // Remove defined variable (kill)
-                result_set.remove(&LiveVar(*dest));
             }
             InstructionKind::UnaryOp { dest, operand, .. } => {
-                // Add used variables (gen)
-                self.add_operand_vars(&mut result_set, operand);
                 // Remove defined variable (kill)
                 result_set.remove(&LiveVar(*dest));
+                // Add used variables (gen)
+                self.add_operand_vars(&mut result_set, operand);
             }
             InstructionKind::Call { dest, args, .. } => {
-                // Add used variables (gen)
-                for arg in args {
-                    self.add_operand_vars(&mut result_set, arg);
-                }
                 // Remove defined variable (kill)
                 if let Some(dest_var) = dest {
                     result_set.remove(&LiveVar(*dest_var));
                 }
+                // Add used variables (gen)
+                for arg in args {
+                    self.add_operand_vars(&mut result_set, arg);
+                }
             }
             InstructionKind::TableGet { dest, keys, .. } => {
+                // Remove defined variable (kill)
+                result_set.remove(&LiveVar(*dest));
                 // Add used variables (gen)
                 for key in keys {
                     self.add_operand_vars(&mut result_set, key);
                 }
-                // Remove defined variable (kill)
-                result_set.remove(&LiveVar(*dest));
             }
             InstructionKind::TableSet { keys, value, .. } => {
+                // No variable is defined by TableSet
                 // Add used variables (gen)
                 for key in keys {
                     self.add_operand_vars(&mut result_set, key);
                 }
                 self.add_operand_vars(&mut result_set, value);
-                // No variable is defined by TableSet
             }
             InstructionKind::Assert { condition, .. } => {
+                // No variable is defined by Assert
                 // Add used variables (gen)
                 self.add_operand_vars(&mut result_set, condition);
-                // No variable is defined by Assert
             }
         }
 

@@ -38,8 +38,7 @@ impl DeadCodeElimination {
                 }
             }
             InstructionKind::TableGet { dest, .. } => {
-                // Table operations might have side effects, but if it's just a read...
-                // For now, conservatively keep table operations
+                // Table operations might have side effects, but if it's just a read
                 !live_after.contains(dest) // Could eliminate if result unused
             }
             InstructionKind::TableSet { .. } => {
