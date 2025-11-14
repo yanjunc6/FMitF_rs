@@ -103,14 +103,14 @@ pub enum HopType {
 }
 
 /// Determines the hop type for each hop based on the combined (merged) SC-graph.
-/// 
+///
 /// Returns a map from (FunctionId, HopId) to HopType.
-/// 
+///
 /// For merged hops (those in the same CombinedVertex):
 /// - The first hop in program order is MergedHopBegin
 /// - The last hop in program order is MergedHopEnd
 /// - All middle hops are MergedHop
-/// 
+///
 /// For non-merged hops: NormalHop
 pub fn determine_hop_types(
     combined_graph: &CombinedSCGraph,
@@ -152,19 +152,19 @@ pub fn determine_hop_types(
 }
 
 /// Calculates the conflicts map for each hop based on the normal SC-graph.
-/// 
+///
 /// Returns a map from (FunctionId, HopId) to a map of (chain_index -> hop_index).
-/// 
+///
 /// For each hop, we find all C-edges connecting to hops in other transactions,
 /// and record only the FIRST hop in each conflicting transaction chain.
-/// 
+///
 /// Parameters:
 /// - scgraph: The normal (non-merged) SC-graph containing C-edges
 /// - program: The CFG program to determine transaction order and hop indices
-/// 
+///
 /// The chain_index corresponds to the position of the transaction in the Chains() array
 /// returned by global.go (i.e., the order in program.all_transactions).
-/// 
+///
 /// The hop_index is the position of the hop within that transaction's hop list
 /// (not the HopId, but the sequential index 0, 1, 2, ...).
 pub fn calculate_conflicts(
@@ -203,10 +203,12 @@ pub fn calculate_conflicts(
                 ) {
                     let source_key = (source_node.function_id, source_node.hop_id);
                     let conflicts_map = conflicts.entry(source_key).or_insert_with(HashMap::new);
-                    
+
                     // Only record if this chain doesn't already have a conflict recorded
                     // (we want the FIRST conflicting hop in that chain)
-                    conflicts_map.entry(target_chain_idx).or_insert(target_hop_idx);
+                    conflicts_map
+                        .entry(target_chain_idx)
+                        .or_insert(target_hop_idx);
                 }
 
                 // Record conflict from target to source
@@ -216,9 +218,11 @@ pub fn calculate_conflicts(
                 ) {
                     let target_key = (target_node.function_id, target_node.hop_id);
                     let conflicts_map = conflicts.entry(target_key).or_insert_with(HashMap::new);
-                    
+
                     // Only record if this chain doesn't already have a conflict recorded
-                    conflicts_map.entry(source_chain_idx).or_insert(source_hop_idx);
+                    conflicts_map
+                        .entry(source_chain_idx)
+                        .or_insert(source_hop_idx);
                 }
             }
         }
@@ -226,4 +230,3 @@ pub fn calculate_conflicts(
 
     conflicts
 }
-

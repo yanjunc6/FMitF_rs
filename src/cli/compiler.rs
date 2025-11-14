@@ -524,7 +524,7 @@ impl Compiler {
                     Ok((simplified, simplified_combined))
                 },
             )?;
-            
+
             // Use the simplified graphs for code generation
             sc = simplified_sc;
             combined = simplified_combined;

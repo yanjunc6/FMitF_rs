@@ -36,6 +36,10 @@ pub fn generate_go_code(
     files.push(gen_util::generate_util()?);
     files.push(gen_converters::generate_converters()?);
     files.push(gen_global::generate_global(program, sc_graph)?);
-    files.extend(gen_transaction::generate_transactions(program, sc_graph, combined_graph)?);
+    files.extend(gen_transaction::generate_transactions(
+        program,
+        sc_graph,
+        combined_graph,
+    )?);
     Ok(files)
 }

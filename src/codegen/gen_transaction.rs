@@ -4,11 +4,12 @@ use super::{
     GoProgram,
 };
 use crate::cfg::{
-    self, BinaryOp, FunctionKind, Instruction, InstructionKind, Operand, Terminator,
-    UnaryOp,
+    self, BinaryOp, FunctionKind, Instruction, InstructionKind, Operand, Terminator, UnaryOp,
 };
 use crate::dataflow::{analyze_live_variables, analyze_table_mod_ref, AccessType, LiveVar};
-use crate::sc_graph::{calculate_conflicts, determine_hop_types, CombinedSCGraph, HopType, SCGraph};
+use crate::sc_graph::{
+    calculate_conflicts, determine_hop_types, CombinedSCGraph, HopType, SCGraph,
+};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::Write;
@@ -22,7 +23,7 @@ pub fn generate_transactions(
 
     // Determine hop types from the combined (merged) graph
     let hop_types = determine_hop_types(combined_graph);
-    
+
     // Calculate conflicts from the normal SC-graph
     let conflicts = calculate_conflicts(sc_graph, program);
 
@@ -80,7 +81,14 @@ pub fn generate_transactions(
         generate_next_req(&mut content, program, function_id)?;
 
         // Generate ChainImpl function
-        generate_chain_impl(&mut content, program, sc_graph, function_id, &hop_types, &conflicts)?;
+        generate_chain_impl(
+            &mut content,
+            program,
+            sc_graph,
+            function_id,
+            &hop_types,
+            &conflicts,
+        )?;
 
         files.push(GoProgram::new(file_name, content));
     }
@@ -97,7 +105,9 @@ pub(super) struct CodeGenContext {
 
 impl CodeGenContext {
     pub fn normal() -> Self {
-        Self { is_partition: false }
+        Self {
+            is_partition: false,
+        }
     }
 
     pub fn partition() -> Self {
@@ -153,7 +163,7 @@ fn generate_hop_function_impl(
 ) -> Result<(), std::fmt::Error> {
     let function = &program.functions[function_id];
     let hop = &program.hops[hop_id];
-    
+
     let hop_name = if ctx.is_partition {
         format!("{}Hop{}Par", pascal_case(&function.name), hop_index)
     } else {
@@ -247,11 +257,11 @@ fn generate_hop_function_impl(
     // OPTIMIZATION PREPROCESSING: Transform instructions into optimized operations
     let mut all_optimized_ops: Vec<(cfg::BasicBlockId, Vec<OptimizedOp>)> = Vec::new();
     let mut table_var_count = 0;
-    
+
     for &block_id in &hop.blocks {
         let block = &program.basic_blocks[block_id];
         let optimized_ops = optimize_instructions(&block.instructions);
-        
+
         // Count table variables needed for this block
         for op in &optimized_ops {
             match op {
@@ -268,7 +278,7 @@ fn generate_hop_function_impl(
                 }
             }
         }
-        
+
         all_optimized_ops.push((block_id, optimized_ops));
     }
 
@@ -305,7 +315,7 @@ fn generate_hop_function_impl(
                 }
             }
         }
-        
+
         for (i, table_name) in table_types_needed.iter().enumerate() {
             let idx = i + 1;
             writeln!(out, "\tvar keyBytes{} []byte", idx)?;
@@ -387,18 +397,35 @@ fn generate_hop_function_impl(
     // Generate code for entry block with label
     writeln!(out, "BB{}:", entry_block.index())?;
     let entry_block_obj = &program.basic_blocks[entry_block];
-    
+
     // Find the optimized ops for the entry block
-    let (_, entry_ops) = all_optimized_ops.iter().find(|(bid, _)| *bid == entry_block).unwrap();
-    
+    let (_, entry_ops) = all_optimized_ops
+        .iter()
+        .find(|(bid, _)| *bid == entry_block)
+        .unwrap();
+
     if ctx.is_partition {
         // Partition mode: generate code with early returns after table accesses
         for op in entry_ops {
-            if let Some(shard) = check_partition_from_op(out, program, op, "\t", &mut initialized_vars, &mut table_access_count)? {
+            if let Some(shard) = check_partition_from_op(
+                out,
+                program,
+                op,
+                "\t",
+                &mut initialized_vars,
+                &mut table_access_count,
+            )? {
                 writeln!(out, "\tif true {{ return {} }}", shard)?;
             }
             // Generate unreachable code (for Go compiler variable usage)
-            lower_instruction_or_combined(out, program, op, &mut initialized_vars, &mut table_access_count, "\t")?;
+            lower_instruction_or_combined(
+                out,
+                program,
+                op,
+                &mut initialized_vars,
+                &mut table_access_count,
+                "\t",
+            )?;
         }
     } else {
         // Normal mode: generate regular code
@@ -411,7 +438,7 @@ fn generate_hop_function_impl(
             "\t",
         )?;
     }
-    
+
     lower_terminator_goto(
         out,
         program,
@@ -435,16 +462,33 @@ fn generate_hop_function_impl(
         }
 
         // Find the optimized ops for this block
-        let (_, block_ops) = all_optimized_ops.iter().find(|(bid, _)| *bid == block_id).unwrap();
-        
+        let (_, block_ops) = all_optimized_ops
+            .iter()
+            .find(|(bid, _)| *bid == block_id)
+            .unwrap();
+
         if ctx.is_partition {
             // Partition mode: generate code with early returns after table accesses
             for op in block_ops {
-                if let Some(shard) = check_partition_from_op(out, program, op, "\t", &mut initialized_vars, &mut table_access_count)? {
+                if let Some(shard) = check_partition_from_op(
+                    out,
+                    program,
+                    op,
+                    "\t",
+                    &mut initialized_vars,
+                    &mut table_access_count,
+                )? {
                     writeln!(out, "\tif true {{ return {} }}", shard)?;
                 }
                 // Generate unreachable code (for Go compiler variable usage)
-                lower_instruction_or_combined(out, program, op, &mut initialized_vars, &mut table_access_count, "\t")?;
+                lower_instruction_or_combined(
+                    out,
+                    program,
+                    op,
+                    &mut initialized_vars,
+                    &mut table_access_count,
+                    "\t",
+                )?;
             }
         } else {
             // Normal mode: generate regular code
@@ -487,10 +531,24 @@ fn lower_optimized_ops(
     for op in ops {
         match op {
             OptimizedOp::Single(inst) => {
-                lower_instruction(out, program, inst, initialized_vars, table_access_count, indent)?;
+                lower_instruction(
+                    out,
+                    program,
+                    inst,
+                    initialized_vars,
+                    table_access_count,
+                    indent,
+                )?;
             }
             OptimizedOp::CombinedTableAccess(group) => {
-                lower_combined_table_access(out, program, group, initialized_vars, table_access_count, indent)?;
+                lower_combined_table_access(
+                    out,
+                    program,
+                    group,
+                    initialized_vars,
+                    table_access_count,
+                    indent,
+                )?;
             }
         }
     }
@@ -506,7 +564,14 @@ pub(super) fn lower_single_instruction(
     table_access_count: &mut usize,
     indent: &str,
 ) -> Result<(), std::fmt::Error> {
-    lower_instruction(out, program, inst, initialized_vars, table_access_count, indent)
+    lower_instruction(
+        out,
+        program,
+        inst,
+        initialized_vars,
+        table_access_count,
+        indent,
+    )
 }
 
 /// Lower a single instruction
@@ -657,7 +722,11 @@ fn lower_instruction(
             writeln!(
                 out,
                 "{}put{}(tx, {}Key{{{}}}, {})",
-                indent, table_name, table_name, key_args.join(", "), row_var
+                indent,
+                table_name,
+                table_name,
+                key_args.join(", "),
+                row_var
             )?;
         }
 
@@ -695,7 +764,8 @@ fn lower_instruction(
             } else if func_name == "str" {
                 operand_to_string(program, &args[0])
             } else {
-                let args_go: Vec<String> = args.iter().map(|arg| operand_to_go(program, arg)).collect();
+                let args_go: Vec<String> =
+                    args.iter().map(|arg| operand_to_go(program, arg)).collect();
                 format!("{}({})", go_name, args_go.join(", "))
             };
 
@@ -725,9 +795,13 @@ fn lower_combined_table_access(
 ) -> Result<(), std::fmt::Error> {
     let table_info = &program.tables[group.table_id];
     let table_name = pascal_case(&table_info.name);
-    
-    writeln!(out, "{}// Optimized combined table access: {}", indent, table_name)?;
-    
+
+    writeln!(
+        out,
+        "{}// Optimized combined table access: {}",
+        indent, table_name
+    )?;
+
     let key_args: Vec<String> = table_info
         .primary_key_fields
         .iter()
@@ -738,15 +812,19 @@ fn lower_combined_table_access(
             format!("{}: {}", field.name, value)
         })
         .collect();
-    
+
     *table_access_count += 1;
     let key_var = format!("keyBytes{}", table_access_count);
     let row_var = format!("row{}", table_access_count);
-    
+
     writeln!(
         out,
         "{}{}, {} = get{}(tx, {}Key{{{}}})",
-        indent, key_var, row_var, table_name, table_name,
+        indent,
+        key_var,
+        row_var,
+        table_name,
+        table_name,
         key_args.join(", ")
     )?;
     writeln!(
@@ -754,7 +832,7 @@ fn lower_combined_table_access(
         "{}rwSet = AddRWSet(rwSet, \"{}\", {})",
         indent, table_name, key_var
     )?;
-    
+
     for access in &group.accesses {
         match access {
             TableAccess::Get { dest, field, .. } => {
@@ -774,15 +852,19 @@ fn lower_combined_table_access(
             }
         }
     }
-    
+
     if group.has_writes {
         writeln!(
             out,
             "{}put{}(tx, {}Key{{{}}}, {})",
-            indent, table_name, table_name, key_args.join(", "), row_var
+            indent,
+            table_name,
+            table_name,
+            key_args.join(", "),
+            row_var
         )?;
     }
-    
+
     Ok(())
 }
 
@@ -806,7 +888,11 @@ fn check_partition_from_op(
                     let table_info = &program.tables[*table];
                     let table_name = pascal_case(&table_info.name);
 
-                    writeln!(out, "{}// First table access - calculate partition: {}", indent, table_name)?;
+                    writeln!(
+                        out,
+                        "{}// First table access - calculate partition: {}",
+                        indent, table_name
+                    )?;
 
                     let key_args: Vec<String> = table_info
                         .primary_key_fields
@@ -820,9 +906,19 @@ fn check_partition_from_op(
                         .collect();
 
                     let call = if matches!(&inst.kind, InstructionKind::TableGet { .. }) {
-                        format!("get{}Par({}Key{{{}}})", table_name, table_name, key_args.join(", "))
+                        format!(
+                            "get{}Par({}Key{{{}}})",
+                            table_name,
+                            table_name,
+                            key_args.join(", ")
+                        )
                     } else {
-                        format!("put{}Par({}Key{{{}}})", table_name, table_name, key_args.join(", "))
+                        format!(
+                            "put{}Par({}Key{{{}}})",
+                            table_name,
+                            table_name,
+                            key_args.join(", ")
+                        )
                     };
 
                     Ok(Some(call))
@@ -835,7 +931,11 @@ fn check_partition_from_op(
             let table_info = &program.tables[group.table_id];
             let table_name = pascal_case(&table_info.name);
 
-            writeln!(out, "{}// First table access (optimized group) - calculate partition: {}", indent, table_name)?;
+            writeln!(
+                out,
+                "{}// First table access (optimized group) - calculate partition: {}",
+                indent, table_name
+            )?;
 
             let key_args: Vec<String> = table_info
                 .primary_key_fields
@@ -850,9 +950,19 @@ fn check_partition_from_op(
 
             // Use getPar for reads, putPar for writes (both return same partition)
             let call = if group.has_writes {
-                format!("put{}Par({}Key{{{}}})", table_name, table_name, key_args.join(", "))
+                format!(
+                    "put{}Par({}Key{{{}}})",
+                    table_name,
+                    table_name,
+                    key_args.join(", ")
+                )
             } else {
-                format!("get{}Par({}Key{{{}}})", table_name, table_name, key_args.join(", "))
+                format!(
+                    "get{}Par({}Key{{{}}})",
+                    table_name,
+                    table_name,
+                    key_args.join(", ")
+                )
             };
 
             Ok(Some(call))
@@ -872,10 +982,24 @@ fn lower_instruction_or_combined(
 ) -> Result<(), std::fmt::Error> {
     match op {
         OptimizedOp::Single(inst) => {
-            lower_instruction(out, program, inst, initialized_vars, table_access_count, indent)?;
+            lower_instruction(
+                out,
+                program,
+                inst,
+                initialized_vars,
+                table_access_count,
+                indent,
+            )?;
         }
         OptimizedOp::CombinedTableAccess(group) => {
-            lower_combined_table_access(out, program, group, initialized_vars, table_access_count, indent)?;
+            lower_combined_table_access(
+                out,
+                program,
+                group,
+                initialized_vars,
+                table_access_count,
+                indent,
+            )?;
         }
     }
     Ok(())
@@ -953,7 +1077,11 @@ pub(super) fn lower_terminator_goto(
         Terminator::Return(value) => {
             if ctx.is_partition {
                 // For partition mode, just return the value directly
-                writeln!(out, "{}panic(\"partition cannot be calculated due to return statement\")", indent)?;
+                writeln!(
+                    out,
+                    "{}panic(\"partition cannot be calculated due to return statement\")",
+                    indent
+                )?;
             } else {
                 // For normal hop mode, wrap in TrxRes
                 if let Some(val) = value {
@@ -1181,6 +1309,37 @@ fn generate_next_req(
     for (hop_idx, _hop_id) in function.hops.iter().enumerate() {
         writeln!(out, "\tcase {}:", hop_idx)?;
 
+        // Extract live-out variables from the CURRENT hop (hop_idx - 1) if this is not hop 0
+        if hop_idx > 0 {
+            // Get live-in variables for THIS hop (which are live-out of previous hop)
+            if let Some(&this_hop_id) = function.hops.get(hop_idx) {
+                let this_hop = &program.hops[this_hop_id];
+                if let Some(this_entry) = this_hop.entry_block {
+                    if let Some(live_in_lattice) = liveness.block_entry.get(&this_entry) {
+                        if let Some(live_in_set) = live_in_lattice.as_set() {
+                            let mut live_vars: Vec<_> =
+                                live_in_set.iter().map(|LiveVar(v)| *v).collect();
+                            live_vars.sort_by_key(|var_id| var_id.index());
+                            if !live_vars.is_empty() {
+                                writeln!(
+                                    out,
+                                    "\t\t// Extract live-out variables from previous hop results"
+                                )?;
+                                for (idx, var_id) in live_vars.iter().enumerate() {
+                                    let var_name = go_var_name(program, *var_id);
+                                    writeln!(
+                                        out,
+                                        "\t\tparams[\"{}\"] = in.Results[{}]",
+                                        var_name, idx
+                                    )?;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Calculate partition for the NEXT hop (hop_idx)
         writeln!(out, "\t\t// Deep copy params to avoid modification")?;
         writeln!(out, "\t\tparamsCopy := make(map[string]string)")?;
@@ -1196,34 +1355,6 @@ fn generate_next_req(
             "\t\tnextShard = int({}Hop{}Par(paramsCopy))",
             func_name, hop_idx
         )?;
-
-        // Extract live-out variables from the CURRENT hop (hop_idx - 1) if this is not hop 0
-        if hop_idx > 0 {
-            // Get live-in variables for THIS hop (which are live-out of previous hop)
-            if let Some(&this_hop_id) = function.hops.get(hop_idx) {
-                let this_hop = &program.hops[this_hop_id];
-                if let Some(this_entry) = this_hop.entry_block {
-                    if let Some(live_in_lattice) = liveness.block_entry.get(&this_entry) {
-                        if let Some(live_in_set) = live_in_lattice.as_set() {
-                            let mut live_vars: Vec<_> =
-                                live_in_set.iter().map(|LiveVar(v)| *v).collect();
-                            live_vars.sort_by_key(|var_id| var_id.index());
-                            if !live_vars.is_empty() {
-                                writeln!(out, "\t\t// Extract live-out variables from previous hop results")?;
-                                for (idx, var_id) in live_vars.iter().enumerate() {
-                                    let var_name = go_var_name(program, *var_id);
-                                    writeln!(
-                                        out,
-                                        "\t\tparams[\"{}\"] = in.Results[{}]",
-                                        var_name, idx
-                                    )?;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 
     writeln!(out, "\tdefault:")?;
@@ -1239,7 +1370,9 @@ fn generate_next_req(
     writeln!(out)?;
 
     Ok(())
-}fn generate_chain_impl(
+}
+
+fn generate_chain_impl(
     out: &mut String,
     program: &cfg::Program,
     _sc_graph: &SCGraph,
@@ -1282,7 +1415,10 @@ fn generate_next_req(
         }
 
         // Get hop type from the computed map
-        let hop_type_enum = hop_types.get(&(function_id, hop_id)).copied().unwrap_or(HopType::NormalHop);
+        let hop_type_enum = hop_types
+            .get(&(function_id, hop_id))
+            .copied()
+            .unwrap_or(HopType::NormalHop);
         let hop_type = match hop_type_enum {
             HopType::NormalHop => "util.NormalHop",
             HopType::MergedHopBegin => "util.MergedHopBegin",
@@ -1299,7 +1435,8 @@ fn generate_next_req(
                 "map[int32]int32{}".to_string()
             } else {
                 // Build the conflicts map string
-                let mut parts: Vec<String> = hop_conflicts.iter()
+                let mut parts: Vec<String> = hop_conflicts
+                    .iter()
                     .map(|(chain_idx, hop_idx)| format!("{}: {}", chain_idx, hop_idx))
                     .collect();
                 parts.sort(); // Sort for consistent output

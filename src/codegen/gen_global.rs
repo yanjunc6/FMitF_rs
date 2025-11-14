@@ -232,7 +232,9 @@ fn write_partition_function(
             | InstructionKind::BinaryOp { dest, .. }
             | InstructionKind::UnaryOp { dest, .. }
             | InstructionKind::TableGet { dest, .. }
-            | InstructionKind::Call { dest: Some(dest), .. } = &inst.kind
+            | InstructionKind::Call {
+                dest: Some(dest), ..
+            } = &inst.kind
             {
                 if !function.params.contains(dest) {
                     collect_var_decls_from_instruction(program, inst, &mut var_decls);
@@ -273,7 +275,14 @@ fn write_partition_function(
         }
 
         // Emit terminator
-        lower_terminator_goto(out, program, &block.terminator, "\t", None, CodeGenContext::partition())?;
+        lower_terminator_goto(
+            out,
+            program,
+            &block.terminator,
+            "\t",
+            None,
+            CodeGenContext::partition(),
+        )?;
     }
 
     writeln!(out, "}}")?;

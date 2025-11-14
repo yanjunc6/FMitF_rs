@@ -173,7 +173,13 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                         crate::cfg::Terminator::Branch {
                             if_true, if_false, ..
                         } => vec![*if_true, *if_false],
-                        crate::cfg::Terminator::HopExit { .. } => vec![], // Handle hop exits as needed
+                        crate::cfg::Terminator::HopExit { next_hop } => {
+                            if let Some(first_block) = program.hops[*next_hop].entry_block {
+                                vec![first_block]
+                            } else {
+                                vec![]
+                            }
+                        }
                         crate::cfg::Terminator::Return(_) | crate::cfg::Terminator::Abort => vec![],
                     };
 
