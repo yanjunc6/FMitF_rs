@@ -188,8 +188,8 @@ func TPCCNewOrderDistrictHop(tx *bolt.Tx, in *proto.TrxReq) (*proto.TrxRes, erro
 // params: 
 // history: used for concurrency contorl, will be set with fixed steps so you don't need to care
 // shards: the number of total partitions, can be used for modular operation, like id%shards to get the corresponding nodeId
-func TPCCNewOrderNextReq(in *proto.TrxRes, params map[string]string, history []uint32,
-	shards int) (*proto.TrxReq, map[string]string, []uint32, int) {
+func TPCCNewOrderNextReq(in *proto.TrxRes, params map[string]string,
+	shards int) (*proto.TrxReq, map[string]string, int) {
 	// --- Fixed steps to set up the transaction request for the next hop
 	hopId := in.Info.Hopid
 	req := &proto.TrxReq{
@@ -252,13 +252,11 @@ func TPCCNewOrderNextReq(in *proto.TrxRes, params map[string]string, history []u
 		d, _ := strconv.ParseUint(params["did"], 10, 64)
 		nextShard = int(w*10 + d)
 	default:
-		return nil, params, history, 0
+		return nil, params, 0
 	}
 
 	// Fixed steps
-	history = append(history, uint32(nextShard))
 	req.Params = params
-	req.History = history
 	req.Info.Hopid += 1
 	req.Dependency = in.Dependency
 	return req, params, history, nextShard
