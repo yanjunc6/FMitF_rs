@@ -120,3 +120,17 @@ pub fn analyze_reaching_definitions(
     );
     analysis.analyze(func, program)
 }
+
+
+pub fn analyze_reaching_definitions_hop(
+    func: &Function,
+    program: &crate::cfg::Program,
+) -> DataflowResults<SetLattice<Definition>> {
+    let analysis = DataflowAnalysis::new(
+        AnalysisLevel::Hop,
+        Direction::Forward,
+        AnalysisKind::May,
+        ReachingDefTransfer,
+    );
+    analysis.analyze(func, program)
+}
