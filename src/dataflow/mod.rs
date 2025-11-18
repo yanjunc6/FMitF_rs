@@ -9,10 +9,10 @@ mod lattice;
 mod util;
 
 mod liveness;
-pub use liveness::{analyze_live_variables, LiveVar};
+pub use liveness::{analyze_live_variables, analyze_live_variables_hop, LiveVar};
 
 mod reaching_definitions;
-pub use reaching_definitions::{analyze_reaching_definitions, Definition};
+pub use reaching_definitions::{analyze_reaching_definitions, analyze_reaching_definitions_hop, Definition};
 
 mod available_expressions;
 pub use available_expressions::{analyze_available_expressions, AvailExpr, ExprKind};

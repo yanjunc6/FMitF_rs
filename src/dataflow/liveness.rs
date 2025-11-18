@@ -154,4 +154,17 @@ pub fn analyze_live_variables(
     analysis.analyze(func, program)
 }
 
-//TODO: we need to mod-ref analysis to detect whether variable is modified in a hop
+
+/// Analyze live variables in a function (backward, hop-level)
+pub fn analyze_live_variables_hop(
+    func: &Function,
+    program: &crate::cfg::Program,
+) -> DataflowResults<SetLattice<LiveVar>> {
+    let analysis = DataflowAnalysis::new(
+        AnalysisLevel::Hop,
+        Direction::Backward,
+        AnalysisKind::May,
+        LivenessTransfer,
+    );
+    analysis.analyze(func, program)
+}

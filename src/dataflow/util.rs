@@ -75,6 +75,14 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                 } else {
                     let mut merged = self.transfer.initial_value();
                     for &pred_id in &block.predecessors {
+                        if self.level == AnalysisLevel::Hop
+                            && matches!(
+                                program.basic_blocks[pred_id].terminator,
+                                crate::cfg::Terminator::HopExit { .. }
+                            )
+                        {
+                            continue;
+                        }
                         if let Some(pred_exit) = block_exit.get(&pred_id) {
                             merged = match self.kind {
                                 AnalysisKind::May => merged.join(pred_exit),
@@ -175,7 +183,11 @@ impl<L: Lattice, T: TransferFunction<L>> DataflowAnalysis<L, T> {
                         } => vec![*if_true, *if_false],
                         crate::cfg::Terminator::HopExit { next_hop } => {
                             if let Some(first_block) = program.hops[*next_hop].entry_block {
-                                vec![first_block]
+                                if self.level == AnalysisLevel::Function {
+                                    vec![first_block]
+                                } else {
+                                    vec![]
+                                }
                             } else {
                                 vec![]
                             }

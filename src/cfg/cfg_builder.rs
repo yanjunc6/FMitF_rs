@@ -2416,6 +2416,12 @@ impl<'a> FunctionContext<'a> {
             self.builder.cfg.basic_blocks[*target]
                 .predecessors
                 .push(block_id);
+        } else if let cfg::Terminator::HopExit { next_hop } = &term {
+            if let Some(first_block) = self.builder.cfg.hops[*next_hop].entry_block {
+                self.builder.cfg.basic_blocks[first_block]
+                    .predecessors
+                    .push(block_id);
+            }
         }
         self.builder.cfg.basic_blocks[block_id].terminator = term;
     }
