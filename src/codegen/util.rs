@@ -61,10 +61,20 @@ pub fn go_type_string(program: &cfg::Program, ty_id: TypeId) -> String {
         Type::List(inner_ty) => {
             format!("[]{}", go_type_string(program, *inner_ty))
         }
+        Type::Row { table_id } => {
+            // Row<T> type should be just T in Go
+            let table = &program.tables[*table_id];
+            pascal_case(&table.name)
+        }
         Type::Declared { type_id, .. } => {
             let user_type = &program.user_defined_types[*type_id];
             if user_type.name == "unit" {
                 "Unit".to_string()
+            } else if user_type.name == "UUID" {
+                "UUID".to_string()
+            } else if user_type.name == "Iterator" {
+                // Handle Iterator<T> type - in Go we use *Iterator for all iterators
+                "*Iterator".to_string()
             } else {
                 format!(
                     "/* Unsupported user type {} */ interface{{}}",

@@ -80,6 +80,11 @@ pub fn generate_transactions(
             )?;
         }
 
+        // Generate aggregate functions for global hops
+        for (hop_index, hop_id) in function.hops.iter().enumerate() {
+            generate_aggregate_function(&mut content, program, function_id, hop_index, *hop_id)?;
+        }
+
         // Generate NextReq function
         generate_next_req(&mut content, program, function_id)?;
 
@@ -144,6 +149,15 @@ fn generate_partition_hop_function(
     hop_index: usize,
     hop_id: cfg::HopId,
 ) -> Result<(), std::fmt::Error> {
+    // Check if hop has @global decorator
+    let hop = &program.hops[hop_id];
+    let is_global = hop.decorators.iter().any(|d| d.name == "global");
+
+    // Skip generating partition function for global hops
+    if is_global {
+        return Ok(());
+    }
+
     generate_hop_function_impl(
         out,
         program,
@@ -153,6 +167,59 @@ fn generate_partition_hop_function(
         None,
         CodeGenContext::partition(),
     )
+}
+
+fn generate_aggregate_function(
+    out: &mut String,
+    program: &cfg::Program,
+    function_id: cfg::FunctionId,
+    hop_index: usize,
+    hop_id: cfg::HopId,
+) -> Result<(), std::fmt::Error> {
+    // Check if hop has @global decorator
+    let hop = &program.hops[hop_id];
+    let is_global = hop.decorators.iter().any(|d| d.name == "global");
+
+    // Skip generating aggregate function for non-global hops
+    if !is_global {
+        return Ok(());
+    }
+
+    let function = &program.functions[function_id];
+    let func_name = pascal_case(&function.name);
+    let aggregate_name = format!("{}Hop{}Aggregate", func_name, hop_index);
+
+    writeln!(
+        out,
+        "// {} aggregates results from multiple shards for hop {}",
+        aggregate_name, hop_index
+    )?;
+    writeln!(
+        out,
+        "func {}(results [][]string, params map[string]string) map[string]string {{",
+        aggregate_name
+    )?;
+
+    // For now, generate a simple concatenation aggregation
+    // This assumes the result is a list that needs to be concatenated
+    writeln!(
+        out,
+        "\t// TODO: Customize aggregation logic based on return type"
+    )?;
+    writeln!(out, "\t// For now, using ListConcatenate for list results")?;
+    writeln!(out, "\tif len(results) > 0 && len(results[0]) > 0 {{")?;
+    writeln!(out, "\t\t// Assuming the result is a list")?;
+    writeln!(out, "\t\tvar emptyList []interface{{}}")?;
+    writeln!(
+        out,
+        "\t\tparams[\"result\"] = ListConcatenate(results, emptyList)"
+    )?;
+    writeln!(out, "\t}}")?;
+    writeln!(out, "\treturn params")?;
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+
+    Ok(())
 }
 
 fn generate_hop_function_impl(
@@ -833,6 +900,40 @@ fn lower_instruction(
                     )?;
                     initialized_vars.insert(*dest_var);
                 }
+            }
+            // Special handling for scan function
+            else if func_name == "scan" {
+                if let Some(dest_var) = dest {
+                    let dest_name = go_var_name(program, *dest_var);
+                    // args[0] is the table (Table operand)
+                    // args[1] is n (int)
+                    // args[2] is m (int)
+                    if let Operand::Table(table_id) = &args[0] {
+                        let table_name = &program.tables[*table_id].name;
+                        let n_expr = operand_to_go(program, &args[1]);
+                        let m_expr = operand_to_go(program, &args[2]);
+                        writeln!(
+                            out,
+                            "{}{} = scan(tx, \"{}\", int({}), int({}))",
+                            indent, dest_name, table_name, n_expr, m_expr
+                        )?;
+                    }
+                    initialized_vars.insert(*dest_var);
+                }
+            }
+            // Special handling for hasNext, next, get_id
+            else if func_name == "hasNext" || func_name == "next" || func_name == "get_id" {
+                let args_go: Vec<String> =
+                    args.iter().map(|arg| operand_to_go(program, arg)).collect();
+                let call_expr = format!("{}({})", func_name, args_go.join(", "));
+
+                if let Some(dest_var) = dest {
+                    let dest_name = go_var_name(program, *dest_var);
+                    writeln!(out, "{}{} = {}", indent, dest_name, call_expr)?;
+                    initialized_vars.insert(*dest_var);
+                } else {
+                    writeln!(out, "{}{}", indent, call_expr)?;
+                }
             } else {
                 let call_expr = if has_go_decorator && func_name == "+" {
                     let list_expr = operand_to_go(program, &args[0]);
@@ -846,6 +947,10 @@ fn lower_instruction(
                     "nil".to_string()
                 } else if func_name == "str" {
                     operand_to_string(program, &args[0])
+                } else if func_name == "append" {
+                    let list_expr = operand_to_go(program, &args[0]);
+                    let elem_expr = operand_to_go(program, &args[1]);
+                    format!("append({}, {})", list_expr, elem_expr)
                 } else {
                     let args_go: Vec<String> =
                         args.iter().map(|arg| operand_to_go(program, arg)).collect();
@@ -1451,21 +1556,33 @@ fn generate_next_req(
             }
         }
 
-        // Calculate partition for the NEXT hop (hop_idx)
-        writeln!(out, "\t\t// Deep copy params to avoid modification")?;
-        writeln!(out, "\t\tparamsCopy := make(map[string]string)")?;
-        writeln!(out, "\t\tfor k, v := range params {{")?;
-        writeln!(out, "\t\t\tparamsCopy[k] = v")?;
-        writeln!(out, "\t\t}}")?;
-        writeln!(
-            out,
-            "\t\t// Calculate partition for next hop using partition function"
-        )?;
-        writeln!(
-            out,
-            "\t\tnextShard = int({}Hop{}Par(paramsCopy))",
-            func_name, hop_idx
-        )?;
+        // Check if this hop is global
+        if let Some(&this_hop_id) = function.hops.get(hop_idx) {
+            let this_hop = &program.hops[this_hop_id];
+            let is_global = this_hop.decorators.iter().any(|d| d.name == "global");
+
+            if is_global {
+                // For global hops, no partition calculation needed
+                writeln!(out, "\t\t// Global hop - no partition calculation needed")?;
+                writeln!(out, "\t\tbreak")?;
+            } else {
+                // Calculate partition for the NEXT hop (hop_idx) for non-global hops
+                writeln!(out, "\t\t// Deep copy params to avoid modification")?;
+                writeln!(out, "\t\tparamsCopy := make(map[string]string)")?;
+                writeln!(out, "\t\tfor k, v := range params {{")?;
+                writeln!(out, "\t\t\tparamsCopy[k] = v")?;
+                writeln!(out, "\t\t}}")?;
+                writeln!(
+                    out,
+                    "\t\t// Calculate partition for next hop using partition function"
+                )?;
+                writeln!(
+                    out,
+                    "\t\tnextShard = int({}Hop{}Par(paramsCopy))",
+                    func_name, hop_idx
+                )?;
+            }
+        }
     }
 
     writeln!(out, "\tdefault:")?;
@@ -1526,15 +1643,22 @@ fn generate_chain_impl(
         }
 
         // Get hop type from the computed map
+        // Check if hop has @global decorator
+        let is_global = hop.decorators.iter().any(|d| d.name == "global");
+
         let hop_type_enum = hop_types
             .get(&(function_id, hop_id))
             .copied()
             .unwrap_or(HopType::NormalHop);
-        let hop_type = match hop_type_enum {
-            HopType::NormalHop => "util.NormalHop",
-            HopType::MergedHopBegin => "util.MergedHopBegin",
-            HopType::MergedHop => "util.MergedHop",
-            HopType::MergedHopEnd => "util.MergedHopEnd",
+        let hop_type = if is_global {
+            "util.GlobalHop"
+        } else {
+            match hop_type_enum {
+                HopType::NormalHop => "util.NormalHop",
+                HopType::MergedHopBegin => "util.MergedHopBegin",
+                HopType::MergedHop => "util.MergedHop",
+                HopType::MergedHopEnd => "util.MergedHopEnd",
+            }
         };
 
         // Process function name
@@ -1562,6 +1686,13 @@ fn generate_chain_impl(
         writeln!(out, "\t\thopType:    {},", hop_type)?;
         writeln!(out, "\t\tisReadOnly: {},", is_read_only)?;
         writeln!(out, "\t\tprocess:    {},", process_func)?;
+
+        // Add aggregate function for global hops
+        if is_global {
+            let aggregate_func = format!("{}Hop{}Aggregate", func_name, hop_index);
+            writeln!(out, "\t\taggregate:  {},", aggregate_func)?;
+        }
+
         writeln!(out, "\t\tconflicts:  {},", conflicts_map)?;
         writeln!(out, "\t}}")?;
         writeln!(out)?;
