@@ -57,7 +57,15 @@ impl BoogieStateManager {
         // Havoc live-IN variables only
         for (slice, vars) in &analysis_info.live_in {
             for &var_id in vars {
-                let var_name = format!("s{}_{}", slice, cfg_program.variables[var_id].name);
+                let var = &cfg_program.variables[var_id];
+
+                let var_name = format!("s{}_{}", slice, var.name);
+                let var_type = BoogieProgramGenerator::convert_type_id(cfg_program, &var.ty);
+
+                // Ensure the variable exists as a local variable
+                base.generator
+                    .ensure_local_variable_exists(&var_name, var_type);
+
                 base.add_line(BoogieLine::Havoc(var_name.clone()));
                 havocked_vars.insert(var_name);
             }
