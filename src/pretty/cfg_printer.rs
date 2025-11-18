@@ -13,8 +13,8 @@ use std::io::{self, Write};
 // Debug options - simple constants for development
 const SHOW_VAR_IDS: bool = true;
 const SHOW_TYPE_INFO: bool = false;
-const SHOW_LIVENESS: bool = false;
-const SHOW_REACHING_DEF: bool = true;
+const SHOW_LIVENESS: bool = true;
+const SHOW_REACHING_DEF: bool = false;
 const SHOW_TABLE_MOD_REF: bool = true;
 
 /// A pretty printer for CFG nodes.

@@ -62,10 +62,6 @@ impl CommutativeVerificationManager {
         cfg_program: &CfgProgram,
         sc_graph: &SCGraph,
     ) -> Results<Vec<Boogie::BoogieProgram>> {
-        let mut base_generator = BaseVerificationGenerator::new(cfg_program);
-        // Initialize base boogie items like tables/constants
-        base_generator.generator.gen_string_axioms();
-
         // Create simple commutative units from the SC-graph
         self.create_simple_commutative_units(sc_graph);
 
