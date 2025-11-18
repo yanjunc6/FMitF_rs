@@ -121,7 +121,6 @@ pub fn analyze_reaching_definitions(
     analysis.analyze(func, program)
 }
 
-
 pub fn analyze_reaching_definitions_hop(
     func: &Function,
     program: &crate::cfg::Program,

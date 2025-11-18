@@ -6,7 +6,10 @@ use super::{
 use crate::cfg::{
     self, BinaryOp, FunctionKind, Instruction, InstructionKind, Operand, Terminator, UnaryOp,
 };
-use crate::dataflow::{analyze_live_variables, analyze_table_mod_ref, AccessType, LiveVar};
+use crate::dataflow::{
+    analyze_live_variables, analyze_live_variables_hop, analyze_reaching_definitions_hop,
+    analyze_table_mod_ref, AccessType, LiveVar,
+};
 use crate::sc_graph::{
     calculate_conflicts, determine_hop_types, CombinedSCGraph, HopType, SCGraph,
 };
@@ -195,12 +198,18 @@ fn generate_hop_function_impl(
         writeln!(out)?;
     }
 
-    // Run liveness analysis on the entire function
-    let liveness = analyze_live_variables(function, program);
+    // Run hop-level liveness analysis to determine which variables are used in this hop
+    let hop_liveness = analyze_live_variables_hop(function, program);
 
-    // Get live-in variables for this hop's entry block
+    // Run function-level liveness analysis to determine live-out variables
+    let func_liveness = analyze_live_variables(function, program);
+
+    // Run hop-level reaching definitions to determine which variables are defined in this hop
+    let hop_reaching_def = analyze_reaching_definitions_hop(function, program);
+
+    // Get live-in variables for this hop (variables used in this hop)
     let entry_block = hop.entry_block.expect("Hop must have entry block");
-    let mut live_in_set = liveness
+    let mut live_in_set = hop_liveness
         .block_entry
         .get(&entry_block)
         .and_then(|lattice| lattice.as_set())
@@ -208,11 +217,11 @@ fn generate_hop_function_impl(
         .unwrap_or_default();
     live_in_set.sort_by_key(|var_id| var_id.index());
 
-    // Get live-in variables for the next hop (these are the live-out of current hop)
-    let mut next_hop_live_in = if let Some(next_id) = next_hop_id {
+    // Get live-out variables at function level for the next hop
+    let mut func_live_out = if let Some(next_id) = next_hop_id {
         let next_hop = &program.hops[next_id];
         if let Some(next_entry) = next_hop.entry_block {
-            liveness
+            func_liveness
                 .block_entry
                 .get(&next_entry)
                 .and_then(|lattice| lattice.as_set())
@@ -224,7 +233,27 @@ fn generate_hop_function_impl(
     } else {
         Vec::new()
     };
-    next_hop_live_in.sort_by_key(|var_id| var_id.index());
+    func_live_out.sort_by_key(|var_id| var_id.index());
+
+    // Get variables defined in this hop (from reaching definitions at hop exit)
+    let mut vars_defined_in_hop = HashSet::new();
+    for &block_id in &hop.blocks {
+        if let Some(exit_state) = hop_reaching_def.block_exit.get(&block_id) {
+            if let Some(defs) = exit_state.as_set() {
+                for def in defs {
+                    vars_defined_in_hop.insert(def.var);
+                }
+            }
+        }
+    }
+
+    // Variables to write back: live-out at function level AND defined in this hop
+    let mut vars_to_write_back: Vec<cfg::VariableId> = func_live_out
+        .iter()
+        .filter(|var_id| vars_defined_in_hop.contains(var_id))
+        .copied()
+        .collect();
+    vars_to_write_back.sort_by_key(|var_id| var_id.index());
 
     // Collect all variables that need declaration
     let mut var_decls: HashMap<cfg::VariableId, String> = HashMap::new();
@@ -444,11 +473,9 @@ fn generate_hop_function_impl(
         program,
         &entry_block_obj.terminator,
         "\t",
-        Some((&initialized_vars, &next_hop_live_in)),
+        Some((&initialized_vars, &vars_to_write_back)),
         ctx,
-    )?;
-
-    // Generate code for other blocks in the hop (only with label if used)
+    )?; // Generate code for other blocks in the hop (only with label if used)
     for &block_id in &hop.blocks {
         if block_id == entry_block {
             continue; // Already generated
@@ -507,7 +534,7 @@ fn generate_hop_function_impl(
             program,
             &block.terminator,
             "\t",
-            Some((&initialized_vars, &next_hop_live_in)),
+            Some((&initialized_vars, &vars_to_write_back)),
             ctx,
         )?;
     }
@@ -762,7 +789,11 @@ fn lower_instruction(
                     } else {
                         "interface{}".to_string()
                     };
-                    writeln!(out, "{}to_unit[{}]({}, &{})", indent, arg_type, arg_expr, dest_name)?;
+                    writeln!(
+                        out,
+                        "{}to_unit[{}]({}, &{})",
+                        indent, arg_type, arg_expr, dest_name
+                    )?;
                     initialized_vars.insert(*dest_var);
                 }
             } else {
@@ -1062,7 +1093,7 @@ pub(super) fn collect_used_labels(term: &Terminator, used_labels: &mut HashSet<c
 }
 
 /// Lower terminator - works for both normal and partition modes
-/// For hop functions, pass Some((initialized_vars, next_hop_live_in))
+/// For hop functions, pass Some((initialized_vars, vars_to_write_back))
 /// For standalone partition functions, pass None
 pub(super) fn lower_terminator_goto(
     out: &mut String,
@@ -1122,12 +1153,12 @@ pub(super) fn lower_terminator_goto(
             if ctx.is_partition {
                 writeln!(out, "{}panic(\"unexpected hop exit in partition\")", indent)?;
             } else {
-                // Collect variables that are live-in at the next hop
-                if let Some((initialized_vars, next_hop_live_in)) = hop_context {
-                    if !next_hop_live_in.is_empty() {
-                        writeln!(out, "{}// Collect live-out variables to results", indent)?;
+                // Collect variables that need to be written back (live-out AND defined in this hop)
+                if let Some((initialized_vars, vars_to_write_back)) = hop_context {
+                    if !vars_to_write_back.is_empty() {
+                        writeln!(out, "{}// Write back variables to results", indent)?;
                         let mut results = Vec::new();
-                        for var_id in next_hop_live_in {
+                        for var_id in vars_to_write_back {
                             let var_name = go_var_name(program, *var_id);
                             let expr = if initialized_vars.contains(var_id) {
                                 go_var_to_string(program, *var_id)
@@ -1316,8 +1347,11 @@ fn generate_next_req(
     writeln!(out, "\tnextShard := 0")?;
     writeln!(out)?;
 
-    // Run liveness analysis to determine what variables need to be passed between hops
-    let liveness = analyze_live_variables(function, program);
+    // Run function-level liveness analysis to determine what variables need to be passed between hops
+    let func_liveness = analyze_live_variables(function, program);
+
+    // Run hop-level reaching definitions for each hop to determine which variables are defined
+    let hop_reaching_def = analyze_reaching_definitions_hop(function, program);
 
     writeln!(out, "\tswitch hopId {{")?;
 
@@ -1325,29 +1359,52 @@ fn generate_next_req(
     for (hop_idx, _hop_id) in function.hops.iter().enumerate() {
         writeln!(out, "\tcase {}:", hop_idx)?;
 
-        // Extract live-out variables from the CURRENT hop (hop_idx - 1) if this is not hop 0
+        // Extract variables from the PREVIOUS hop results if this is not hop 0
         if hop_idx > 0 {
-            // Get live-in variables for THIS hop (which are live-out of previous hop)
-            if let Some(&this_hop_id) = function.hops.get(hop_idx) {
-                let this_hop = &program.hops[this_hop_id];
-                if let Some(this_entry) = this_hop.entry_block {
-                    if let Some(live_in_lattice) = liveness.block_entry.get(&this_entry) {
-                        if let Some(live_in_set) = live_in_lattice.as_set() {
-                            let mut live_vars: Vec<_> =
-                                live_in_set.iter().map(|LiveVar(v)| *v).collect();
-                            live_vars.sort_by_key(|var_id| var_id.index());
-                            if !live_vars.is_empty() {
-                                writeln!(
-                                    out,
-                                    "\t\t// Extract live-out variables from previous hop results"
-                                )?;
-                                for (idx, var_id) in live_vars.iter().enumerate() {
-                                    let var_name = go_var_name(program, *var_id);
+            if let Some(&prev_hop_id) = function.hops.get(hop_idx - 1) {
+                let prev_hop = &program.hops[prev_hop_id];
+
+                // Get live-in variables for THIS hop at function level
+                if let Some(&this_hop_id) = function.hops.get(hop_idx) {
+                    let this_hop = &program.hops[this_hop_id];
+                    if let Some(this_entry) = this_hop.entry_block {
+                        if let Some(live_in_lattice) = func_liveness.block_entry.get(&this_entry) {
+                            if let Some(live_in_set) = live_in_lattice.as_set() {
+                                // Get variables defined in previous hop
+                                let mut vars_defined_in_prev_hop = HashSet::new();
+                                for &block_id in &prev_hop.blocks {
+                                    if let Some(exit_state) =
+                                        hop_reaching_def.block_exit.get(&block_id)
+                                    {
+                                        if let Some(defs) = exit_state.as_set() {
+                                            for def in defs {
+                                                vars_defined_in_prev_hop.insert(def.var);
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Variables to extract: live-in for this hop AND defined in previous hop
+                                let mut vars_to_extract: Vec<_> = live_in_set
+                                    .iter()
+                                    .map(|LiveVar(v)| *v)
+                                    .filter(|var_id| vars_defined_in_prev_hop.contains(var_id))
+                                    .collect();
+                                vars_to_extract.sort_by_key(|var_id| var_id.index());
+
+                                if !vars_to_extract.is_empty() {
                                     writeln!(
                                         out,
-                                        "\t\tparams[\"{}\"] = in.Results[{}]",
-                                        var_name, idx
+                                        "\t\t// Extract variables from previous hop results"
                                     )?;
+                                    for (idx, var_id) in vars_to_extract.iter().enumerate() {
+                                        let var_name = go_var_name(program, *var_id);
+                                        writeln!(
+                                            out,
+                                            "\t\tparams[\"{}\"] = in.Results[{}]",
+                                            var_name, idx
+                                        )?;
+                                    }
                                 }
                             }
                         }

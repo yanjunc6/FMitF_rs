@@ -154,7 +154,6 @@ pub fn analyze_live_variables(
     analysis.analyze(func, program)
 }
 
-
 /// Analyze live variables in a function (backward, hop-level)
 pub fn analyze_live_variables_hop(
     func: &Function,
