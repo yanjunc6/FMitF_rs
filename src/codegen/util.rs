@@ -66,7 +66,10 @@ pub fn go_type_string(program: &cfg::Program, ty_id: TypeId) -> String {
             if user_type.name == "unit" {
                 "Unit".to_string()
             } else {
-                format!("/* Unsupported user type {} */ interface{{}}", user_type.name)
+                format!(
+                    "/* Unsupported user type {} */ interface{{}}",
+                    user_type.name
+                )
             }
         }
         //TODO: Implement support for other types

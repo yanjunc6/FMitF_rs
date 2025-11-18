@@ -16,14 +16,23 @@ fn build_converters_source() -> Result<String, std::fmt::Error> {
     writeln!(out)?;
 
     // Unit type definition
-    writeln!(out, "// Unit is a user-defined type representing the unit type")?;
+    writeln!(
+        out,
+        "// Unit is a user-defined type representing the unit type"
+    )?;
     writeln!(out, "type Unit struct {{}}")?;
     writeln!(out)?;
 
     // to_unit function
-    writeln!(out, "// to_unit converts any value to Unit type (pass-by-reference style)")?;
+    writeln!(
+        out,
+        "// to_unit converts any value to Unit type (pass-by-reference style)"
+    )?;
     writeln!(out, "func to_unit[T any](value T, result *Unit) {{")?;
-    writeln!(out, "\t// This function marks the value as used and assigns to result")?;
+    writeln!(
+        out,
+        "\t// This function marks the value as used and assigns to result"
+    )?;
     writeln!(out, "\t_ = value")?;
     writeln!(out, "\t*result = Unit{{}}")?;
     writeln!(out, "}}")?;

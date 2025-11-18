@@ -741,7 +741,12 @@ impl<W: Write> CfgPrinter<W> {
                 if SHOW_VAR_IDS {
                     write!(self.writer, "[v{}]", def.var.index())?;
                 }
-                write!(self.writer, "@bb{}.{}", def.loc.block.index(), def.loc.index)?;
+                write!(
+                    self.writer,
+                    "@bb{}.{}",
+                    def.loc.block.index(),
+                    def.loc.index
+                )?;
             }
         } else {
             write!(self.writer, "TOP")?;
