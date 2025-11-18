@@ -1077,11 +1077,11 @@ pub(super) fn lower_terminator_goto(
         Terminator::Return(value) => {
             if ctx.is_partition {
                 // For partition mode, just return the value directly
-                writeln!(
-                    out,
-                    "{}panic(\"partition cannot be calculated due to return statement\")",
-                    indent
-                )?;
+                if let Some(val) = value {
+                    writeln!(out, "{}return {}", indent, operand_to_go(program, val))?;
+                } else {
+                    writeln!(out, "{}return 0", indent)?;
+                }
             } else {
                 // For normal hop mode, wrap in TrxRes
                 if let Some(val) = value {

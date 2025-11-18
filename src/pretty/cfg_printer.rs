@@ -3,7 +3,10 @@
 //! This module provides pretty printing for the Control Flow Graph (CFG) representation.
 
 use crate::cfg::*;
-use crate::dataflow::{analyze_live_variables, DataflowResults, LiveVar, SetLattice};
+use crate::dataflow::{
+    analyze_live_variables, analyze_reaching_definitions, analyze_table_mod_ref, AccessType,
+    DataflowResults, Definition, LiveVar, SetLattice, TableAccess,
+};
 use crate::pretty::PrettyPrint;
 use std::io::{self, Write};
 
@@ -11,12 +14,16 @@ use std::io::{self, Write};
 const SHOW_VAR_IDS: bool = true;
 const SHOW_TYPE_INFO: bool = false;
 const SHOW_LIVENESS: bool = false;
+const SHOW_REACHING_DEF: bool = true;
+const SHOW_TABLE_MOD_REF: bool = true;
 
 /// A pretty printer for CFG nodes.
 pub struct CfgPrinter<W: Write> {
     writer: W,
     indent_level: usize,
     liveness: Option<DataflowResults<SetLattice<LiveVar>>>,
+    reaching_def: Option<DataflowResults<SetLattice<Definition>>>,
+    table_mod_ref: Option<DataflowResults<SetLattice<TableAccess>>>,
 }
 
 impl<W: Write> CfgPrinter<W> {
@@ -25,6 +32,8 @@ impl<W: Write> CfgPrinter<W> {
             writer,
             indent_level: 0,
             liveness: None,
+            reaching_def: None,
+            table_mod_ref: None,
         }
     }
 
@@ -239,6 +248,24 @@ impl<W: Write> CfgPrinter<W> {
             }
         }
 
+        if SHOW_REACHING_DEF {
+            if !matches!(function.kind, crate::cfg::FunctionKind::Operator) {
+                let reaching_def_results = analyze_reaching_definitions(function, program);
+                self.reaching_def = Some(reaching_def_results);
+            } else {
+                self.reaching_def = None;
+            }
+        }
+
+        if SHOW_TABLE_MOD_REF {
+            if !matches!(function.kind, crate::cfg::FunctionKind::Operator) {
+                let table_mod_ref_results = analyze_table_mod_ref(function, program);
+                self.table_mod_ref = Some(table_mod_ref_results);
+            } else {
+                self.table_mod_ref = None;
+            }
+        }
+
         // Print decorators
         for decorator in &function.decorators {
             self.write_indent()?;
@@ -445,6 +472,36 @@ impl<W: Write> CfgPrinter<W> {
             }
         }
 
+        // Print reaching definitions info
+        if SHOW_REACHING_DEF {
+            let reaching_def_in_set = if let Some(reaching_def) = &self.reaching_def {
+                reaching_def.block_entry.get(&id).cloned()
+            } else {
+                None
+            };
+            if let Some(reaching_def_in) = reaching_def_in_set {
+                self.write_indent()?;
+                write!(self.writer, "reaching_def_in: ")?;
+                self.print_reaching_def_set(program, &reaching_def_in)?;
+                writeln!(self.writer)?;
+            }
+        }
+
+        // Print table mod/ref info
+        if SHOW_TABLE_MOD_REF {
+            let table_mod_ref_in_set = if let Some(table_mod_ref) = &self.table_mod_ref {
+                table_mod_ref.block_entry.get(&id).cloned()
+            } else {
+                None
+            };
+            if let Some(table_mod_ref_in) = table_mod_ref_in_set {
+                self.write_indent()?;
+                write!(self.writer, "table_mod_ref_in: ")?;
+                self.print_table_mod_ref_set(program, &table_mod_ref_in)?;
+                writeln!(self.writer)?;
+            }
+        }
+
         // Print instructions
         for instruction in &block.instructions {
             self.print_instruction(program, instruction)?;
@@ -464,6 +521,36 @@ impl<W: Write> CfgPrinter<W> {
                 self.write_indent()?;
                 write!(self.writer, "liveout: ")?;
                 self.print_liveness_set(program, &live_out)?;
+                writeln!(self.writer)?;
+            }
+        }
+
+        // Print reaching definitions info
+        if SHOW_REACHING_DEF {
+            let reaching_def_out_set = if let Some(reaching_def) = &self.reaching_def {
+                reaching_def.block_exit.get(&id).cloned()
+            } else {
+                None
+            };
+            if let Some(reaching_def_out) = reaching_def_out_set {
+                self.write_indent()?;
+                write!(self.writer, "reaching_def_out: ")?;
+                self.print_reaching_def_set(program, &reaching_def_out)?;
+                writeln!(self.writer)?;
+            }
+        }
+
+        // Print table mod/ref info
+        if SHOW_TABLE_MOD_REF {
+            let table_mod_ref_out_set = if let Some(table_mod_ref) = &self.table_mod_ref {
+                table_mod_ref.block_exit.get(&id).cloned()
+            } else {
+                None
+            };
+            if let Some(table_mod_ref_out) = table_mod_ref_out_set {
+                self.write_indent()?;
+                write!(self.writer, "table_mod_ref_out: ")?;
+                self.print_table_mod_ref_set(program, &table_mod_ref_out)?;
                 writeln!(self.writer)?;
             }
         }
@@ -629,6 +716,57 @@ impl<W: Write> CfgPrinter<W> {
                 write!(self.writer, "{}", var.name)?;
                 if SHOW_VAR_IDS {
                     write!(self.writer, "[v{}]", live_var.0.index())?;
+                }
+            }
+        } else {
+            write!(self.writer, "TOP")?;
+        }
+        write!(self.writer, "}}")?;
+        Ok(())
+    }
+
+    fn print_reaching_def_set(
+        &mut self,
+        program: &Program,
+        reaching_def: &SetLattice<Definition>,
+    ) -> io::Result<()> {
+        write!(self.writer, "{{")?;
+        if let Some(set) = reaching_def.as_set() {
+            for (i, def) in set.iter().enumerate() {
+                if i > 0 {
+                    write!(self.writer, ", ")?;
+                }
+                let var = &program.variables[def.var];
+                write!(self.writer, "{}", var.name)?;
+                if SHOW_VAR_IDS {
+                    write!(self.writer, "[v{}]", def.var.index())?;
+                }
+                write!(self.writer, "@bb{}.{}", def.loc.block.index(), def.loc.index)?;
+            }
+        } else {
+            write!(self.writer, "TOP")?;
+        }
+        write!(self.writer, "}}")?;
+        Ok(())
+    }
+
+    fn print_table_mod_ref_set(
+        &mut self,
+        program: &Program,
+        table_mod_ref: &SetLattice<TableAccess>,
+    ) -> io::Result<()> {
+        write!(self.writer, "{{")?;
+        if let Some(set) = table_mod_ref.as_set() {
+            for (i, access) in set.iter().enumerate() {
+                if i > 0 {
+                    write!(self.writer, ", ")?;
+                }
+                let table = &program.tables[access.table];
+                let field = &program.table_fields[access.field];
+                write!(self.writer, "{}.{}", table.name, field.name)?;
+                match access.access_type {
+                    AccessType::Read => write!(self.writer, "(R)")?,
+                    AccessType::Write => write!(self.writer, "(W)")?,
                 }
             }
         } else {
