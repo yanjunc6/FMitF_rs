@@ -218,6 +218,7 @@ fn generate_hop_function_impl(
     live_in_set.sort_by_key(|var_id| var_id.index());
 
     // Get live-out variables at function level for the next hop
+    // For partition mode, we still need to determine live-out even though next_hop_id is None
     let mut func_live_out = if let Some(next_id) = next_hop_id {
         let next_hop = &program.hops[next_id];
         if let Some(next_entry) = next_hop.entry_block {
@@ -227,6 +228,23 @@ fn generate_hop_function_impl(
                 .and_then(|lattice| lattice.as_set())
                 .map(|set| set.iter().map(|LiveVar(v)| *v).collect::<Vec<_>>())
                 .unwrap_or_default()
+        } else {
+            Vec::new()
+        }
+    } else if ctx.is_partition {
+        // For partition mode, find the next hop from the function's hop list
+        if let Some(next_hop_id_from_list) = function.hops.get(hop_index + 1) {
+            let next_hop = &program.hops[*next_hop_id_from_list];
+            if let Some(next_entry) = next_hop.entry_block {
+                func_liveness
+                    .block_entry
+                    .get(&next_entry)
+                    .and_then(|lattice| lattice.as_set())
+                    .map(|set| set.iter().map(|LiveVar(v)| *v).collect::<Vec<_>>())
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            }
         } else {
             Vec::new()
         }
@@ -543,6 +561,25 @@ fn generate_hop_function_impl(
     writeln!(out)?;
 
     Ok(())
+}
+
+/// Helper function to generate result expressions for variables to write back
+fn generate_results_exprs(
+    program: &cfg::Program,
+    vars_to_write_back: &[cfg::VariableId],
+    initialized_vars: &HashSet<cfg::VariableId>,
+) -> Vec<String> {
+    let mut results = Vec::new();
+    for var_id in vars_to_write_back {
+        let var_name = go_var_name(program, *var_id);
+        let expr = if initialized_vars.contains(var_id) {
+            go_var_to_string(program, *var_id)
+        } else {
+            format!("params[\"{}\"]", var_name)
+        };
+        results.push(expr);
+    }
+    results
 }
 
 /// Lower a sequence of optimized operations (main code generation entry point)
@@ -1151,22 +1188,23 @@ pub(super) fn lower_terminator_goto(
 
         Terminator::HopExit { .. } => {
             if ctx.is_partition {
+                // For partition mode, generate unreachable results assignment at the end
+                if let Some((initialized_vars, vars_to_write_back)) = hop_context {
+                    if !vars_to_write_back.is_empty() {
+                        let results =
+                            generate_results_exprs(program, &vars_to_write_back, &initialized_vars);
+                        writeln!(out, "\t// Unreachable: use variables in results")?;
+                        writeln!(out, "\t_ = []string{{{}}}", results.join(", "))?;
+                    }
+                }
                 writeln!(out, "{}panic(\"unexpected hop exit in partition\")", indent)?;
             } else {
                 // Collect variables that need to be written back (live-out AND defined in this hop)
                 if let Some((initialized_vars, vars_to_write_back)) = hop_context {
                     if !vars_to_write_back.is_empty() {
                         writeln!(out, "{}// Write back variables to results", indent)?;
-                        let mut results = Vec::new();
-                        for var_id in vars_to_write_back {
-                            let var_name = go_var_name(program, *var_id);
-                            let expr = if initialized_vars.contains(var_id) {
-                                go_var_to_string(program, *var_id)
-                            } else {
-                                format!("params[\"{}\"]", var_name)
-                            };
-                            results.push(expr);
-                        }
+                        let results =
+                            generate_results_exprs(program, vars_to_write_back, initialized_vars);
                         writeln!(out, "{}return &proto.TrxRes{{", indent)?;
                         writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
                         writeln!(out, "{}\tInfo:   in.Info,", indent)?;
