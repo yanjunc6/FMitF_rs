@@ -10,9 +10,38 @@ pub fn generate_converters() -> Result<GoProgram, Box<dyn Error>> {
 fn build_converters_source() -> Result<String, std::fmt::Error> {
     let mut out = String::new();
 
-    write_go_file_header(&mut out, &["strconv"])?;
+    write_go_file_header(
+        &mut out,
+        &["strconv", "encoding/json", "github.com/boltdb/bolt"],
+    )?;
 
     writeln!(out, "// TODO: Add composite/list converters and handle locale or precision policies if required.")?;
+    writeln!(out)?;
+
+    // Constants
+    writeln!(out, "// __slice__ is a constant used for scan operations")?;
+    writeln!(out, "const __slice__ = 0")?;
+    writeln!(out)?;
+
+    // UUID type definition
+    writeln!(out, "// UUID is a unique identifier type (uint64 for now)")?;
+    writeln!(out, "type UUID uint64")?;
+    writeln!(out)?;
+
+    // genUUID function
+    writeln!(out, "// genUUID generates a unique identifier")?;
+    writeln!(
+        out,
+        "// In a real implementation, this should generate proper UUIDs"
+    )?;
+    writeln!(out, "// For now, it returns a simple counter-based ID")?;
+    writeln!(out, "var uuidCounter uint64 = 1")?;
+    writeln!(out, "func genUUID(n int, m int) UUID {{")?;
+    writeln!(out, "\t_ = n")?;
+    writeln!(out, "\t_ = m")?;
+    writeln!(out, "\tuuidCounter++")?;
+    writeln!(out, "\treturn UUID(uuidCounter)")?;
+    writeln!(out, "}}")?;
     writeln!(out)?;
 
     // Unit type definition
@@ -129,6 +158,82 @@ fn build_converters_source() -> Result<String, std::fmt::Error> {
     writeln!(out, "\t\tpanic(\"listGet: index out of range\")")?;
     writeln!(out, "\t}}")?;
     writeln!(out, "\treturn list[idx]")?;
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+
+    // Iterator type and related functions
+    writeln!(out, "// Iterator wraps a BoltDB cursor for table iteration")?;
+    writeln!(out, "type Iterator struct {{")?;
+    writeln!(out, "\tcursor *bolt.Cursor")?;
+    writeln!(out, "\tcurrentKey []byte")?;
+    writeln!(out, "\tcurrentValue []byte")?;
+    writeln!(out, "\tisValid bool")?;
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+
+    // scan function - creates an iterator over a table
+    writeln!(out, "// scan creates an iterator over a table")?;
+    writeln!(
+        out,
+        "func scan(tx *bolt.Tx, tableName string, n int, m int) *Iterator {{"
+    )?;
+    writeln!(out, "\t_ = n // unused parameters")?;
+    writeln!(out, "\t_ = m")?;
+    writeln!(out, "\tb := tx.Bucket([]byte(tableName))")?;
+    writeln!(out, "\tif b == nil {{")?;
+    writeln!(out, "\t\treturn &Iterator{{isValid: false}}")?;
+    writeln!(out, "\t}}")?;
+    writeln!(out, "\tc := b.Cursor()")?;
+    writeln!(out, "\tk, v := c.First()")?;
+    writeln!(out, "\treturn &Iterator{{")?;
+    writeln!(out, "\t\tcursor: c,")?;
+    writeln!(out, "\t\tcurrentKey: k,")?;
+    writeln!(out, "\t\tcurrentValue: v,")?;
+    writeln!(out, "\t\tisValid: k != nil,")?;
+    writeln!(out, "\t}}")?;
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+
+    // hasNext function - checks if iterator has more elements
+    writeln!(out, "// hasNext checks if the iterator has more elements")?;
+    writeln!(out, "func hasNext(iter *Iterator) bool {{")?;
+    writeln!(out, "\treturn iter.isValid")?;
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+
+    // next function - advances the iterator to the next element
+    writeln!(out, "// next advances the iterator to the next element")?;
+    writeln!(out, "func next(iter *Iterator) *Iterator {{")?;
+    writeln!(out, "\tif !iter.isValid {{")?;
+    writeln!(out, "\t\treturn iter")?;
+    writeln!(out, "\t}}")?;
+    writeln!(out, "\tk, v := iter.cursor.Next()")?;
+    writeln!(out, "\titer.currentKey = k")?;
+    writeln!(out, "\titer.currentValue = v")?;
+    writeln!(out, "\titer.isValid = k != nil")?;
+    writeln!(out, "\treturn iter")?;
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+
+    // get_id function - generic function to extract ID from iterator
+    // This needs to be generated per table type
+    // TODO: delete this function, and generate per-table get_id functions, move it to global.go
+    writeln!(
+        out,
+        "// get_id extracts the UUID from the iterator's current key"
+    )?;
+    writeln!(
+        out,
+        "// This is a generic implementation that assumes the key is a UUID"
+    )?;
+    writeln!(out, "func get_id(iter *Iterator) UUID {{")?;
+    writeln!(out, "\tif !iter.isValid {{")?;
+    writeln!(out, "\t\tpanic(\"get_id: iterator is not valid\")")?;
+    writeln!(out, "\t}}")?;
+    writeln!(out, "\t// Deserialize key as UUID")?;
+    writeln!(out, "\tvar id UUID")?;
+    writeln!(out, "\tjson.Unmarshal(iter.currentKey, &id)")?;
+    writeln!(out, "\treturn id")?;
     writeln!(out, "}}")?;
 
     Ok(out)

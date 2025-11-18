@@ -58,6 +58,13 @@ fn build_util_source() -> Result<String, std::fmt::Error> {
     )?;
     writeln!(out)?;
 
+    // AggregateFunc type for global hops
+    writeln!(
+        out,
+        "type AggregateFunc func(results [][]string, params map[string]string) map[string]string"
+    )?;
+    writeln!(out)?;
+
     // Hop type
     writeln!(out, "type Hop struct {{")?;
     writeln!(out, "\tid         int32")?;
@@ -65,6 +72,7 @@ fn build_util_source() -> Result<String, std::fmt::Error> {
     writeln!(out, "\thopType    int")?;
     writeln!(out, "\tconflicts  map[int32]int32")?;
     writeln!(out, "\tprocess    ProcessFunc")?;
+    writeln!(out, "\taggregate  AggregateFunc // For global hops")?;
     writeln!(out)?;
     writeln!(out, "\tisWaitTx    bool")?;
     writeln!(out, "\tisRecordDep bool")?;
@@ -96,6 +104,31 @@ fn build_util_source() -> Result<String, std::fmt::Error> {
         out,
         "\treturn append(rwSet, &proto.RWSet{{TableName: tableName, Key: string(key)}})"
     )?;
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+
+    // ListConcatenate function for global hop aggregation
+    writeln!(
+        out,
+        "// ListConcatenate concatenates results from multiple shards into a single list"
+    )?;
+    writeln!(
+        out,
+        "func ListConcatenate[T any](src [][]string, dest []T) string {{"
+    )?;
+    writeln!(out, "\tvar tmp []T")?;
+    writeln!(out, "\tfor _, v := range src {{")?;
+    writeln!(out, "\t\tif len(v) == 0 {{")?;
+    writeln!(out, "\t\t\tcontinue")?;
+    writeln!(out, "\t\t}}")?;
+    writeln!(out)?;
+    writeln!(out, "\t\tjson.Unmarshal([]byte(v[0]), &tmp)")?;
+    writeln!(out, "\t\tdest = append(dest, tmp...)")?;
+    writeln!(out, "\t}}")?;
+    writeln!(out)?;
+    writeln!(out, "\tresult, _ := json.Marshal(dest)")?;
+    writeln!(out)?;
+    writeln!(out, "\treturn string(result)")?;
     writeln!(out, "}}")?;
     writeln!(out)?;
 
