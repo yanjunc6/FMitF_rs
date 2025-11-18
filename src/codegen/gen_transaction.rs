@@ -751,32 +751,48 @@ fn lower_instruction(
                 .any(|decorator| decorator.name == "go");
             let go_name = go_function_name(program, *func);
 
-            let call_expr = if has_go_decorator && func_name == "+" {
-                let list_expr = operand_to_go(program, &args[0]);
-                let elem_expr = operand_to_go(program, &args[1]);
-                format!("concat({}, {})", list_expr, elem_expr)
-            } else if has_go_decorator && func_name == "get" {
-                let list_expr = operand_to_go(program, &args[0]);
-                let index_expr = operand_to_go(program, &args[1]);
-                format!("{}({}, int({}))", go_name, list_expr, index_expr)
-            } else if has_go_decorator && func_name == "emptyList" {
-                "nil".to_string()
-            } else if func_name == "str" {
-                operand_to_string(program, &args[0])
+            // Special handling for to_unit: use pass-by-reference style
+            if func_name == "to_unit" {
+                if let Some(dest_var) = dest {
+                    let dest_name = go_var_name(program, *dest_var);
+                    let arg_expr = operand_to_go(program, &args[0]);
+                    // Get the type parameter for the generic function
+                    let arg_type = if let Operand::Variable(var_id) = &args[0] {
+                        go_type_string(program, program.variables[*var_id].ty)
+                    } else {
+                        "interface{}".to_string()
+                    };
+                    writeln!(out, "{}to_unit[{}]({}, &{})", indent, arg_type, arg_expr, dest_name)?;
+                    initialized_vars.insert(*dest_var);
+                }
             } else {
-                let args_go: Vec<String> =
-                    args.iter().map(|arg| operand_to_go(program, arg)).collect();
-                format!("{}({})", go_name, args_go.join(", "))
-            };
+                let call_expr = if has_go_decorator && func_name == "+" {
+                    let list_expr = operand_to_go(program, &args[0]);
+                    let elem_expr = operand_to_go(program, &args[1]);
+                    format!("concat({}, {})", list_expr, elem_expr)
+                } else if has_go_decorator && func_name == "get" {
+                    let list_expr = operand_to_go(program, &args[0]);
+                    let index_expr = operand_to_go(program, &args[1]);
+                    format!("{}({}, int({}))", go_name, list_expr, index_expr)
+                } else if has_go_decorator && func_name == "emptyList" {
+                    "nil".to_string()
+                } else if func_name == "str" {
+                    operand_to_string(program, &args[0])
+                } else {
+                    let args_go: Vec<String> =
+                        args.iter().map(|arg| operand_to_go(program, arg)).collect();
+                    format!("{}({})", go_name, args_go.join(", "))
+                };
 
-            if let Some(dest_var) = dest {
-                let dest_name = go_var_name(program, *dest_var);
-                writeln!(out, "{}{} = {}", indent, dest_name, call_expr)?;
-                initialized_vars.insert(*dest_var);
-            } else if func_name == "str" {
-                writeln!(out, "{}_ = {}", indent, call_expr)?;
-            } else {
-                writeln!(out, "{}{}", indent, call_expr)?;
+                if let Some(dest_var) = dest {
+                    let dest_name = go_var_name(program, *dest_var);
+                    writeln!(out, "{}{} = {}", indent, dest_name, call_expr)?;
+                    initialized_vars.insert(*dest_var);
+                } else if func_name == "str" {
+                    writeln!(out, "{}_ = {}", indent, call_expr)?;
+                } else {
+                    writeln!(out, "{}{}", indent, call_expr)?;
+                }
             }
         }
     }

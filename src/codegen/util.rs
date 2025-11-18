@@ -61,6 +61,14 @@ pub fn go_type_string(program: &cfg::Program, ty_id: TypeId) -> String {
         Type::List(inner_ty) => {
             format!("[]{}", go_type_string(program, *inner_ty))
         }
+        Type::Declared { type_id, .. } => {
+            let user_type = &program.user_defined_types[*type_id];
+            if user_type.name == "unit" {
+                "Unit".to_string()
+            } else {
+                format!("/* Unsupported user type {} */ interface{{}}", user_type.name)
+            }
+        }
         //TODO: Implement support for other types
         //other => panic!("Unsupported type in Go codegen: {:?}", other),
         other => format!("/* Unsupported type */ interface{{}} /* {:?} */", other),

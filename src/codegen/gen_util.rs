@@ -99,5 +99,12 @@ fn build_util_source() -> Result<String, std::fmt::Error> {
     writeln!(out, "}}")?;
     writeln!(out)?;
 
+    // putData function
+    writeln!(out, "func putData(tx *bolt.Bucket, key []byte, value any) {{")?;
+    writeln!(out, "\tvalueBytes, _ := json.Marshal(value)")?;
+    writeln!(out, "\ttx.Put(key, valueBytes)")?;
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+
     Ok(out)
 }
