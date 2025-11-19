@@ -370,14 +370,22 @@ fn extract_partition_operands(
     let table = &cfg_program.tables[table_id];
     let mut operands = Vec::new();
 
-    for field_id in &table.node_partition_args {
-        if let Some(pk_idx) = table
-            .primary_key_fields
-            .iter()
-            .position(|pk_field| pk_field == field_id)
-        {
-            if pk_idx < keys.len() {
-                operands.push(keys[pk_idx].clone());
+    for arg in &table.node_partition_args {
+        match arg {
+            crate::cfg::PartitionArg::Field(field_id) => {
+                if let Some(pk_idx) = table
+                    .primary_key_fields
+                    .iter()
+                    .position(|pk_field| pk_field == field_id)
+                {
+                    if pk_idx < keys.len() {
+                        operands.push(keys[pk_idx].clone());
+                    }
+                }
+            }
+            crate::cfg::PartitionArg::Constant(val) => {
+                // Convert constant value to operand
+                operands.push(Operand::Constant(val.clone()));
             }
         }
     }

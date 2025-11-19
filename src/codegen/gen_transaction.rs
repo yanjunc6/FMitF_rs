@@ -350,16 +350,8 @@ fn generate_hop_function_impl(
     // Declare live-in variables
     for var_id in &live_in_set {
         let var = &program.variables[*var_id];
-        let var_type = &program.types[var.ty];
-
-        let decl_type = match var_type {
-            cfg::Type::Primitive(cfg::PrimitiveType::Int)
-            | cfg::Type::Primitive(cfg::PrimitiveType::Float)
-            | cfg::Type::Primitive(cfg::PrimitiveType::Bool)
-            | cfg::Type::Primitive(cfg::PrimitiveType::String)
-            | cfg::Type::List(_) => go_type_string(program, var.ty),
-            _ => String::from("interface{}"),
-        };
+        // Use go_type_string for all types to properly handle UUID, Row<T>, Iterator<T>, etc.
+        let decl_type = go_type_string(program, var.ty);
         var_decls.insert(*var_id, decl_type);
     }
 
@@ -460,7 +452,25 @@ fn generate_hop_function_impl(
             cfg::Type::Primitive(cfg::PrimitiveType::String) => {
                 writeln!(out, "\t{} = params[\"{}\"]", var_name, var_name)?;
             }
-            cfg::Type::List(_) => {
+            cfg::Type::Declared { type_id, .. } => {
+                let user_type = &program.user_defined_types[*type_id];
+                if user_type.name == "UUID" {
+                    // UUID is uint64, so use toUint64
+                    writeln!(
+                        out,
+                        "\t{} = UUID(toUint64(params[\"{}\"]))",
+                        var_name, var_name
+                    )?;
+                } else {
+                    // For other user-defined types, use json.Unmarshal
+                    writeln!(
+                        out,
+                        "\tjson.Unmarshal([]byte(params[\"{}\"]), &{})",
+                        var_name, var_name
+                    )?;
+                }
+            }
+            cfg::Type::List(_) | cfg::Type::Row { .. } => {
                 writeln!(
                     out,
                     "\tjson.Unmarshal([]byte(params[\"{}\"]), &{})",
@@ -1270,10 +1280,9 @@ pub(super) fn lower_terminator_goto(
             if ctx.is_partition {
                 // For partition mode, just return the value directly
                 if let Some(val) = value {
-                    writeln!(out, "{}return {}", indent, operand_to_go(program, val))?;
-                } else {
-                    writeln!(out, "{}return 0", indent)?;
+                    writeln!(out, "{}_ = {}", indent, operand_to_go(program, val))?;
                 }
+                writeln!(out, "{}return 0", indent)?;
             } else {
                 // For normal hop mode, wrap in TrxRes
                 if let Some(val) = value {
@@ -1722,6 +1731,10 @@ fn generate_to_json(
     let function = &program.functions[function_id];
     let func_name = pascal_case(&function.name);
 
+    writeln!(
+        out,
+        "// legacy: use json package to avoid unused import error"
+    )?;
     writeln!(
         out,
         "func {}ToJSON(v interface{{}}) ([]byte, error) {{",

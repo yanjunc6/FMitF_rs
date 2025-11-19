@@ -31,7 +31,7 @@ fn build_converters_source() -> Result<String, std::fmt::Error> {
     )?;
     writeln!(out, "// For now, it returns a simple counter-based ID")?;
     writeln!(out, "var uuidCounter uint64 = 1")?;
-    writeln!(out, "func genUUID(n int, m int) UUID {{")?;
+    writeln!(out, "func genUUID(n uint64, m uint64) UUID {{")?;
     writeln!(out, "\t_ = n")?;
     writeln!(out, "\t_ = m")?;
     writeln!(out, "\tuuidCounter++")?;

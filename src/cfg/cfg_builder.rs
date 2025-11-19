@@ -425,21 +425,37 @@ impl CfgBuilder {
                                 if let Some(ast::IdentifierResolution::Field(field_id)) =
                                     resolved_declarations.first()
                                 {
+                                    let cfg_field_id = self.field_map[field_id];
                                     self.cfg.tables[cfg_table_id]
                                         .node_partition_args
-                                        .push(self.field_map[field_id]);
-                                    schedule_fields.insert(self.field_map[field_id]);
+                                        .push(cfg::PartitionArg::Field(cfg_field_id));
+                                    schedule_fields.insert(cfg_field_id);
                                 } else {
                                     // For now, just skip non-field identifiers
                                     // This could be expanded to handle other identifier types
                                 }
                             }
-                            ast::Expression::Literal { .. } => {
-                                // Skip literal expressions in partition arguments
-                                // These are handled differently in the partition function itself
+                            ast::Expression::Literal { value, .. } => {
+                                // Include literal constants in partition arguments
+                                let const_val = match value {
+                                    ast::Literal::Integer(s) => {
+                                        cfg::ConstantValue::Int(s.parse().unwrap_or(0))
+                                    }
+                                    ast::Literal::Float(s) => cfg::ConstantValue::Float(
+                                        ordered_float::OrderedFloat(s.parse().unwrap_or(0.0)),
+                                    ),
+                                    ast::Literal::String(s) => {
+                                        cfg::ConstantValue::String(s.clone())
+                                    }
+                                    ast::Literal::Bool(b) => cfg::ConstantValue::Bool(*b),
+                                    _ => continue, // Skip complex literals like lists/rows
+                                };
+                                self.cfg.tables[cfg_table_id]
+                                    .node_partition_args
+                                    .push(cfg::PartitionArg::Constant(const_val));
                             }
                             _ => {
-                                // Skip other complex expressions
+                                // Skip other complex expressions for now
                                 // The partition logic will need to handle these appropriately
                             }
                         }

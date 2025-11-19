@@ -127,9 +127,17 @@ fn build_global_source(
             let call_args: Vec<String> = table
                 .node_partition_args
                 .iter()
-                .map(|field_id| {
-                    let field = &program.table_fields[*field_id];
-                    format!("key.{}", field.name)
+                .map(|arg| match arg {
+                    cfg::PartitionArg::Field(field_id) => {
+                        let field = &program.table_fields[*field_id];
+                        format!("key.{}", field.name)
+                    }
+                    cfg::PartitionArg::Constant(val) => match val {
+                        cfg::ConstantValue::Int(i) => i.to_string(),
+                        cfg::ConstantValue::Float(f) => f.to_string(),
+                        cfg::ConstantValue::Bool(b) => b.to_string(),
+                        cfg::ConstantValue::String(s) => format!("\"{}\"", s),
+                    },
                 })
                 .collect();
 
