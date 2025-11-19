@@ -1,5 +1,7 @@
 // Partition function declaration
-function f(x: int) -> int;
+partition f(x: int) -> int {
+    return x;
+}
 
 // ===========================================
 // Table Declarations

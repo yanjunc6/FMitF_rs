@@ -404,7 +404,6 @@ impl BaseVerificationGenerator {
         }
     }
 
-    #[allow(dead_code)]
     pub fn default_generate_block_edges(
         &mut self,
         block: &BasicBlock,
@@ -435,16 +434,18 @@ impl BaseVerificationGenerator {
                     else_body: vec![Box::new(BoogieLine::Goto(false_label))],
                 });
             }
-            crate::cfg::Terminator::Return(ret_val) => {
-                if let Some(op) = ret_val {
-                    let ret_name = self.get_operand_name(op, slice_id, cfg_program)?;
-                    let ret_expr = self.generator.convert_operand(cfg_program, op, ret_name)?;
-                    // Assuming a special return variable `__ret`
-                    lines.push(BoogieLine::Assign(
-                        self.scope.get_scoped_name("__ret"),
-                        ret_expr,
-                    ));
-                }
+            crate::cfg::Terminator::Return(..) => {
+                // NOTE: No return value should be handled here.
+                // if let Some(op) = ret_val {
+                //     let ret_name = self.get_operand_name(op, slice_id, cfg_program)?;
+                //     let ret_expr = self.generator.convert_operand(cfg_program, op, ret_name)?;
+                //
+                //     // Assuming a special return variable `__ret`
+                //     lines.push(BoogieLine::Assign(
+                //         self.scope.get_scoped_name("__ret"),
+                //         ret_expr,
+                //     ));
+                // }
                 lines.push(BoogieLine::Goto(self.scope.get_scoped_name("epilogue")));
             }
             crate::cfg::Terminator::HopExit { .. } => {

@@ -321,6 +321,15 @@ pub enum UnaryOp {
 // --- Tables and Fields
 // ============================================================================
 
+/// Represents an argument to a partition function call in a table's node declaration
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PartitionArg {
+    /// A reference to a table field
+    Field(FieldId),
+    /// A constant value
+    Constant(ConstantValue),
+}
+
 #[derive(Debug, Clone)]
 pub struct Table {
     pub name: String,
@@ -328,7 +337,7 @@ pub struct Table {
     pub primary_key_fields: Vec<FieldId>,
     pub other_fields: Vec<FieldId>,
     pub node_partition: Option<FunctionId>,
-    pub node_partition_args: Vec<FieldId>,
+    pub node_partition_args: Vec<PartitionArg>, // Complete partition call args (fields and constants)
     pub invariants: Vec<FunctionId>,
 }
 

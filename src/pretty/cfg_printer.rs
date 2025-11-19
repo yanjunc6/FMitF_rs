@@ -12,8 +12,8 @@ use std::io::{self, Write};
 
 // Debug options - simple constants for development
 const SHOW_VAR_IDS: bool = true;
-const SHOW_TYPE_INFO: bool = false;
-const SHOW_LIVENESS: bool = true;
+const SHOW_TYPE_INFO: bool = true;
+const SHOW_LIVENESS: bool = false;
 const SHOW_REACHING_DEF: bool = false;
 const SHOW_TABLE_MOD_REF: bool = true;
 
@@ -195,14 +195,24 @@ impl<W: Write> CfgPrinter<W> {
             }
             if !table.node_partition_args.is_empty() {
                 write!(self.writer, "(")?;
-                for (i, field_id) in table.node_partition_args.iter().enumerate() {
+                for (i, arg) in table.node_partition_args.iter().enumerate() {
                     if i > 0 {
                         write!(self.writer, ", ")?;
                     }
-                    let field = &program.table_fields[*field_id];
-                    write!(self.writer, "{}", field.name)?;
-                    if SHOW_VAR_IDS {
-                        write!(self.writer, "[f{}]", field_id.index())?;
+                    match arg {
+                        PartitionArg::Field(field_id) => {
+                            let field = &program.table_fields[*field_id];
+                            write!(self.writer, "{}", field.name)?;
+                            if SHOW_VAR_IDS {
+                                write!(self.writer, "[f{}]", field_id.index())?;
+                            }
+                        }
+                        PartitionArg::Constant(val) => match val {
+                            ConstantValue::Int(i) => write!(self.writer, "{}", i)?,
+                            ConstantValue::Float(f) => write!(self.writer, "{}", f)?,
+                            ConstantValue::Bool(b) => write!(self.writer, "{}", b)?,
+                            ConstantValue::String(s) => write!(self.writer, "\"{}\"", s)?,
+                        },
                     }
                 }
                 write!(self.writer, ")")?;

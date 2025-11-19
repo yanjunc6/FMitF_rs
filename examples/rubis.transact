@@ -1,16 +1,13 @@
 // ===========================================
 // Partition function declarations
 // ===========================================
-function f(x: UUID) -> int {
+partition f(x: UUID) -> int {
     return x;
 }
-function f(x: int) -> int {
-    return 10 * x;
-}
-function g(x: string, y: int) -> int {
+
+partition g(x: string, y: int) -> int {
     return y;
 }
-function h(x: int, y: int) -> int;
 
 // ===========================================
 // Table Declarations
