@@ -155,7 +155,7 @@ pub fn determine_hop_types(
 ///
 /// Returns a map from (FunctionId, HopId) to a map of (chain_index -> hop_index).
 ///
-/// For each hop, we find all C-edges connecting to hops in other transactions,
+/// For each hop, we find all C-edges connecting to hops in other transactions and same transactions,
 /// and record only the FIRST hop in each conflicting transaction chain.
 ///
 /// Parameters:
@@ -194,36 +194,33 @@ pub fn calculate_conflicts(
             let source_node = edge.source;
             let target_node = edge.target;
 
-            // Only process if they're from different transactions
-            if source_node.function_id != target_node.function_id {
-                // Record conflict from source to target
-                if let (Some(&target_chain_idx), Some(&target_hop_idx)) = (
-                    func_to_chain_index.get(&target_node.function_id),
-                    hop_to_index.get(&(target_node.function_id, target_node.hop_id)),
-                ) {
-                    let source_key = (source_node.function_id, source_node.hop_id);
-                    let conflicts_map = conflicts.entry(source_key).or_insert_with(HashMap::new);
+            // Record conflict from source to target
+            if let (Some(&target_chain_idx), Some(&target_hop_idx)) = (
+                func_to_chain_index.get(&target_node.function_id),
+                hop_to_index.get(&(target_node.function_id, target_node.hop_id)),
+            ) {
+                let source_key = (source_node.function_id, source_node.hop_id);
+                let conflicts_map = conflicts.entry(source_key).or_insert_with(HashMap::new);
 
-                    // Only record if this chain doesn't already have a conflict recorded
-                    // (we want the FIRST conflicting hop in that chain)
-                    conflicts_map
-                        .entry(target_chain_idx)
-                        .or_insert(target_hop_idx);
-                }
+                // Only record if this chain doesn't already have a conflict recorded
+                // (we want the FIRST conflicting hop in that chain)
+                conflicts_map
+                    .entry(target_chain_idx)
+                    .or_insert(target_hop_idx);
+            }
 
-                // Record conflict from target to source
-                if let (Some(&source_chain_idx), Some(&source_hop_idx)) = (
-                    func_to_chain_index.get(&source_node.function_id),
-                    hop_to_index.get(&(source_node.function_id, source_node.hop_id)),
-                ) {
-                    let target_key = (target_node.function_id, target_node.hop_id);
-                    let conflicts_map = conflicts.entry(target_key).or_insert_with(HashMap::new);
+            // Record conflict from target to source
+            if let (Some(&source_chain_idx), Some(&source_hop_idx)) = (
+                func_to_chain_index.get(&source_node.function_id),
+                hop_to_index.get(&(source_node.function_id, source_node.hop_id)),
+            ) {
+                let target_key = (target_node.function_id, target_node.hop_id);
+                let conflicts_map = conflicts.entry(target_key).or_insert_with(HashMap::new);
 
-                    // Only record if this chain doesn't already have a conflict recorded
-                    conflicts_map
-                        .entry(source_chain_idx)
-                        .or_insert(source_hop_idx);
-                }
+                // Only record if this chain doesn't already have a conflict recorded
+                conflicts_map
+                    .entry(source_chain_idx)
+                    .or_insert(source_hop_idx);
             }
         }
     }
