@@ -98,6 +98,9 @@ pub fn generate_transactions(
             &conflicts,
         )?;
 
+        // Generate ToJson function
+        generate_to_json(&mut content, program, function_id)?;
+
         files.push(GoProgram::new(file_name, content));
     }
 
@@ -1704,6 +1707,27 @@ fn generate_chain_impl(
         "\treturn &Chain{{db: db, hops: hops, NextReq: {}NextReq}}",
         func_name
     )?;
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+
+    Ok(())
+}
+
+/// Use json package to eliminate unused import errors
+fn generate_to_json(
+    out: &mut String,
+    program: &cfg::Program,
+    function_id: cfg::FunctionId,
+) -> Result<(), std::fmt::Error> {
+    let function = &program.functions[function_id];
+    let func_name = pascal_case(&function.name);
+
+    writeln!(
+        out,
+        "func {}ToJSON(v interface{{}}) ([]byte, error) {{",
+        func_name
+    )?;
+    writeln!(out, "\treturn json.Marshal(v)")?;
     writeln!(out, "}}")?;
     writeln!(out)?;
 

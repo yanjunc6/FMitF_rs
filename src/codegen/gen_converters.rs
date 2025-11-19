@@ -18,11 +18,6 @@ fn build_converters_source() -> Result<String, std::fmt::Error> {
     writeln!(out, "// TODO: Add composite/list converters and handle locale or precision policies if required.")?;
     writeln!(out)?;
 
-    // Constants
-    writeln!(out, "// __slice__ is a constant used for scan operations")?;
-    writeln!(out, "const __slice__ = 0")?;
-    writeln!(out)?;
-
     // UUID type definition
     writeln!(out, "// UUID is a unique identifier type (uint64 for now)")?;
     writeln!(out, "type UUID uint64")?;
