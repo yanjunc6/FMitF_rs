@@ -15,7 +15,7 @@ const SHOW_VAR_IDS: bool = true;
 const SHOW_TYPE_INFO: bool = true;
 const SHOW_LIVENESS: bool = false;
 const SHOW_REACHING_DEF: bool = false;
-const SHOW_TABLE_MOD_REF: bool = true;
+const SHOW_TABLE_MOD_REF: bool = false;
 
 /// A pretty printer for CFG nodes.
 pub struct CfgPrinter<W: Write> {

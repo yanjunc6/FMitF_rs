@@ -203,21 +203,90 @@ fn generate_aggregate_function(
         aggregate_name
     )?;
 
-    // For now, generate a simple concatenation aggregation
-    // This assumes the result is a list that needs to be concatenated
-    writeln!(
-        out,
-        "\t// TODO: Customize aggregation logic based on return type"
-    )?;
-    writeln!(out, "\t// For now, using ListConcatenate for list results")?;
-    writeln!(out, "\tif len(results) > 0 && len(results[0]) > 0 {{")?;
-    writeln!(out, "\t\t// Assuming the result is a list")?;
-    writeln!(out, "\t\tvar emptyList []interface{{}}")?;
-    writeln!(
-        out,
-        "\t\tparams[\"result\"] = ListConcatenate(results, emptyList)"
-    )?;
-    writeln!(out, "\t}}")?;
+    // Determine the return variables by analyzing what's written back
+    // Run function-level liveness analysis
+    let func_liveness = analyze_live_variables(function, program);
+    let hop_reaching_def = analyze_reaching_definitions_hop(function, program);
+
+    // Get live-out variables for the next hop
+    // For global hops, if this is the last hop, we need to check function return instead
+    let mut func_live_out = if let Some(next_hop_id) = function.hops.get(hop_index + 1) {
+        let next_hop = &program.hops[*next_hop_id];
+        if let Some(next_entry) = next_hop.entry_block {
+            func_liveness
+                .block_entry
+                .get(&next_entry)
+                .and_then(|lattice| lattice.as_set())
+                .map(|set| set.iter().map(|LiveVar(v)| *v).collect::<Vec<_>>())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        }
+    } else {
+        // For the last hop, check what's returned
+        // Look for variables that reach the return or hop exit blocks
+        let mut live_at_exit = Vec::new();
+        for &block_id in &hop.blocks {
+            let block = &program.basic_blocks[block_id];
+            match &block.terminator {
+                cfg::Terminator::HopExit { .. } | cfg::Terminator::Return(_) => {
+                    if let Some(live_out) = func_liveness.block_exit.get(&block_id) {
+                        if let Some(vars) = live_out.as_set() {
+                            for LiveVar(var_id) in vars {
+                                if !live_at_exit.contains(var_id) {
+                                    live_at_exit.push(*var_id);
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        live_at_exit
+    };
+    func_live_out.sort_by_key(|var_id| var_id.index());
+
+    // Get variables defined in this hop
+    let mut vars_defined_in_hop = HashSet::new();
+    for &block_id in &hop.blocks {
+        if let Some(exit_state) = hop_reaching_def.block_exit.get(&block_id) {
+            if let Some(defs) = exit_state.as_set() {
+                for def in defs {
+                    vars_defined_in_hop.insert(def.var);
+                }
+            }
+        }
+    }
+
+    // Variables to write back: live-out at function level AND defined in this hop
+    let mut vars_to_write_back: Vec<cfg::VariableId> = func_live_out
+        .iter()
+        .filter(|var_id| vars_defined_in_hop.contains(var_id))
+        .copied()
+        .collect();
+    vars_to_write_back.sort_by_key(|var_id| var_id.index());
+
+    // Generate aggregation code for each return variable
+    for (idx, var_id) in vars_to_write_back.iter().enumerate() {
+        let var = &program.variables[*var_id];
+        let var_name = go_var_name(program, *var_id);
+        let go_type = go_type_string(program, var.ty);
+
+        writeln!(out, "\t// Define typed list for {}", var_name)?;
+        writeln!(out, "\tvar {} {}", var_name, go_type)?;
+        writeln!(
+            out,
+            "\tparams[\"{}\"] = ListConcatenate(results, {})",
+            var_name, var_name
+        )?;
+
+        // Add blank line between variables if there are multiple
+        if idx < vars_to_write_back.len() - 1 {
+            writeln!(out)?;
+        }
+    }
+
     writeln!(out, "\treturn params")?;
     writeln!(out, "}}")?;
     writeln!(out)?;
