@@ -3,19 +3,26 @@
 //! This module provides pretty printing for the Control Flow Graph (CFG) representation.
 
 use crate::cfg::*;
+use crate::dataflow::ExprKind;
 use crate::dataflow::{
-    analyze_live_variables, analyze_reaching_definitions, analyze_table_mod_ref, AccessType,
-    DataflowResults, Definition, LiveVar, SetLattice, TableAccess,
+    analyze_available_expressions, analyze_live_variables, analyze_reaching_definitions,
+    analyze_table_mod_ref, AccessType, AvailExpr, DataflowResults, Definition, LiveVar, SetLattice,
+    StmtLoc, TableAccess,
 };
 use crate::pretty::PrettyPrint;
 use std::io::{self, Write};
 
 // Debug options - simple constants for development
 const SHOW_VAR_IDS: bool = true;
-const SHOW_TYPE_INFO: bool = true;
-const SHOW_LIVENESS: bool = false;
-const SHOW_REACHING_DEF: bool = false;
-const SHOW_TABLE_MOD_REF: bool = false;
+const SHOW_TYPE_INFO: bool = false;
+const SHOW_LIVENESS: bool = true;
+const SHOW_REACHING_DEF: bool = true;
+const SHOW_TABLE_MOD_REF: bool = true;
+const SHOW_AVAILABLE_EXPRS: bool = true;
+
+// Options for granularity of analysis printing
+const SHOW_ANALYSIS_PER_BLOCK: bool = false; // Show analysis at block entry/exit
+const SHOW_ANALYSIS_PER_STMT: bool = true; // Show analysis before/after each statement
 
 /// A pretty printer for CFG nodes.
 pub struct CfgPrinter<W: Write> {
@@ -24,6 +31,7 @@ pub struct CfgPrinter<W: Write> {
     liveness: Option<DataflowResults<SetLattice<LiveVar>>>,
     reaching_def: Option<DataflowResults<SetLattice<Definition>>>,
     table_mod_ref: Option<DataflowResults<SetLattice<TableAccess>>>,
+    available_exprs: Option<DataflowResults<SetLattice<AvailExpr>>>,
 }
 
 impl<W: Write> CfgPrinter<W> {
@@ -34,6 +42,7 @@ impl<W: Write> CfgPrinter<W> {
             liveness: None,
             reaching_def: None,
             table_mod_ref: None,
+            available_exprs: None,
         }
     }
 
@@ -276,6 +285,15 @@ impl<W: Write> CfgPrinter<W> {
             }
         }
 
+        if SHOW_AVAILABLE_EXPRS {
+            if !matches!(function.kind, crate::cfg::FunctionKind::Operator) {
+                let available_exprs_results = analyze_available_expressions(function, program);
+                self.available_exprs = Some(available_exprs_results);
+            } else {
+                self.available_exprs = None;
+            }
+        }
+
         // Print decorators
         for decorator in &function.decorators {
             self.write_indent()?;
@@ -468,7 +486,7 @@ impl<W: Write> CfgPrinter<W> {
         self.indent();
 
         // Print liveness info
-        if SHOW_LIVENESS {
+        if SHOW_LIVENESS && SHOW_ANALYSIS_PER_BLOCK {
             let live_in_set = if let Some(liveness) = &self.liveness {
                 liveness.block_entry.get(&id).cloned()
             } else {
@@ -483,7 +501,7 @@ impl<W: Write> CfgPrinter<W> {
         }
 
         // Print reaching definitions info
-        if SHOW_REACHING_DEF {
+        if SHOW_REACHING_DEF && SHOW_ANALYSIS_PER_BLOCK {
             let reaching_def_in_set = if let Some(reaching_def) = &self.reaching_def {
                 reaching_def.block_entry.get(&id).cloned()
             } else {
@@ -498,7 +516,7 @@ impl<W: Write> CfgPrinter<W> {
         }
 
         // Print table mod/ref info
-        if SHOW_TABLE_MOD_REF {
+        if SHOW_TABLE_MOD_REF && SHOW_ANALYSIS_PER_BLOCK {
             let table_mod_ref_in_set = if let Some(table_mod_ref) = &self.table_mod_ref {
                 table_mod_ref.block_entry.get(&id).cloned()
             } else {
@@ -512,16 +530,49 @@ impl<W: Write> CfgPrinter<W> {
             }
         }
 
+        // Print available expressions info
+        if SHOW_AVAILABLE_EXPRS && SHOW_ANALYSIS_PER_BLOCK {
+            let available_exprs_in_set = if let Some(available_exprs) = &self.available_exprs {
+                available_exprs.block_entry.get(&id).cloned()
+            } else {
+                None
+            };
+            if let Some(available_exprs_in) = available_exprs_in_set {
+                self.write_indent()?;
+                write!(self.writer, "available_exprs_in: ")?;
+                self.print_available_exprs_set(program, &available_exprs_in)?;
+                writeln!(self.writer)?;
+            }
+        }
+
         // Print instructions
-        for instruction in &block.instructions {
+        for (idx, instruction) in block.instructions.iter().enumerate() {
+            // Print per-statement entry analysis
+            if SHOW_ANALYSIS_PER_STMT {
+                let stmt_loc = StmtLoc {
+                    block: id,
+                    index: idx,
+                };
+                self.print_stmt_analysis_entry(program, &stmt_loc)?;
+            }
+
             self.print_instruction(program, instruction)?;
+
+            // Print per-statement exit analysis
+            if SHOW_ANALYSIS_PER_STMT {
+                let stmt_loc = StmtLoc {
+                    block: id,
+                    index: idx,
+                };
+                self.print_stmt_analysis_exit(program, &stmt_loc)?;
+            }
         }
 
         // Print terminator
         self.print_terminator(program, &block.terminator)?;
 
         // Print liveness info
-        if SHOW_LIVENESS {
+        if SHOW_LIVENESS && SHOW_ANALYSIS_PER_BLOCK {
             let live_out_set = if let Some(liveness) = &self.liveness {
                 liveness.block_exit.get(&id).cloned()
             } else {
@@ -536,7 +587,7 @@ impl<W: Write> CfgPrinter<W> {
         }
 
         // Print reaching definitions info
-        if SHOW_REACHING_DEF {
+        if SHOW_REACHING_DEF && SHOW_ANALYSIS_PER_BLOCK {
             let reaching_def_out_set = if let Some(reaching_def) = &self.reaching_def {
                 reaching_def.block_exit.get(&id).cloned()
             } else {
@@ -551,7 +602,7 @@ impl<W: Write> CfgPrinter<W> {
         }
 
         // Print table mod/ref info
-        if SHOW_TABLE_MOD_REF {
+        if SHOW_TABLE_MOD_REF && SHOW_ANALYSIS_PER_BLOCK {
             let table_mod_ref_out_set = if let Some(table_mod_ref) = &self.table_mod_ref {
                 table_mod_ref.block_exit.get(&id).cloned()
             } else {
@@ -561,6 +612,21 @@ impl<W: Write> CfgPrinter<W> {
                 self.write_indent()?;
                 write!(self.writer, "table_mod_ref_out: ")?;
                 self.print_table_mod_ref_set(program, &table_mod_ref_out)?;
+                writeln!(self.writer)?;
+            }
+        }
+
+        // Print available expressions info
+        if SHOW_AVAILABLE_EXPRS && SHOW_ANALYSIS_PER_BLOCK {
+            let available_exprs_out_set = if let Some(available_exprs) = &self.available_exprs {
+                available_exprs.block_exit.get(&id).cloned()
+            } else {
+                None
+            };
+            if let Some(available_exprs_out) = available_exprs_out_set {
+                self.write_indent()?;
+                write!(self.writer, "available_exprs_out: ")?;
+                self.print_available_exprs_set(program, &available_exprs_out)?;
                 writeln!(self.writer)?;
             }
         }
@@ -788,6 +854,219 @@ impl<W: Write> CfgPrinter<W> {
             write!(self.writer, "TOP")?;
         }
         write!(self.writer, "}}")?;
+        Ok(())
+    }
+
+    fn print_available_exprs_set(
+        &mut self,
+        program: &Program,
+        available_exprs: &SetLattice<AvailExpr>,
+    ) -> io::Result<()> {
+        write!(self.writer, "{{")?;
+        if let Some(set) = available_exprs.as_set() {
+            for (i, expr) in set.iter().enumerate() {
+                if i > 0 {
+                    write!(self.writer, ", ")?;
+                }
+                let dest_var = &program.variables[expr.dest];
+                write!(self.writer, "{}=", dest_var.name)?;
+                if SHOW_VAR_IDS {
+                    write!(self.writer, "[v{}]", expr.dest.index())?;
+                }
+                self.print_expr_kind(program, &expr.op)?;
+            }
+        } else {
+            write!(self.writer, "TOP")?;
+        }
+        write!(self.writer, "}}")?;
+        Ok(())
+    }
+
+    fn print_expr_kind(&mut self, program: &Program, expr: &ExprKind) -> io::Result<()> {
+        match expr {
+            ExprKind::BinaryOp { op, left, right } => {
+                write!(self.writer, "(")?;
+                self.print_operand(program, left)?;
+                write!(self.writer, " {} ", self.binary_op_to_string(op))?;
+                self.print_operand(program, right)?;
+                write!(self.writer, ")")?;
+            }
+            ExprKind::UnaryOp { op, operand } => {
+                write!(self.writer, "{}", self.unary_op_to_string(op))?;
+                self.print_operand(program, operand)?;
+            }
+            ExprKind::Use(operand) => {
+                self.print_operand(program, operand)?;
+            }
+            ExprKind::Call { func, args } => {
+                let function = &program.functions[*func];
+                write!(self.writer, "{}(", function.name)?;
+                if SHOW_VAR_IDS {
+                    write!(self.writer, "[fn{}]", func.index())?;
+                }
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        write!(self.writer, ", ")?;
+                    }
+                    self.print_operand(program, arg)?;
+                }
+                write!(self.writer, ")")?;
+            }
+        }
+        Ok(())
+    }
+
+    fn print_stmt_analysis_entry(
+        &mut self,
+        program: &Program,
+        stmt_loc: &StmtLoc,
+    ) -> io::Result<()> {
+        let mut has_any = false;
+
+        // Liveness
+        if SHOW_LIVENESS {
+            let live_in = if let Some(liveness) = &self.liveness {
+                liveness.stmt_entry.get(stmt_loc).cloned()
+            } else {
+                None
+            };
+            if let Some(live_in) = live_in {
+                self.write_indent()?;
+                write!(self.writer, "  [stmt_in] livein: ")?;
+                self.print_liveness_set(program, &live_in)?;
+                writeln!(self.writer)?;
+                has_any = true;
+            }
+        }
+
+        // Reaching definitions
+        if SHOW_REACHING_DEF {
+            let rd_in = if let Some(reaching_def) = &self.reaching_def {
+                reaching_def.stmt_entry.get(stmt_loc).cloned()
+            } else {
+                None
+            };
+            if let Some(rd_in) = rd_in {
+                self.write_indent()?;
+                write!(self.writer, "  [stmt_in] reaching_def: ")?;
+                self.print_reaching_def_set(program, &rd_in)?;
+                writeln!(self.writer)?;
+                has_any = true;
+            }
+        }
+
+        // Table mod/ref
+        if SHOW_TABLE_MOD_REF {
+            let tmr_in = if let Some(table_mod_ref) = &self.table_mod_ref {
+                table_mod_ref.stmt_entry.get(stmt_loc).cloned()
+            } else {
+                None
+            };
+            if let Some(tmr_in) = tmr_in {
+                self.write_indent()?;
+                write!(self.writer, "  [stmt_in] table_mod_ref: ")?;
+                self.print_table_mod_ref_set(program, &tmr_in)?;
+                writeln!(self.writer)?;
+                has_any = true;
+            }
+        }
+
+        // Available expressions
+        if SHOW_AVAILABLE_EXPRS {
+            let ae_in = if let Some(available_exprs) = &self.available_exprs {
+                available_exprs.stmt_entry.get(stmt_loc).cloned()
+            } else {
+                None
+            };
+            if let Some(ae_in) = ae_in {
+                self.write_indent()?;
+                write!(self.writer, "  [stmt_in] available_exprs: ")?;
+                self.print_available_exprs_set(program, &ae_in)?;
+                writeln!(self.writer)?;
+                has_any = true;
+            }
+        }
+
+        if has_any {
+            // Add a blank line for readability
+        }
+        Ok(())
+    }
+
+    fn print_stmt_analysis_exit(
+        &mut self,
+        program: &Program,
+        stmt_loc: &StmtLoc,
+    ) -> io::Result<()> {
+        let mut has_any = false;
+
+        // Liveness
+        if SHOW_LIVENESS {
+            let live_out = if let Some(liveness) = &self.liveness {
+                liveness.stmt_exit.get(stmt_loc).cloned()
+            } else {
+                None
+            };
+            if let Some(live_out) = live_out {
+                self.write_indent()?;
+                write!(self.writer, "  [stmt_out] liveout: ")?;
+                self.print_liveness_set(program, &live_out)?;
+                writeln!(self.writer)?;
+                has_any = true;
+            }
+        }
+
+        // Reaching definitions
+        if SHOW_REACHING_DEF {
+            let rd_out = if let Some(reaching_def) = &self.reaching_def {
+                reaching_def.stmt_exit.get(stmt_loc).cloned()
+            } else {
+                None
+            };
+            if let Some(rd_out) = rd_out {
+                self.write_indent()?;
+                write!(self.writer, "  [stmt_out] reaching_def: ")?;
+                self.print_reaching_def_set(program, &rd_out)?;
+                writeln!(self.writer)?;
+                has_any = true;
+            }
+        }
+
+        // Table mod/ref
+        if SHOW_TABLE_MOD_REF {
+            let tmr_out = if let Some(table_mod_ref) = &self.table_mod_ref {
+                table_mod_ref.stmt_exit.get(stmt_loc).cloned()
+            } else {
+                None
+            };
+            if let Some(tmr_out) = tmr_out {
+                self.write_indent()?;
+                write!(self.writer, "  [stmt_out] table_mod_ref: ")?;
+                self.print_table_mod_ref_set(program, &tmr_out)?;
+                writeln!(self.writer)?;
+                has_any = true;
+            }
+        }
+
+        // Available expressions
+        if SHOW_AVAILABLE_EXPRS {
+            let ae_out = if let Some(available_exprs) = &self.available_exprs {
+                available_exprs.stmt_exit.get(stmt_loc).cloned()
+            } else {
+                None
+            };
+            if let Some(ae_out) = ae_out {
+                self.write_indent()?;
+                write!(self.writer, "  [stmt_out] available_exprs: ")?;
+                self.print_available_exprs_set(program, &ae_out)?;
+                writeln!(self.writer)?;
+                has_any = true;
+            }
+        }
+
+        if has_any {
+            // Add a blank line for readability
+        }
         Ok(())
     }
 
