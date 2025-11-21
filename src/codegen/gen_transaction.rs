@@ -614,7 +614,7 @@ fn generate_hop_function_impl(
                 writeln!(out, "\tif true {{ return {} }}", shard)?;
             }
             // Generate unreachable code (for Go compiler variable usage)
-            lower_instruction_or_combined(
+            lower_optimized_op(
                 out,
                 program,
                 op,
@@ -675,7 +675,7 @@ fn generate_hop_function_impl(
                     writeln!(out, "\tif true {{ return {} }}", shard)?;
                 }
                 // Generate unreachable code (for Go compiler variable usage)
-                lower_instruction_or_combined(
+                lower_optimized_op(
                     out,
                     program,
                     op,
@@ -733,6 +733,41 @@ fn generate_results_exprs(
 
 /// Lower a sequence of optimized operations (main code generation entry point)
 /// This function handles both single instructions and combined table accesses uniformly
+/// Lower a single OptimizedOp (either a single instruction or a combined table access)
+fn lower_optimized_op(
+    out: &mut String,
+    program: &cfg::Program,
+    op: &OptimizedOp,
+    initialized_vars: &mut HashSet<cfg::VariableId>,
+    table_access_count: &mut usize,
+    indent: &str,
+) -> Result<(), std::fmt::Error> {
+    match op {
+        OptimizedOp::Single(inst) => {
+            lower_instruction(
+                out,
+                program,
+                inst,
+                initialized_vars,
+                table_access_count,
+                indent,
+            )?;
+        }
+        OptimizedOp::CombinedTableAccess(group) => {
+            lower_combined_table_access(
+                out,
+                program,
+                group,
+                initialized_vars,
+                table_access_count,
+                indent,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Lower a sequence of OptimizedOps
 fn lower_optimized_ops(
     out: &mut String,
     program: &cfg::Program,
@@ -742,53 +777,21 @@ fn lower_optimized_ops(
     indent: &str,
 ) -> Result<(), std::fmt::Error> {
     for op in ops {
-        match op {
-            OptimizedOp::Single(inst) => {
-                lower_instruction(
-                    out,
-                    program,
-                    inst,
-                    initialized_vars,
-                    table_access_count,
-                    indent,
-                )?;
-            }
-            OptimizedOp::CombinedTableAccess(group) => {
-                lower_combined_table_access(
-                    out,
-                    program,
-                    group,
-                    initialized_vars,
-                    table_access_count,
-                    indent,
-                )?;
-            }
-        }
+        lower_optimized_op(
+            out,
+            program,
+            op,
+            initialized_vars,
+            table_access_count,
+            indent,
+        )?;
     }
     Ok(())
 }
 
 /// Lower a single instruction (public API for other modules)
-pub(super) fn lower_single_instruction(
-    out: &mut String,
-    program: &cfg::Program,
-    inst: &Instruction,
-    initialized_vars: &mut HashSet<cfg::VariableId>,
-    table_access_count: &mut usize,
-    indent: &str,
-) -> Result<(), std::fmt::Error> {
-    lower_instruction(
-        out,
-        program,
-        inst,
-        initialized_vars,
-        table_access_count,
-        indent,
-    )
-}
-
-/// Lower a single instruction
-fn lower_instruction(
+/// Lower a single instruction to Go code
+pub(super) fn lower_instruction(
     out: &mut String,
     program: &cfg::Program,
     inst: &Instruction,
@@ -1003,11 +1006,13 @@ fn lower_instruction(
                     initialized_vars.insert(*dest_var);
                 }
             }
-            // Special handling for hasNext, next, get_id
-            else if func_name == "hasNext" || func_name == "next" || func_name == "get_id" {
+            // Special handling for hasNext, next, and iterator getter functions (get_*)
+            else if func_name == "hasNext" || func_name == "next" || func_name.starts_with("get_")
+            {
                 let args_go: Vec<String> =
                     args.iter().map(|arg| operand_to_go(program, arg)).collect();
-                let call_expr = format!("{}({})", func_name, args_go.join(", "));
+                // Use go_name which includes function ID suffix for @rename decorated functions
+                let call_expr = format!("{}({})", go_name, args_go.join(", "));
 
                 if let Some(dest_var) = dest {
                     let dest_name = go_var_name(program, *dest_var);
@@ -1243,39 +1248,6 @@ fn check_partition_from_op(
 
 /// Helper to lower a single OptimizedOp (either instruction or combined access)
 /// Used for unreachable code generation in partition functions
-fn lower_instruction_or_combined(
-    out: &mut String,
-    program: &cfg::Program,
-    op: &OptimizedOp,
-    initialized_vars: &mut HashSet<cfg::VariableId>,
-    table_access_count: &mut usize,
-    indent: &str,
-) -> Result<(), std::fmt::Error> {
-    match op {
-        OptimizedOp::Single(inst) => {
-            lower_instruction(
-                out,
-                program,
-                inst,
-                initialized_vars,
-                table_access_count,
-                indent,
-            )?;
-        }
-        OptimizedOp::CombinedTableAccess(group) => {
-            lower_combined_table_access(
-                out,
-                program,
-                group,
-                initialized_vars,
-                table_access_count,
-                indent,
-            )?;
-        }
-    }
-    Ok(())
-}
-
 // Helper function to collect variable declarations from an instruction
 pub(super) fn collect_var_decls_from_instruction(
     program: &cfg::Program,
@@ -1482,48 +1454,47 @@ fn table_field_accessor(
     }
 }
 
+/// Generate the Go function name for a given function ID.
+/// Handles three types of renaming:
+/// 1. @go decorator: applies built-in renames (length->len, float->float32, int->uint64, get->listGet)
+/// 2. @rename decorator: appends function ID suffix to avoid conflicts (e.g., get_id_28)
+/// 3. Default: uses the function name as-is
 pub(super) fn go_function_name(program: &cfg::Program, func_id: cfg::FunctionId) -> String {
     let function = &program.functions[func_id];
+    let func_name = &function.name;
 
-    // Check if the function has @rename decorator (used for generated functions)
-    let has_rename = function
+    // Check for @go decorator (applies built-in renames)
+    let has_go_decorator = function
+        .decorators
+        .iter()
+        .any(|decorator| decorator.name == "go");
+
+    // Check for @rename decorator (adds function ID suffix)
+    let has_rename_decorator = function
         .decorators
         .iter()
         .any(|decorator| decorator.name == "rename");
 
-    // Start with the base name
-    let base_name = if function
-        .decorators
-        .iter()
-        .any(|decorator| decorator.name == "go")
-    {
-        go_function_rename(&function.name)
-            .unwrap_or_else(|| function.name.as_str())
-            .to_string()
+    // Apply built-in renames if @go decorator is present
+    let base_name = if has_go_decorator {
+        match func_name.as_str() {
+            "length" => "len",
+            "float" => "float32",
+            "int" => "uint64",
+            "get" => "listGet",
+            _ => func_name.as_str(),
+        }
+        .to_string()
     } else {
-        function.name.clone()
+        func_name.clone()
     };
 
     // If @rename decorator is present, append the function ID
-    if has_rename {
+    if has_rename_decorator {
         format!("{}_{}", base_name, func_id.index())
     } else {
         base_name
     }
-}
-
-const GO_FUNCTION_RENAMES: &[(&str, &str)] = &[
-    ("length", "len"),
-    ("float", "float32"),
-    ("int", "uint64"),
-    ("get", "listGet"),
-];
-
-fn go_function_rename(name: &str) -> Option<&'static str> {
-    GO_FUNCTION_RENAMES
-        .iter()
-        .find(|(from, _)| *from == name)
-        .map(|(_, to)| *to)
 }
 
 fn go_var_to_string(program: &cfg::Program, var_id: cfg::VariableId) -> String {
