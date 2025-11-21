@@ -15,14 +15,14 @@ use std::io::{self, Write};
 // Debug options - simple constants for development
 const SHOW_VAR_IDS: bool = true;
 const SHOW_TYPE_INFO: bool = false;
-const SHOW_LIVENESS: bool = true;
-const SHOW_REACHING_DEF: bool = true;
-const SHOW_TABLE_MOD_REF: bool = true;
-const SHOW_AVAILABLE_EXPRS: bool = true;
+const SHOW_LIVENESS: bool = false;
+const SHOW_REACHING_DEF: bool = false;
+const SHOW_TABLE_MOD_REF: bool = false;
+const SHOW_AVAILABLE_EXPRS: bool = false;
 
 // Options for granularity of analysis printing
-const SHOW_ANALYSIS_PER_BLOCK: bool = false; // Show analysis at block entry/exit
-const SHOW_ANALYSIS_PER_STMT: bool = true; // Show analysis before/after each statement
+const SHOW_ANALYSIS_PER_BLOCK: bool = true; // Show analysis at block entry/exit
+const SHOW_ANALYSIS_PER_STMT: bool = false; // Show analysis before/after each statement
 
 /// A pretty printer for CFG nodes.
 pub struct CfgPrinter<W: Write> {
@@ -670,10 +670,11 @@ impl<W: Write> CfgPrinter<W> {
                     write!(self.writer, " = ")?;
                 }
                 let function = &program.functions[*func];
-                write!(self.writer, "{}(", function.name)?;
+                write!(self.writer, "{}", function.name)?;
                 if SHOW_VAR_IDS {
                     write!(self.writer, "[fn{}]", func.index())?;
                 }
+                write!(self.writer, "(")?;
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 {
                         write!(self.writer, ", ")?;

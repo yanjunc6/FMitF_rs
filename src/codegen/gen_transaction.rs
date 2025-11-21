@@ -1484,7 +1484,15 @@ fn table_field_accessor(
 
 pub(super) fn go_function_name(program: &cfg::Program, func_id: cfg::FunctionId) -> String {
     let function = &program.functions[func_id];
-    if function
+
+    // Check if the function has @rename decorator (used for generated functions)
+    let has_rename = function
+        .decorators
+        .iter()
+        .any(|decorator| decorator.name == "rename");
+
+    // Start with the base name
+    let base_name = if function
         .decorators
         .iter()
         .any(|decorator| decorator.name == "go")
@@ -1494,6 +1502,13 @@ pub(super) fn go_function_name(program: &cfg::Program, func_id: cfg::FunctionId)
             .to_string()
     } else {
         function.name.clone()
+    };
+
+    // If @rename decorator is present, append the function ID
+    if has_rename {
+        format!("{}_{}", base_name, func_id.index())
+    } else {
+        base_name
     }
 }
 

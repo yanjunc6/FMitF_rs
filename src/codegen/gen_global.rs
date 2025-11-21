@@ -37,6 +37,9 @@ fn build_global_source(
     writeln!(out, "}}")?;
     writeln!(out)?;
 
+    // Generate iterator get_* functions for each table's primary keys
+    generate_iterator_getters(&mut out, program)?;
+
     if program.global_consts.len() > 0 {
         writeln!(out, "const (")?;
         for (_, global_const) in &program.global_consts {
@@ -420,6 +423,95 @@ fn generate_scheds_function(
 
     writeln!(out, "}}")?;
     writeln!(out)?;
+
+    Ok(())
+}
+
+fn generate_iterator_getters(
+    out: &mut String,
+    program: &cfg::Program,
+) -> Result<(), std::fmt::Error> {
+    writeln!(out, "// Iterator getter functions for table primary keys")?;
+    writeln!(out, "// Generated for each primary key field in each table")?;
+    writeln!(out)?;
+
+    for &table_id in &program.all_tables {
+        let table = &program.tables[table_id];
+        let table_name = pascal_case(&table.name);
+
+        // Generate a get_* function for each primary key field
+        for &field_id in &table.primary_key_fields {
+            let field = &program.table_fields[field_id];
+            let field_name = &field.name;
+            let field_type = go_type_string(program, field.field_type);
+
+            // Find the function ID for this getter (if it exists in the program)
+            // Functions with @generated decorator should use their function ID in the name
+            let func_name = format!("get_{}", field_name);
+
+            // Check if there's a function with this name that has @generated decorator
+            let maybe_func_id = program
+                .functions
+                .iter()
+                .find(|(_, func)| {
+                    func.name == func_name && func.decorators.iter().any(|d| d.name == "generated")
+                })
+                .map(|(id, _)| id);
+
+            let final_func_name = if let Some(func_id) = maybe_func_id {
+                // Use function ID suffix to avoid naming conflicts
+                format!("{}_{}", func_name, func_id.index())
+            } else {
+                func_name
+            };
+
+            writeln!(
+                out,
+                "// {} extracts {} from the iterator for table {}",
+                final_func_name, field_name, table_name
+            )?;
+            writeln!(
+                out,
+                "func {}(iter *Iterator) {} {{",
+                final_func_name, field_type
+            )?;
+            writeln!(out, "\tif !iter.isValid {{")?;
+            writeln!(
+                out,
+                "\t\tpanic(\"{}: iterator is not valid\")",
+                final_func_name
+            )?;
+            writeln!(out, "\t}}")?;
+            writeln!(out)?;
+            writeln!(
+                out,
+                "\t// Deserialize the composite key to extract {}",
+                field_name
+            )?;
+            writeln!(out, "\ttype CompositeKey struct {{")?;
+
+            // Include all primary key fields in the composite key structure
+            for &pk_field_id in &table.primary_key_fields {
+                let pk_field = &program.table_fields[pk_field_id];
+                let pk_field_type = go_type_string(program, pk_field.field_type);
+                writeln!(out, "\t\t{} {}", pk_field.name, pk_field_type)?;
+            }
+
+            writeln!(out, "\t}}")?;
+            writeln!(out)?;
+            writeln!(out, "\tvar key CompositeKey")?;
+            writeln!(
+                out,
+                "\tif err := json.Unmarshal(iter.currentKey, &key); err != nil {{"
+            )?;
+            writeln!(out, "\t\tpanic(err)")?;
+            writeln!(out, "\t}}")?;
+            writeln!(out)?;
+            writeln!(out, "\treturn key.{}", field_name)?;
+            writeln!(out, "}}")?;
+            writeln!(out)?;
+        }
+    }
 
     Ok(())
 }
