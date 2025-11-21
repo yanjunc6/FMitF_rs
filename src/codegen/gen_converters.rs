@@ -210,26 +210,8 @@ fn build_converters_source() -> Result<String, std::fmt::Error> {
     writeln!(out, "}}")?;
     writeln!(out)?;
 
-    // get_id function - generic function to extract ID from iterator
-    // This needs to be generated per table type
-    // TODO: delete this function, and generate per-table get_id functions, move it to global.go
-    writeln!(
-        out,
-        "// get_id extracts the UUID from the iterator's current key"
-    )?;
-    writeln!(
-        out,
-        "// This is a generic implementation that assumes the key is a UUID"
-    )?;
-    writeln!(out, "func get_id(iter *Iterator) UUID {{")?;
-    writeln!(out, "\tif !iter.isValid {{")?;
-    writeln!(out, "\t\tpanic(\"get_id: iterator is not valid\")")?;
-    writeln!(out, "\t}}")?;
-    writeln!(out, "\t// Deserialize key as UUID")?;
-    writeln!(out, "\tvar id UUID")?;
-    writeln!(out, "\tjson.Unmarshal(iter.currentKey, &id)")?;
-    writeln!(out, "\treturn id")?;
-    writeln!(out, "}}")?;
+    // Note: get_* functions for iterator primary key extraction
+    // are now generated per-table in global.go
 
     Ok(out)
 }
