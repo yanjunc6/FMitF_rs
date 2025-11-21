@@ -1,7 +1,7 @@
 use super::{
     gen_transaction::{
         collect_used_labels, collect_var_decls_from_instruction, go_function_name,
-        lower_single_instruction, lower_terminator_goto, CodeGenContext,
+        lower_instruction, lower_terminator_goto, CodeGenContext,
     },
     util::{go_type_string, go_var_name, pascal_case, write_go_file_header},
     GoProgram,
@@ -324,7 +324,7 @@ fn lower_instruction_partition(
             let mut temp_out = String::new();
             let mut initialized_vars = HashSet::new();
             let mut table_access_count = 0usize;
-            lower_single_instruction(
+            lower_instruction(
                 &mut temp_out,
                 program,
                 inst,
@@ -435,6 +435,26 @@ fn generate_iterator_getters(
     writeln!(out, "// Generated for each primary key field in each table")?;
     writeln!(out)?;
 
+    // Build a map from field_name to a list of all matching function IDs (in order)
+    // We'll consume them in order as we iterate through tables
+    use std::collections::HashMap;
+    let mut field_func_lists: HashMap<String, Vec<cfg::FunctionId>> = HashMap::new();
+
+    for (func_id, func) in program.functions.iter() {
+        // Only consider functions with @generated decorator
+        if !func.decorators.iter().any(|d| d.name == "generated") {
+            continue;
+        }
+
+        // Extract field name from function name (e.g., "get_id" -> "id")
+        if let Some(field_name) = func.name.strip_prefix("get_") {
+            field_func_lists
+                .entry(field_name.to_string())
+                .or_insert_with(Vec::new)
+                .push(func_id);
+        }
+    }
+
     for &table_id in &program.all_tables {
         let table = &program.tables[table_id];
         let table_name = pascal_case(&table.name);
@@ -444,19 +464,16 @@ fn generate_iterator_getters(
             let field = &program.table_fields[field_id];
             let field_name = &field.name;
             let field_type = go_type_string(program, field.field_type);
-
-            // Find the function ID for this getter (if it exists in the program)
-            // Functions with @generated decorator should use their function ID in the name
             let func_name = format!("get_{}", field_name);
 
-            // Check if there's a function with this name that has @generated decorator
-            let maybe_func_id = program
-                .functions
-                .iter()
-                .find(|(_, func)| {
-                    func.name == func_name && func.decorators.iter().any(|d| d.name == "generated")
-                })
-                .map(|(id, _)| id);
+            // Get the next function ID for this field name (consuming in order)
+            let maybe_func_id = field_func_lists.get_mut(field_name).and_then(|func_list| {
+                if !func_list.is_empty() {
+                    Some(func_list.remove(0))
+                } else {
+                    None
+                }
+            });
 
             let final_func_name = if let Some(func_id) = maybe_func_id {
                 // Use function ID suffix to avoid naming conflicts
