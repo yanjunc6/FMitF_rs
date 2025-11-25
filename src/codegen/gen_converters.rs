@@ -39,6 +39,13 @@ fn build_converters_source() -> Result<String, std::fmt::Error> {
     writeln!(out, "}}")?;
     writeln!(out)?;
 
+    // UUID_to_int function
+    writeln!(out, "// UUID_to_int converts a UUID to an int")?;
+    writeln!(out, "func UUID_to_int(id UUID) uint64 {{")?;
+    writeln!(out, "\treturn uint64(id)")?;
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+
     // Unit type definition
     writeln!(
         out,

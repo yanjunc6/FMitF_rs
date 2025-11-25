@@ -254,13 +254,9 @@ pub fn lower_terminator_goto(
                     writeln!(out, "{}return 0", indent)?;
                 }
                 CodeGenContext::Normal => {
-                    // Normal mode: just return
-                    if let Some(operand) = operand {
-                        let ret_expr = operand_to_go(program, operand);
-                        writeln!(out, "{}return {}", indent, ret_expr)?;
-                    } else {
-                        writeln!(out, "{}return", indent)?;
-                    }
+                    // Normal mode: doing nothing
+                    writeln!(out, "{}// return - no action", indent)?;
+                    generate_trx_res_return(out, program, hop_context, indent)?;
                 }
                 CodeGenContext::PartitionFunction => {
                     // Partition function: return the actual value
@@ -287,37 +283,7 @@ pub fn lower_terminator_goto(
                 }
                 writeln!(out, "{}panic(\"unexpected hop exit in partition\")", indent)?;
             } else {
-                // Collect variables that need to be written back (live-out AND defined in this hop)
-                if let Some((initialized_vars, vars_to_write_back)) = hop_context {
-                    if !vars_to_write_back.is_empty() {
-                        writeln!(out, "{}// Write back variables to results", indent)?;
-                        let results =
-                            generate_results_exprs(program, vars_to_write_back, initialized_vars);
-                        writeln!(out, "{}return &proto.TrxRes{{", indent)?;
-                        writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
-                        writeln!(out, "{}\tInfo:   in.Info,", indent)?;
-                        writeln!(
-                            out,
-                            "{}\tResults: []string{{{}}},",
-                            indent,
-                            results.join(", ")
-                        )?;
-                        writeln!(out, "{}\tRWSets: rwSet,", indent)?;
-                        writeln!(out, "{}}}, nil", indent)?;
-                    } else {
-                        writeln!(out, "{}return &proto.TrxRes{{", indent)?;
-                        writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
-                        writeln!(out, "{}\tInfo:   in.Info,", indent)?;
-                        writeln!(out, "{}\tRWSets: rwSet,", indent)?;
-                        writeln!(out, "{}}}, nil", indent)?;
-                    }
-                } else {
-                    writeln!(out, "{}return &proto.TrxRes{{", indent)?;
-                    writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
-                    writeln!(out, "{}\tInfo:   in.Info,", indent)?;
-                    writeln!(out, "{}\tRWSets: rwSet,", indent)?;
-                    writeln!(out, "{}}}, nil", indent)?;
-                }
+                generate_trx_res_return(out, program, hop_context, indent)?;
             }
         }
 
@@ -341,11 +307,54 @@ fn generate_results_exprs(
         let expr = if initialized_vars.contains(var_id) {
             go_var_to_string(program, *var_id)
         } else {
-            format!("params[\"{}\"]", var_name)
+            format!("params[\"{}\"])", var_name)
         };
         results.push(expr);
     }
     results
+}
+
+/// Helper function to generate a TrxRes return statement
+/// Used in both normal hop exit and transaction returns
+pub fn generate_trx_res_return(
+    out: &mut String,
+    program: &cfg::Program,
+    hop_context: Option<(&HashSet<cfg::VariableId>, &[cfg::VariableId])>,
+    indent: &str,
+) -> Result<(), std::fmt::Error> {
+    // Collect variables that need to be written back (live-out AND defined in this hop)
+    if let Some((initialized_vars, vars_to_write_back)) = hop_context {
+        if !vars_to_write_back.is_empty() {
+            writeln!(out, "{}// Write back variables to results", indent)?;
+            let results = generate_results_exprs(program, vars_to_write_back, initialized_vars);
+            writeln!(out, "{}return &proto.TrxRes{{", indent)?;
+            writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
+            writeln!(out, "{}\tInfo:   in.Info,", indent)?;
+            writeln!(
+                out,
+                "{}\tResults: []string{{{}}},",
+                indent,
+                results.join(", ")
+            )?;
+            writeln!(out, "{}\tRWSets: rwSet,", indent)?;
+            writeln!(out, "{}}}, nil", indent)?;
+        } else {
+            writeln!(out, "{}return &proto.TrxRes{{", indent)?;
+            writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
+            writeln!(out, "{}\tInfo:   in.Info,", indent)?;
+            writeln!(out, "{}\tRWSets: rwSet,", indent)?;
+            writeln!(out, "{}}}, nil", indent)?;
+        }
+    } else {
+        // No hop context - generate basic return
+        writeln!(out, "{}return &proto.TrxRes{{", indent)?;
+        writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
+        writeln!(out, "{}\tInfo:   in.Info,", indent)?;
+        writeln!(out, "{}\tRWSets: rwSet,", indent)?;
+        writeln!(out, "{}}}, nil", indent)?;
+    }
+
+    Ok(())
 }
 
 /// Lower a single instruction to Go code
@@ -418,11 +427,21 @@ pub fn lower_instruction(
                     }
                 }
                 "scan" => {
-                    // scan(table) returns an iterator
+                    // scan(table, n, m) returns an iterator
                     if let Some(dest) = dest {
                         let dest_name = go_var_name(program, *dest);
-                        if !arg_exprs.is_empty() {
-                            writeln!(out, "{}{} = {}(tx)", indent, dest_name, func_name)?;
+                        // args[0] is the table (Table operand)
+                        // args[1] is n (int)
+                        // args[2] is m (int)
+                        if let Operand::Table(table_id) = &args[0] {
+                            let table_name = &program.tables[*table_id].name;
+                            let n_expr = operand_to_go(program, &args[1]);
+                            let m_expr = operand_to_go(program, &args[2]);
+                            writeln!(
+                                out,
+                                "{}{} = scan(tx, \"{}\", int({}), int({}))",
+                                indent, dest_name, table_name, n_expr, m_expr
+                            )?;
                         }
                         initialized_vars.insert(*dest);
                     }
@@ -457,33 +476,16 @@ pub fn lower_instruction(
                         initialized_vars.insert(*dest);
                     }
                 }
-                name if name.starts_with("get_") => {
-                    // get_field accessors
-                    if let Some(dest) = dest {
-                        let dest_name = go_var_name(program, *dest);
-                        let field_name = &name[4..]; // Remove "get_" prefix
-                        if !arg_exprs.is_empty() {
-                            writeln!(
-                                out,
-                                "{}{} = {}.{}",
-                                indent, dest_name, arg_exprs[0], field_name
-                            )?;
-                        }
-                        initialized_vars.insert(*dest);
-                    }
-                }
                 "str" => {
-                    // Convert to string
+                    // Convert to string - use operand_to_string for proper conversion
                     if let Some(dest) = dest {
                         let dest_name = go_var_name(program, *dest);
-                        writeln!(
-                            out,
-                            "{}{} = {}({})",
-                            indent,
-                            dest_name,
-                            func_name,
-                            arg_exprs.join(", ")
-                        )?;
+                        let str_expr = if !args.is_empty() {
+                            operand_to_string(program, &args[0])
+                        } else {
+                            "\"\"".to_string()
+                        };
+                        writeln!(out, "{}{} = {}", indent, dest_name, str_expr)?;
                         initialized_vars.insert(*dest);
                     }
                 }
@@ -498,6 +500,54 @@ pub fn lower_instruction(
                             dest_name,
                             arg_exprs.join(", ")
                         )?;
+                        initialized_vars.insert(*dest);
+                    }
+                }
+                "emptyList" => {
+                    // Create an empty list
+                    if let Some(dest) = dest {
+                        let dest_name = go_var_name(program, *dest);
+                        writeln!(out, "{}{} = nil", indent, dest_name)?;
+                    }
+                }
+                "+" => {
+                    // String concatenation or list concatenation
+                    if let Some(dest) = dest {
+                        let dest_name = go_var_name(program, *dest);
+                        // Check if this is string concatenation
+                        if args.len() == 2 {
+                            let dest_ty = program.variables[*dest].ty;
+                            let is_string = matches!(
+                                &program.types[dest_ty],
+                                crate::cfg::Type::Primitive(crate::cfg::PrimitiveType::String)
+                            );
+                            if is_string && !arg_exprs.is_empty() {
+                                writeln!(
+                                    out,
+                                    "{}{} = concat({}, {})",
+                                    indent, dest_name, arg_exprs[0], arg_exprs[1]
+                                )?;
+                            } else {
+                                // List concatenation or other types
+                                writeln!(
+                                    out,
+                                    "{}{} = {}({})",
+                                    indent,
+                                    dest_name,
+                                    func_name,
+                                    arg_exprs.join(", ")
+                                )?;
+                            }
+                        } else {
+                            writeln!(
+                                out,
+                                "{}{} = {}({})",
+                                indent,
+                                dest_name,
+                                func_name,
+                                arg_exprs.join(", ")
+                            )?;
+                        }
                         initialized_vars.insert(*dest);
                     }
                 }
