@@ -97,7 +97,6 @@ fn build_global_source(
         writeln!(out, "\t\t\tpanic(err)")?;
         writeln!(out, "\t\t}}")?;
         writeln!(out, "\t}}")?;
-        writeln!(out, "\trow.Key = key")?;
         writeln!(out, "\treturn keyBytes, row")?;
         writeln!(out, "}}")?;
         writeln!(out)?;
