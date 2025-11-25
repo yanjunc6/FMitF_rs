@@ -14,80 +14,80 @@ partition g(x: string, y: int) -> int {
 // ===========================================
 
 table Users {
-    primary id: UUID;
-    node f(id);
+    primary Id: UUID;
+    node f(Id);
 
-    firstname: string;
-    lastname: string;
-    nickname: string;
-    password: string;
-    email: string;
-    rating: int;
-    balance: float;
-    creation_date: int;
-    region: int;
+    Firstname: string;
+    Lastname: string;
+    Nickname: string;
+    Password: string;
+    Email: string;
+    Rating: int;
+    Balance: float;
+    Creation_date: int;
+    Region: int;
 }
 
 table Usernames {
-    primary nickname: string;
-    node g(nickname, 0); // TODO: why 2 params here?
+    primary Nickname: string;
+    node g(Nickname, 0); // TODO: why 2 params here?
 
-    id: UUID;
-    password: string;
-    counter: int;
+    Id: UUID;
+    Password: string;
+    Counter: int;
 }
 
 table Items {
-    primary id: UUID;
-    node f(id);
+    primary Id: UUID;
+    node f(Id);
 
-    name: string;
-    description: string;
-    initial_price: float;
-    quantity: int;
-    reserve_price: float;
-    buy_now: float;
-    nb_of_bids: int;
-    max_bid: float;
-    start_date: int;
-    end_date: int;
-    seller: UUID;
-    region: int;
-    category: int;
+    Name: string;
+    Description: string;
+    Initial_price: float;
+    Quantity: int;
+    Reserve_price: float;
+    Buy_now: float;
+    Nb_of_bids: int;
+    Max_bid: float;
+    Start_date: int;
+    End_date: int;
+    Seller: UUID;
+    Region: int;
+    Category: int;
 }
 
 table Bids {
-    primary id: UUID;
-    node f(id);
+    primary Id: UUID;
+    node f(Id);
 
-    user_id: UUID;
-    item_id: UUID;
-    qty: int;
-    bid: float;
-    max_bid: float;
-    date: int;
+    User_id: UUID;
+    Item_id: UUID;
+    Qty: int;
+    Bid: float;
+    Max_bid: float;
+    Date: int;
 }
 
 table Comments {
-    primary id: UUID;
-    node f(id);
+    primary Id: UUID;
+    node f(Id);
 
-    from_user_id: UUID;
-    to_user_id: UUID;
-    item_id: UUID;
-    rating: int;
-    comment: string;
-    date: int;
+    From_user_id: UUID;
+    To_user_id: UUID;
+    Item_id: UUID;
+    Rating: int;
+    Comment: string;
+    Date: int;
 }
 
 table Buy_now {
-    primary id: UUID;
-    node f(id);
+    primary Id: UUID;
+    node f(Id);
 
-    buyer_id: UUID;
-    item_id: UUID;
-    qty: int;
-    date: int;
+    Buyer_id: UUID;
+    Item_id: UUID;
+    Qty: int;
+    Date: int;
 }
 
 // ===========================================
@@ -96,7 +96,7 @@ table Buy_now {
 
 transaction userAuth(nickname: string, password: string) -> bool {
     hop {
-        var pwd: string = Usernames[nickname: nickname].password;
+        var pwd: string = Usernames[Nickname: nickname].Password;
         var is_match: bool = (pwd === password);
         return is_match;
     }
@@ -105,45 +105,45 @@ transaction userAuth(nickname: string, password: string) -> bool {
 transaction registerUser(nickname: string, password: string, firstname: string, lastname: string, email: string) {
     hop {
         var uid: UUID = genUUID(1, __slice__);
-        if (Usernames[nickname: nickname].counter > 0) {
+        if (Usernames[Nickname: nickname].Counter > 0) {
             return;
         }
-        Usernames[nickname: nickname].counter = Usernames[nickname: nickname].counter + 1;
-        Usernames[nickname: nickname].password = password;
-        Usernames[nickname: nickname].id = uid;
+        Usernames[Nickname: nickname].Counter = Usernames[Nickname: nickname].Counter + 1;
+        Usernames[Nickname: nickname].Password = password;
+        Usernames[Nickname: nickname].Id = uid;
     }
 
     hop {
-        Users[id: uid] = {
-            nickname: nickname,
-            password: password,
-            firstname: firstname,
-            lastname: lastname,
-            email: email
+        Users[Id: uid] = {
+            Nickname: nickname,
+            Password: password,
+            Firstname: firstname,
+            Lastname: lastname,
+            Email: email
         };
     }
 }
 
 transaction viewUser(uid: UUID) -> string {
     hop {
-        var info: string = Users[id: uid].nickname + Users[id: uid].firstname + Users[id: uid].lastname + str(Users[id: uid].rating);
+        var info: string = Users[Id: uid].Nickname + Users[Id: uid].Firstname + Users[Id: uid].Lastname + str(Users[Id: uid].Rating);
         return info;
     }
 }
 
 transaction makeComment(from_uid: UUID, to_uid: UUID, iid: UUID, comment: string, rating: int) {
     hop {
-        var id: UUID = genUUID(2, __slice__);
-        Users[id: to_uid].rating = Users[id: to_uid].rating + rating;
+        var Id: UUID = genUUID(2, __slice__);
+        Users[Id: to_uid].Rating = Users[Id: to_uid].Rating + rating;
     }
 
     hop {
-        Comments[id: id] = {
-            from_user_id: from_uid,
-            to_user_id: to_uid,
-            item_id: iid,
-            comment: comment,
-            rating: rating
+        Comments[Id: Id] = {
+            From_user_id: from_uid,
+            To_user_id: to_uid,
+            Item_id: iid,
+            Comment: comment,
+            Rating: rating
         };
     }
 }
@@ -153,9 +153,9 @@ transaction getCommentsByToUID(to_id: UUID) -> List<string> {
         var commentList: List<string> = emptyList();
         for (var comments_iter: Iterator<Comments> = scan(Comments, 0, __slice__); hasNext(comments_iter); comments_iter = next(comments_iter)) {
             var comment_id = get_id(comments_iter);
-            var c_to_user_id = Comments[id: comment_id].to_user_id;
+            var c_to_user_id = Comments[Id: comment_id].To_user_id;
             if c_to_user_id === to_id {
-                commentList = append(commentList, Comments[id: comment_id].comment);
+                commentList = append(commentList, Comments[Id: comment_id].Comment);
             }
         }
         return commentList;
@@ -167,9 +167,9 @@ transaction getCommentsByIID(iid: UUID) -> List<string> {
         var commentList: List<string> = emptyList();
         for (var comments_iter: Iterator<Comments> = scan(Comments, 1, __slice__); hasNext(comments_iter); comments_iter = next(comments_iter)) {
             var comment_id = get_id(comments_iter);
-            var c_item_id = Comments[id: comment_id].item_id;
+            var c_item_id = Comments[Id: comment_id].Item_id;
             if c_item_id === iid {
-                commentList = append(commentList, Comments[id: comment_id].comment);
+                commentList = append(commentList, Comments[Id: comment_id].Comment);
             }
         }
         return commentList;
@@ -181,9 +181,9 @@ transaction getItemsByRegion(region_id: int) -> List<Row<Items>> {
         var itemList: List<Row<Items>> = emptyList();
         for (var items_iter: Iterator<Items> = scan(Items, 2, __slice__); hasNext(items_iter); items_iter = next(items_iter)) {
             var item_id = get_id(items_iter);
-            var i_region = Items[id: item_id].region;
+            var i_region = Items[Id: item_id].Region;
             if i_region == region_id {
-                itemList = append(itemList, Items[id: item_id]);
+                itemList = append(itemList, Items[Id: item_id]);
             }
         }
         return itemList;
@@ -195,9 +195,9 @@ transaction getItemsByCategory(category_id: int) -> List<Row<Items>> {
         var itemList: List<Row<Items>> = emptyList();
         for (var items_iter: Iterator<Items> = scan(Items, 3, __slice__); hasNext(items_iter); items_iter = next(items_iter)) {
             var item_id = get_id(items_iter);
-            var i_category = Items[id: item_id].category;
+            var i_category = Items[Id: item_id].Category;
             if i_category == category_id {
-                itemList = append(itemList, Items[id: item_id]);
+                itemList = append(itemList, Items[Id: item_id]);
             }
         }
         return itemList;
@@ -207,19 +207,19 @@ transaction getItemsByCategory(category_id: int) -> List<Row<Items>> {
 transaction registerItem(name: string, description: string, initial_price: float, quantity: int, reserve_price: float, buy_now: float, date: int, seller: UUID, region: int, category: int) {
     hop {
         var iid: UUID = genUUID(3, __slice__);
-        Items[id: iid] = {
-            name: name,
-            description: description,
-            initial_price: initial_price,
-            quantity: quantity,
-            reserve_price: reserve_price,
-            buy_now: buy_now,
-            nb_of_bids: 0,
-            max_bid: 0.0,
-            start_date: date,
-            seller: seller,
-            region: region,
-            category: category
+        Items[Id: iid] = {
+            Name: name,
+            Description: description,
+            Initial_price: initial_price,
+            Quantity: quantity,
+            Reserve_price: reserve_price,
+            Buy_now: buy_now,
+            Nb_of_bids: 0,
+            Max_bid: 0.0,
+            Start_date: date,
+            Seller: seller,
+            Region: region,
+            Category: category
         };
     }
 }
@@ -227,23 +227,23 @@ transaction registerItem(name: string, description: string, initial_price: float
 transaction putBid(iid: UUID, max_bid_val: float, uid: UUID, quantity: int, bid_val: float, date: int) {
     hop {
         var bid_id: UUID = genUUID(4, __slice__);
-        var cur_max: float = Items[id: iid].max_bid;
+        var cur_max: float = Items[Id: iid].Max_bid;
         if max_bid_val > cur_max {
-            Items[id: iid].max_bid = max_bid_val;
-            Items[id: iid].nb_of_bids = Items[id: iid].nb_of_bids + 1;
+            Items[Id: iid].Max_bid = max_bid_val;
+            Items[Id: iid].Nb_of_bids = Items[Id: iid].Nb_of_bids + 1;
         } else {
             return;
         }
     }
 
     hop {
-        Bids[id: bid_id] = {
-            user_id: uid,
-            item_id: iid,
-            qty: quantity,
-            bid: bid_val,
-            max_bid: max_bid_val,
-            date: date
+        Bids[Id: bid_id] = {
+            User_id: uid,
+            Item_id: iid,
+            Qty: quantity,
+            Bid: bid_val,
+            Max_bid: max_bid_val,
+            Date: date
         };
     }
 }
@@ -266,9 +266,9 @@ transaction getBidsByItem(iid: UUID) -> List<Row<Bids>> {
         var bidList: List<Row<Bids>> = emptyList();
         for (var bids_iter: Iterator<Bids> = scan(Bids, 4, __slice__); hasNext(bids_iter); bids_iter = next(bids_iter)) {
             var bid = get_id(bids_iter);
-            var b_item_id = Bids[id: bid].item_id;
+            var b_item_id = Bids[Id: bid].Item_id;
             if b_item_id === iid {
-                bidList = append(bidList, Bids[id: bid]);
+                bidList = append(bidList, Bids[Id: bid]);
             }
         }
         return bidList;
@@ -280,9 +280,9 @@ transaction getBidsByUser(uid: UUID) -> List<Row<Bids>> {
         var bidList: List<Row<Bids>> = emptyList();
         for (var bids_iter: Iterator<Bids> = scan(Bids, 5, __slice__); hasNext(bids_iter); bids_iter = next(bids_iter)) {
             var bid_id = get_id(bids_iter);
-            var b_user_id = Bids[id: bid_id].user_id;
+            var b_user_id = Bids[Id: bid_id].User_id;
             if b_user_id === uid {
-                bidList = append(bidList, Bids[id: bid_id]);
+                bidList = append(bidList, Bids[Id: bid_id]);
             }
         }
         return bidList;
@@ -292,24 +292,24 @@ transaction getBidsByUser(uid: UUID) -> List<Row<Bids>> {
 transaction buyNow(iid: UUID, uid: UUID, quantity: int, date: int) {
     hop {
         var bnid: UUID = genUUID(5, __slice__);
-        var cur_qty: int = Items[id: iid].quantity;
+        var cur_qty: int = Items[Id: iid].Quantity;
         if quantity > cur_qty {
             return;
         }
 
         cur_qty = cur_qty - quantity;
-        Items[id: iid].quantity = cur_qty;
+        Items[Id: iid].Quantity = cur_qty;
         if cur_qty == 0 {
-            Items[id: iid].end_date = date;
+            Items[Id: iid].End_date = date;
         }
     }
 
     hop {
-        Buy_now[id: bnid] = {
-            buyer_id: uid,
-            item_id: iid,
-            qty: quantity,
-            date: date
+        Buy_now[Id: bnid] = {
+            Buyer_id: uid,
+            Item_id: iid,
+            Qty: quantity,
+            Date: date
         };
     }
 }
