@@ -1,8 +1,7 @@
 use super::{
     gen_helper::{
-        collect_used_labels, collect_var_decls_from_instruction, go_var_to_string,
-        lower_optimized_op, lower_optimized_ops, lower_terminator_goto, operand_to_go,
-        CodeGenContext,
+        collect_used_labels, collect_var_decls_from_instruction, lower_optimized_op,
+        lower_optimized_ops, lower_terminator_goto, operand_to_go, CodeGenContext,
     },
     gen_table_optimizer::{optimize_instructions, OptimizedOp},
     util::{go_type_string, go_var_name, pascal_case, snake_case, write_go_file_header},
