@@ -142,5 +142,16 @@ fn build_util_source() -> Result<String, std::fmt::Error> {
     writeln!(out, "}}")?;
     writeln!(out)?;
 
+    // hashStr function for string hashing
+    writeln!(out, "// hashStr computes a hash of a string")?;
+    writeln!(out, "func hashStr(s string) uint64 {{")?;
+    writeln!(out, "\tvar hash uint64 = 0")?;
+    writeln!(out, "\tfor _, c := range s {{")?;
+    writeln!(out, "\t\thash = hash*31 + uint64(c)")?;
+    writeln!(out, "\t}}")?;
+    writeln!(out, "\treturn hash")?;
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+
     Ok(out)
 }
