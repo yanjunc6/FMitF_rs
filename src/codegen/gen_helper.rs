@@ -439,7 +439,7 @@ pub fn lower_instruction(
                             let m_expr = operand_to_go(program, &args[2]);
                             writeln!(
                                 out,
-                                "{}{} = scan(tx, \"{}\", int({}), int({}))",
+                                "{}{} = scan(tx, \"t{}\", int({}), int({}))",
                                 indent, dest_name, table_name, n_expr, m_expr
                             )?;
                         }

@@ -371,7 +371,19 @@ fn generate_hop_function_impl(
             Vec::new()
         }
     } else {
-        Vec::new()
+        // No next hop - this is the last hop
+        // Check if any block has a Return terminator with an operand
+        let mut return_vars = Vec::new();
+        for &block_id in &hop.blocks {
+            let block = &program.basic_blocks[block_id];
+            if let cfg::Terminator::Return(Some(cfg::Operand::Variable(var_id))) = block.terminator
+            {
+                if !return_vars.contains(&var_id) {
+                    return_vars.push(var_id);
+                }
+            }
+        }
+        return_vars
     };
     func_live_out.sort_by_key(|var_id| var_id.index());
 
