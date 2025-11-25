@@ -1,5 +1,5 @@
 use super::{
-    gen_transaction::{
+    gen_helper::{
         collect_used_labels, collect_var_decls_from_instruction, go_function_name,
         lower_instruction, lower_terminator_goto, CodeGenContext,
     },
@@ -292,7 +292,7 @@ fn write_partition_function(
             &block.terminator,
             "\t",
             None,
-            CodeGenContext::partition(),
+            CodeGenContext::PartitionFunction,
         )?;
     }
 

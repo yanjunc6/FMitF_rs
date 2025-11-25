@@ -1,11 +1,14 @@
 use super::{
+    gen_helper::{
+        binary_op_to_go, collect_used_labels, collect_var_decls_from_instruction, go_function_name,
+        go_var_to_string, lower_terminator_goto, operand_to_go, operand_to_string,
+        table_field_accessor, unary_op_to_go, CodeGenContext,
+    },
     gen_table_optimizer::{optimize_instructions, OptimizedOp, TableAccess, TableAccessGroup},
     util::{go_type_string, go_var_name, pascal_case, snake_case, write_go_file_header},
     GoProgram,
 };
-use crate::cfg::{
-    self, BinaryOp, FunctionKind, Instruction, InstructionKind, Operand, Terminator, UnaryOp,
-};
+use crate::cfg::{self, FunctionKind, Instruction, InstructionKind, Operand};
 use crate::dataflow::{
     analyze_live_variables, analyze_live_variables_hop, analyze_reaching_definitions_hop,
     analyze_table_mod_ref, AccessType, LiveVar,
@@ -107,25 +110,6 @@ pub fn generate_transactions(
     Ok(files)
 }
 
-/// Context for code generation - controls whether we generate normal or partition code
-#[derive(Debug, Clone, Copy)]
-pub(super) struct CodeGenContext {
-    /// If true, generate partition calculation code (with early returns after table access)
-    pub is_partition: bool,
-}
-
-impl CodeGenContext {
-    pub fn normal() -> Self {
-        Self {
-            is_partition: false,
-        }
-    }
-
-    pub fn partition() -> Self {
-        Self { is_partition: true }
-    }
-}
-
 fn generate_hop_function(
     out: &mut String,
     program: &cfg::Program,
@@ -141,7 +125,7 @@ fn generate_hop_function(
         hop_index,
         hop_id,
         next_hop_id,
-        CodeGenContext::normal(),
+        CodeGenContext::Normal,
     )
 }
 
@@ -168,7 +152,7 @@ fn generate_partition_hop_function(
         hop_index,
         hop_id,
         None,
-        CodeGenContext::partition(),
+        CodeGenContext::TransactionPartition,
     )
 }
 
@@ -306,13 +290,13 @@ fn generate_hop_function_impl(
     let function = &program.functions[function_id];
     let hop = &program.hops[hop_id];
 
-    let hop_name = if ctx.is_partition {
+    let hop_name = if ctx.is_partition() {
         format!("{}Hop{}Par", pascal_case(&function.name), hop_index)
     } else {
         format!("{}Hop{}", pascal_case(&function.name), hop_index)
     };
 
-    if ctx.is_partition {
+    if ctx.is_partition() {
         writeln!(
             out,
             "// {} calculates the partition for hop {} without database access.",
@@ -370,7 +354,7 @@ fn generate_hop_function_impl(
         } else {
             Vec::new()
         }
-    } else if ctx.is_partition {
+    } else if ctx.is_partition() {
         // For partition mode, find the next hop from the function's hop list
         if let Some(next_hop_id_from_list) = function.hops.get(hop_index + 1) {
             let next_hop = &program.hops[*next_hop_id_from_list];
@@ -563,7 +547,7 @@ fn generate_hop_function_impl(
     }
 
     // For partition mode, create fake variables for unreachable code
-    if ctx.is_partition {
+    if ctx.is_partition() {
         writeln!(
             out,
             "\tvar tx *bolt.Tx = nil // Fake tx for unreachable code"
@@ -600,7 +584,7 @@ fn generate_hop_function_impl(
         .find(|(bid, _)| *bid == entry_block)
         .unwrap();
 
-    if ctx.is_partition {
+    if ctx.is_partition() {
         // Partition mode: generate code with early returns after table accesses
         for op in entry_ops {
             if let Some(shard) = check_partition_from_op(
@@ -661,7 +645,7 @@ fn generate_hop_function_impl(
             .find(|(bid, _)| *bid == block_id)
             .unwrap();
 
-        if ctx.is_partition {
+        if ctx.is_partition() {
             // Partition mode: generate code with early returns after table accesses
             for op in block_ops {
                 if let Some(shard) = check_partition_from_op(
@@ -1244,300 +1228,6 @@ fn check_partition_from_op(
             Ok(Some(call))
         }
     }
-}
-
-/// Helper to lower a single OptimizedOp (either instruction or combined access)
-/// Used for unreachable code generation in partition functions
-// Helper function to collect variable declarations from an instruction
-pub(super) fn collect_var_decls_from_instruction(
-    program: &cfg::Program,
-    inst: &Instruction,
-    var_decls: &mut HashMap<cfg::VariableId, String>,
-) {
-    match &inst.kind {
-        InstructionKind::Assign { dest, .. }
-        | InstructionKind::BinaryOp { dest, .. }
-        | InstructionKind::UnaryOp { dest, .. }
-        | InstructionKind::TableGet { dest, .. } => {
-            let ty = go_type_string(program, program.variables[*dest].ty);
-            var_decls.insert(*dest, ty);
-        }
-        InstructionKind::Call {
-            dest: Some(dest), ..
-        } => {
-            let ty = go_type_string(program, program.variables[*dest].ty);
-            var_decls.insert(*dest, ty);
-        }
-        _ => {}
-    }
-}
-
-// Helper function to collect labels that are actually used
-pub(super) fn collect_used_labels(term: &Terminator, used_labels: &mut HashSet<cfg::BasicBlockId>) {
-    match term {
-        Terminator::Jump(target) => {
-            used_labels.insert(*target);
-        }
-        Terminator::Branch {
-            if_true, if_false, ..
-        } => {
-            used_labels.insert(*if_true);
-            used_labels.insert(*if_false);
-        }
-        _ => {}
-    }
-}
-
-/// Lower terminator - works for both normal and partition modes
-/// For hop functions, pass Some((initialized_vars, vars_to_write_back))
-/// For standalone partition functions, pass None
-pub(super) fn lower_terminator_goto(
-    out: &mut String,
-    program: &cfg::Program,
-    term: &Terminator,
-    indent: &str,
-    hop_context: Option<(&HashSet<cfg::VariableId>, &[cfg::VariableId])>,
-    ctx: CodeGenContext,
-) -> Result<(), std::fmt::Error> {
-    match term {
-        Terminator::Jump(target) => {
-            writeln!(out, "{}goto BB{}", indent, target.index())?;
-        }
-
-        Terminator::Branch {
-            condition,
-            if_true,
-            if_false,
-        } => {
-            let cond_go = operand_to_go(program, condition);
-            writeln!(out, "{}if {} {{", indent, cond_go)?;
-            writeln!(out, "{}\tgoto BB{}", indent, if_true.index())?;
-            writeln!(out, "{}}} else {{", indent)?;
-            writeln!(out, "{}\tgoto BB{}", indent, if_false.index())?;
-            writeln!(out, "{}}}", indent)?;
-        }
-
-        Terminator::Return(value) => {
-            if ctx.is_partition {
-                // For partition mode, just return the value directly
-                if let Some(val) = value {
-                    writeln!(out, "{}_ = {}", indent, operand_to_go(program, val))?;
-                    writeln!(out, "{}return {}", indent, operand_to_go(program, val))?;
-                } else {
-                writeln!(out, "{}return 0", indent)?;
-                }
-            } else {
-                // For normal hop mode, wrap in TrxRes
-                if let Some(val) = value {
-                    let result_expr = operand_to_string(program, val);
-                    writeln!(out, "{}return &proto.TrxRes{{", indent)?;
-                    writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
-                    writeln!(out, "{}\tInfo:   in.Info,", indent)?;
-                    writeln!(out, "{}\tResults: []string{{{}}},", indent, result_expr)?;
-                    writeln!(out, "{}\tRWSets: rwSet,", indent)?;
-                    writeln!(out, "{}}}, nil", indent)?;
-                } else {
-                    writeln!(out, "{}return &proto.TrxRes{{", indent)?;
-                    writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
-                    writeln!(out, "{}\tInfo:   in.Info,", indent)?;
-                    writeln!(out, "{}\tRWSets: rwSet,", indent)?;
-                    writeln!(out, "{}}}, nil", indent)?;
-                }
-            }
-        }
-
-        Terminator::HopExit { .. } => {
-            if ctx.is_partition {
-                // For partition mode, generate unreachable results assignment at the end
-                if let Some((initialized_vars, vars_to_write_back)) = hop_context {
-                    if !vars_to_write_back.is_empty() {
-                        let results =
-                            generate_results_exprs(program, &vars_to_write_back, &initialized_vars);
-                        writeln!(out, "\t// Unreachable: use variables in results")?;
-                        writeln!(out, "\t_ = []string{{{}}}", results.join(", "))?;
-                    }
-                }
-                writeln!(out, "{}panic(\"unexpected hop exit in partition\")", indent)?;
-            } else {
-                // Collect variables that need to be written back (live-out AND defined in this hop)
-                if let Some((initialized_vars, vars_to_write_back)) = hop_context {
-                    if !vars_to_write_back.is_empty() {
-                        writeln!(out, "{}// Write back variables to results", indent)?;
-                        let results =
-                            generate_results_exprs(program, vars_to_write_back, initialized_vars);
-                        writeln!(out, "{}return &proto.TrxRes{{", indent)?;
-                        writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
-                        writeln!(out, "{}\tInfo:   in.Info,", indent)?;
-                        writeln!(
-                            out,
-                            "{}\tResults: []string{{{}}},",
-                            indent,
-                            results.join(", ")
-                        )?;
-                        writeln!(out, "{}\tRWSets: rwSet,", indent)?;
-                        writeln!(out, "{}}}, nil", indent)?;
-                        return Ok(());
-                    }
-                }
-                // Fallback: no live-out variables (last hop or no inter-hop dependencies)
-                writeln!(out, "{}return &proto.TrxRes{{", indent)?;
-                writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
-                writeln!(out, "{}\tInfo:   in.Info,", indent)?;
-                writeln!(out, "{}\tRWSets: rwSet,", indent)?;
-                writeln!(out, "{}}}, nil", indent)?;
-            }
-        }
-
-        Terminator::Abort => {
-            if ctx.is_partition {
-                writeln!(out, "{}panic(\"partition aborted\")", indent)?;
-            } else {
-                writeln!(out, "{}panic(\"transaction aborted\")", indent)?;
-            }
-        }
-    }
-
-    Ok(())
-}
-
-pub(super) fn operand_to_go(program: &cfg::Program, operand: &Operand) -> String {
-    match operand {
-        Operand::Variable(var_id) => go_var_name(program, *var_id),
-        Operand::Constant(const_val) => match const_val {
-            cfg::ConstantValue::Int(i) => i.to_string(),
-            cfg::ConstantValue::Float(f) => format!("{}", f),
-            cfg::ConstantValue::Bool(b) => b.to_string(),
-            cfg::ConstantValue::String(s) => format!("\"{}\"", s.replace('"', "\\\"")),
-        },
-        Operand::Global(global_id) => {
-            let global = &program.global_consts[*global_id];
-            global.name.clone()
-        }
-        Operand::Table(_) => "/* table */".to_string(),
-    }
-}
-
-pub(super) fn binary_op_to_go(op: BinaryOp) -> &'static str {
-    match op {
-        BinaryOp::AddInt | BinaryOp::AddFloat => "+",
-        BinaryOp::SubInt | BinaryOp::SubFloat => "-",
-        BinaryOp::MulInt | BinaryOp::MulFloat => "*",
-        BinaryOp::DivInt | BinaryOp::DivFloat => "/",
-        BinaryOp::ModInt => "%",
-        BinaryOp::EqInt | BinaryOp::EqFloat | BinaryOp::Eq => "==",
-        BinaryOp::NeqInt | BinaryOp::NeqFloat | BinaryOp::Neq => "!=",
-        BinaryOp::LtInt | BinaryOp::LtFloat => "<",
-        BinaryOp::LeqInt | BinaryOp::LeqFloat => "<=",
-        BinaryOp::GtInt | BinaryOp::GtFloat => ">",
-        BinaryOp::GeqInt | BinaryOp::GeqFloat => ">=",
-        BinaryOp::And => "&&",
-        BinaryOp::Or => "||",
-    }
-}
-
-pub(super) fn unary_op_to_go(op: UnaryOp) -> &'static str {
-    match op {
-        UnaryOp::NegInt | UnaryOp::NegFloat => "-",
-        UnaryOp::NotBool => "!",
-    }
-}
-
-fn table_field_accessor(
-    program: &cfg::Program,
-    table: &cfg::Table,
-    field_id: cfg::FieldId,
-    row_var: &str,
-) -> String {
-    let field_info = &program.table_fields[field_id];
-    if table.primary_key_fields.contains(&field_id) {
-        format!("{}.Key.{}", row_var, field_info.name)
-    } else {
-        format!("{}.{}", row_var, field_info.name)
-    }
-}
-
-/// Generate the Go function name for a given function ID.
-/// Handles three types of renaming:
-/// 1. @go decorator: applies built-in renames (length->len, float->float32, int->uint64, get->listGet)
-/// 2. @rename decorator: appends function ID suffix to avoid conflicts (e.g., get_id_28)
-/// 3. Default: uses the function name as-is
-pub(super) fn go_function_name(program: &cfg::Program, func_id: cfg::FunctionId) -> String {
-    let function = &program.functions[func_id];
-    let func_name = &function.name;
-
-    // Check for @go decorator (applies built-in renames)
-    let has_go_decorator = function
-        .decorators
-        .iter()
-        .any(|decorator| decorator.name == "go");
-
-    // Check for @rename decorator (adds function ID suffix)
-    let has_rename_decorator = function
-        .decorators
-        .iter()
-        .any(|decorator| decorator.name == "rename");
-
-    // Apply built-in renames if @go decorator is present
-    let base_name = if has_go_decorator {
-        match func_name.as_str() {
-            "length" => "len",
-            "float" => "float32",
-            "int" => "uint64",
-            "get" => "listGet",
-            _ => func_name.as_str(),
-        }
-        .to_string()
-    } else {
-        func_name.clone()
-    };
-
-    // If @rename decorator is present, append the function ID
-    if has_rename_decorator {
-        format!("{}_{}", base_name, func_id.index())
-    } else {
-        base_name
-    }
-}
-
-fn go_var_to_string(program: &cfg::Program, var_id: cfg::VariableId) -> String {
-    let expr = go_var_name(program, var_id);
-    let ty_id = program.variables[var_id].ty;
-    go_value_to_string(program, ty_id, &expr)
-}
-
-fn go_value_to_string(program: &cfg::Program, ty_id: cfg::TypeId, expr: &str) -> String {
-    match &program.types[ty_id] {
-        cfg::Type::Primitive(cfg::PrimitiveType::Int) => format!("fromUint64({})", expr),
-        cfg::Type::Primitive(cfg::PrimitiveType::Float) => format!("fromFloat32({})", expr),
-        cfg::Type::Primitive(cfg::PrimitiveType::Bool) => format!("fromBool({})", expr),
-        cfg::Type::Primitive(cfg::PrimitiveType::String) => expr.to_string(),
-        cfg::Type::List(_) => format!("string(mustJSON({}))", expr),
-        _ => format!("string(mustJSON({}))", expr),
-    }
-}
-
-fn operand_to_string(program: &cfg::Program, operand: &Operand) -> String {
-    match operand {
-        Operand::Variable(var_id) => go_var_to_string(program, *var_id),
-        Operand::Constant(const_val) => match const_val {
-            cfg::ConstantValue::Int(i) => format!("fromUint64(uint64({}))", i),
-            cfg::ConstantValue::Float(f) => format!("fromFloat32(float32({}))", f),
-            cfg::ConstantValue::Bool(b) => format!("fromBool({})", b),
-            cfg::ConstantValue::String(s) => go_string_literal(s),
-        },
-        Operand::Global(global_id) => {
-            let global = &program.global_consts[*global_id];
-            go_value_to_string(program, global.ty, &global.name)
-        }
-        Operand::Table(table_id) => {
-            let table = &program.tables[*table_id];
-            go_string_literal(&table.name)
-        }
-    }
-}
-
-fn go_string_literal(value: &str) -> String {
-    format!("\"{}\"", value.escape_default())
 }
 
 fn generate_next_req(
