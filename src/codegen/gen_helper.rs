@@ -7,6 +7,7 @@ use crate::cfg::{self, BinaryOp, Instruction, InstructionKind, Operand, Terminat
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
+use super::gen_table_optimizer::{OptimizedOp, TableAccess, TableAccessGroup};
 use super::util::{go_type_string, go_var_name, pascal_case};
 
 /// Context for code generation - controls the code generation mode
@@ -245,15 +246,24 @@ pub fn lower_terminator_goto(
         Terminator::Return(operand) => {
             match ctx {
                 CodeGenContext::TransactionPartition => {
-                    // Transaction partition mode: return 0 as partition
+                    // Transaction partition mode: suppress unused and return 0
                     if let Some(operand) = operand {
                         let ret_expr = operand_to_go(program, operand);
                         writeln!(out, "{}_ = {}", indent, ret_expr)?;
                     }
                     writeln!(out, "{}return 0", indent)?;
                 }
-                CodeGenContext::Normal | CodeGenContext::PartitionFunction => {
-                    // Standalone partition function: return actual value
+                CodeGenContext::Normal => {
+                    // Normal mode: just return
+                    if let Some(operand) = operand {
+                        let ret_expr = operand_to_go(program, operand);
+                        writeln!(out, "{}return {}", indent, ret_expr)?;
+                    } else {
+                        writeln!(out, "{}return", indent)?;
+                    }
+                }
+                CodeGenContext::PartitionFunction => {
+                    // Partition function: return the actual value
                     if let Some(operand) = operand {
                         let ret_expr = operand_to_go(program, operand);
                         writeln!(out, "{}return {}", indent, ret_expr)?;
@@ -381,24 +391,133 @@ pub fn lower_instruction(
             initialized_vars.insert(*dest);
         }
 
+        InstructionKind::Assert { condition, message } => {
+            let cond_expr = operand_to_go(program, condition);
+            let msg = if message.is_empty() {
+                "assertion failed".to_string()
+            } else {
+                message.clone()
+            };
+            writeln!(out, "{}if !({}) {{", indent, cond_expr)?;
+            writeln!(out, "{}\tpanic(\"{}\")", indent, msg.escape_default())?;
+            writeln!(out, "{}}}", indent)?;
+        }
+
         InstructionKind::Call { dest, func, args } => {
+            let function = &program.functions[*func];
             let func_name = go_function_name(program, *func);
             let arg_exprs: Vec<String> =
                 args.iter().map(|arg| operand_to_go(program, arg)).collect();
 
-            if let Some(dest) = dest {
-                let dest_name = go_var_name(program, *dest);
-                writeln!(
-                    out,
-                    "{}{} = {}({})",
-                    indent,
-                    dest_name,
-                    func_name,
-                    arg_exprs.join(", ")
-                )?;
-                initialized_vars.insert(*dest);
-            } else {
-                writeln!(out, "{}{}({})", indent, func_name, arg_exprs.join(", "))?;
+            // Special handling for built-in functions
+            match function.name.as_str() {
+                "to_unit" => {
+                    // to_unit consumes its argument but returns nothing
+                    if !arg_exprs.is_empty() {
+                        writeln!(out, "{}_ = {}", indent, arg_exprs[0])?;
+                    }
+                }
+                "scan" => {
+                    // scan(table) returns an iterator
+                    if let Some(dest) = dest {
+                        let dest_name = go_var_name(program, *dest);
+                        if !arg_exprs.is_empty() {
+                            writeln!(out, "{}{} = {}(tx)", indent, dest_name, func_name)?;
+                        }
+                        initialized_vars.insert(*dest);
+                    }
+                }
+                "hasNext" => {
+                    // hasNext(iterator) returns bool
+                    if let Some(dest) = dest {
+                        let dest_name = go_var_name(program, *dest);
+                        writeln!(
+                            out,
+                            "{}{} = {}({})",
+                            indent,
+                            dest_name,
+                            func_name,
+                            arg_exprs.join(", ")
+                        )?;
+                        initialized_vars.insert(*dest);
+                    }
+                }
+                "next" => {
+                    // next(iterator) returns the next element
+                    if let Some(dest) = dest {
+                        let dest_name = go_var_name(program, *dest);
+                        writeln!(
+                            out,
+                            "{}{} = {}({})",
+                            indent,
+                            dest_name,
+                            func_name,
+                            arg_exprs.join(", ")
+                        )?;
+                        initialized_vars.insert(*dest);
+                    }
+                }
+                name if name.starts_with("get_") => {
+                    // get_field accessors
+                    if let Some(dest) = dest {
+                        let dest_name = go_var_name(program, *dest);
+                        let field_name = &name[4..]; // Remove "get_" prefix
+                        if !arg_exprs.is_empty() {
+                            writeln!(
+                                out,
+                                "{}{} = {}.{}",
+                                indent, dest_name, arg_exprs[0], field_name
+                            )?;
+                        }
+                        initialized_vars.insert(*dest);
+                    }
+                }
+                "str" => {
+                    // Convert to string
+                    if let Some(dest) = dest {
+                        let dest_name = go_var_name(program, *dest);
+                        writeln!(
+                            out,
+                            "{}{} = {}({})",
+                            indent,
+                            dest_name,
+                            func_name,
+                            arg_exprs.join(", ")
+                        )?;
+                        initialized_vars.insert(*dest);
+                    }
+                }
+                "append" => {
+                    // Append to list
+                    if let Some(dest) = dest {
+                        let dest_name = go_var_name(program, *dest);
+                        writeln!(
+                            out,
+                            "{}{} = append({})",
+                            indent,
+                            dest_name,
+                            arg_exprs.join(", ")
+                        )?;
+                        initialized_vars.insert(*dest);
+                    }
+                }
+                _ => {
+                    // Default function call handling
+                    if let Some(dest) = dest {
+                        let dest_name = go_var_name(program, *dest);
+                        writeln!(
+                            out,
+                            "{}{} = {}({})",
+                            indent,
+                            dest_name,
+                            func_name,
+                            arg_exprs.join(", ")
+                        )?;
+                        initialized_vars.insert(*dest);
+                    } else {
+                        writeln!(out, "{}{}({})", indent, func_name, arg_exprs.join(", "))?;
+                    }
+                }
             }
         }
 
@@ -517,10 +636,160 @@ pub fn lower_instruction(
                 row_var
             )?;
         }
+    }
 
-        _ => {
-            // Skip other instruction types
+    Ok(())
+}
+
+/// Lower a single optimized operation (instruction or combined table access)
+pub fn lower_optimized_op(
+    out: &mut String,
+    program: &cfg::Program,
+    op: &OptimizedOp,
+    initialized_vars: &mut HashSet<cfg::VariableId>,
+    table_access_count: &mut usize,
+    indent: &str,
+) -> Result<(), std::fmt::Error> {
+    match op {
+        OptimizedOp::Single(inst) => {
+            lower_instruction(
+                out,
+                program,
+                inst,
+                initialized_vars,
+                table_access_count,
+                indent,
+            )?;
         }
+        OptimizedOp::CombinedTableAccess(group) => {
+            lower_combined_table_access(
+                out,
+                program,
+                group,
+                initialized_vars,
+                table_access_count,
+                indent,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Lower a sequence of optimized operations
+pub fn lower_optimized_ops(
+    out: &mut String,
+    program: &cfg::Program,
+    ops: &[OptimizedOp],
+    initialized_vars: &mut HashSet<cfg::VariableId>,
+    table_access_count: &mut usize,
+    indent: &str,
+) -> Result<(), std::fmt::Error> {
+    for op in ops {
+        lower_optimized_op(
+            out,
+            program,
+            op,
+            initialized_vars,
+            table_access_count,
+            indent,
+        )?;
+    }
+    Ok(())
+}
+
+/// Lower a combined table access group (multiple gets/sets to the same key)
+pub fn lower_combined_table_access(
+    out: &mut String,
+    program: &cfg::Program,
+    group: &TableAccessGroup,
+    initialized_vars: &mut HashSet<cfg::VariableId>,
+    table_access_count: &mut usize,
+    indent: &str,
+) -> Result<(), std::fmt::Error> {
+    let table_info = &program.tables[group.table_id];
+    let table_name = pascal_case(&table_info.name);
+
+    writeln!(
+        out,
+        "{}// Combined table access: {} ({} operations)",
+        indent,
+        table_name,
+        group.accesses.len()
+    )?;
+
+    let key_args: Vec<String> = table_info
+        .primary_key_fields
+        .iter()
+        .zip(group.keys.iter())
+        .map(|(field_id, key_operand)| {
+            let field_info = &program.table_fields[*field_id];
+            let key_expr = operand_to_go(program, key_operand);
+            format!("{}: {}", field_info.name, key_expr)
+        })
+        .collect();
+
+    *table_access_count += 1;
+    let key_var = format!("keyBytes{}", table_access_count);
+    let row_var = format!("row{}", table_access_count);
+
+    // Fetch the row once
+    writeln!(
+        out,
+        "{}{}, {} = get{}(tx, {}Key{{{}}})",
+        indent,
+        key_var,
+        row_var,
+        table_name,
+        table_name,
+        key_args.join(", ")
+    )?;
+    writeln!(
+        out,
+        "{}rwSet = AddRWSet(rwSet, \"{}\", {})",
+        indent, table_name, key_var
+    )?;
+
+    // Process all accesses
+    for access in &group.accesses {
+        match access {
+            TableAccess::Get { dest, field, .. } => {
+                let dest_name = go_var_name(program, *dest);
+                if let Some(field_id) = field {
+                    let field_accessor =
+                        table_field_accessor(program, table_info, *field_id, &row_var);
+                    writeln!(out, "{}{} = {}", indent, dest_name, field_accessor)?;
+                } else {
+                    // Read whole row
+                    writeln!(out, "{}{} = {}", indent, dest_name, row_var)?;
+                }
+                initialized_vars.insert(*dest);
+            }
+            TableAccess::Set { field, value, .. } => {
+                if let Some(field_id) = field {
+                    let field_accessor =
+                        table_field_accessor(program, table_info, *field_id, &row_var);
+                    let value_expr = operand_to_go(program, value);
+                    writeln!(out, "{}{} = {}", indent, field_accessor, value_expr)?;
+                } else {
+                    // Write whole row
+                    let value_expr = operand_to_go(program, value);
+                    writeln!(out, "{}{} = {}", indent, row_var, value_expr)?;
+                }
+            }
+        }
+    }
+
+    // Write back if there were any writes
+    if group.has_writes {
+        writeln!(
+            out,
+            "{}put{}(tx, {}Key{{{}}}, {})",
+            indent,
+            table_name,
+            table_name,
+            key_args.join(", "),
+            row_var
+        )?;
     }
 
     Ok(())

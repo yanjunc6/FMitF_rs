@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::Write;
 
-pub(super) fn generate_global(
+pub fn generate_global(
     program: &cfg::Program,
     sc_graph: &SCGraph,
 ) -> Result<GoProgram, Box<dyn Error>> {

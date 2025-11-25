@@ -2,7 +2,7 @@ use super::{util::write_go_file_header, GoProgram};
 use std::error::Error;
 use std::fmt::Write;
 
-pub(super) fn generate_util() -> Result<GoProgram, Box<dyn Error>> {
+pub fn generate_util() -> Result<GoProgram, Box<dyn Error>> {
     let content = build_util_source()?;
     Ok(GoProgram::new("util.go", content))
 }
