@@ -104,6 +104,8 @@
 
 const __slice__: int = 0;
 const __shards__: int = 1;
+
+@intrinsic @go function UUID_to_int(u: UUID) -> int;
 @intrinsic @Boogie function genUUID(n: int, m: int) -> UUID;
 
 @intrinsic @global @Boogie function scan<T>(t: Table<T>, n: int, m: int) -> Iterator<T>;

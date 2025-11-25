@@ -2,7 +2,7 @@
 // Partition function declarations
 // ===========================================
 partition f(x: UUID) -> int {
-    return x;
+    return UUID_to_int(x);
 }
 
 partition g(x: string, y: int) -> int {
