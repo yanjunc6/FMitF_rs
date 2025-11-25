@@ -103,6 +103,7 @@
 @intrinsic @Boogie function str<T>(x: T) -> string;
 
 const __slice__: int = 0;
+const __shards__: int = 1;
 @intrinsic @Boogie function genUUID(n: int, m: int) -> UUID;
 
 @intrinsic @global @Boogie function scan<T>(t: Table<T>, n: int, m: int) -> Iterator<T>;
@@ -112,6 +113,8 @@ const __slice__: int = 0;
 // vague function
 @intrinsic @Boogie @go function to_unit<T>(x: T) -> unit; // it does nothing at runtime
 
+// only used in partition function
+@intrinsic @go function hashStr(s: string) -> int;
 
 // ===========================================
 //  Generated Functions for Iterator

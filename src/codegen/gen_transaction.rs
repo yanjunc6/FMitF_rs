@@ -1322,8 +1322,10 @@ pub(super) fn lower_terminator_goto(
                 // For partition mode, just return the value directly
                 if let Some(val) = value {
                     writeln!(out, "{}_ = {}", indent, operand_to_go(program, val))?;
-                }
+                    writeln!(out, "{}return {}", indent, operand_to_go(program, val))?;
+                } else {
                 writeln!(out, "{}return 0", indent)?;
+                }
             } else {
                 // For normal hop mode, wrap in TrxRes
                 if let Some(val) = value {

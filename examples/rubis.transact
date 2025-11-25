@@ -6,7 +6,7 @@ partition f(x: UUID) -> int {
 }
 
 partition g(x: string, y: int) -> int {
-    return y;
+    return (y + hashStr(x)) % __shards__;
 }
 
 // ===========================================
@@ -152,7 +152,7 @@ transaction getCommentsByToUID(to_id: UUID) -> List<string> {
     @global hop {
         var commentList: List<string> = emptyList();
         for (var comments_iter: Iterator<Comments> = scan(Comments, 0, __slice__); hasNext(comments_iter); comments_iter = next(comments_iter)) {
-            var comment_id = get_id(comments_iter);
+            var comment_id = get_Id(comments_iter);
             var c_to_user_id = Comments[Id: comment_id].To_user_id;
             if c_to_user_id === to_id {
                 commentList = append(commentList, Comments[Id: comment_id].Comment);
@@ -166,7 +166,7 @@ transaction getCommentsByIID(iid: UUID) -> List<string> {
     @global hop {
         var commentList: List<string> = emptyList();
         for (var comments_iter: Iterator<Comments> = scan(Comments, 1, __slice__); hasNext(comments_iter); comments_iter = next(comments_iter)) {
-            var comment_id = get_id(comments_iter);
+            var comment_id = get_Id(comments_iter);
             var c_item_id = Comments[Id: comment_id].Item_id;
             if c_item_id === iid {
                 commentList = append(commentList, Comments[Id: comment_id].Comment);
@@ -180,7 +180,7 @@ transaction getItemsByRegion(region_id: int) -> List<Row<Items>> {
     @global hop {
         var itemList: List<Row<Items>> = emptyList();
         for (var items_iter: Iterator<Items> = scan(Items, 2, __slice__); hasNext(items_iter); items_iter = next(items_iter)) {
-            var item_id = get_id(items_iter);
+            var item_id = get_Id(items_iter);
             var i_region = Items[Id: item_id].Region;
             if i_region == region_id {
                 itemList = append(itemList, Items[Id: item_id]);
@@ -194,7 +194,7 @@ transaction getItemsByCategory(category_id: int) -> List<Row<Items>> {
     @global hop {
         var itemList: List<Row<Items>> = emptyList();
         for (var items_iter: Iterator<Items> = scan(Items, 3, __slice__); hasNext(items_iter); items_iter = next(items_iter)) {
-            var item_id = get_id(items_iter);
+            var item_id = get_Id(items_iter);
             var i_category = Items[Id: item_id].Category;
             if i_category == category_id {
                 itemList = append(itemList, Items[Id: item_id]);
@@ -265,7 +265,7 @@ transaction getBidsByItem(iid: UUID) -> List<Row<Bids>> {
     @global hop {
         var bidList: List<Row<Bids>> = emptyList();
         for (var bids_iter: Iterator<Bids> = scan(Bids, 4, __slice__); hasNext(bids_iter); bids_iter = next(bids_iter)) {
-            var bid = get_id(bids_iter);
+            var bid = get_Id(bids_iter);
             var b_item_id = Bids[Id: bid].Item_id;
             if b_item_id === iid {
                 bidList = append(bidList, Bids[Id: bid]);
@@ -279,7 +279,7 @@ transaction getBidsByUser(uid: UUID) -> List<Row<Bids>> {
     @global hop {
         var bidList: List<Row<Bids>> = emptyList();
         for (var bids_iter: Iterator<Bids> = scan(Bids, 5, __slice__); hasNext(bids_iter); bids_iter = next(bids_iter)) {
-            var bid_id = get_id(bids_iter);
+            var bid_id = get_Id(bids_iter);
             var b_user_id = Bids[Id: bid_id].User_id;
             if b_user_id === uid {
                 bidList = append(bidList, Bids[Id: bid_id]);

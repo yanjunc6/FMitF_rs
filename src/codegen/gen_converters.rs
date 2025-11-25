@@ -212,6 +212,10 @@ fn build_converters_source() -> Result<String, std::fmt::Error> {
 
     // Note: get_* functions for iterator primary key extraction
     // are now generated per-table in global.go
+    writeln!(out, "// legacy: use json package to avoid unused import error")?;
+    writeln!(out, "func legacyJSONUsage(v interface{{}}) ([]byte, error) {{")?;
+    writeln!(out, "\treturn json.Marshal(v)")?;
+    writeln!(out, "}}")?;
 
     Ok(out)
 }
