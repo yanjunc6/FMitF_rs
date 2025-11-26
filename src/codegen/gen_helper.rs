@@ -30,6 +30,13 @@ impl CodeGenContext {
     }
 }
 
+/// Context for hop execution including variables and tables
+pub struct HopContext<'a> {
+    pub initialized_vars: &'a HashSet<cfg::VariableId>,
+    pub vars_to_write_back: &'a [cfg::VariableId],
+    pub tables_written: &'a HashSet<cfg::TableId>,
+}
+
 /// Convert a CFG operand to Go code
 pub fn operand_to_go(program: &cfg::Program, operand: &Operand) -> String {
     match operand {
@@ -215,14 +222,14 @@ pub fn collect_used_labels(term: &Terminator, used_labels: &mut HashSet<cfg::Bas
 }
 
 /// Lower terminator - works for all three contexts: Normal, TransactionPartition, PartitionFunction
-/// For hop functions, pass Some((initialized_vars, vars_to_write_back))
+/// For hop functions, pass Some(HopContext)
 /// For standalone partition functions, pass None
 pub fn lower_terminator_goto(
     out: &mut String,
     program: &cfg::Program,
     term: &Terminator,
     indent: &str,
-    hop_context: Option<(&HashSet<cfg::VariableId>, &[cfg::VariableId])>,
+    hop_context: Option<HopContext>,
     ctx: CodeGenContext,
 ) -> Result<(), std::fmt::Error> {
     match term {
@@ -273,10 +280,13 @@ pub fn lower_terminator_goto(
         Terminator::HopExit { .. } => {
             if ctx.is_partition() {
                 // For partition mode, generate unreachable results assignment at the end
-                if let Some((initialized_vars, vars_to_write_back)) = hop_context {
-                    if !vars_to_write_back.is_empty() {
-                        let results =
-                            generate_results_exprs(program, vars_to_write_back, initialized_vars);
+                if let Some(ref ctx) = hop_context {
+                    if !ctx.vars_to_write_back.is_empty() {
+                        let results = generate_results_exprs(
+                            program,
+                            ctx.vars_to_write_back,
+                            ctx.initialized_vars,
+                        );
                         writeln!(out, "\t// Unreachable: use variables in results")?;
                         writeln!(out, "\t_ = []string{{{}}}", results.join(", "))?;
                     }
@@ -319,14 +329,31 @@ fn generate_results_exprs(
 pub fn generate_trx_res_return(
     out: &mut String,
     program: &cfg::Program,
-    hop_context: Option<(&HashSet<cfg::VariableId>, &[cfg::VariableId])>,
+    hop_context: Option<HopContext>,
     indent: &str,
 ) -> Result<(), std::fmt::Error> {
+    // Flush caches for tables written in this hop
+    if let Some(ref ctx) = hop_context {
+        if !ctx.tables_written.is_empty() {
+            writeln!(
+                out,
+                "{}// Flush caches for tables written in this hop",
+                indent
+            )?;
+            for table_id in ctx.tables_written {
+                let table = &program.tables[*table_id];
+                let table_name = pascal_case(&table.name);
+                writeln!(out, "{}flush{}Cache(tx)", indent, table_name)?;
+            }
+        }
+    }
+
     // Collect variables that need to be written back (live-out AND defined in this hop)
-    if let Some((initialized_vars, vars_to_write_back)) = hop_context {
-        if !vars_to_write_back.is_empty() {
+    if let Some(ctx) = hop_context {
+        if !ctx.vars_to_write_back.is_empty() {
             writeln!(out, "{}// Write back variables to results", indent)?;
-            let results = generate_results_exprs(program, vars_to_write_back, initialized_vars);
+            let results =
+                generate_results_exprs(program, ctx.vars_to_write_back, ctx.initialized_vars);
             writeln!(out, "{}return &proto.TrxRes{{", indent)?;
             writeln!(out, "{}\tStatus: proto.Status_Success,", indent)?;
             writeln!(out, "{}\tInfo:   in.Info,", indent)?;

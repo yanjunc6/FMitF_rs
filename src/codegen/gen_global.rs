@@ -3,7 +3,7 @@ use super::{
         collect_used_labels, collect_var_decls_from_instruction, go_function_name,
         lower_instruction, lower_terminator_goto, CodeGenContext,
     },
-    util::{go_type_string, go_var_name, pascal_case, write_go_file_header},
+    util::{go_type_string, go_var_name, pascal_case, snake_case, write_go_file_header},
     GoProgram,
 };
 use crate::cfg::{self, FunctionKind, InstructionKind};
@@ -36,6 +36,12 @@ fn build_global_source(
     writeln!(out, "\treturn bytes")?;
     writeln!(out, "}}")?;
     writeln!(out)?;
+
+    // Generate cache structs for each table
+    generate_cache_structs(&mut out, program)?;
+
+    // Generate flush caches function
+    generate_flush_caches(&mut out, program)?;
 
     // Generate iterator get_* functions for each table's primary keys
     generate_iterator_getters(&mut out, program)?;
@@ -78,11 +84,79 @@ fn build_global_source(
         writeln!(out, "}}")?;
         writeln!(out)?;
 
+        // Generate flush function for this table
+        writeln!(
+            out,
+            "// flush{}Cache writes the cached data to the database if it's dirty.",
+            struct_name
+        )?;
+        writeln!(out, "func flush{}Cache(tx *bolt.Tx) {{", struct_name)?;
+        writeln!(
+            out,
+            "\tif {}Cache.row != nil && {}Cache.isDirty {{",
+            snake_case(&table.name),
+            snake_case(&table.name)
+        )?;
+        writeln!(
+            out,
+            "\t\t// Only write to DB if the cache is marked as dirty."
+        )?;
+        writeln!(out, "\t\tbucket := tx.Bucket([]byte(\"{}\"))", bucket_name)?;
+        writeln!(out, "\t\tif bucket == nil {{")?;
+        writeln!(out, "\t\t\tpanic(\"missing bucket {}\")", bucket_name)?;
+        writeln!(out, "\t\t}}")?;
+        writeln!(
+            out,
+            "\t\tvar key {} = {}Cache.row.Key",
+            key_struct_name,
+            snake_case(&table.name)
+        )?;
+        writeln!(
+            out,
+            "\t\tvar row {} = *{}Cache.row",
+            struct_name,
+            snake_case(&table.name)
+        )?;
+        writeln!(out, "\t\tputData(bucket, mustJSON(key), mustJSON(row))")?;
+        writeln!(out, "\t}}")?;
+        writeln!(out, "\t// Clear the cache after flushing.")?;
+        writeln!(out, "\t{}Cache.row = nil", snake_case(&table.name))?;
+        writeln!(out, "\t{}Cache.isDirty = false", snake_case(&table.name))?;
+        writeln!(out, "}}")?;
+        writeln!(out)?;
+
+        // Generate get function with cache
+        writeln!(
+            out,
+            "// get{} fetches data, utilizing the cache.",
+            struct_name
+        )?;
         writeln!(
             out,
             "func get{}(tx *bolt.Tx, key {}) ([]byte, {}) {{",
             struct_name, key_struct_name, struct_name
         )?;
+        writeln!(out, "\t// 1. Check cache first.")?;
+        writeln!(
+            out,
+            "\tif {}Cache.row != nil && {}Cache.row.Key == key {{",
+            snake_case(&table.name),
+            snake_case(&table.name)
+        )?;
+        writeln!(
+            out,
+            "\t\treturn mustJSON(key), *{}Cache.row // Cache Hit",
+            snake_case(&table.name)
+        )?;
+        writeln!(out, "\t}}")?;
+        writeln!(out)?;
+        writeln!(
+            out,
+            "\t// 2. Cache Miss: Flush any old dirty data before loading new data."
+        )?;
+        writeln!(out, "\tflush{}Cache(tx)", struct_name)?;
+        writeln!(out)?;
+        writeln!(out, "\t// 3. Proceed with DB lookup.")?;
         writeln!(out, "\tbucket := tx.Bucket([]byte(\"{}\"))", bucket_name)?;
         writeln!(out, "\tif bucket == nil {{")?;
         writeln!(out, "\t\tpanic(\"missing bucket {}\")", bucket_name)?;
@@ -97,21 +171,48 @@ fn build_global_source(
         writeln!(out, "\t\t\tpanic(err)")?;
         writeln!(out, "\t\t}}")?;
         writeln!(out, "\t}}")?;
+        writeln!(
+            out,
+            "\t// 4. Update cache with the newly fetched, clean row."
+        )?;
+        writeln!(out, "\t{}Cache.row = &row", snake_case(&table.name))?;
+        writeln!(out, "\t{}Cache.isDirty = false", snake_case(&table.name))?;
+        writeln!(out)?;
         writeln!(out, "\treturn keyBytes, row")?;
         writeln!(out, "}}")?;
         writeln!(out)?;
 
+        // Generate put function with cache
+        writeln!(
+            out,
+            "// put{} updates the cache and marks it as dirty (write-back).",
+            struct_name
+        )?;
         writeln!(
             out,
             "func put{}(tx *bolt.Tx, key {}, row {}) {{",
             struct_name, key_struct_name, struct_name
         )?;
-        writeln!(out, "\tbucket := tx.Bucket([]byte(\"{}\"))", bucket_name)?;
-        writeln!(out, "\tif bucket == nil {{")?;
-        writeln!(out, "\t\tpanic(\"missing bucket {}\")", bucket_name)?;
+        writeln!(
+            out,
+            "\t// If the cache holds a different row, flush it first."
+        )?;
+        writeln!(
+            out,
+            "\tif {}Cache.row != nil && {}Cache.row.Key != key {{",
+            snake_case(&table.name),
+            snake_case(&table.name)
+        )?;
+        writeln!(out, "\t\tflush{}Cache(tx)", struct_name)?;
         writeln!(out, "\t}}")?;
+        writeln!(out)?;
+        writeln!(
+            out,
+            "\t// Place the new row in the cache and mark it as dirty."
+        )?;
         writeln!(out, "\trow.Key = key")?;
-        writeln!(out, "\tputData(bucket, mustJSON(key), mustJSON(row))")?;
+        writeln!(out, "\t{}Cache.row = &row", snake_case(&table.name))?;
+        writeln!(out, "\t{}Cache.isDirty = true", snake_case(&table.name))?;
         writeln!(out, "}}")?;
         writeln!(out)?;
 
@@ -529,6 +630,38 @@ fn generate_iterator_getters(
         }
     }
 
+    Ok(())
+}
+
+fn generate_cache_structs(out: &mut String, program: &cfg::Program) -> Result<(), std::fmt::Error> {
+    for &table_id in &program.all_tables {
+        let table = &program.tables[table_id];
+        let struct_name = pascal_case(&table.name);
+        let cache_var = format!("{}Cache", snake_case(&table.name));
+
+        writeln!(
+            out,
+            "// Global variable for the single-row write-back cache."
+        )?;
+        writeln!(out, "var {} struct {{", cache_var)?;
+        writeln!(out, "\trow    *{}", struct_name)?;
+        writeln!(out, "\tisDirty bool")?;
+        writeln!(out, "}}")?;
+        writeln!(out)?;
+    }
+    Ok(())
+}
+
+fn generate_flush_caches(out: &mut String, program: &cfg::Program) -> Result<(), std::fmt::Error> {
+    writeln!(out, "// FlushAllCaches flushes all table caches")?;
+    writeln!(out, "func FlushAllCaches(tx *bolt.Tx) {{")?;
+    for &table_id in &program.all_tables {
+        let table = &program.tables[table_id];
+        let struct_name = pascal_case(&table.name);
+        writeln!(out, "\tflush{}Cache(tx)", struct_name)?;
+    }
+    writeln!(out, "}}")?;
+    writeln!(out)?;
     Ok(())
 }
 
