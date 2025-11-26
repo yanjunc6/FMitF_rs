@@ -102,9 +102,10 @@ transaction userAuth(nickname: string, password: string) -> bool {
     }
 }
 
-transaction registerUser(nickname: string, password: string, firstname: string, lastname: string, email: string) {
+transaction registerUser(uid: UUID, nickname: string, password: string, firstname: string, lastname: string, email: string)
+    assume uid === genUUID(1, __slice__);
+{
     hop {
-        var uid: UUID = genUUID(1, __slice__);
         if (Usernames[Nickname: nickname].Counter > 0) {
             return;
         }
@@ -131,14 +132,15 @@ transaction viewUser(uid: UUID) -> string {
     }
 }
 
-transaction makeComment(from_uid: UUID, to_uid: UUID, iid: UUID, comment: string, rating: int) {
+transaction makeComment(id: UUID, from_uid: UUID, to_uid: UUID, iid: UUID, comment: string, rating: int)
+    assume id === genUUID(2, __slice__);
+{
     hop {
-        var Id: UUID = genUUID(2, __slice__);
         Users[Id: to_uid].Rating = Users[Id: to_uid].Rating + rating;
     }
 
     hop {
-        Comments[Id: Id] = {
+        Comments[Id: id] = {
             From_user_id: from_uid,
             To_user_id: to_uid,
             Item_id: iid,
@@ -204,9 +206,10 @@ transaction getItemsByCategory(category_id: int) -> List<Row<Items>> {
     }
 }
 
-transaction registerItem(name: string, description: string, initial_price: float, quantity: int, reserve_price: float, buy_now: float, date: int, seller: UUID, region: int, category: int) {
+transaction registerItem(iid: UUID, name: string, description: string, initial_price: float, quantity: int, reserve_price: float, buy_now: float, date: int, seller: UUID, region: int, category: int) 
+    assume iid === genUUID(3, __slice__);
+{
     hop {
-        var iid: UUID = genUUID(3, __slice__);
         Items[Id: iid] = {
             Name: name,
             Description: description,
@@ -224,9 +227,10 @@ transaction registerItem(name: string, description: string, initial_price: float
     }
 }
 
-transaction putBid(iid: UUID, max_bid_val: float, uid: UUID, quantity: int, bid_val: float, date: int) {
+transaction putBid(bid_id: UUID, iid: UUID, max_bid_val: float, uid: UUID, quantity: int, bid_val: float, date: int) 
+    assume bid_id === genUUID(4, __slice__);
+{
     hop {
-        var bid_id: UUID = genUUID(4, __slice__);
         var cur_max: float = Items[Id: iid].Max_bid;
         if max_bid_val > cur_max {
             Items[Id: iid].Max_bid = max_bid_val;
@@ -289,9 +293,10 @@ transaction getBidsByUser(uid: UUID) -> List<Row<Bids>> {
     }
 }
 
-transaction buyNow(iid: UUID, uid: UUID, quantity: int, date: int) {
+transaction buyNow(bnid: UUID, iid: UUID, uid: UUID, quantity: int, date: int) 
+    assume bnid === genUUID(5, __slice__);
+{
     hop {
-        var bnid: UUID = genUUID(5, __slice__);
         var cur_qty: int = Items[Id: iid].Quantity;
         if quantity > cur_qty {
             return;
