@@ -67,8 +67,10 @@ impl CombinedSCGraph {
 /// 1) Ensure S-edges are directed (already given by the SCGraphEdge).
 /// 2) Contract all nodes connected by C-edges (undirected) into single vertices.
 /// 3) On the graph of those vertices with S-edges only, contract strongly connected components (SCCs) into single vertices until acyclic.
-/// 4) Split each merged SCC vertex into multiple per-transaction vertices (function_id + instance),
-///    and connect those per-transaction vertices with undirected C-edges.
+/// 4) Split each merged SCC vertex into multiple per-transaction vertices (function_id + instance).
+///    IMPORTANT: Only preserve the original C-edges from the input graph. Do NOT create new C-edges
+///    between vertices just because they ended up in the same SCC.
+///    (C-edges between nodes merged into the same combined vertex become internal and are omitted.)
 pub fn combine_for_deadlock_elimination(scg: &SCGraph) -> CombinedSCGraph {
     // Step 2: Contract all nodes connected by C-edges into single vertices (C-components).
     let (ccomp_id_of, _ccomp_nodes, ccomp_count) = contract_c_edges(scg);
@@ -148,16 +150,22 @@ pub fn combine_for_deadlock_elimination(scg: &SCGraph) -> CombinedSCGraph {
         }
     }
 
-    // Add C-edges (undirected) among all per-transaction vertices that originated from the same SCC.
-    for ids in scc_vertex_ids {
-        if ids.len() >= 2 {
-            // For each unordered pair (i, j), i < j, add one undirected C-edge.
-            let mut sorted_ids = ids.clone();
-            sorted_ids.sort_unstable();
-            for i in 0..sorted_ids.len() {
-                for j in (i + 1)..sorted_ids.len() {
-                    let a = sorted_ids[i];
-                    let b = sorted_ids[j];
+    // Add C-edges: preserve only the original C-edges from the input graph.
+    // We should NOT create new C-edges between vertices just because they're in the same SCC.
+    // The SCC merging is for eliminating deadlocks in S-edges, not for creating new C-edges.
+    for e in &scg.edges {
+        if let EdgeType::C = e.edge_type {
+            if let (Some(&from_id), Some(&to_id)) = (
+                original_to_combined.get(&e.source),
+                original_to_combined.get(&e.target),
+            ) {
+                if from_id != to_id {
+                    // Ensure canonical ordering for undirected C-edges
+                    let (a, b) = if from_id < to_id {
+                        (from_id, to_id)
+                    } else {
+                        (to_id, from_id)
+                    };
                     edge_set.insert(CombinedEdge {
                         source: a,
                         target: b,
