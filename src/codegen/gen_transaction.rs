@@ -1,7 +1,7 @@
 use super::{
     gen_helper::{
         collect_used_labels, collect_var_decls_from_instruction, lower_optimized_op,
-        lower_optimized_ops, lower_terminator_goto, operand_to_go, CodeGenContext,
+        lower_optimized_ops, lower_terminator_goto, operand_to_go, CodeGenContext, HopContext,
     },
     gen_table_optimizer::{optimize_instructions, OptimizedOp},
     util::{go_type_string, go_var_name, pascal_case, snake_case, write_go_file_header},
@@ -407,6 +407,21 @@ fn generate_hop_function_impl(
         .collect();
     vars_to_write_back.sort_by_key(|var_id| var_id.index());
 
+    // Run table mod/ref analysis at HOP level to determine which tables are written
+    let table_analysis = analyze_table_mod_ref(function, program);
+    let mut tables_written = HashSet::new();
+    for &block_id in &hop.blocks {
+        if let Some(exit_state) = table_analysis.block_exit.get(&block_id) {
+            if let Some(accesses) = exit_state.as_set() {
+                for access in accesses {
+                    if access.access_type == AccessType::Write {
+                        tables_written.insert(access.table);
+                    }
+                }
+            }
+        }
+    }
+
     // Collect all variables that need declaration
     let mut var_decls: HashMap<cfg::VariableId, String> = HashMap::new();
     let mut initialized_vars: HashSet<cfg::VariableId> = HashSet::new();
@@ -635,7 +650,11 @@ fn generate_hop_function_impl(
         program,
         &entry_block_obj.terminator,
         "\t",
-        Some((&initialized_vars, &vars_to_write_back)),
+        Some(HopContext {
+            initialized_vars: &initialized_vars,
+            vars_to_write_back: &vars_to_write_back,
+            tables_written: &tables_written,
+        }),
         ctx,
     )?; // Generate code for other blocks in the hop (only with label if used)
     for &block_id in &hop.blocks {
@@ -696,7 +715,11 @@ fn generate_hop_function_impl(
             program,
             &block.terminator,
             "\t",
-            Some((&initialized_vars, &vars_to_write_back)),
+            Some(HopContext {
+                initialized_vars: &initialized_vars,
+                vars_to_write_back: &vars_to_write_back,
+                tables_written: &tables_written,
+            }),
             ctx,
         )?;
     }
