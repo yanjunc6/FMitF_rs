@@ -105,8 +105,9 @@ impl BoogieStateManager {
                     })
                     .collect();
 
+                // Table invariants are global, use slice 0 as context for __slice__ resolution
                 let body_expr =
-                    Self::inline_special_function(base, cfg_program, *inv_func_id, &arg_exprs);
+                    Self::inline_special_function(base, cfg_program, *inv_func_id, &arg_exprs, 0);
 
                 if inv_func.params.is_empty() {
                     base.add_line(BoogieLine::Assume(body_expr));
@@ -151,8 +152,13 @@ impl BoogieStateManager {
                         );
                         args.push(expr);
                     }
-                    let assume_expr =
-                        Self::inline_special_function(base, cfg_program, *assume_func_id, &args);
+                    let assume_expr = Self::inline_special_function(
+                        base,
+                        cfg_program,
+                        *assume_func_id,
+                        &args,
+                        *slice_id,
+                    );
                     base.add_line(BoogieLine::Assume(assume_expr));
                 }
             }
@@ -352,6 +358,7 @@ impl BoogieStateManager {
         cfg_program: &CfgProgram,
         func_id: FunctionId,
         args: &[BoogieExpr],
+        slice_id: SliceId,
     ) -> BoogieExpr {
         let func = &cfg_program.functions[func_id];
         assert_eq!(
@@ -381,12 +388,18 @@ impl BoogieStateManager {
             let control = {
                 let block = &cfg_program.basic_blocks[current_block];
                 for instruction in &block.instructions {
-                    Self::evaluate_special_instruction(base, cfg_program, instruction, &mut env);
+                    Self::evaluate_special_instruction(
+                        base,
+                        cfg_program,
+                        instruction,
+                        &mut env,
+                        slice_id,
+                    );
                 }
 
                 match &block.terminator {
                     Terminator::Return(Some(op)) => {
-                        let expr = Self::operand_to_expr(base, cfg_program, op, &env);
+                        let expr = Self::operand_to_expr(base, cfg_program, op, &env, slice_id);
                         InlineControl::Return(expr)
                     }
                     Terminator::Return(None) => InlineControl::Return(BoogieExpr {
@@ -417,10 +430,11 @@ impl BoogieStateManager {
         cfg_program: &CfgProgram,
         instruction: &Instruction,
         env: &mut HashMap<VariableId, BoogieExpr>,
+        slice_id: SliceId,
     ) {
         match &instruction.kind {
             InstructionKind::Assign { dest, src } => {
-                let expr = Self::operand_to_expr(base, cfg_program, src, env);
+                let expr = Self::operand_to_expr(base, cfg_program, src, env, slice_id);
                 env.insert(*dest, expr);
             }
             InstructionKind::BinaryOp {
@@ -429,8 +443,8 @@ impl BoogieStateManager {
                 left,
                 right,
             } => {
-                let left_expr = Self::operand_to_expr(base, cfg_program, left, env);
-                let right_expr = Self::operand_to_expr(base, cfg_program, right, env);
+                let left_expr = Self::operand_to_expr(base, cfg_program, left, env, slice_id);
+                let right_expr = Self::operand_to_expr(base, cfg_program, right, env, slice_id);
                 let bin_op = BoogieProgramGenerator::convert_binary_op(op);
                 let result = BoogieExpr {
                     kind: BoogieExprKind::BinOp(Box::new(left_expr), bin_op, Box::new(right_expr)),
@@ -438,7 +452,7 @@ impl BoogieStateManager {
                 env.insert(*dest, result);
             }
             InstructionKind::UnaryOp { dest, op, operand } => {
-                let operand_expr = Self::operand_to_expr(base, cfg_program, operand, env);
+                let operand_expr = Self::operand_to_expr(base, cfg_program, operand, env, slice_id);
                 let un_op = match base.generator.convert_unary_op(op) {
                     Ok(op) => op,
                     Err(_) => {
@@ -454,7 +468,7 @@ impl BoogieStateManager {
                 let func_name = base.resolve_function_name(cfg_program, *func);
                 let mut boogie_args = Vec::with_capacity(args.len());
                 for arg in args {
-                    boogie_args.push(Self::operand_to_expr(base, cfg_program, arg, env));
+                    boogie_args.push(Self::operand_to_expr(base, cfg_program, arg, env, slice_id));
                 }
                 let call_expr = BoogieExpr {
                     kind: BoogieExprKind::FunctionCall {
@@ -477,7 +491,7 @@ impl BoogieStateManager {
                 let table_decl = &cfg_program.tables[*table];
                 let key_exprs: Vec<BoogieExpr> = keys
                     .iter()
-                    .map(|key| Self::operand_to_expr(base, cfg_program, key, env))
+                    .map(|key| Self::operand_to_expr(base, cfg_program, key, env, slice_id))
                     .collect();
 
                 if let Some(field_id) = field {
@@ -542,6 +556,7 @@ impl BoogieStateManager {
         cfg_program: &CfgProgram,
         operand: &Operand,
         env: &HashMap<VariableId, BoogieExpr>,
+        slice_id: SliceId,
     ) -> BoogieExpr {
         match operand {
             Operand::Variable(var_id) => env.get(var_id).cloned().unwrap_or_else(|| {
@@ -552,7 +567,13 @@ impl BoogieStateManager {
                 Err(_) => panic!("Failed to convert constant in special expression function"),
             },
             Operand::Global(global_id) => {
-                let name = cfg_program.global_consts[*global_id].name.clone();
+                let global_const = &cfg_program.global_consts[*global_id];
+                // Special handling for __slice__ constant - replace with actual slice ID
+                let name = if global_const.name == "__slice__" {
+                    slice_id.to_string()
+                } else {
+                    global_const.name.clone()
+                };
                 BoogieExpr {
                     kind: BoogieExprKind::Var(name),
                 }
