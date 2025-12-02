@@ -221,6 +221,9 @@ impl Compiler {
             .filter(|edge| matches!(edge.edge_type, crate::sc_graph::EdgeType::C))
             .count();
 
+        // Save original SC graph for plotting later
+        let original_sc = sc.clone();
+
         // Stage 5: Verification (Commutative) -> generate Boogie, run, process results, and write simplified graphs
         if !enable_verification {
             summary.simplified_sc_c_edges = summary.sc_c_edges;
@@ -308,53 +311,59 @@ impl Compiler {
                     let completed_count = Arc::new(AtomicUsize::new(0));
 
                     // Run write+boogie per program in parallel, collecting outputs for sequential logging
-                    let run_results: Vec<(String, Result<std::process::Output, std::io::Error>)> =
-                        programs
-                            .par_iter()
-                            .map(|program| {
-                                let file_name = format!("{}.bpl", program.name);
-                                let file_path = boogie_dir.join(&file_name);
+                    let run_results: Vec<(
+                        String,
+                        std::time::Duration,
+                        Result<std::process::Output, std::io::Error>,
+                    )> = programs
+                        .par_iter()
+                        .map(|program| {
+                            let file_name = format!("{}.bpl", program.name);
+                            let file_path = boogie_dir.join(&file_name);
 
-                                // Write .bpl file (fast, don't track this)
-                                let write_res = (|| -> Result<(), std::io::Error> {
-                                    use std::io::Write;
-                                    let mut f = fs::File::create(&file_path)?;
-                                    write!(f, "{}", program)?;
-                                    Ok(())
-                                })();
+                            // Write .bpl file (fast, don't track this)
+                            let write_res = (|| -> Result<(), std::io::Error> {
+                                use std::io::Write;
+                                let mut f = fs::File::create(&file_path)?;
+                                write!(f, "{}", program)?;
+                                Ok(())
+                            })();
 
-                                let output = match write_res {
-                                    Ok(()) => {
-                                        // Add to running set RIGHT before calling Boogie
-                                        {
-                                            let mut files = running_files.lock().unwrap();
-                                            files.insert(file_name.clone());
-                                            let files_list: Vec<String> =
-                                                files.iter().cloned().collect();
-                                            let completed = completed_count.load(Ordering::Relaxed);
-                                            let msg = if files_list.len() <= 3 {
-                                                format!("Running: {}", files_list.join(", "))
-                                            } else {
-                                                format!(
-                                                    "Running: {}, {}, {} (+{} more)",
-                                                    files_list[0],
-                                                    files_list[1],
-                                                    files_list[2],
-                                                    files_list.len() - 3
-                                                )
-                                            };
-                                            pb.set_position(completed as u64);
-                                            pb.set_message(msg);
-                                        }
+                            let (duration, output) = match write_res {
+                                Ok(()) => {
+                                    // Add to running set RIGHT before calling Boogie
+                                    {
+                                        let mut files = running_files.lock().unwrap();
+                                        files.insert(file_name.clone());
+                                        let files_list: Vec<String> =
+                                            files.iter().cloned().collect();
+                                        let completed = completed_count.load(Ordering::Relaxed);
+                                        let msg = if files_list.len() <= 3 {
+                                            format!("Running: {}", files_list.join(", "))
+                                        } else {
+                                            format!(
+                                                "Running: {}, {}, {} (+{} more)",
+                                                files_list[0],
+                                                files_list[1],
+                                                files_list[2],
+                                                files_list.len() - 3
+                                            )
+                                        };
+                                        pb.set_position(completed as u64);
+                                        pb.set_message(msg);
+                                    }
 
-                                        // Actually run Boogie
-                                        let result = Command::new("boogie")
-                                            .arg("/quiet")
-                                            .arg("/errorTrace:0")
-                                            .arg(format!("/loopUnroll:{}", loop_unroll))
-                                            .arg(format!("/timeLimit:{}", timeout_secs))
-                                            .arg(file_path.to_string_lossy().to_string())
-                                            .output();
+                                    // START TIMER and run Boogie
+                                    let start_time = std::time::Instant::now();
+                                    let result = Command::new("boogie")
+                                        .arg("/quiet")
+                                        .arg("/errorTrace:0")
+                                        .arg(format!("/loopUnroll:{}", loop_unroll))
+                                        .arg(format!("/timeLimit:{}", timeout_secs))
+                                        .arg(file_path.to_string_lossy().to_string())
+                                        .output();
+                                    // GET ELAPSED WALL-CLOCK TIME
+                                    let duration = start_time.elapsed();
 
                                         // Remove from running set and increment completed counter
                                         {
@@ -383,22 +392,23 @@ impl Compiler {
                                             }
                                         }
 
-                                        result
-                                    }
-                                    Err(e) => Err(e),
-                                };
+                                    (duration, result)
+                                }
+                                Err(e) => (std::time::Duration::default(), Err(e)),
+                            };
 
-                                (file_name, output.map_err(|e| e))
-                            })
-                            .collect();
+                            (file_name, duration, output.map_err(|e| e))
+                        })
+                        .collect();
 
                     // Finish the progress bar before logging
                     pb.finish_with_message("Boogie runs complete");
 
                     // 3) Append outputs to compiler.log and parse errors sequentially
                     let mut exec_errors = Vec::new();
+                    let mut c_edge_infos: Vec<crate::cli::summary::CEdgeVerificationInfo> = Vec::new();
 
-                    for (file_name, output) in run_results {
+                    for (file_name, duration, output) in run_results {
                         match output {
                             Ok(out) => {
                                 self.logger
@@ -432,7 +442,17 @@ impl Compiler {
                                         Self::build_timeout_error_from_commutative(&file_name)
                                     {
                                         summary.verification_timeouts += 1;
-                                        all_boogie_errors.push(timeout_error);
+                                        all_boogie_errors.push(timeout_error.clone());
+
+                                        // Record C-edge info for timeout
+                                        if let Some(info) = Self::extract_c_edge_info_from_error(
+                                            &file_name,
+                                            duration,
+                                            true, // is_timeout
+                                            false, // eliminated (will be updated later)
+                                        ) {
+                                            c_edge_infos.push(info);
+                                        }
                                     } else {
                                         summary.boogie_compile_failures += 1;
                                         exec_errors.push(format!(
@@ -468,6 +488,18 @@ impl Compiler {
                                 if is_pass {
                                     summary.verification_pass += 1;
                                 }
+
+                                // Record C-edge info if this is a commutative verification
+                                if file_name.starts_with("commutative_") {
+                                    if let Some(info) = Self::extract_c_edge_info_from_error(
+                                        &file_name,
+                                        duration,
+                                        false, // not timeout
+                                        false, // eliminated status will be updated later
+                                    ) {
+                                        c_edge_infos.push(info);
+                                    }
+                                }
                             }
                             Err(e) => {
                                 self.logger.line(format!(
@@ -494,6 +526,28 @@ impl Compiler {
                         .iter()
                         .filter(|edge| matches!(edge.edge_type, crate::sc_graph::EdgeType::C))
                         .count();
+
+                    // Update eliminated status for C-edge infos
+                    let eliminated_edges: std::collections::HashSet<_> = sc
+                        .edges
+                        .iter()
+                        .filter(|e| matches!(e.edge_type, crate::sc_graph::EdgeType::C))
+                        .filter(|e| !simplified.edges.contains(e))
+                        .collect();
+
+                    for info in &mut c_edge_infos {
+                        // Check if this C-edge was eliminated
+                        info.eliminated = eliminated_edges.iter().any(|e| {
+                            e.source.function_id.index() == info.source_function_id
+                                && e.source.instance == info.source_instance
+                                && e.source.hop_id.index() == info.source_hop_id
+                                && e.target.function_id.index() == info.target_function_id
+                                && e.target.instance == info.target_instance
+                                && e.target.hop_id.index() == info.target_hop_id
+                        });
+                    }
+
+                    summary.c_edge_verifications = c_edge_infos;
 
                     // Write simplified graphs (unified) with prefix "simplified"
                     self.write_sc_graph_dots(
@@ -559,6 +613,34 @@ impl Compiler {
 
         println!("{}", "Completed".green().bold());
         emit_summary(&summary, &mut self.logger);
+
+        // Generate plots if verification was enabled
+        if enable_verification && !summary.c_edge_verifications.is_empty() {
+            // Plot histogram
+            let histogram_path = output_dir.join("verification_time_histogram.png");
+            if let Err(e) = summary.plot_verification_histogram(&histogram_path) {
+                eprintln!("Warning: Failed to generate histogram: {}", e);
+            } else {
+                println!(
+                    "📊 Verification time histogram: {}",
+                    histogram_path.display()
+                );
+            }
+
+            // Write plotted SC-graph DOT file (using original graph before verification)
+            let plotted_path = output_dir.join("sc_graph_plotted.dot");
+            if let Err(e) = self.write_sc_graph_plotted(
+                &original_sc,
+                &optimized_or_cfg_program,
+                &summary.c_edge_verifications,
+                &plotted_path,
+            ) {
+                eprintln!("Warning: Failed to generate plotted SC-graph: {}", e);
+            } else {
+                println!("📊 Plotted SC-graph: {}", plotted_path.display());
+            }
+        }
+
         Ok(())
     }
 
@@ -598,6 +680,19 @@ impl Compiler {
 
         self.logger
             .line(format!("📄 CFG file written to: {}", cfg_file.display()))?;
+        Ok(())
+    }
+
+    /// Write SC-graph with timing and elimination information
+    fn write_sc_graph_plotted(
+        &mut self,
+        sc: &crate::sc_graph::SCGraph,
+        program: &cfg::Program,
+        c_edge_infos: &[crate::cli::summary::CEdgeVerificationInfo],
+        output_path: &PathBuf,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut file = std::fs::File::create(output_path)?;
+        sc.to_dot_plotted(program, c_edge_infos, &mut file)?;
         Ok(())
     }
 
@@ -675,6 +770,38 @@ impl Compiler {
             function_id,
             instance,
             hop_id,
+        })
+    }
+
+    fn extract_c_edge_info_from_error(
+        file_name: &str,
+        duration: std::time::Duration,
+        is_timeout: bool,
+        eliminated: bool,
+    ) -> Option<crate::cli::summary::CEdgeVerificationInfo> {
+        let trimmed = file_name.strip_suffix(".bpl").unwrap_or(file_name);
+        if !trimmed.starts_with("commutative_") {
+            return None;
+        }
+
+        let parts: Vec<&str> = trimmed.split('_').collect();
+        if parts.len() != 8 || parts.get(4).copied() != Some("vs") {
+            return None;
+        }
+
+        let source = Self::parse_commutative_node(parts[1], parts[2], parts[3])?;
+        let target = Self::parse_commutative_node(parts[5], parts[6], parts[7])?;
+
+        Some(crate::cli::summary::CEdgeVerificationInfo {
+            source_function_id: source.function_id,
+            source_instance: source.instance,
+            source_hop_id: source.hop_id,
+            target_function_id: target.function_id,
+            target_instance: target.instance,
+            target_hop_id: target.hop_id,
+            duration,
+            is_timeout,
+            eliminated,
         })
     }
 }
