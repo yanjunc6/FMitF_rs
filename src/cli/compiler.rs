@@ -617,28 +617,15 @@ impl Compiler {
         // Generate plots if verification was enabled
         if enable_verification && !summary.c_edge_verifications.is_empty() {
             // Plot histogram
-            let histogram_path = output_dir.join("verification_time_histogram.png");
-            if let Err(e) = summary.plot_verification_histogram(&histogram_path) {
-                eprintln!("Warning: Failed to generate histogram: {}", e);
-            } else {
-                println!(
-                    "📊 Verification time histogram: {}",
-                    histogram_path.display()
-                );
-            }
+            self.write_verification_histogram(&summary, output_dir)?;
 
             // Write plotted SC-graph DOT file (using original graph before verification)
-            let plotted_path = output_dir.join("sc_graph_plotted.dot");
-            if let Err(e) = self.write_sc_graph_plotted(
+            self.write_sc_graph_plotted(
                 &original_sc,
                 &optimized_or_cfg_program,
                 &summary.c_edge_verifications,
-                &plotted_path,
-            ) {
-                eprintln!("Warning: Failed to generate plotted SC-graph: {}", e);
-            } else {
-                println!("📊 Plotted SC-graph: {}", plotted_path.display());
-            }
+                output_dir,
+            )?;
         }
 
         Ok(())
@@ -689,10 +676,36 @@ impl Compiler {
         sc: &crate::sc_graph::SCGraph,
         program: &cfg::Program,
         c_edge_infos: &[crate::cli::summary::CEdgeVerificationInfo],
-        output_path: &PathBuf,
+        output_dir: &PathBuf,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut file = std::fs::File::create(output_path)?;
-        sc.to_dot_plotted(program, c_edge_infos, &mut file)?;
+        std::fs::create_dir_all(output_dir)?;
+
+        let plotted_path = output_dir.join("sc_graph_plotted.dot");
+        let mut file = std::fs::File::create(&plotted_path)?;
+        sc.to_dot(program, Some(c_edge_infos), &mut file)?;
+
+        self.logger.line(format!(
+            "📄 Plotted SC-graph DOT file written: {}",
+            plotted_path.display()
+        ))?;
+        Ok(())
+    }
+
+    /// Write verification time histogram
+    fn write_verification_histogram(
+        &mut self,
+        summary: &RunSummary,
+        output_dir: &PathBuf,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        std::fs::create_dir_all(output_dir)?;
+
+        let histogram_path = output_dir.join("verification_time_histogram.png");
+        summary.plot_verification_histogram(&histogram_path)?;
+
+        self.logger.line(format!(
+            "📄 Verification time histogram written: {}",
+            histogram_path.display()
+        ))?;
         Ok(())
     }
 

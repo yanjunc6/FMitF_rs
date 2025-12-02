@@ -23,11 +23,12 @@ fn func_name(program: &Program, fid: FunctionId) -> &str {
 }
 
 impl SCGraph {
-    /// Write SCGraph DOT with timing and elimination information
-    pub fn to_dot_plotted<W: Write>(
+    /// Write SCGraph DOT using function names from Program.
+    /// If c_edge_infos is provided, adds timing and elimination information with legend.
+    pub fn to_dot<W: Write>(
         &self,
         program: &Program,
-        c_edge_infos: &[crate::cli::summary::CEdgeVerificationInfo],
+        c_edge_infos: Option<&[crate::cli::summary::CEdgeVerificationInfo]>,
         mut w: W,
     ) -> IoResult<()> {
         writeln!(w, "digraph SCGraph {{")?;
@@ -38,49 +39,56 @@ impl SCGraph {
         )?;
         writeln!(w, "  edge  [fontname=Helvetica];")?;
 
-        // Add legend
-        writeln!(w, "  // Legend for C-edge coloring")?;
-        writeln!(w, "  subgraph cluster_legend {{")?;
-        writeln!(w, "    label=\"Verification Time\";")?;
-        writeln!(w, "    style=dashed;")?;
-        writeln!(
-            w,
-            "    legend_fast [label=\"Fast (<1ms)\", color=\"#00FF00\", style=filled, shape=box];"
-        )?;
-        writeln!(w, "    legend_medium [label=\"Medium (1-10ms)\", color=\"#FFFF00\", style=filled, shape=box];")?;
-        writeln!(w, "    legend_slow [label=\"Slow (10-100ms)\", color=\"#FFA500\", style=filled, shape=box];")?;
-        writeln!(w, "    legend_very_slow [label=\"Very Slow (>100ms)\", color=\"#FF0000\", style=filled, shape=box];")?;
-        writeln!(
-            w,
-            "    legend_eliminated [label=\"Eliminated (dotted)\", style=dotted, shape=box];"
-        )?;
-        writeln!(
-            w,
-            "    legend_remaining [label=\"Remaining (dashed)\", style=dashed, shape=box];"
-        )?;
-        writeln!(
-            w,
-            "    legend_fast -> legend_medium -> legend_slow -> legend_very_slow [style=invis];"
-        )?;
-        writeln!(
-            w,
-            "    legend_eliminated -> legend_remaining [style=invis];"
-        )?;
-        writeln!(w, "  }}")?;
-
-        // Build a map from C-edge to its info
-        let mut edge_info_map = std::collections::HashMap::new();
-        for info in c_edge_infos {
-            let key = (
-                info.source_function_id,
-                info.source_instance,
-                info.source_hop_id,
-                info.target_function_id,
-                info.target_instance,
-                info.target_hop_id,
-            );
-            edge_info_map.insert(key, info);
+        // If timing info is provided, add legend
+        if c_edge_infos.is_some() {
+            writeln!(w, "  // Legend for C-edge coloring")?;
+            writeln!(w, "  subgraph cluster_legend {{")?;
+            writeln!(w, "    label=\"Verification Time\";")?;
+            writeln!(w, "    style=dashed;")?;
+            writeln!(
+                w,
+                "    legend_fast [label=\"Fast (<1ms)\", color=\"#00FF00\", style=filled, shape=box];"
+            )?;
+            writeln!(w, "    legend_medium [label=\"Medium (1-10ms)\", color=\"#FFFF00\", style=filled, shape=box];")?;
+            writeln!(w, "    legend_slow [label=\"Slow (10-100ms)\", color=\"#FFA500\", style=filled, shape=box];")?;
+            writeln!(w, "    legend_very_slow [label=\"Very Slow (>100ms)\", color=\"#FF0000\", style=filled, shape=box];")?;
+            writeln!(
+                w,
+                "    legend_eliminated [label=\"Eliminated (dotted)\", style=dotted, shape=box];"
+            )?;
+            writeln!(
+                w,
+                "    legend_remaining [label=\"Remaining (dashed)\", style=dashed, shape=box];"
+            )?;
+            writeln!(
+                w,
+                "    legend_fast -> legend_medium -> legend_slow -> legend_very_slow [style=invis];"
+            )?;
+            writeln!(
+                w,
+                "    legend_eliminated -> legend_remaining [style=invis];"
+            )?;
+            writeln!(w, "  }}")?;
         }
+
+        // Build edge info map if provided
+        let edge_info_map = if let Some(infos) = c_edge_infos {
+            let mut map = std::collections::HashMap::new();
+            for info in infos {
+                let key = (
+                    info.source_function_id,
+                    info.source_instance,
+                    info.source_hop_id,
+                    info.target_function_id,
+                    info.target_instance,
+                    info.target_hop_id,
+                );
+                map.insert(key, info);
+            }
+            Some(map)
+        } else {
+            None
+        };
 
         // Stable order
         let mut nodes: Vec<_> = self.nodes.iter().collect();
@@ -115,7 +123,6 @@ impl SCGraph {
                 e.target.hop_id.index(),
             )
         });
-
         for e in edges.iter() {
             let src = format!(
                 "f{}_i{}_h{}",
@@ -129,53 +136,61 @@ impl SCGraph {
                 e.target.instance,
                 e.target.hop_id.index()
             );
-
             match e.edge_type {
                 EdgeType::S => writeln!(w, "  {} -> {} [color=black, label=\"S\"];", src, dst)?,
                 EdgeType::C => {
-                    // Look up timing info
-                    let key = (
-                        e.source.function_id.index(),
-                        e.source.instance,
-                        e.source.hop_id.index(),
-                        e.target.function_id.index(),
-                        e.target.instance,
-                        e.target.hop_id.index(),
-                    );
+                    // If timing info is available, use it
+                    if let Some(ref map) = edge_info_map {
+                        let key = (
+                            e.source.function_id.index(),
+                            e.source.instance,
+                            e.source.hop_id.index(),
+                            e.target.function_id.index(),
+                            e.target.instance,
+                            e.target.hop_id.index(),
+                        );
 
-                    if let Some(info) = edge_info_map.get(&key) {
-                        let duration_us = info.duration.as_micros();
-                        let duration_ms = info.duration.as_secs_f64() * 1000.0;
+                        if let Some(info) = map.get(&key) {
+                            let duration_us = info.duration.as_micros();
+                            let duration_ms = info.duration.as_secs_f64() * 1000.0;
 
-                        // Determine color based on time
-                        let color = if duration_ms < 1.0 {
-                            "#00FF00" // Green - fast
-                        } else if duration_ms < 10.0 {
-                            "#FFFF00" // Yellow - medium
-                        } else if duration_ms < 100.0 {
-                            "#FFA500" // Orange - slow
+                            // Determine color based on time
+                            let color = if duration_ms < 1.0 {
+                                "#00FF00" // Green - fast
+                            } else if duration_ms < 10.0 {
+                                "#FFFF00" // Yellow - medium
+                            } else if duration_ms < 100.0 {
+                                "#FFA500" // Orange - slow
+                            } else {
+                                "#FF0000" // Red - very slow
+                            };
+
+                            // Determine style based on elimination
+                            let style = if info.eliminated { "dotted" } else { "dashed" };
+
+                            let label = if info.is_timeout {
+                                "C (timeout)".to_string()
+                            } else if duration_us < 1000 {
+                                format!("C ({}µs)", duration_us)
+                            } else {
+                                format!("C ({:.1}ms)", duration_ms)
+                            };
+
+                            writeln!(
+                                w,
+                                "  {} -> {} [dir=none, style={}, color=\"{}\", label=\"{}\"];",
+                                src, dst, style, color, label
+                            )?;
                         } else {
-                            "#FF0000" // Red - very slow
-                        };
-
-                        // Determine style based on elimination
-                        let style = if info.eliminated { "dotted" } else { "dashed" };
-
-                        let label = if info.is_timeout {
-                            "C (timeout)".to_string()
-                        } else if duration_us < 1000 {
-                            format!("C ({}µs)", duration_us)
-                        } else {
-                            format!("C ({:.1}ms)", duration_ms)
-                        };
-
-                        writeln!(
-                            w,
-                            "  {} -> {} [dir=none, style={}, color=\"{}\", label=\"{}\"];",
-                            src, dst, style, color, label
-                        )?;
+                            // Key not found in map - use default
+                            writeln!(
+                                w,
+                                "  {} -> {} [dir=none, style=dashed, color=darkorange, label=\"C\"];",
+                                src, dst
+                            )?;
+                        }
                     } else {
-                        // No timing info available - use default
+                        // No timing info provided - use default
                         writeln!(
                             w,
                             "  {} -> {} [dir=none, style=dashed, color=darkorange, label=\"C\"];",
@@ -183,75 +198,6 @@ impl SCGraph {
                         )?;
                     }
                 }
-            }
-        }
-        writeln!(w, "}}")?;
-        Ok(())
-    }
-
-    /// Write SCGraph DOT using function names from Program.
-    pub fn to_dot<W: Write>(&self, program: &Program, mut w: W) -> IoResult<()> {
-        writeln!(w, "digraph SCGraph {{")?;
-        writeln!(w, "  graph [rankdir=LR];")?;
-        writeln!(
-            w,
-            "  node  [shape=record, fontsize=10, fontname=Helvetica];"
-        )?;
-        writeln!(w, "  edge  [fontname=Helvetica];")?;
-
-        // Stable order
-        let mut nodes: Vec<_> = self.nodes.iter().collect();
-        nodes.sort_by_key(|n| (n.function_id.index(), n.instance, n.hop_id.index()));
-
-        for n in nodes.iter() {
-            let name = func_name(program, n.function_id);
-            writeln!(
-                w,
-                "  f{}_i{}_h{} [label=\"{}#{}\\nHop {}\\n\"];",
-                n.function_id.index(),
-                n.instance,
-                n.hop_id.index(),
-                esc(name),
-                n.instance,
-                n.hop_id.index()
-            )?;
-        }
-
-        let mut edges = self.edges.clone();
-        edges.sort_by_key(|e| {
-            (
-                match e.edge_type {
-                    EdgeType::S => 0usize,
-                    EdgeType::C => 1usize,
-                },
-                e.source.function_id.index(),
-                e.source.instance,
-                e.source.hop_id.index(),
-                e.target.function_id.index(),
-                e.target.instance,
-                e.target.hop_id.index(),
-            )
-        });
-        for e in edges.iter() {
-            let src = format!(
-                "f{}_i{}_h{}",
-                e.source.function_id.index(),
-                e.source.instance,
-                e.source.hop_id.index()
-            );
-            let dst = format!(
-                "f{}_i{}_h{}",
-                e.target.function_id.index(),
-                e.target.instance,
-                e.target.hop_id.index()
-            );
-            match e.edge_type {
-                EdgeType::S => writeln!(w, "  {} -> {} [color=black, label=\"S\"];", src, dst)?,
-                EdgeType::C => writeln!(
-                    w,
-                    "  {} -> {} [dir=none, style=dashed, color=darkorange, label=\"C\"];",
-                    src, dst
-                )?,
             }
         }
         writeln!(w, "}}")?;
@@ -332,7 +278,7 @@ pub struct CombinedSCGraphDotPrinter<'a> {
 
 impl<'a> PrettyPrint for SCGraphDotPrinter<'a> {
     fn pretty_print(&self, writer: &mut impl Write) -> IoResult<()> {
-        self.graph.to_dot(self.program, writer)
+        self.graph.to_dot(self.program, None, writer)
     }
 }
 
