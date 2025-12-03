@@ -26,7 +26,10 @@ fn build_global_source(
 ) -> Result<String, std::fmt::Error> {
     let mut out = String::new();
 
-    write_go_file_header(&mut out, &["encoding/json", "github.com/boltdb/bolt"])?;
+    write_go_file_header(
+        &mut out,
+        &["encoding/json", "sync", "github.com/boltdb/bolt"],
+    )?;
 
     writeln!(out, "func mustJSON(value any) []byte {{")?;
     writeln!(out, "\tbytes, err := json.Marshal(value)")?;
@@ -84,22 +87,26 @@ fn build_global_source(
         writeln!(out, "}}")?;
         writeln!(out)?;
 
-        // Generate flush function for this table
+        // Generate unlocked flush function for this table (internal helper)
         writeln!(
             out,
-            "// flush{}Cache writes the cached data to the database if it's dirty.",
+            "// flush{}CacheUnlocked contains the core logic for flushing.",
             struct_name
         )?;
-        writeln!(out, "func flush{}Cache(tx *bolt.Tx) {{", struct_name)?;
+        writeln!(
+            out,
+            "// It is unexported and \"unsafe\" because it assumes the caller has already acquired the necessary lock."
+        )?;
+        writeln!(
+            out,
+            "func flush{}CacheUnlocked(tx *bolt.Tx) {{",
+            struct_name
+        )?;
         writeln!(
             out,
             "\tif {}Cache.row != nil && {}Cache.isDirty {{",
             snake_case(&table.name),
             snake_case(&table.name)
-        )?;
-        writeln!(
-            out,
-            "\t\t// Only write to DB if the cache is marked as dirty."
         )?;
         writeln!(out, "\t\tbucket := tx.Bucket([]byte(\"{}\"))", bucket_name)?;
         writeln!(out, "\t\tif bucket == nil {{")?;
@@ -125,10 +132,31 @@ fn build_global_source(
         writeln!(out, "}}")?;
         writeln!(out)?;
 
-        // Generate get function with cache
+        // Generate public thread-safe flush function for this table
         writeln!(
             out,
-            "// get{} fetches data, utilizing the cache.",
+            "// flush{}Cache is the public, thread-safe API for flushing the cache.",
+            struct_name
+        )?;
+        writeln!(
+            out,
+            "// It acquires the lock before calling the core logic."
+        )?;
+        writeln!(out, "func flush{}Cache(tx *bolt.Tx) {{", struct_name)?;
+        writeln!(out, "\t{}Cache.lock.Lock()", snake_case(&table.name))?;
+        writeln!(
+            out,
+            "\tdefer {}Cache.lock.Unlock()",
+            snake_case(&table.name)
+        )?;
+        writeln!(out, "\tflush{}CacheUnlocked(tx)", struct_name)?;
+        writeln!(out, "}}")?;
+        writeln!(out)?;
+
+        // Generate get function with cache (thread-safe with double-checked locking)
+        writeln!(
+            out,
+            "// get{} fetches data, utilizing the cache in a highly concurrent and safe manner.",
             struct_name
         )?;
         writeln!(
@@ -136,7 +164,35 @@ fn build_global_source(
             "func get{}(tx *bolt.Tx, key {}) ([]byte, {}) {{",
             struct_name, key_struct_name, struct_name
         )?;
-        writeln!(out, "\t// 1. Check cache first.")?;
+        writeln!(
+            out,
+            "\t// 1. Fast path (Read-only): Use a read lock for concurrent cache checks."
+        )?;
+        writeln!(out, "\t{}Cache.lock.RLock()", snake_case(&table.name))?;
+        writeln!(
+            out,
+            "\tif {}Cache.row != nil && {}Cache.row.Key == key {{",
+            snake_case(&table.name),
+            snake_case(&table.name)
+        )?;
+        writeln!(out, "\t\trow := *{}Cache.row", snake_case(&table.name))?;
+        writeln!(out, "\t\t{}Cache.lock.RUnlock()", snake_case(&table.name))?;
+        writeln!(out, "\t\treturn mustJSON(key), row // Cache Hit")?;
+        writeln!(out, "\t}}")?;
+        writeln!(out, "\t{}Cache.lock.RUnlock()", snake_case(&table.name))?;
+        writeln!(out)?;
+        writeln!(
+            out,
+            "\t// 2. Slow path (Write path): Acquire an exclusive lock."
+        )?;
+        writeln!(out, "\t{}Cache.lock.Lock()", snake_case(&table.name))?;
+        writeln!(
+            out,
+            "\tdefer {}Cache.lock.Unlock()",
+            snake_case(&table.name)
+        )?;
+        writeln!(out)?;
+        writeln!(out, "\t// 3. Double-check in case another goroutine populated the cache while we waited for the lock.")?;
         writeln!(
             out,
             "\tif {}Cache.row != nil && {}Cache.row.Key == key {{",
@@ -152,11 +208,11 @@ fn build_global_source(
         writeln!(out)?;
         writeln!(
             out,
-            "\t// 2. Cache Miss: Flush any old dirty data before loading new data."
+            "\t// 4. Cache Miss: Call the \"unlocked\" helper since we already hold the lock."
         )?;
-        writeln!(out, "\tflush{}Cache(tx)", struct_name)?;
+        writeln!(out, "\tflush{}CacheUnlocked(tx)", struct_name)?;
         writeln!(out)?;
-        writeln!(out, "\t// 3. Proceed with DB lookup.")?;
+        writeln!(out, "\t// 5. Proceed with DB lookup.")?;
         writeln!(out, "\tbucket := tx.Bucket([]byte(\"{}\"))", bucket_name)?;
         writeln!(out, "\tif bucket == nil {{")?;
         writeln!(out, "\t\tpanic(\"missing bucket {}\")", bucket_name)?;
@@ -171,9 +227,10 @@ fn build_global_source(
         writeln!(out, "\t\t\tpanic(err)")?;
         writeln!(out, "\t\t}}")?;
         writeln!(out, "\t}}")?;
+        writeln!(out, "\t")?;
         writeln!(
             out,
-            "\t// 4. Update cache with the newly fetched, clean row."
+            "\t// 6. Update cache with the newly fetched, clean row."
         )?;
         writeln!(out, "\t{}Cache.row = &row", snake_case(&table.name))?;
         writeln!(out, "\t{}Cache.isDirty = false", snake_case(&table.name))?;
@@ -182,7 +239,7 @@ fn build_global_source(
         writeln!(out, "}}")?;
         writeln!(out)?;
 
-        // Generate put function with cache
+        // Generate put function with cache (thread-safe)
         writeln!(
             out,
             "// put{} updates the cache and marks it as dirty (write-back).",
@@ -193,9 +250,16 @@ fn build_global_source(
             "func put{}(tx *bolt.Tx, key {}, row {}) {{",
             struct_name, key_struct_name, struct_name
         )?;
+        writeln!(out, "\t{}Cache.lock.Lock()", snake_case(&table.name))?;
         writeln!(
             out,
-            "\t// If the cache holds a different row, flush it first."
+            "\tdefer {}Cache.lock.Unlock()",
+            snake_case(&table.name)
+        )?;
+        writeln!(out)?;
+        writeln!(
+            out,
+            "\t// If the cache holds a different row, call the \"unlocked\" helper to flush it."
         )?;
         writeln!(
             out,
@@ -203,7 +267,7 @@ fn build_global_source(
             snake_case(&table.name),
             snake_case(&table.name)
         )?;
-        writeln!(out, "\t\tflush{}Cache(tx)", struct_name)?;
+        writeln!(out, "\t\tflush{}CacheUnlocked(tx)", struct_name)?;
         writeln!(out, "\t}}")?;
         writeln!(out)?;
         writeln!(
@@ -641,10 +705,11 @@ fn generate_cache_structs(out: &mut String, program: &cfg::Program) -> Result<()
 
         writeln!(
             out,
-            "// Global variable for the single-row write-back cache."
+            "// Global variable for the single-row write-back cache with a RWMutex."
         )?;
         writeln!(out, "var {} struct {{", cache_var)?;
-        writeln!(out, "\trow    *{}", struct_name)?;
+        writeln!(out, "\tlock    sync.RWMutex")?;
+        writeln!(out, "\trow     *{}", struct_name)?;
         writeln!(out, "\tisDirty bool")?;
         writeln!(out, "}}")?;
         writeln!(out)?;
