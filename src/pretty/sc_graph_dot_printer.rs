@@ -23,6 +23,19 @@ fn func_name(program: &Program, fid: FunctionId) -> &str {
 }
 
 impl SCGraph {
+    /// Interpolate color using lightness of orange from light (fast) to dark (slow) based on ratio [0, 1]
+    fn interpolate_color(ratio: f64) -> String {
+        let ratio = ratio.clamp(0.0, 1.0);
+        // Orange base color: RGB(255, 165, 0)
+        // Interpolate from light orange to dark orange by adjusting lightness
+        // Light orange (ratio=0): #ff5e00ff (lighter)
+        // Dark orange (ratio=1): #572100ff (darker)
+        let r = (255.0 - ratio * (255.0 - 86.0)) as u8;
+        let g = (214.0 - ratio * (214.0 - 33.0)) as u8;
+        let b = 0 as u8;
+        format!("#{:02X}{:02X}{:02X}", r, g, b)
+    }
+
     /// Write SCGraph DOT using function names from Program.
     /// If c_edge_infos is provided, adds timing and elimination information with legend.
     pub fn to_dot<W: Write>(
@@ -39,41 +52,12 @@ impl SCGraph {
         )?;
         writeln!(w, "  edge  [fontname=Helvetica];")?;
 
-        // If timing info is provided, add legend
-        if c_edge_infos.is_some() {
-            writeln!(w, "  // Legend for C-edge coloring")?;
-            writeln!(w, "  subgraph cluster_legend {{")?;
-            writeln!(w, "    label=\"Verification Time\";")?;
-            writeln!(w, "    style=dashed;")?;
-            writeln!(
-                w,
-                "    legend_fast [label=\"Fast (<1ms)\", color=\"#00FF00\", style=filled, shape=box];"
-            )?;
-            writeln!(w, "    legend_medium [label=\"Medium (1-10ms)\", color=\"#FFFF00\", style=filled, shape=box];")?;
-            writeln!(w, "    legend_slow [label=\"Slow (10-100ms)\", color=\"#FFA500\", style=filled, shape=box];")?;
-            writeln!(w, "    legend_very_slow [label=\"Very Slow (>100ms)\", color=\"#FF0000\", style=filled, shape=box];")?;
-            writeln!(
-                w,
-                "    legend_eliminated [label=\"Eliminated (dotted)\", style=dotted, shape=box];"
-            )?;
-            writeln!(
-                w,
-                "    legend_remaining [label=\"Remaining (dashed)\", style=dashed, shape=box];"
-            )?;
-            writeln!(
-                w,
-                "    legend_fast -> legend_medium -> legend_slow -> legend_very_slow [style=invis];"
-            )?;
-            writeln!(
-                w,
-                "    legend_eliminated -> legend_remaining [style=invis];"
-            )?;
-            writeln!(w, "  }}")?;
-        }
-
-        // Build edge info map if provided
-        let edge_info_map = if let Some(infos) = c_edge_infos {
+        // If timing info is provided, calculate dynamic range and add legend
+        let (edge_info_map, min_time_ms, max_time_ms) = if let Some(infos) = c_edge_infos {
             let mut map = std::collections::HashMap::new();
+            let mut min_time = f64::MAX;
+            let mut max_time = 0.0f64;
+
             for info in infos {
                 let key = (
                     info.source_function_id,
@@ -83,11 +67,56 @@ impl SCGraph {
                     info.target_instance,
                     info.target_hop_id,
                 );
+                let time_ms = info.duration.as_secs_f64() * 1000.0;
+                min_time = min_time.min(time_ms);
+                max_time = max_time.max(time_ms);
                 map.insert(key, info);
             }
-            Some(map)
+
+            // Add legend with continuous color bar
+            writeln!(w, "  // Legend for C-edge coloring")?;
+            writeln!(w, "  subgraph cluster_legend {{")?;
+            writeln!(w, "    label=\"Verification Time (ms)\";")?;
+            writeln!(w, "    style=dashed;")?;
+
+            // Create 6 color gradient boxes from green to red
+            let num_legend_steps = 6;
+            for i in 0..num_legend_steps {
+                let ratio = i as f64 / (num_legend_steps - 1) as f64;
+                let time_val = min_time + ratio * (max_time - min_time);
+                let color = Self::interpolate_color(ratio);
+                writeln!(
+                    w,
+                    "    legend_{} [label=\"{:.1}\", color=\"{}\", style=filled, shape=box];",
+                    i, time_val, color
+                )?;
+            }
+
+            // Link them horizontally
+            write!(w, "    ")?;
+            for i in 0..num_legend_steps - 1 {
+                write!(w, "legend_{} -> ", i)?;
+            }
+            writeln!(w, "legend_{} [style=invis];", num_legend_steps - 1)?;
+
+            // Add style legend
+            writeln!(
+                w,
+                "    legend_eliminated [label=\"Eliminated\", style=\"dotted,bold\", shape=box];"
+            )?;
+            writeln!(
+                w,
+                "    legend_remaining [label=\"Remaining\", style=dashed, shape=box];"
+            )?;
+            writeln!(
+                w,
+                "    legend_eliminated -> legend_remaining [style=invis];"
+            )?;
+            writeln!(w, "  }}")?;
+
+            (Some(map), min_time, max_time)
         } else {
-            None
+            (None, 0.0, 1.0)
         };
 
         // Stable order
@@ -154,19 +183,21 @@ impl SCGraph {
                             let duration_us = info.duration.as_micros();
                             let duration_ms = info.duration.as_secs_f64() * 1000.0;
 
-                            // Determine color based on time
-                            let color = if duration_ms < 1.0 {
-                                "#00FF00" // Green - fast
-                            } else if duration_ms < 10.0 {
-                                "#FFFF00" // Yellow - medium
-                            } else if duration_ms < 100.0 {
-                                "#FFA500" // Orange - slow
+                            // Calculate color based on position in dynamic range
+                            let ratio = if max_time_ms > min_time_ms {
+                                (duration_ms - min_time_ms) / (max_time_ms - min_time_ms)
                             } else {
-                                "#FF0000" // Red - very slow
+                                0.5
                             };
+                            let color = Self::interpolate_color(ratio);
 
-                            // Determine style based on elimination
-                            let style = if info.eliminated { "dotted" } else { "dashed" };
+                            // Determine style based on elimination (use bold for dotted to make it thicker)
+                            let style = if info.eliminated {
+                                "dotted,bold"
+                            } else {
+                                "dashed"
+                            };
+                            let penwidth = if info.eliminated { ",penwidth=2.0" } else { "" };
 
                             let label = if info.is_timeout {
                                 "C (timeout)".to_string()
@@ -178,8 +209,8 @@ impl SCGraph {
 
                             writeln!(
                                 w,
-                                "  {} -> {} [dir=none, style={}, color=\"{}\", label=\"{}\"];",
-                                src, dst, style, color, label
+                                "  {} -> {} [dir=none, style=\"{}\", color=\"{}\", label=\"{}\"{}];",
+                                src, dst, style, color, label, penwidth
                             )?;
                         } else {
                             // Key not found in map - use default

@@ -43,8 +43,7 @@ impl RunSummary {
     }
 
     /// Plot verification time histogram using plotters
-    /// Generates a simple histogram without text labels (to avoid font dependencies)
-    /// The chart shows verification time distribution across bins
+    /// Generates a histogram with title, axis labels, and grid on the PNG
     pub fn plot_verification_histogram(
         &self,
         output_path: &std::path::Path,
@@ -55,15 +54,7 @@ impl RunSummary {
             return Ok(()); // Nothing to plot
         }
 
-        // Also write a text summary file alongside the image
-        let summary_path = output_path.with_extension("txt");
-        let mut summary_file = std::fs::File::create(&summary_path)?;
-        use std::io::Write;
-        writeln!(summary_file, "C-Edge Verification Time Distribution")?;
-        writeln!(summary_file, "======================================")?;
-        writeln!(summary_file)?;
-
-        let root = BitMapBackend::new(output_path, (1000, 700)).into_drawing_area();
+        let root = BitMapBackend::new(output_path, (1200, 800)).into_drawing_area();
         root.fill(&WHITE)?;
 
         // Collect durations in milliseconds for better readability
@@ -80,14 +71,6 @@ impl RunSummary {
             .iter()
             .fold(max_time, |a, &b| if b < a { b } else { a });
 
-        writeln!(
-            summary_file,
-            "Time Range: {:.2}ms - {:.2}ms",
-            min_time, max_time
-        )?;
-        writeln!(summary_file, "Total C-Edges: {}", durations_ms.len())?;
-        writeln!(summary_file)?;
-
         // Create 20 bins
         let num_bins = 20;
         let bin_width = (max_time - min_time) / num_bins as f64;
@@ -101,20 +84,26 @@ impl RunSummary {
 
         let max_count = *bins.iter().max().unwrap_or(&1);
 
-        writeln!(summary_file, "Histogram (20 bins):")?;
-        writeln!(summary_file, "Bin Range (ms) -> Count")?;
-        for (i, &count) in bins.iter().enumerate() {
-            let x_start = min_time + (i as f64) * bin_width;
-            let x_end = x_start + bin_width;
-            writeln!(summary_file, "{:.2} - {:.2} -> {}", x_start, x_end, count)?;
-        }
+        let mut chart = ChartBuilder::on(&root)
+            .caption(
+                "C-Edge Verification Time Distribution",
+                ("sans-serif", 40).into_font(),
+            )
+            .margin(20)
+            .x_label_area_size(60)
+            .y_label_area_size(60)
+            .build_cartesian_2d(
+                min_time..(max_time + bin_width),
+                0..(max_count + max_count / 10),
+            )?;
 
-        let mut chart = ChartBuilder::on(&root).margin(40).build_cartesian_2d(
-            min_time..(max_time + bin_width),
-            0..(max_count + max_count / 10),
-        )?;
-
-        chart.configure_mesh().disable_mesh().draw()?;
+        chart
+            .configure_mesh()
+            .x_desc("Verification Time (ms)")
+            .y_desc("Number of C-Edges")
+            .x_label_formatter(&|x| format!("{:.0}", x))
+            .y_label_formatter(&|y| format!("{}", y))
+            .draw()?;
 
         chart.draw_series(bins.iter().enumerate().map(|(i, &count)| {
             let x_start = min_time + (i as f64) * bin_width;
