@@ -74,17 +74,18 @@ impl SCGraph {
     }
 
     /// Calculate average verification time for a node (excluding timeouts)
-    /// Returns (average_time_ms, has_timeout)
+    /// Returns (average_time_ms, has_timeout, all_timeout)
     fn calculate_node_average(
         node_id: (usize, u32, usize), // (function_id, instance, hop_id)
         edge_info_map: &std::collections::HashMap<
             (usize, u32, usize, usize, u32, usize),
             &crate::cli::summary::CEdgeVerificationInfo,
         >,
-    ) -> Option<(f64, bool)> {
+    ) -> Option<(f64, bool, bool)> {
         let mut total_time = 0.0;
         let mut count = 0;
         let mut has_timeout = false;
+        let mut total_edges = 0;
 
         // Check all edges where this node is either source or target
         for (key, info) in edge_info_map.iter() {
@@ -92,6 +93,7 @@ impl SCGraph {
             let is_target = (key.3, key.4, key.5) == node_id;
 
             if is_source || is_target {
+                total_edges += 1;
                 if info.is_timeout {
                     has_timeout = true;
                 } else {
@@ -101,18 +103,31 @@ impl SCGraph {
             }
         }
 
+        let all_timeout = total_edges > 0 && count == 0;
+
         if count > 0 {
-            Some((total_time / count as f64, has_timeout))
+            Some((total_time / count as f64, has_timeout, all_timeout))
         } else if has_timeout {
             // Has timeout but no valid times
-            Some((0.0, true))
+            Some((0.0, true, all_timeout))
         } else {
             None
         }
     }
 
     /// Get node color based on average time and timeout status
-    fn get_node_color(avg_time: f64, min_time: f64, max_time: f64, has_timeout: bool) -> String {
+    fn get_node_color(
+        avg_time: f64,
+        min_time: f64,
+        max_time: f64,
+        has_timeout: bool,
+        all_timeout: bool,
+    ) -> String {
+        if all_timeout {
+            // All edges are timeout - return solid gray
+            return Self::timeout_color().to_string();
+        }
+
         let ratio = if max_time > min_time {
             (avg_time - min_time) / (max_time - min_time)
         } else {
@@ -246,9 +261,16 @@ impl SCGraph {
 
             // Calculate node color based on average C-edge verification time
             let color_attr = if let Some(ref map) = edge_info_map {
-                if let Some((avg_time, has_timeout)) = Self::calculate_node_average(node_id, map) {
-                    let node_color =
-                        Self::get_node_color(avg_time, min_time_ms, max_time_ms, has_timeout);
+                if let Some((avg_time, has_timeout, all_timeout)) =
+                    Self::calculate_node_average(node_id, map)
+                {
+                    let node_color = Self::get_node_color(
+                        avg_time,
+                        min_time_ms,
+                        max_time_ms,
+                        has_timeout,
+                        all_timeout,
+                    );
                     format!(", style=filled, fillcolor=\"{}\"", node_color)
                 } else {
                     String::new()
@@ -334,7 +356,7 @@ impl SCGraph {
                             } else {
                                 "dashed"
                             };
-                            let penwidth = if info.eliminated { ",penwidth=2.0" } else { "" };
+                            let penwidth = ",penwidth=2.0";
 
                             let label = if info.is_timeout {
                                 "C (timeout)".to_string()
