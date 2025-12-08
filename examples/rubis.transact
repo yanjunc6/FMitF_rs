@@ -82,12 +82,10 @@ table Comments {
 
 table Buy_now {
     primary Id: UUID;
+    primary Item_id: UUID;
     node f(Id);
 
-    Buyer_id: UUID;
-    Item_id: UUID;
-    Qty: int;
-    Date: int;
+    Counter: int;
 }
 
 // ===========================================
@@ -293,7 +291,7 @@ transaction getBidsByUser(uid: UUID) -> List<Row<Bids>> {
     }
 }
 
-transaction buyNow(bnid: UUID, iid: UUID, uid: UUID, quantity: int, date: int) 
+transaction buyNow(bnid: UUID, iid: UUID, quantity: int) 
     assume bnid === genUUID(5, __slice__);
 {
     hop {
@@ -310,11 +308,32 @@ transaction buyNow(bnid: UUID, iid: UUID, uid: UUID, quantity: int, date: int)
     }
 
     hop {
-        Buy_now[Id: bnid] = {
-            Buyer_id: uid,
-            Item_id: iid,
-            Qty: quantity,
-            Date: date
-        };
+        Buy_now[Id: bnid, Item_id: iid].Counter += 1
+    }
+}
+
+transaction cancelBuy(bnid: UUID, iid: UUID, quantity: int)
+{
+    hop {
+        Buy_now[Id: bnid, Item_id: iid].Counter -= 1
+    }
+    hop {
+        Items[Id: iid].Quantity += quantity;
+    }
+}
+
+transaction itemSwap(iid1: UUID, iid2: UUID, quantity: int)
+    assume iid1 < iid2;
+{
+    hop {
+        var cur_qty: int = Items[Id: iid1].Quantity;
+        if quantity > cur_qty {
+            return;
+        }
+        cur_qty = cur_qty - quantity;
+        Items[Id: iid1].Quantity = cur_qty;
+    }
+    hop {
+        Items[Id: iid2].Quantity += quantity;
     }
 }
