@@ -79,7 +79,7 @@ impl SCGraph {
         node_id: (usize, u32, usize), // (function_id, instance, hop_id)
         edge_info_map: &std::collections::HashMap<
             (usize, u32, usize, usize, u32, usize),
-            &crate::cli::summary::CEdgeVerificationInfo,
+            &crate::cli::data::CEdgeVerificationData,
         >,
     ) -> Option<(f64, bool, bool)> {
         let mut total_time = 0.0;
@@ -94,10 +94,10 @@ impl SCGraph {
 
             if is_source || is_target {
                 total_edges += 1;
-                if info.is_timeout {
+                if info.result == crate::cli::data::VerificationResult::Timeout {
                     has_timeout = true;
                 } else {
-                    total_time += info.duration.as_secs_f64() * 1000.0;
+                    total_time += info.duration_ms;
                     count += 1;
                 }
             }
@@ -148,7 +148,7 @@ impl SCGraph {
     pub fn to_dot<W: Write>(
         &self,
         program: &Program,
-        c_edge_infos: Option<&[crate::cli::summary::CEdgeVerificationInfo]>,
+        c_edge_infos: Option<&[crate::cli::data::CEdgeVerificationData]>,
         mut w: W,
     ) -> IoResult<()> {
         writeln!(w, "digraph SCGraph {{")?;
@@ -177,8 +177,8 @@ impl SCGraph {
                 );
 
                 // Exclude timeouts from range calculation
-                if !info.is_timeout {
-                    let time_ms = info.duration.as_secs_f64() * 1000.0;
+                if info.result != crate::cli::data::VerificationResult::Timeout {
+                    let time_ms = info.duration_ms;
                     min_time = min_time.min(time_ms);
                     max_time = max_time.max(time_ms);
                 } else {
@@ -335,11 +335,11 @@ impl SCGraph {
                         );
 
                         if let Some(info) = map.get(&key) {
-                            let duration_us = info.duration.as_micros();
-                            let duration_ms = info.duration.as_secs_f64() * 1000.0;
+                            let duration_ms = info.duration_ms;
+                            let duration_us = (duration_ms * 1000.0) as u128;
 
                             // Use gray for timeout, otherwise calculate color based on position in dynamic range
-                            let color = if info.is_timeout {
+                            let color = if info.result == crate::cli::data::VerificationResult::Timeout {
                                 Self::timeout_color().to_string()
                             } else {
                                 let ratio = if max_time_ms > min_time_ms {
@@ -358,7 +358,7 @@ impl SCGraph {
                             };
                             let penwidth = ",penwidth=2.0";
 
-                            let label = if info.is_timeout {
+                            let label = if info.result == crate::cli::data::VerificationResult::Timeout {
                                 "C (timeout)".to_string()
                             } else if duration_us < 1000 {
                                 format!("C ({}µs)", duration_us)
