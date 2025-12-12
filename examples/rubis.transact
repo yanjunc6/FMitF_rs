@@ -291,7 +291,7 @@ transaction getBidsByUser(uid: UUID) -> List<Row<Bids>> {
     }
 }
 
-transaction buyNow(bnid: UUID, iid: UUID, quantity: int) 
+transaction buyNow(bnid: UUID, iid: UUID, quantity: int, date: int) 
     assume bnid === genUUID(5, __slice__);
 {
     hop {
@@ -308,32 +308,16 @@ transaction buyNow(bnid: UUID, iid: UUID, quantity: int)
     }
 
     hop {
-        Buy_now[Id: bnid, Item_id: iid].Counter += 1
+        Buy_now[Id: bnid, Item_id: iid].Counter = Buy_now[Id: bnid, Item_id: iid].Counter + 1;
     }
 }
 
 transaction cancelBuy(bnid: UUID, iid: UUID, quantity: int)
 {
     hop {
-        Buy_now[Id: bnid, Item_id: iid].Counter -= 1
+        Buy_now[Id: bnid, Item_id: iid].Counter = Buy_now[Id: bnid, Item_id: iid].Counter - 1;
     }
     hop {
-        Items[Id: iid].Quantity += quantity;
-    }
-}
-
-transaction itemSwap(iid1: UUID, iid2: UUID, quantity: int)
-    assume iid1 < iid2;
-{
-    hop {
-        var cur_qty: int = Items[Id: iid1].Quantity;
-        if quantity > cur_qty {
-            return;
-        }
-        cur_qty = cur_qty - quantity;
-        Items[Id: iid1].Quantity = cur_qty;
-    }
-    hop {
-        Items[Id: iid2].Quantity += quantity;
+        Items[Id: iid].Quantity = Items[Id: iid].Quantity + quantity;
     }
 }

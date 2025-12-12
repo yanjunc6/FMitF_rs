@@ -1,9 +1,9 @@
 //! CLI Module - Simple compiler entry point
 
 pub mod compiler;
+pub mod data;
 pub mod log;
 pub mod stage;
-pub mod summary;
 
 use clap::Parser;
 use std::path::PathBuf;

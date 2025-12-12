@@ -2,11 +2,11 @@
 //!
 //! This module contains the main compilation orchestration logic.
 
-use super::stage::execute_stage; // Import the new helper
+use super::stage::execute_stage;
 use crate::ast::Program;
 use crate::cfg;
+use crate::cli::data::{self, CEdgeVerificationData, DataCollector, MemoryStats, VerificationResult};
 use crate::cli::log::Logger;
-use crate::cli::summary::{emit_summary, RunSummary};
 use crate::codegen;
 use crate::frontend::parse_and_analyze_program;
 use crate::optimization::CfgOptimizer;
@@ -16,12 +16,13 @@ use crate::verification::{
     verify_result_process::VerifyResultProcessor, VerificationManager, VerificationType,
 };
 use colored::*;
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
 // ============================================================================
-// --- Compiler Structure
+// --- Helper Structures
 // ============================================================================
 
 /// Custom error type for stage failures
@@ -37,6 +38,19 @@ impl std::fmt::Display for StageError {
 }
 
 impl std::error::Error for StageError {}
+
+/// Result of running a Boogie verification with /usr/bin/time
+struct BoogieRunResult {
+    file_name: String,
+    duration_ms: f64,
+    stdout: String,
+    stderr: String,
+    memory_stats: MemoryStats,
+}
+
+// ============================================================================
+// --- Compiler Structure
+// ============================================================================
 
 /// Main compiler orchestrator
 pub struct Compiler {
@@ -59,28 +73,22 @@ impl Compiler {
 
     /// Report compiler errors and return a custom stage error
     fn handle_compiler_errors(&mut self, errors: Vec<CompilerError>) -> StageError {
-        // Report all errors using the diagnostic reporter (this will print them)
         if let Err(report_err) = self.reporter.report_all(&errors) {
             eprintln!("Warning: Failed to report errors: {}", report_err);
         }
-        // Return a simple message for the stage error line
         StageError {
             message: format!("Failed with {} errors", errors.len()),
         }
     }
 
-    /// Compile a single source file
+    /// Read a source file
     pub fn read_file(
         &mut self,
         input_path: &PathBuf,
     ) -> Result<(String, String), Box<dyn std::error::Error>> {
-        // Read input file
         let input_content = std::fs::read_to_string(input_path)?;
         let filename = input_path.to_string_lossy().to_string();
-
-        // Add source for error reporting
         self.add_source(&filename, &input_content);
-
         Ok((filename, input_content))
     }
 
@@ -97,7 +105,7 @@ impl Compiler {
     ) -> Result<(), Box<dyn std::error::Error>> {
         println!("{} compilation pipeline", "Starting".bold().green());
 
-        // Initialize logger and write opening line
+        // Initialize logger
         self.logger.init(output_dir)?;
         self.logger.line("===== Compiler run started =====")?;
         self.logger.line(format!(
@@ -105,12 +113,18 @@ impl Compiler {
             loop_unroll, timeout_secs
         ))?;
 
+        // Initialize data collector
+        let input_file_name = input_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let mut data_collector = DataCollector::new(input_file_name, instances);
+        data_collector.set_config(loop_unroll as usize, timeout_secs as usize);
+
         let total_stages =
             4 + if enable_verification { 1 } else { 0 } + if enable_optimization { 1 } else { 0 };
         let mut current_stage = 0;
-        let mut summary = RunSummary::new(instances);
-        summary.boogie_loop_unroll = loop_unroll as usize;
-        summary.boogie_timeout_secs = timeout_secs as usize;
 
         // Stage 1: Frontend (Parsing)
         current_stage += 1;
@@ -123,7 +137,7 @@ impl Compiler {
             current_stage,
             total_stages,
             || -> Result<Program, Box<dyn std::error::Error>> {
-                // 1. Parse prelude file
+                // Parse prelude
                 let prelude_path = PathBuf::from("src/cli/prelude.transact");
                 let prelude = self.read_file(&prelude_path)?;
                 let prelude_filename = prelude_path.to_string_lossy();
@@ -137,10 +151,9 @@ impl Compiler {
                         },
                     )?;
 
-                // 2. Parse the main source file
+                // Parse main source
                 let source = self.read_file(input_path)?;
                 let source_filename = input_path.to_string_lossy();
-                // Convert to static string for the lifetime requirement
                 let source_filename_static =
                     Box::leak(source_filename.to_string().into_boxed_str()) as &'static str;
                 let source_program = parse_and_analyze_program(
@@ -153,8 +166,6 @@ impl Compiler {
                 })?;
 
                 self.write_ast_pretty(&source_program, output_dir)?;
-
-                // 3. Return the program
                 Ok(source_program)
             },
         )?;
@@ -166,18 +177,13 @@ impl Compiler {
             current_stage,
             total_stages,
             || -> Result<cfg::Program, Box<dyn std::error::Error>> {
-                // Generate CFG from AST using cfg_builder
                 let cfg_program: cfg::Program = cfg::cfg_builder::build(program);
-
-                // Write CFG pretty print
                 self.write_cfg_pretty(&cfg_program, output_dir, "cfg_pretty.txt")?;
-
                 Ok(cfg_program)
             },
         )?;
 
         // Stage 3: Optimization (optional)
-
         let optimized_or_cfg_program = if enable_optimization {
             current_stage += 1;
             execute_stage(
@@ -196,395 +202,67 @@ impl Compiler {
             cfg_program
         };
 
-        summary.function_count = optimized_or_cfg_program.functions.len();
-        summary.hop_count = optimized_or_cfg_program.hops.len();
+        data_collector.set_program_stats(
+            optimized_or_cfg_program.functions.len(),
+            optimized_or_cfg_program.hops.len(),
+        );
 
-        // Stage 4: SC-Graph (Build + Combine + DOT Outputs)
+        // Stage 4: SC-Graph
         current_stage += 1;
         let (mut sc, mut combined) = execute_stage(
             "SC-Graph",
             current_stage,
             total_stages,
-            || -> Result<(crate::sc_graph::SCGraph, crate::sc_graph::CombinedSCGraph), Box<dyn std::error::Error>> {
+            || -> Result<
+                (crate::sc_graph::SCGraph, crate::sc_graph::CombinedSCGraph),
+                Box<dyn std::error::Error>,
+            > {
                 let builder = crate::sc_graph::SCGraphBuilder::new(instances as u32);
                 let sc = builder.build(&optimized_or_cfg_program);
                 let combined = crate::sc_graph::combine_for_deadlock_elimination(&sc);
-                // Unified DOT writer with empty prefix -> sc_graph.dot and combined_sc_graph.dot
                 self.write_sc_graph_dots(&sc, &optimized_or_cfg_program, output_dir, "")?;
                 Ok((sc, combined))
             },
         )?;
 
-        summary.sc_c_edges = sc
+        let sc_c_edges = sc
             .edges
             .iter()
             .filter(|edge| matches!(edge.edge_type, crate::sc_graph::EdgeType::C))
             .count();
 
-        // Save original SC graph for plotting later
         let original_sc = sc.clone();
 
-        // Stage 5: Verification (Commutative) -> generate Boogie, run, process results, and write simplified graphs
+        // Stage 5: Verification (optional)
         if !enable_verification {
-            summary.simplified_sc_c_edges = summary.sc_c_edges;
+            data_collector.set_sc_stats(sc_c_edges, sc_c_edges);
         } else {
             current_stage += 1;
             let (simplified_sc, simplified_combined) = execute_stage(
                 "Verification",
                 current_stage,
                 total_stages,
-                || -> Result<(crate::sc_graph::SCGraph, crate::sc_graph::CombinedSCGraph), Box<dyn std::error::Error>> {
-                    // 1) Generate Boogie programs for all configured verification types
-                    let verifier = VerificationManager::new();
-                    let mut programs: Vec<BoogieProgram> = Vec::new();
-
-                    let partition_programs = verifier
-                        .generate_verification_programs(
-                            &optimized_or_cfg_program,
-                            &sc,
-                            VerificationType::HopPartition,
-                        )
-                        .map_err(|errs| {
-                            let _ = self.reporter.report_all(&errs);
-                            let msg = format!(
-                                "Verification generation failed with {} errors",
-                                errs.len()
-                            );
-                            Box::<dyn std::error::Error>::from(msg)
-                        })?;
-                    programs.extend(partition_programs);
-
-                    let commutative_programs = verifier
-                        .generate_verification_programs(
-                            &optimized_or_cfg_program,
-                            &sc,
-                            VerificationType::Commutative,
-                        )
-                        .map_err(|errs| {
-                            // Report now and convert to a simple boxed error
-                            let _ = self.reporter.report_all(&errs);
-                            let msg = format!(
-                                "Verification generation failed with {} errors",
-                                errs.len()
-                            );
-                            Box::<dyn std::error::Error>::from(msg)
-                        })?;
-                    programs.extend(commutative_programs);
-
-                    summary.verification_total = programs.len();
-                    summary.verification_pass = 0;
-                    summary.verification_errors = 0;
-                    summary.verification_timeouts = 0;
-                    summary.boogie_compile_failures = 0;
-
-                    // Ensure output directory exists
-                    fs::create_dir_all(output_dir)?;
-                    let boogie_dir = output_dir.join("Boogie");
-                    if boogie_dir.exists() {
-                        fs::remove_dir_all(&boogie_dir)?;
-                    }
-                    fs::create_dir_all(&boogie_dir)?;
-
-                    // 2) Write each Boogie program to a .bpl file and run Boogie in parallel with progress
-                    use indicatif::{ProgressBar, ProgressStyle};
-                    use rayon::prelude::*;
-                    use std::collections::HashSet;
-                    use std::sync::atomic::{AtomicUsize, Ordering};
-                    use std::sync::{Arc, Mutex};
-
-                    let mut all_boogie_errors: Vec<BoogieError> = Vec::new();
-
-                    let total = programs.len() as u64;
-                    let pb = ProgressBar::new(total);
-                    pb.set_style(
-                        ProgressStyle::with_template(
-                            "[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}",
-                        )
-                        .unwrap()
-                        .progress_chars("=>-"),
-                    );
-                    pb.set_message("running Boogie");
-
-                    // Thread-safe tracking: running files set and completed counter
-                    let running_files: Arc<Mutex<HashSet<String>>> =
-                        Arc::new(Mutex::new(HashSet::new()));
-                    let completed_count = Arc::new(AtomicUsize::new(0));
-
-                    // Run write+boogie per program in parallel, collecting outputs for sequential logging
-                    let run_results: Vec<(
-                        String,
-                        std::time::Duration,
-                        Result<std::process::Output, std::io::Error>,
-                    )> = programs
-                        .par_iter()
-                        .map(|program| {
-                            let file_name = format!("{}.bpl", program.name);
-                            let file_path = boogie_dir.join(&file_name);
-
-                            // Write .bpl file (fast, don't track this)
-                            let write_res = (|| -> Result<(), std::io::Error> {
-                                use std::io::Write;
-                                let mut f = fs::File::create(&file_path)?;
-                                write!(f, "{}", program)?;
-                                Ok(())
-                            })();
-
-                            let (duration, output) = match write_res {
-                                Ok(()) => {
-                                    // Add to running set RIGHT before calling Boogie
-                                    {
-                                        let mut files = running_files.lock().unwrap();
-                                        files.insert(file_name.clone());
-                                        let files_list: Vec<String> =
-                                            files.iter().cloned().collect();
-                                        let completed = completed_count.load(Ordering::Relaxed);
-                                        let msg = if files_list.len() <= 3 {
-                                            format!("Running: {}", files_list.join(", "))
-                                        } else {
-                                            format!(
-                                                "Running: {}, {}, {} (+{} more)",
-                                                files_list[0],
-                                                files_list[1],
-                                                files_list[2],
-                                                files_list.len() - 3
-                                            )
-                                        };
-                                        pb.set_position(completed as u64);
-                                        pb.set_message(msg);
-                                    }
-
-                                    // START TIMER and run Boogie
-                                    let start_time = std::time::Instant::now();
-                                    let result = Command::new("boogie")
-                                        .arg("/quiet")
-                                        .arg("/errorTrace:0")
-                                        .arg(format!("/loopUnroll:{}", loop_unroll))
-                                        .arg(format!("/timeLimit:{}", timeout_secs))
-                                        .arg(file_path.to_string_lossy().to_string())
-                                        .output();
-                                    // GET ELAPSED WALL-CLOCK TIME
-                                    let duration = start_time.elapsed();
-
-                                        // Remove from running set and increment completed counter
-                                        {
-                                            let mut files = running_files.lock().unwrap();
-                                            files.remove(&file_name);
-                                            let new_completed =
-                                                completed_count.fetch_add(1, Ordering::Relaxed) + 1;
-                                            let files_list: Vec<String> =
-                                                files.iter().cloned().collect();
-                                            if !files_list.is_empty() {
-                                                let msg = if files_list.len() <= 3 {
-                                                    format!("Running: {}", files_list.join(", "))
-                                                } else {
-                                                    format!(
-                                                        "Running: {}, {}, {} (+{} more)",
-                                                        files_list[0],
-                                                        files_list[1],
-                                                        files_list[2],
-                                                        files_list.len() - 3
-                                                    )
-                                                };
-                                                pb.set_position(new_completed as u64);
-                                                pb.set_message(msg);
-                                            } else {
-                                                pb.set_position(new_completed as u64);
-                                            }
-                                        }
-
-                                    (duration, result)
-                                }
-                                Err(e) => (std::time::Duration::default(), Err(e)),
-                            };
-
-                            (file_name, duration, output.map_err(|e| e))
-                        })
-                        .collect();
-
-                    // Finish the progress bar before logging
-                    pb.finish_with_message("Boogie runs complete");
-
-                    // 3) Append outputs to compiler.log and parse errors sequentially
-                    let mut exec_errors = Vec::new();
-                    let mut c_edge_infos: Vec<crate::cli::summary::CEdgeVerificationInfo> = Vec::new();
-
-                    for (file_name, duration, output) in run_results {
-                        match output {
-                            Ok(out) => {
-                                self.logger
-                                    .line(format!("===== Boogie run for {} =====", file_name))?;
-                                self.logger
-                                    .block("stdout:", &String::from_utf8_lossy(&out.stdout))?;
-                                self.logger
-                                    .block("stderr:", &String::from_utf8_lossy(&out.stderr))?;
-
-                                let stdout_str = String::from_utf8_lossy(&out.stdout);
-                                let stderr_str = String::from_utf8_lossy(&out.stderr);
-                                let combined_output = format!("{}\n{}", stdout_str, stderr_str);
-
-                                // Check for compilation errors (non-zero exit code or error patterns)
-                                if !out.status.success()
-                                    || combined_output.contains("parse errors detected")
-                                    || combined_output.contains("name resolution errors detected")
-                                    || combined_output.contains("type errors detected")
-                                    || combined_output.contains("type checking errors detected")
-                                {
-                                    summary.boogie_compile_failures += 1;
-                                    exec_errors.push(format!(
-                                    "Boogie compilation failed for {}: Check compiler.log for details.", 
-                                    file_name
-                                ));
-                                    continue; // Continue logging other results instead of returning immediately
-                                }
-
-                                if combined_output.contains("timed out") {
-                                    if let Some(timeout_error) =
-                                        Self::build_timeout_error_from_commutative(&file_name)
-                                    {
-                                        summary.verification_timeouts += 1;
-                                        all_boogie_errors.push(timeout_error.clone());
-
-                                        // Record C-edge info for timeout
-                                        if let Some(info) = Self::extract_c_edge_info_from_error(
-                                            &file_name,
-                                            duration,
-                                            true, // is_timeout
-                                            false, // eliminated (will be updated later)
-                                        ) {
-                                            c_edge_infos.push(info);
-                                        }
-                                    } else {
-                                        summary.boogie_compile_failures += 1;
-                                        exec_errors.push(format!(
-                                            "Boogie verification timed out for unknown file {}.",
-                                            file_name
-                                        ));
-                                    }
-                                    continue; // Continue logging other results instead of returning immediately
-                                }
-
-                                let mut is_pass = true;
-
-                                // Parse Boogie output lines for S-expressions
-                                // Boogie outputs the {:msg "..."} content directly, not wrapped
-                                let mut parse_streams =
-                                    vec![stdout_str.as_ref(), stderr_str.as_ref()];
-                                for s in parse_streams.drain(..) {
-                                    // Split into lines and try to parse each line as an S-expression
-                                    for line in s.lines() {
-                                        let line = line.trim();
-                                        if line.starts_with('(') && line.ends_with(')') {
-                                            // This might be an S-expression - try to parse it
-                                            if let Some(err) = crate::verification::Boogie::BoogieError::from_boogie_string(line) {
-                                            // This is a valid BoogieError (verification result) - add it
-                                            summary.verification_errors += 1;
-                                            is_pass = false;
-                                            all_boogie_errors.push(err);
-                                        }
-                                        }
-                                    }
-                                }
-
-                                if is_pass {
-                                    summary.verification_pass += 1;
-                                }
-
-                                // Record C-edge info if this is a commutative verification
-                                if file_name.starts_with("commutative_") {
-                                    if let Some(info) = Self::extract_c_edge_info_from_error(
-                                        &file_name,
-                                        duration,
-                                        false, // not timeout
-                                        false, // eliminated status will be updated later
-                                    ) {
-                                        c_edge_infos.push(info);
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                self.logger.line(format!(
-                                    "===== Boogie run for {} FAILED: {} =====",
-                                    file_name, e
-                                ))?;
-                                summary.boogie_compile_failures += 1;
-                                exec_errors
-                                    .push(format!("Failed to run Boogie for {}: {}", file_name, e));
-                            }
-                        }
-                    }
-
-                    // 4) Process results and write simplified graphs
-                    let (verification_errors, simplified) =
-                        VerifyResultProcessor::process_boogie_errors(
-                            &optimized_or_cfg_program,
-                            sc.clone(),
-                            all_boogie_errors,
-                        );
-
-                    summary.simplified_sc_c_edges = simplified
-                        .edges
-                        .iter()
-                        .filter(|edge| matches!(edge.edge_type, crate::sc_graph::EdgeType::C))
-                        .count();
-
-                    // Update eliminated status for C-edge infos
-                    let eliminated_edges: std::collections::HashSet<_> = sc
-                        .edges
-                        .iter()
-                        .filter(|e| matches!(e.edge_type, crate::sc_graph::EdgeType::C))
-                        .filter(|e| !simplified.edges.contains(e))
-                        .collect();
-
-                    for info in &mut c_edge_infos {
-                        // Check if this C-edge was eliminated
-                        info.eliminated = eliminated_edges.iter().any(|e| {
-                            e.source.function_id.index() == info.source_function_id
-                                && e.source.instance == info.source_instance
-                                && e.source.hop_id.index() == info.source_hop_id
-                                && e.target.function_id.index() == info.target_function_id
-                                && e.target.instance == info.target_instance
-                                && e.target.hop_id.index() == info.target_hop_id
-                        });
-                    }
-
-                    summary.c_edge_verifications = c_edge_infos;
-
-                    // Write simplified graphs (unified) with prefix "simplified"
-                    self.write_sc_graph_dots(
-                        &simplified,
+                || -> Result<
+                    (crate::sc_graph::SCGraph, crate::sc_graph::CombinedSCGraph),
+                    Box<dyn std::error::Error>,
+                > {
+                    self.run_verification_stage(
                         &optimized_or_cfg_program,
+                        &sc,
+                        &combined,
                         output_dir,
-                        "simplified",
-                    )?;
-
-                    // Compute the simplified combined graph
-                    let simplified_combined = crate::sc_graph::combine_for_deadlock_elimination(&simplified);
-
-                    // After logging all results, check if there were any errors
-                    if !exec_errors.is_empty() {
-                        return Err(Box::from(format!(
-                        "Boogie verification failed: {} errors. Check compiler.log for details.",
-                        exec_errors.len()
-                    )));
-                    }
-
-                    // If there are user-facing verification errors, report them now
-                    if !verification_errors.is_empty() {
-                        // Best effort reporting; ignore result
-                        let _ = self.reporter.report_all(&verification_errors);
-                    }
-
-                    // Return the simplified graphs
-                    Ok((simplified, simplified_combined))
+                        loop_unroll,
+                        timeout_secs,
+                        &mut data_collector,
+                    )
                 },
             )?;
 
-            // Use the simplified graphs for code generation
             sc = simplified_sc;
             combined = simplified_combined;
         }
 
-        // Stage 6: Go code generation
+        // Stage 6: Code Generation
         current_stage += 1;
         let _ = execute_stage(
             "Codegen",
@@ -612,18 +290,29 @@ impl Compiler {
         )?;
 
         println!("{}", "Completed".green().bold());
-        emit_summary(&summary, &mut self.logger);
+        data::emit_summary(&data_collector, &mut self.logger);
 
-        // Generate plots if verification was enabled
-        if enable_verification && !summary.c_edge_verifications.is_empty() {
+        // Generate outputs
+        if enable_verification && !data_collector.data().c_edge_verifications.is_empty() {
+            // Write data.json
+            let data_path = output_dir.join("data.json");
+            data_collector.write_to_file(&data_path)?;
+            self.logger
+                .line(format!("📄 Benchmark data written: {}", data_path.display()))?;
+
             // Plot histogram
-            self.write_verification_histogram(&summary, output_dir)?;
+            let histogram_path = output_dir.join("verification_time_histogram.png");
+            data_collector.plot_verification_histogram(&histogram_path)?;
+            self.logger.line(format!(
+                "📄 Verification time histogram written: {}",
+                histogram_path.display()
+            ))?;
 
-            // Write plotted SC-graph DOT file (using original graph before verification)
+            // Write plotted SC-graph
             self.write_sc_graph_plotted(
                 &original_sc,
                 &optimized_or_cfg_program,
-                &summary.c_edge_verifications,
+                &data_collector.data().c_edge_verifications,
                 output_dir,
             )?;
         }
@@ -631,128 +320,395 @@ impl Compiler {
         Ok(())
     }
 
-    /// Write AST pretty print to file
-    fn write_ast_pretty(
-        &mut self,
-        program: &Program,
-        output_dir: &PathBuf,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        // Create output directory if it doesn't exist
-        fs::create_dir_all(output_dir)?;
-
-        // Write AST with debug information (includes IDs, name resolution, and type resolution if constants are enabled)
-        let ast_file = output_dir.join("ast_pretty.txt");
-        let mut file = fs::File::create(&ast_file)?;
-        program.pretty_print_with_debug(&mut file)?;
-
-        self.logger
-            .line(format!("📄 AST file written to: {}", ast_file.display()))?;
-        Ok(())
-    }
-
-    /// Write CFG pretty print to file
-    fn write_cfg_pretty(
+    /// Run the verification stage - separated for clarity
+    fn run_verification_stage(
         &mut self,
         program: &cfg::Program,
-        output_dir: &PathBuf,
-        filename: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        // Create output directory if it doesn't exist
-        fs::create_dir_all(output_dir)?;
-
-        // Write CFG with debug information (includes IDs and type information)
-        let cfg_file = output_dir.join(filename);
-        let mut file = fs::File::create(&cfg_file)?;
-        program.pretty_print_with_debug(&mut file)?;
-
-        self.logger
-            .line(format!("📄 CFG file written to: {}", cfg_file.display()))?;
-        Ok(())
-    }
-
-    /// Write SC-graph with timing and elimination information
-    fn write_sc_graph_plotted(
-        &mut self,
         sc: &crate::sc_graph::SCGraph,
-        program: &cfg::Program,
-        c_edge_infos: &[crate::cli::summary::CEdgeVerificationInfo],
+        _combined: &crate::sc_graph::CombinedSCGraph,
         output_dir: &PathBuf,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        std::fs::create_dir_all(output_dir)?;
+        loop_unroll: u32,
+        timeout_secs: u32,
+        data_collector: &mut DataCollector,
+    ) -> Result<
+        (crate::sc_graph::SCGraph, crate::sc_graph::CombinedSCGraph),
+        Box<dyn std::error::Error>,
+    > {
+        // Generate Boogie programs
+        let verifier = VerificationManager::new();
+        let mut programs: Vec<BoogieProgram> = Vec::new();
 
-        let plotted_path = output_dir.join("sc_graph_plotted.dot");
-        let mut file = std::fs::File::create(&plotted_path)?;
-        sc.to_dot(program, Some(c_edge_infos), &mut file)?;
+        let partition_programs = verifier
+            .generate_verification_programs(
+                program,
+                sc,
+                VerificationType::HopPartition,
+            )
+            .map_err(|_errors| {
+                Box::<dyn std::error::Error>::from("Partition verification generation failed")
+            })?;
+        programs.extend(partition_programs);
 
-        self.logger.line(format!(
-            "📄 Plotted SC-graph DOT file written: {}",
-            plotted_path.display()
-        ))?;
-        Ok(())
+        let commutative_programs = verifier
+            .generate_verification_programs(program, sc, VerificationType::Commutative)
+            .map_err(|_errors| {
+                Box::<dyn std::error::Error>::from("Commutative verification generation failed")
+            })?;
+        programs.extend(commutative_programs);
+
+        // Setup Boogie directory
+        fs::create_dir_all(output_dir)?;
+        let boogie_dir = output_dir.join("Boogie");
+        if boogie_dir.exists() {
+            fs::remove_dir_all(&boogie_dir)?;
+        }
+        fs::create_dir_all(&boogie_dir)?;
+
+        // Run verifications in parallel with progress tracking
+        let run_results = self.run_boogie_verifications_parallel(
+            &programs,
+            &boogie_dir,
+            loop_unroll,
+            timeout_secs,
+        )?;
+
+        // Process results and collect data
+        let mut all_boogie_errors: Vec<BoogieError> = Vec::new();
+        let mut exec_errors = Vec::new();
+
+        for result in run_results {
+            self.logger
+                .line(format!("===== Boogie run for {} =====", result.file_name))?;
+            self.logger.block("stdout:", &result.stdout)?;
+            self.logger.block("stderr:", &result.stderr)?;
+
+            // Process verification result
+            let verification_result =
+                self.process_boogie_result(&result, &mut all_boogie_errors, &mut exec_errors);
+
+            // Extract C-edge info and add to data collector
+            if let Some((src_f, src_i, src_h, tgt_f, tgt_i, tgt_h)) =
+                Self::parse_commutative_edge_ids(&result.file_name)
+            {
+                let edge_data = CEdgeVerificationData {
+                    source_function_id: src_f,
+                    source_instance: src_i,
+                    source_hop_id: src_h,
+                    target_function_id: tgt_f,
+                    target_instance: tgt_i,
+                    target_hop_id: tgt_h,
+                    duration_ms: result.duration_ms,
+                    result: verification_result,
+                    eliminated: false, // Will be updated later
+                    memory_stats: result.memory_stats,
+                    boogie_stdout: result.stdout,
+                    boogie_stderr: result.stderr,
+                    boogie_file: result.file_name,
+                };
+                data_collector.add_c_edge_verification(edge_data);
+            }
+        }
+
+        // Process verification results
+        let (verification_errors, simplified) =
+            VerifyResultProcessor::process_boogie_errors(program, sc.clone(), all_boogie_errors);
+
+        let simplified_sc_c_edges = simplified
+            .edges
+            .iter()
+            .filter(|edge| matches!(edge.edge_type, crate::sc_graph::EdgeType::C))
+            .count();
+
+        data_collector.set_sc_stats(
+            sc.edges
+                .iter()
+                .filter(|edge| matches!(edge.edge_type, crate::sc_graph::EdgeType::C))
+                .count(),
+            simplified_sc_c_edges,
+        );
+
+        // Mark eliminated edges (edges that exist in original but not in simplified)
+        let simplified_edges: HashSet<_> = simplified
+            .edges
+            .iter()
+            .filter(|e| matches!(e.edge_type, crate::sc_graph::EdgeType::C))
+            .map(|e| {
+                (
+                    e.source.function_id.index(),
+                    e.source.instance,
+                    e.source.hop_id.index(),
+                    e.target.function_id.index(),
+                    e.target.instance,
+                    e.target.hop_id.index(),
+                )
+            })
+            .collect();
+
+        let eliminated_edges: HashSet<_> = sc
+            .edges
+            .iter()
+            .filter(|e| matches!(e.edge_type, crate::sc_graph::EdgeType::C))
+            .map(|e| {
+                (
+                    e.source.function_id.index(),
+                    e.source.instance,
+                    e.source.hop_id.index(),
+                    e.target.function_id.index(),
+                    e.target.instance,
+                    e.target.hop_id.index(),
+                )
+            })
+            .filter(|edge| !simplified_edges.contains(edge))
+            .collect();
+
+        data_collector.mark_eliminated_edges(&eliminated_edges);
+
+        // Write simplified graphs
+        self.write_sc_graph_dots(&simplified, program, output_dir, "simplified")?;
+
+        let simplified_combined = crate::sc_graph::combine_for_deadlock_elimination(&simplified);
+
+        if !verification_errors.is_empty() {
+            self.logger
+                .line("⚠️  Verification completed with errors")?;
+            self.logger
+                .line(format!("  Total errors: {}", verification_errors.len()))?;
+        }
+        if !exec_errors.is_empty() {
+            for error in &exec_errors {
+                self.logger.line(format!("⚠️  {}", error))?;
+            }
+        }
+
+        Ok((simplified, simplified_combined))
     }
 
-    /// Write verification time histogram
-    fn write_verification_histogram(
-        &mut self,
-        summary: &RunSummary,
-        output_dir: &PathBuf,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        std::fs::create_dir_all(output_dir)?;
+    /// Run Boogie verifications in parallel using /usr/bin/time -v
+    fn run_boogie_verifications_parallel(
+        &self,
+        programs: &[BoogieProgram],
+        boogie_dir: &PathBuf,
+        loop_unroll: u32,
+        timeout_secs: u32,
+    ) -> Result<Vec<BoogieRunResult>, Box<dyn std::error::Error>> {
+        use indicatif::{ProgressBar, ProgressStyle};
+        use rayon::prelude::*;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Mutex};
 
-        let histogram_path = output_dir.join("verification_time_histogram.png");
-        summary.plot_verification_histogram(&histogram_path)?;
+        let total = programs.len() as u64;
+        let pb = ProgressBar::new(total);
+        pb.set_style(
+            ProgressStyle::with_template(
+                "[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}",
+            )
+            .unwrap()
+            .progress_chars("=>-"),
+        );
+        pb.set_message("running Boogie");
 
-        self.logger.line(format!(
-            "📄 Verification time histogram written: {}",
-            histogram_path.display()
-        ))?;
-        Ok(())
+        let running_files: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+        let completed_count = Arc::new(AtomicUsize::new(0));
+
+        let run_results: Vec<BoogieRunResult> = programs
+            .par_iter()
+            .map(|program| {
+                let file_name = format!("{}.bpl", program.name);
+                let file_path = boogie_dir.join(&file_name);
+
+                // Write .bpl file
+                let write_res = (|| -> Result<(), std::io::Error> {
+                    use std::io::Write;
+                    let mut f = fs::File::create(&file_path)?;
+                    write!(f, "{}", program)?;
+                    Ok(())
+                })();
+
+                match write_res {
+                    Ok(()) => {
+                        // Update progress
+                        {
+                            let mut files = running_files.lock().unwrap();
+                            files.insert(file_name.clone());
+                            let files_list: Vec<String> = files.iter().cloned().collect();
+                            let completed = completed_count.load(Ordering::Relaxed);
+                            let msg = if files_list.len() <= 3 {
+                                format!("Running: {}", files_list.join(", "))
+                            } else {
+                                format!(
+                                    "Running: {}, {}, {} (+{} more)",
+                                    files_list[0],
+                                    files_list[1],
+                                    files_list[2],
+                                    files_list.len() - 3
+                                )
+                            };
+                            pb.set_position(completed as u64);
+                            pb.set_message(msg);
+                        }
+
+                        // Run with /usr/bin/time -v
+                        let start_time = std::time::Instant::now();
+                        let result = Command::new("/usr/bin/time")
+                            .arg("-v")
+                            .arg("boogie")
+                            .arg("/quiet")
+                            .arg("/errorTrace:0")
+                            .arg(format!("/loopUnroll:{}", loop_unroll))
+                            .arg(format!("/timeLimit:{}", timeout_secs))
+                            .arg(file_path.to_string_lossy().to_string())
+                            .output();
+                        let duration = start_time.elapsed();
+
+                        // Update progress
+                        {
+                            let mut files = running_files.lock().unwrap();
+                            files.remove(&file_name);
+                            let new_completed =
+                                completed_count.fetch_add(1, Ordering::Relaxed) + 1;
+                            let files_list: Vec<String> = files.iter().cloned().collect();
+                            if !files_list.is_empty() {
+                                let msg = if files_list.len() <= 3 {
+                                    format!("Running: {}", files_list.join(", "))
+                                } else {
+                                    format!(
+                                        "Running: {}, {}, {} (+{} more)",
+                                        files_list[0],
+                                        files_list[1],
+                                        files_list[2],
+                                        files_list.len() - 3
+                                    )
+                                };
+                                pb.set_position(new_completed as u64);
+                                pb.set_message(msg);
+                            } else {
+                                pb.set_position(new_completed as u64);
+                            }
+                        }
+
+                        match result {
+                            Ok(output) => {
+                                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                                
+                                // Parse memory stats from stderr (/usr/bin/time output)
+                                let memory_stats = data::parse_time_output(&stderr);
+
+                                BoogieRunResult {
+                                    file_name,
+                                    duration_ms: duration.as_secs_f64() * 1000.0,
+                                    stdout,
+                                    stderr,
+                                    memory_stats,
+                                }
+                            }
+                            Err(e) => BoogieRunResult {
+                                file_name,
+                                duration_ms: 0.0,
+                                stdout: String::new(),
+                                stderr: format!("Failed to execute: {}", e),
+                                memory_stats: MemoryStats::default(),
+                            },
+                        }
+                    }
+                    Err(e) => BoogieRunResult {
+                        file_name,
+                        duration_ms: 0.0,
+                        stdout: String::new(),
+                        stderr: format!("Failed to write .bpl file: {}", e),
+                        memory_stats: MemoryStats::default(),
+                    },
+                }
+            })
+            .collect();
+
+        pb.finish_with_message("Boogie runs complete");
+        Ok(run_results)
     }
 
-    /// Unified method to write SCGraph and its combined variant as DOT files.
-    /// If `prefix` is empty, writes to sc_graph.dot and combined_sc_graph.dot.
-    /// Otherwise writes to {prefix}_sc_graph.dot and {prefix}_combined_sc_graph.dot.
-    fn write_sc_graph_dots(
-        &mut self,
-        sc: &crate::sc_graph::SCGraph,
-        program: &cfg::Program,
-        output_dir: &PathBuf,
-        prefix: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        use crate::pretty::{CombinedSCGraphDotPrinter, PrettyPrint, SCGraphDotPrinter};
-        std::fs::create_dir_all(output_dir)?;
+    /// Process a Boogie result and determine verification status
+    fn process_boogie_result(
+        &self,
+        result: &BoogieRunResult,
+        all_boogie_errors: &mut Vec<BoogieError>,
+        exec_errors: &mut Vec<String>,
+    ) -> VerificationResult {
+        // Check for compilation errors in stdout (Boogie writes errors to stdout)
+        if result.stdout.contains("parse errors detected")
+            || result.stdout.contains("name resolution errors detected")
+            || result.stdout.contains("type errors detected")
+            || result.stdout.contains("type checking errors detected")
+        {
+            exec_errors.push(format!(
+                "Boogie compilation failed for {}: Check compiler.log for details.",
+                result.file_name
+            ));
+            return VerificationResult::CompilationError;
+        }
 
-        let sc_filename = if prefix.is_empty() {
-            "sc_graph.dot".to_string()
+        // Check for timeout in stdout
+        if result.stdout.contains("timed out") {
+            if let Some(timeout_error) =
+                Self::build_timeout_error_from_commutative(&result.file_name)
+            {
+                all_boogie_errors.push(timeout_error);
+                return VerificationResult::Timeout;
+            } else {
+                exec_errors.push(format!(
+                    "Boogie verification timed out for unknown file {}.",
+                    result.file_name
+                ));
+                return VerificationResult::CompilationError;
+            }
+        }
+
+        // Parse Boogie output for S-expressions (verification errors)
+        let mut has_errors = false;
+        for line in result.stdout.lines() {
+            let line = line.trim();
+            if line.starts_with('(') && line.ends_with(')') {
+                if let Some(err) = BoogieError::from_boogie_string(line) {
+                    all_boogie_errors.push(err);
+                    has_errors = true;
+                }
+            }
+        }
+
+        if has_errors {
+            VerificationResult::Error
         } else {
-            format!("{}_sc_graph.dot", prefix)
-        };
-        let combined_filename = if prefix.is_empty() {
-            "sc_graph_combined.dot".to_string()
-        } else {
-            format!("{}_sc_graph_combined.dot", prefix)
-        };
-
-        // Write raw graph
-        let sc_path = output_dir.join(&sc_filename);
-        let mut sc_file = std::fs::File::create(&sc_path)?;
-        SCGraphDotPrinter::new(sc, program).pretty_print(&mut sc_file)?;
-
-        // Compute and write combined graph
-        let combined = crate::sc_graph::combine_for_deadlock_elimination(sc);
-        let combined_path = output_dir.join(&combined_filename);
-        let mut c_file = std::fs::File::create(&combined_path)?;
-        CombinedSCGraphDotPrinter::new(&combined, program).pretty_print(&mut c_file)?;
-
-        // Log instead of printing to stdout
-        self.logger.line(format!(
-            "📄 SC Graph DOT files written: {}, {}",
-            sc_path.display(),
-            combined_path.display()
-        ))?;
-        Ok(())
+            VerificationResult::Pass
+        }
     }
 
+    /// Parse commutative edge IDs from filename
+    fn parse_commutative_edge_ids(
+        file_name: &str,
+    ) -> Option<(usize, u32, usize, usize, u32, usize)> {
+        let trimmed = file_name.strip_suffix(".bpl").unwrap_or(file_name);
+        if !trimmed.starts_with("commutative_") {
+            return None;
+        }
+
+        let parts: Vec<&str> = trimmed.split('_').collect();
+        if parts.len() != 8 || parts.get(4).copied() != Some("vs") {
+            return None;
+        }
+
+        let source = Self::parse_node_from_parts(parts[1], parts[2], parts[3])?;
+        let target = Self::parse_node_from_parts(parts[5], parts[6], parts[7])?;
+
+        Some((
+            source.function_id,
+            source.instance,
+            source.hop_id,
+            target.function_id,
+            target.instance,
+            target.hop_id,
+        ))
+    }
+
+    /// Build timeout error from commutative filename
     fn build_timeout_error_from_commutative(file_name: &str) -> Option<BoogieError> {
         let trimmed = file_name.strip_suffix(".bpl").unwrap_or(file_name);
         if !trimmed.starts_with("commutative_") {
@@ -764,13 +720,14 @@ impl Compiler {
             return None;
         }
 
-        let node_1 = Self::parse_commutative_node(parts[1], parts[2], parts[3])?;
-        let node_2 = Self::parse_commutative_node(parts[5], parts[6], parts[7])?;
+        let node_1 = Self::parse_node_from_parts(parts[1], parts[2], parts[3])?;
+        let node_2 = Self::parse_node_from_parts(parts[5], parts[6], parts[7])?;
 
         Some(BoogieError::SpecialInterleavingTimeout { node_1, node_2 })
     }
 
-    fn parse_commutative_node(
+    /// Parse node from filename parts (f#, i#, h#)
+    fn parse_node_from_parts(
         f_part: &str,
         i_part: &str,
         h_part: &str,
@@ -786,36 +743,102 @@ impl Compiler {
         })
     }
 
-    fn extract_c_edge_info_from_error(
-        file_name: &str,
-        duration: std::time::Duration,
-        is_timeout: bool,
-        eliminated: bool,
-    ) -> Option<crate::cli::summary::CEdgeVerificationInfo> {
-        let trimmed = file_name.strip_suffix(".bpl").unwrap_or(file_name);
-        if !trimmed.starts_with("commutative_") {
-            return None;
-        }
+    // ========================================================================
+    // --- Output Writers
+    // ========================================================================
 
-        let parts: Vec<&str> = trimmed.split('_').collect();
-        if parts.len() != 8 || parts.get(4).copied() != Some("vs") {
-            return None;
-        }
+    /// Write AST pretty print
+    fn write_ast_pretty(
+        &mut self,
+        program: &Program,
+        output_dir: &PathBuf,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        fs::create_dir_all(output_dir)?;
+        let ast_file = output_dir.join("ast_pretty.txt");
+        let mut file = fs::File::create(&ast_file)?;
+        program.pretty_print_with_debug(&mut file)?;
+        self.logger
+            .line(format!("📄 AST file written to: {}", ast_file.display()))?;
+        Ok(())
+    }
 
-        let source = Self::parse_commutative_node(parts[1], parts[2], parts[3])?;
-        let target = Self::parse_commutative_node(parts[5], parts[6], parts[7])?;
+    /// Write CFG pretty print
+    fn write_cfg_pretty(
+        &mut self,
+        program: &cfg::Program,
+        output_dir: &PathBuf,
+        filename: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        fs::create_dir_all(output_dir)?;
+        let cfg_file = output_dir.join(filename);
+        let mut file = fs::File::create(&cfg_file)?;
+        program.pretty_print_with_debug(&mut file)?;
+        self.logger
+            .line(format!("📄 CFG file written to: {}", cfg_file.display()))?;
+        Ok(())
+    }
 
-        Some(crate::cli::summary::CEdgeVerificationInfo {
-            source_function_id: source.function_id,
-            source_instance: source.instance,
-            source_hop_id: source.hop_id,
-            target_function_id: target.function_id,
-            target_instance: target.instance,
-            target_hop_id: target.hop_id,
-            duration,
-            is_timeout,
-            eliminated,
-        })
+    /// Write SC-graph DOT files
+    fn write_sc_graph_dots(
+        &mut self,
+        sc: &crate::sc_graph::SCGraph,
+        program: &cfg::Program,
+        output_dir: &PathBuf,
+        prefix: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use crate::pretty::{CombinedSCGraphDotPrinter, PrettyPrint, SCGraphDotPrinter};
+        
+        fs::create_dir_all(output_dir)?;
+
+        let sc_filename = if prefix.is_empty() {
+            "sc_graph.dot".to_string()
+        } else {
+            format!("{}_sc_graph.dot", prefix)
+        };
+        let combined_filename = if prefix.is_empty() {
+            "sc_graph_combined.dot".to_string()
+        } else {
+            format!("{}_sc_graph_combined.dot", prefix)
+        };
+
+        // Write raw graph
+        let sc_path = output_dir.join(&sc_filename);
+        let mut sc_file = fs::File::create(&sc_path)?;
+        SCGraphDotPrinter::new(sc, program).pretty_print(&mut sc_file)?;
+
+        // Write combined graph
+        let combined = crate::sc_graph::combine_for_deadlock_elimination(sc);
+        let combined_path = output_dir.join(&combined_filename);
+        let mut c_file = fs::File::create(&combined_path)?;
+        CombinedSCGraphDotPrinter::new(&combined, program).pretty_print(&mut c_file)?;
+
+        self.logger.line(format!(
+            "📄 SC Graph DOT files written: {}, {}",
+            sc_path.display(),
+            combined_path.display()
+        ))?;
+        Ok(())
+    }
+
+    /// Write plotted SC-graph with timing information
+    fn write_sc_graph_plotted(
+        &mut self,
+        sc: &crate::sc_graph::SCGraph,
+        program: &cfg::Program,
+        c_edge_verifications: &[CEdgeVerificationData],
+        output_dir: &PathBuf,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        fs::create_dir_all(output_dir)?;
+
+        let plotted_path = output_dir.join("sc_graph_plotted.dot");
+        let mut file = fs::File::create(&plotted_path)?;
+        sc.to_dot(program, Some(c_edge_verifications), &mut file)?;
+
+        self.logger.line(format!(
+            "📄 Plotted SC-graph DOT file written: {}",
+            plotted_path.display()
+        ))?;
+        Ok(())
     }
 }
 
