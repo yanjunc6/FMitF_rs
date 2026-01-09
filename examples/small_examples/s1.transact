@@ -2,35 +2,36 @@ partition get_customer_region(customer_id: int) -> int {
     return 10 * customer_id;
 }
 
-table ACCOUNTS {
+table A {
     primary ID: int;
     node get_customer_region(ID);
 
-    POINTS: int;
+    P: int;
 }
 
-transaction redeem_points(id: int, points: int)
+transaction redeem_points(x: int, p: int)
 {
     hop {
-        ACCOUNTS[ID: id].POINTS = ACCOUNTS[ID: id].POINTS - points;
+        A[ID: x].P = A[ID: x].P - p;
     }
 }
 
-transaction apply_bonus(primary_id: int, affiliate_id: int, points: int)
-assume primary_id != affiliate_id;
-assume points > 0 && points <= 100;
+transaction apply_bonus(x: int, y: int, p: int)
+assume x != y;
+assume p > 0 && p <= 100;
 {
     hop {
         // Check if a points transaction would push the customer over 100 points.
         // If so, auto redeem 100 points.
-        ACCOUNTS[ID: primary_id].POINTS = ACCOUNTS[ID: primary_id].POINTS + points;
-        if (ACCOUNTS[ID: primary_id].POINTS >= 100) {
-            ACCOUNTS[ID: primary_id].POINTS = ACCOUNTS[ID: primary_id].POINTS - 100;
+        if (A[ID: x].P + p >= 100) {
+            A[ID: x].P = A[ID: x].P - 100 + p;
+        } else {
+            A[ID: x].P = A[ID: x].P + p;
         }
     }
     hop {
         // The affiliate who brought in the customer always gets a standard 10-point commission.
-        ACCOUNTS[ID: affiliate_id].POINTS = ACCOUNTS[ID: affiliate_id].POINTS + points;
+        A[ID: y].P = A[ID: y].P + p;
     }
 }
 
