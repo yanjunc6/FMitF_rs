@@ -9,29 +9,29 @@ table A {
     P: int;
 }
 
-transaction redeem_points(x: int, p: int)
+transaction redeem_points(x: int, qty: int)
 {
     hop {
-        A[ID: x].P = A[ID: x].P - p;
+        A[ID: x].P = A[ID: x].P - qty;
     }
 }
 
-transaction apply_bonus(x: int, y: int, p: int)
-assume x != y;
-assume p > 0 && p <= 100;
+transaction apply_bonus(x: int, y: int, qty: int)
+// assume x != y;
+assume qty >= 0 && qty <= 10;
 {
     hop {
         // Check if a points transaction would push the customer over 100 points.
         // If so, auto redeem 100 points.
-        if (A[ID: x].P + p >= 100) {
-            A[ID: x].P = A[ID: x].P - 100 + p;
+        if (A[ID: x].P - qty >= 10) {
+            A[ID: x].P = A[ID: x].P - qty;
         } else {
-            A[ID: x].P = A[ID: x].P + p;
+            A[ID: x].P = A[ID: x].P + 91 - qty;
         }
     }
     hop {
         // The affiliate who brought in the customer always gets a standard 10-point commission.
-        A[ID: y].P = A[ID: y].P + p;
+        A[ID: y].P = A[ID: y].P + qty;
     }
 }
 
