@@ -82,7 +82,18 @@ During a run, the compiler writes:
 - `tmp/ast_pretty.txt`: formatted AST of the input program.
 - `tmp/cfg_pretty.txt` (and `cfg_opt_pretty.txt` when optimizations are enabled): graph-friendly CFG dumps.
 - `tmp/sc_graph*.dot` (and `simplified_sc_graph*.dot` when verif are enabled): serialization-conflict graph visualizations.
+- `tmp/sc_graph_plotted.dot`: a colored serialization-conflict graph visualizations combining two versions.
 - `tmp/Boogie/*.bpl`: generated Boogie verification conditions. Logs and Boogie output are stored in `tmp/compiler.log`.
 
 To inspect verification failures, open the associated `.bpl` files or review the detailed log.
 
+## Evaluation
+
+A script is provided to compile three benchmark:
+```
+bash ./run_benchmark.sh
+```
+
+Please note that this will take a few hours. A quick benchmark can be achieved by commenting out first two tpcc passes in script.
+
+To run them on our prototype database, please refer [database engine guide](db_engine/README.md).
