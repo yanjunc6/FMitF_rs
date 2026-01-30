@@ -1,0 +1,79 @@
+syntax = "proto3";
+package proto;
+
+option go_package = "./;proto";
+
+message Empty {
+
+}
+
+enum Status {
+  Success = 0;
+  Fail = 1;
+  NoSafe = 2;
+  Abort = 3;
+  LockFail = 4;
+}
+
+message TrxInfo {
+  uint64 trxid = 1;
+  int32 chainid = 2;
+  int32 hopid = 3;
+}
+
+message RWSet {
+  string tableName = 1;
+  string key = 2;
+}
+
+message DependencyTuple {
+  uint64 txId = 1;
+  int32 hopId = 2;
+  int32 serverId = 3;
+}
+
+message IdList {
+  repeated DependencyTuple list = 1;
+}
+
+message History {
+  map<uint64, int32> his = 1;
+}
+
+message TrxReq {
+  TrxInfo info = 1;
+  map<string, string> params = 2;
+  map<int32, IdList> dependency = 3;
+}
+
+message TrxRes {
+  Status status = 1;
+  TrxInfo info = 2;
+  repeated string results = 3;
+  repeated RWSet RWSets = 4;
+  map<int32, IdList> dependency = 5;
+}
+
+message TxRWSets {
+  uint64 txId = 1;
+  repeated RWSet RW = 2;
+  bool aborted = 3;
+}
+
+message Stat {
+  repeated int32 numAbort = 1;
+  repeated int32 numMessage = 2;
+}
+
+service HopNode {
+  rpc ProcessRequest (TrxReq) returns (TrxRes);
+  rpc ProcessHop (TrxReq) returns (TrxRes);
+  rpc EndHop(TrxInfo) returns (Empty);
+  rpc EndTx(TxRWSets) returns (Empty);
+  rpc Unlock(TxRWSets) returns (Empty);
+  rpc Prepare(TxRWSets) returns (Empty);
+  rpc Pull(IdList) returns (History);
+  rpc Tick (Empty) returns (Empty);
+  rpc Tok (Empty) returns (Empty);
+  rpc Shutdown (Empty) returns (Stat);
+}
