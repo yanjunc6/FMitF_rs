@@ -8,6 +8,7 @@ The repository contains:
 - Core libraries for syntax/semantic analysis, control-flow graph construction, optimization, and serialization-conflict graph generation.
 - Boogie code generation and result processing utilities for automated formal verification.
 - Sample transaction specifications under `examples/` and generated artifacts in `tmp/` for inspection.
+- A prototype database that implements distributed IC3 protocol under `db_engine` folder. It is used for evaluating the generated code.
 
 ## Installation
 
