@@ -1,14 +1,17 @@
 //! CLI Module - Simple compiler entry point
 
 pub mod compiler;
+pub mod cache_manager;
 pub mod data;
 pub mod log;
+pub mod options;
 pub mod stage;
 
 use clap::Parser;
 use std::path::PathBuf;
 
 use crate::cli::compiler::Compiler;
+use crate::cli::options::{CacheOptions, CompilerOptions, SplitOptions};
 
 // ============================================================================
 // --- CLI Arguments
@@ -47,6 +50,34 @@ pub struct Args {
     /// Skip commutative verification stage
     #[arg(long, default_value_t = false)]
     pub no_verify: bool,
+
+    /// Disable verification result caching
+    #[arg(long, default_value_t = false)]
+    pub disable_cache: bool,
+
+    /// Cache directory (default: <output_dir>/.verification_cache)
+    #[arg(long)]
+    pub cache_dir: Option<PathBuf>,
+
+    /// Maximum cache storage in MB
+    #[arg(long, default_value_t = 512, value_parser = clap::value_parser!(u64).range(1..))]
+    pub cache_max_size: u64,
+
+    /// Clear verification cache before running
+    #[arg(long, default_value_t = false)]
+    pub clear_cache: bool,
+
+    /// Disable timeout-driven recursive commutativity splitting
+    #[arg(long, default_value_t = false)]
+    pub disable_split: bool,
+
+    /// Maximum recursive split depth
+    #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u32).range(0..))]
+    pub split_max_depth: u32,
+
+    /// Split strategy: min-state | balanced | min-state-balanced
+    #[arg(long, default_value = "min-state-balanced")]
+    pub split_strategy: String,
 }
 
 impl Args {
@@ -68,15 +99,28 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut compiler = Compiler::new();
     let output_dir = args.output_dir();
 
-    compiler.run_pipeline(
-        &args.input,
-        &output_dir,
-        args.instances,
-        !args.no_optimize,
-        !args.no_verify,
-        args.loop_unroll,
-        args.timeout,
-    )
+    let compiler_options = CompilerOptions {
+        instances: args.instances,
+        loop_unroll: args.loop_unroll,
+        timeout_secs: args.timeout,
+        enable_optimization: !args.no_optimize,
+        enable_verification: !args.no_verify,
+        cache: CacheOptions {
+            enabled: !args.disable_cache,
+            dir: args
+                .cache_dir
+                .unwrap_or_else(|| output_dir.join(".verification_cache")),
+            max_size_mb: args.cache_max_size,
+            clear: args.clear_cache,
+        },
+        split: SplitOptions {
+            enabled: !args.disable_split,
+            max_depth: args.split_max_depth,
+            strategy: args.split_strategy,
+        },
+    };
+
+    compiler.run_pipeline(&args.input, &output_dir, compiler_options)
 }
 
 // ============================================================================

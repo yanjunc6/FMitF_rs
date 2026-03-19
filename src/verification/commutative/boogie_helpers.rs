@@ -46,17 +46,23 @@ impl BoogieStateManager {
         for set in analysis_info.tables_written.values() {
             tables_to_havoc.extend(set);
         }
+        let mut tables_to_havoc_sorted: Vec<&String> = tables_to_havoc.into_iter().collect();
+        tables_to_havoc_sorted.sort();
 
         let mut havocked_vars: HashSet<String> = HashSet::new();
 
-        for table_var_name in tables_to_havoc {
+        for table_var_name in tables_to_havoc_sorted {
             base.add_line(BoogieLine::Havoc(table_var_name.clone()));
             havocked_vars.insert(table_var_name.clone());
         }
 
         // Havoc live-IN variables only
-        for (slice, vars) in &analysis_info.live_in {
-            for &var_id in vars {
+        let mut live_in_slices: Vec<_> = analysis_info.live_in.keys().cloned().collect();
+        live_in_slices.sort();
+        for slice in live_in_slices {
+            let mut vars_sorted: Vec<_> = analysis_info.live_in[&slice].iter().cloned().collect();
+            vars_sorted.sort_by_key(|v| v.index());
+            for var_id in vars_sorted {
                 let var = &cfg_program.variables[var_id];
 
                 let var_name = format!("s{}_{}", slice, var.name);
@@ -72,7 +78,9 @@ impl BoogieStateManager {
         }
 
         // Initialize active flags to true (don't havoc them, set them directly)
-        for (&slice_id, _) in &unit.hops_per_slice {
+        let mut slice_ids: Vec<_> = unit.hops_per_slice.keys().cloned().collect();
+        slice_ids.sort();
+        for slice_id in slice_ids {
             let active_var_name = format!("s{}_active", slice_id);
 
             // Ensure the active flag variable exists as a local variable
@@ -186,7 +194,10 @@ impl BoogieStateManager {
             tables_to_save.extend(set);
         }
 
-        for table_var_name in tables_to_save {
+        let mut tables_to_save_sorted: Vec<&String> = tables_to_save.into_iter().collect();
+        tables_to_save_sorted.sort();
+
+        for table_var_name in tables_to_save_sorted {
             let snapshot_name = format!("{}_init", table_var_name);
             // Resolve table type using the simplified table_var_types map
             let table_type = analysis_info
@@ -205,8 +216,12 @@ impl BoogieStateManager {
         }
 
         // Save live-IN variables only
-        for (slice, vars) in &analysis_info.live_in {
-            for &var_id in vars {
+        let mut live_in_slices: Vec<_> = analysis_info.live_in.keys().cloned().collect();
+        live_in_slices.sort();
+        for slice in live_in_slices {
+            let mut vars_sorted: Vec<_> = analysis_info.live_in[&slice].iter().cloned().collect();
+            vars_sorted.sort_by_key(|v| v.index());
+            for var_id in vars_sorted {
                 let var_name = format!("s{}_{}", slice, cfg_program.variables[var_id].name);
                 let snapshot_name = format!("{}_init", var_name);
                 // Add the snapshot variable as a local variable
@@ -247,7 +262,10 @@ impl BoogieStateManager {
             tables_to_restore.extend(set);
         }
 
-        for table_var_name in tables_to_restore {
+        let mut tables_to_restore_sorted: Vec<&String> = tables_to_restore.into_iter().collect();
+        tables_to_restore_sorted.sort();
+
+        for table_var_name in tables_to_restore_sorted {
             let snapshot_name = format!("{}_init", table_var_name);
             let assign_expr = BoogieExpr {
                 kind: BoogieExprKind::Var(snapshot_name),
@@ -256,8 +274,12 @@ impl BoogieStateManager {
         }
 
         // Restore live-IN variables only
-        for (slice, vars) in &analysis_info.live_in {
-            for &var_id in vars {
+        let mut live_in_slices: Vec<_> = analysis_info.live_in.keys().cloned().collect();
+        live_in_slices.sort();
+        for slice in live_in_slices {
+            let mut vars_sorted: Vec<_> = analysis_info.live_in[&slice].iter().cloned().collect();
+            vars_sorted.sort_by_key(|v| v.index());
+            for var_id in vars_sorted {
                 let var_name = format!("s{}_{}", slice, cfg_program.variables[var_id].name);
                 let snapshot_name = format!("{}_init", var_name);
                 let assign_expr = BoogieExpr {
@@ -268,7 +290,9 @@ impl BoogieStateManager {
         }
 
         // Reset active flags back to true (they should always be active between interleavings)
-        for (&slice_id, _) in &unit.hops_per_slice {
+        let mut slice_ids: Vec<_> = unit.hops_per_slice.keys().cloned().collect();
+        slice_ids.sort();
+        for slice_id in slice_ids {
             let active_var_name = format!("s{}_active", slice_id);
             let assign_expr = BoogieExpr {
                 kind: BoogieExprKind::BoolConst(true),
@@ -301,7 +325,10 @@ impl BoogieStateManager {
             tables_written_last_hop.extend(set);
         }
 
-        for table_var_name in tables_written_last_hop {
+        let mut tables_written_last_hop_sorted: Vec<&String> = tables_written_last_hop.into_iter().collect();
+        tables_written_last_hop_sorted.sort();
+
+        for table_var_name in tables_written_last_hop_sorted {
             let snapshot_name = format!("{}_{}", table_var_name, suffix);
             table_snapshots.insert(table_var_name.clone(), snapshot_name.clone());
 
@@ -322,12 +349,16 @@ impl BoogieStateManager {
         }
 
         // Snapshot live-OUT variables only
-        for (slice, vars) in &analysis_info.live_out {
-            for &var_id in vars {
+        let mut live_out_slices: Vec<_> = analysis_info.live_out.keys().cloned().collect();
+        live_out_slices.sort();
+        for slice in live_out_slices {
+            let mut vars_sorted: Vec<_> = analysis_info.live_out[&slice].iter().cloned().collect();
+            vars_sorted.sort_by_key(|v| v.index());
+            for var_id in vars_sorted {
                 let var_name = format!("s{}_{}", slice, cfg_program.variables[var_id].name);
                 let snapshot_name = format!("{}_{}", var_name, suffix);
                 var_snapshots
-                    .entry(*slice)
+                    .entry(slice)
                     .or_default()
                     .insert(var_id, snapshot_name.clone());
 
@@ -629,7 +660,10 @@ impl BoogieStateManager {
             tables_written_last_hop.extend(set);
         }
 
-        for table_var_name in tables_written_last_hop {
+        let mut tables_written_last_hop_sorted: Vec<&String> = tables_written_last_hop.into_iter().collect();
+        tables_written_last_hop_sorted.sort();
+
+        for table_var_name in tables_written_last_hop_sorted {
             if let (Some(a_then_b_snapshot), Some(b_then_a_snapshot)) = (
                 a_then_b_vars.table_snapshots.get(table_var_name),
                 b_then_a_vars.table_snapshots.get(table_var_name),

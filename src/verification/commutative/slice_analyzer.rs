@@ -62,18 +62,37 @@ impl SliceAnalyzer {
             >,
             cfg_program: &CfgProgram,
             hop_id: HopId,
+            selected_blocks: Option<&HashSet<crate::cfg::BasicBlockId>>,
         ) -> HashSet<VariableId> {
             let mut vars = HashSet::new();
             let hop = &cfg_program.hops[hop_id];
 
             for &block_id in &hop.blocks {
+                if let Some(sel) = selected_blocks {
+                    if !sel.contains(&block_id) {
+                        continue;
+                    }
+                }
                 let block = &cfg_program.basic_blocks[block_id];
-                let is_exit = matches!(
-                    block.terminator,
-                    crate::cfg::Terminator::HopExit { .. }
+                let is_exit = if let Some(sel) = selected_blocks {
+                    let successors = match &block.terminator {
+                        crate::cfg::Terminator::Jump(target) => vec![*target],
+                        crate::cfg::Terminator::Branch {
+                            if_true, if_false, ..
+                        } => vec![*if_true, *if_false],
+                        crate::cfg::Terminator::HopExit { .. }
                         | crate::cfg::Terminator::Return(_)
-                        | crate::cfg::Terminator::Abort
-                );
+                        | crate::cfg::Terminator::Abort => vec![],
+                    };
+                    successors.is_empty() || successors.iter().any(|s| !sel.contains(s))
+                } else {
+                    matches!(
+                        block.terminator,
+                        crate::cfg::Terminator::HopExit { .. }
+                            | crate::cfg::Terminator::Return(_)
+                            | crate::cfg::Terminator::Abort
+                    )
+                };
                 if is_exit {
                     if let Some(live_vars) = liveness_results.block_exit.get(&block_id) {
                         if let Some(var_set) = live_vars.as_set() {
@@ -94,6 +113,7 @@ impl SliceAnalyzer {
             >,
             cfg_program: &CfgProgram,
             slice: &[HopId],
+            selected_blocks: Option<&HashSet<crate::cfg::BasicBlockId>>,
         ) -> (HashSet<TableAccess>, HashSet<TableAccess>) {
             let mut reads = HashSet::new();
             let mut writes = HashSet::new();
@@ -101,6 +121,11 @@ impl SliceAnalyzer {
             for &hop_id in slice {
                 let hop = &cfg_program.hops[hop_id];
                 for &block_id in &hop.blocks {
+                    if let Some(sel) = selected_blocks {
+                        if !sel.contains(&block_id) {
+                            continue;
+                        }
+                    }
                     if let Some(block_exit) = table_analysis.block_exit.get(&block_id) {
                         if let Some(access_set) = block_exit.as_set() {
                             for table_access in access_set {
@@ -127,11 +152,17 @@ impl SliceAnalyzer {
             >,
             cfg_program: &CfgProgram,
             hop_id: HopId,
+            selected_blocks: Option<&HashSet<crate::cfg::BasicBlockId>>,
         ) -> HashSet<TableAccess> {
             let mut writes = HashSet::new();
             let hop = &cfg_program.hops[hop_id];
 
             for &block_id in &hop.blocks {
+                if let Some(sel) = selected_blocks {
+                    if !sel.contains(&block_id) {
+                        continue;
+                    }
+                }
                 if let Some(block_exit) = table_analysis.block_exit.get(&block_id) {
                     if let Some(access_set) = block_exit.as_set() {
                         for table_access in access_set {
@@ -147,6 +178,14 @@ impl SliceAnalyzer {
 
         let slice_a = unit.hops_per_slice.get(&0).cloned().unwrap_or_default();
         let slice_b = unit.hops_per_slice.get(&1).cloned().unwrap_or_default();
+        let selected_blocks_a: Option<HashSet<crate::cfg::BasicBlockId>> = unit
+            .blocks_per_slice
+            .get(&0)
+            .map(|v| v.iter().cloned().collect());
+        let selected_blocks_b: Option<HashSet<crate::cfg::BasicBlockId>> = unit
+            .blocks_per_slice
+            .get(&1)
+            .map(|v| v.iter().cloned().collect());
         let func_a = &cfg_program.functions[unit.func_per_slice[&0]];
         let func_b = &cfg_program.functions[unit.func_per_slice[&1]];
 
@@ -161,13 +200,22 @@ impl SliceAnalyzer {
         // Get entry and exit blocks for slice A - use entry_block, not first block
         if let Some(&first_hop_a) = slice_a.first() {
             let first_hop_cfg_a = &cfg_program.hops[first_hop_a];
-            if let Some(entry_block_a) = first_hop_cfg_a.entry_block {
+            if let Some(entry_block_a) = selected_blocks_a
+                .as_ref()
+                .and_then(|s| first_hop_cfg_a.blocks.iter().find(|bid| s.contains(bid)).cloned())
+                .or(first_hop_cfg_a.entry_block)
+            {
                 live_in_a = collect_live_vars_entry(&liveness_results_a, entry_block_a);
             }
         }
 
         if let Some(&last_hop_a) = slice_a.last() {
-            live_out_a = collect_live_vars_exit(&liveness_results_a, cfg_program, last_hop_a);
+            live_out_a = collect_live_vars_exit(
+                &liveness_results_a,
+                cfg_program,
+                last_hop_a,
+                selected_blocks_a.as_ref(),
+            );
         }
 
         // Analyze liveness for function B (if different from A)
@@ -176,35 +224,58 @@ impl SliceAnalyzer {
 
             if let Some(&first_hop_b) = slice_b.first() {
                 let first_hop_cfg_b = &cfg_program.hops[first_hop_b];
-                if let Some(entry_block_b) = first_hop_cfg_b.entry_block {
+                if let Some(entry_block_b) = selected_blocks_b
+                    .as_ref()
+                    .and_then(|s| first_hop_cfg_b.blocks.iter().find(|bid| s.contains(bid)).cloned())
+                    .or(first_hop_cfg_b.entry_block)
+                {
                     live_in_b = collect_live_vars_entry(&liveness_results_b, entry_block_b);
                 }
             }
 
             if let Some(&last_hop_b) = slice_b.last() {
-                live_out_b = collect_live_vars_exit(&liveness_results_b, cfg_program, last_hop_b);
+                live_out_b = collect_live_vars_exit(
+                    &liveness_results_b,
+                    cfg_program,
+                    last_hop_b,
+                    selected_blocks_b.as_ref(),
+                );
             }
         } else {
             // Same function, use the same liveness results
             if let Some(&first_hop_b) = slice_b.first() {
                 let first_hop_cfg_b = &cfg_program.hops[first_hop_b];
-                if let Some(entry_block_b) = first_hop_cfg_b.entry_block {
+                if let Some(entry_block_b) = selected_blocks_b
+                    .as_ref()
+                    .and_then(|s| first_hop_cfg_b.blocks.iter().find(|bid| s.contains(bid)).cloned())
+                    .or(first_hop_cfg_b.entry_block)
+                {
                     live_in_b = collect_live_vars_entry(&liveness_results_a, entry_block_b);
                 }
             }
 
             if let Some(&last_hop_b) = slice_b.last() {
-                live_out_b = collect_live_vars_exit(&liveness_results_a, cfg_program, last_hop_b);
+                live_out_b = collect_live_vars_exit(
+                    &liveness_results_a,
+                    cfg_program,
+                    last_hop_b,
+                    selected_blocks_b.as_ref(),
+                );
             }
         }
 
         // Analyze table access for both slices
         let table_analysis_a = analyze_table_mod_ref(func_a, cfg_program);
         let (table_reads_a, table_writes_a) =
-            collect_table_accesses(&table_analysis_a, cfg_program, &slice_a);
+            collect_table_accesses(&table_analysis_a, cfg_program, &slice_a, selected_blocks_a.as_ref());
 
         let table_writes_last_hop_a = if let Some(&last_hop_a) = slice_a.last() {
-            collect_last_hop_writes(&table_analysis_a, cfg_program, last_hop_a)
+            collect_last_hop_writes(
+                &table_analysis_a,
+                cfg_program,
+                last_hop_a,
+                selected_blocks_a.as_ref(),
+            )
         } else {
             HashSet::new()
         };
@@ -217,10 +288,15 @@ impl SliceAnalyzer {
         };
 
         let (table_reads_b, table_writes_b) =
-            collect_table_accesses(&table_analysis_b, cfg_program, &slice_b);
+            collect_table_accesses(&table_analysis_b, cfg_program, &slice_b, selected_blocks_b.as_ref());
 
         let table_writes_last_hop_b = if let Some(&last_hop_b) = slice_b.last() {
-            collect_last_hop_writes(&table_analysis_b, cfg_program, last_hop_b)
+            collect_last_hop_writes(
+                &table_analysis_b,
+                cfg_program,
+                last_hop_b,
+                selected_blocks_b.as_ref(),
+            )
         } else {
             HashSet::new()
         };

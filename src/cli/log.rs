@@ -33,4 +33,11 @@ impl Logger {
         }
         Ok(())
     }
+
+    pub fn line_and_stdout<S: AsRef<str>>(&mut self, s: S) -> std::io::Result<()> {
+        let msg = s.as_ref();
+        self.line(msg)?;
+        println!("{}", msg);
+        Ok(())
+    }
 }
