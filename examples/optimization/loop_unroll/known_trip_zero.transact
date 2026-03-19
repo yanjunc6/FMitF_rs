@@ -1,0 +1,9 @@
+// Expectation: canonical loop with zero trips should be removed/bypassed safely.
+
+function known_trip_zero() -> int {
+    var sum: int = 7;
+    for (var i: int = 5; i < 5; i = i + 1) {
+        sum = sum + i;
+    }
+    return sum;
+}

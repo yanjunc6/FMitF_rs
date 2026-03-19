@@ -143,8 +143,14 @@ impl BoogieStateManager {
         }
 
         // Add assumptions from transaction parameters
-        for (slice_id, hops) in &unit.hops_per_slice {
-            if let Some(first_hop_id) = hops.first() {
+        let mut slice_ids: Vec<_> = unit.hops_per_slice.keys().cloned().collect();
+        slice_ids.sort();
+        for slice_id in slice_ids {
+            if let Some(first_hop_id) = unit
+                .hops_per_slice
+                .get(&slice_id)
+                .and_then(|hops| hops.first())
+            {
                 let func_id = cfg_program.hops[*first_hop_id].function_id;
                 let func = &cfg_program.functions[func_id];
                 for assume_func_id in &func.assumptions {
@@ -155,7 +161,7 @@ impl BoogieStateManager {
                             base,
                             cfg_program,
                             *param_id,
-                            *slice_id,
+                            slice_id,
                             &mut havocked_vars,
                         );
                         args.push(expr);
@@ -165,7 +171,7 @@ impl BoogieStateManager {
                         cfg_program,
                         *assume_func_id,
                         &args,
-                        *slice_id,
+                        slice_id,
                     );
                     base.add_line(BoogieLine::Assume(assume_expr));
                 }
@@ -686,7 +692,9 @@ impl BoogieStateManager {
 
         // Compare live-OUT variables only
         if let Some(vars_a) = analysis_info.live_out.get(&0) {
-            for &var_id in vars_a {
+            let mut vars_sorted: Vec<_> = vars_a.iter().cloned().collect();
+            vars_sorted.sort_by_key(|v| v.index());
+            for var_id in vars_sorted {
                 if let (Some(a_then_b_snapshot), Some(b_then_a_snapshot)) = (
                     a_then_b_vars
                         .var_snapshots
@@ -714,7 +722,9 @@ impl BoogieStateManager {
             }
         }
         if let Some(vars_b) = analysis_info.live_out.get(&1) {
-            for &var_id in vars_b {
+            let mut vars_sorted: Vec<_> = vars_b.iter().cloned().collect();
+            vars_sorted.sort_by_key(|v| v.index());
+            for var_id in vars_sorted {
                 if let (Some(a_then_b_snapshot), Some(b_then_a_snapshot)) = (
                     a_then_b_vars
                         .var_snapshots

@@ -1,0 +1,9 @@
+// Expectation: canonical loop with one trip should become one straight-line body copy.
+
+function known_trip_one() -> int {
+    var sum: int = 10;
+    for (var i: int = 2; i < 3; i = i + 1) {
+        sum = sum + i;
+    }
+    return sum;
+}

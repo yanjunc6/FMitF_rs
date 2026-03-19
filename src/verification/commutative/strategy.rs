@@ -65,13 +65,15 @@ impl CommutativeStrategy {
         for set in analysis_info.tables_written.values() {
             modifies.extend(set.iter().cloned());
         }
+        let mut modifies_sorted: Vec<_> = modifies.into_iter().collect();
+        modifies_sorted.sort();
 
         // Create empty procedure shell and set as current
         let procedure = BoogieProcedure {
             name: procedure_name,
             params: Vec::new(),
             local_vars: Vec::new(),
-            modifies: modifies.into_iter().collect(),
+            modifies: modifies_sorted,
             lines: Vec::new(),
         };
         base.generator.program.procedures.push(procedure);

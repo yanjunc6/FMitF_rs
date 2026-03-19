@@ -14,12 +14,14 @@ mod common_subexpression_elimination;
 mod constant_folding;
 mod copy_propagation;
 mod dead_code_elimination;
+mod loop_unroll;
 
 pub use basic_block_compaction::BasicBlockCompactionPass;
 pub use common_subexpression_elimination::CommonSubexpressionElimination;
 pub use constant_folding::ConstantFoldingPass;
 pub use copy_propagation::CopyPropagationPass;
 pub use dead_code_elimination::DeadCodeElimination;
+pub use loop_unroll::LoopUnrollPass;
 
 /// Trait for optimization passes
 pub trait OptimizationPass {
@@ -55,6 +57,7 @@ impl CfgOptimizer {
         Self::new()
             .add_pass(Box::new(BasicBlockCompactionPass::new()))
             .add_pass(Box::new(ConstantFoldingPass::new()))
+            .add_pass(Box::new(LoopUnrollPass::new(32)))
             .add_pass(Box::new(CopyPropagationPass::new()))
             .add_pass(Box::new(CommonSubexpressionElimination::new()))
             .add_pass(Box::new(DeadCodeElimination::new()))
@@ -90,6 +93,14 @@ impl CfgOptimizer {
             let mut changed_this_iteration = false;
 
             for pass in &self.passes {
+                // TODO: we may want to update this later
+                // Compaction is intentionally a first-iteration normalization pass.
+                // Running it again after loop unroll can collapse newly created linear
+                // chains and remove useful block-level cutpoints for downstream splitting.
+                if iteration > 0 && pass.name() == "basic-block-compaction" {
+                    continue;
+                }
+
                 let changed = pass.optimize_function(program, func_id);
                 if changed {
                     changed_this_iteration = true;
