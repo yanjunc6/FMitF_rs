@@ -1,0 +1,9 @@
+// Expectation: unknown loop bound from parameter should not be unrolled.
+
+function unknown_bound_param(n: int) -> int {
+    var sum: int = 0;
+    for (var i: int = 0; i < n; i = i + 1) {
+        sum = sum + i;
+    }
+    return sum;
+}

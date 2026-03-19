@@ -1,0 +1,11 @@
+// Expectation: loop bound resolved after folding simple constant expression in variables.
+
+function known_trip_via_const_folding() -> int {
+    var bound: int = 1 + 2;
+    var step: int = 1;
+    var sum: int = 0;
+    for (var i: int = 0; i < bound; i = i + step) {
+        sum = sum + 5;
+    }
+    return sum;
+}

@@ -1,0 +1,9 @@
+// Expectation: update step unknown at compile time should not be unrolled.
+
+function non_canonical_update(step: int) -> int {
+    var sum: int = 0;
+    for (var i: int = 0; i < 12; i = i + step) {
+        sum = sum + 1;
+    }
+    return sum;
+}

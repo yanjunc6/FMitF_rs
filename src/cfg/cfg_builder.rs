@@ -1897,7 +1897,9 @@ impl<'a> FunctionContext<'a> {
                                         let field_name_to_id: HashMap<String, cfg::FieldId> =
                                             table_fields.into_iter().collect();
 
-                                        for (field_name, field_var_id) in field_map {
+                                        let mut field_entries: Vec<_> = field_map.into_iter().collect();
+                                        field_entries.sort_by(|a, b| a.0.cmp(&b.0));
+                                        for (field_name, field_var_id) in field_entries {
                                             if let Some(&field_id) =
                                                 field_name_to_id.get(&field_name)
                                             {
@@ -2569,7 +2571,9 @@ impl<'a> FunctionContext<'a> {
                     .get_table_id_from_expr(table)
                     .expect("Table expression should resolve to table ID");
 
-                for (field_name, &field_var_id) in &field_map {
+                let mut field_entries: Vec<_> = field_map.iter().collect();
+                field_entries.sort_by(|a, b| a.0.cmp(b.0));
+                for (field_name, field_var_id) in field_entries {
                     // Build key operands for each field (they're the same for all fields)
                     let key_operands: Vec<_> = key_expr_ids
                         .iter()
@@ -2591,7 +2595,7 @@ impl<'a> FunctionContext<'a> {
                         ]);
                         self.add_instruction(cfg::Instruction {
                             kind: cfg::InstructionKind::TableGet {
-                                dest: field_var_id,
+                                dest: *field_var_id,
                                 table: table_id,
                                 keys: key_operands,
                                 field: Some(field_id),

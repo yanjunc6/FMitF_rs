@@ -1,0 +1,9 @@
+// Expectation: known trip count above cap should be skipped.
+
+function safety_cap_exceeded() -> int {
+    var sum: int = 0;
+    for (var i: int = 0; i < 64; i = i + 1) {
+        sum = sum + 1;
+    }
+    return sum;
+}
