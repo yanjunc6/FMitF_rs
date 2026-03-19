@@ -143,7 +143,7 @@ impl CommutativeStrategy {
 
         // Execute A then B
         base.add_comment_to_current_procedure("Executing A then B:".to_string());
-        executor.execute_interleaving(base, cfg_program, &special.a_then_b, "ab")?;
+        executor.execute_interleaving(base, cfg_program, unit, &special.a_then_b, "ab")?;
         let a_then_b_vars =
             state_manager.snapshot_final_state(base, cfg_program, analysis_info, "a_then_b")?;
 
@@ -152,7 +152,7 @@ impl CommutativeStrategy {
 
         // Execute B then A
         base.add_comment_to_current_procedure("Executing B then A:".to_string());
-        executor.execute_interleaving(base, cfg_program, &special.b_then_a, "ba")?;
+        executor.execute_interleaving(base, cfg_program, unit, &special.b_then_a, "ba")?;
         let b_then_a_vars =
             state_manager.snapshot_final_state(base, cfg_program, analysis_info, "b_then_a")?;
 
@@ -215,6 +215,7 @@ impl InterleavingExecutor {
         &mut self,
         base: &mut BaseVerificationGenerator,
         cfg_program: &CfgProgram,
+        unit: &CommutativeUnit,
         interleaving: &super::Interleaving,
         label_suffix: &str,
     ) -> Results<()> {
@@ -232,7 +233,14 @@ impl InterleavingExecutor {
             let hop_exit_label = format!("{}__{}", base_exit_label, label_suffix);
 
             let hop = &cfg_program.hops[hop_id];
-            for &block_id in hop.blocks.iter() {
+            let selected_blocks = unit
+                .blocks_per_slice
+                .get(&slice_id)
+                .cloned()
+                .unwrap_or_else(|| hop.blocks.clone());
+            let selected_block_set: HashSet<_> = selected_blocks.iter().cloned().collect();
+
+            for &block_id in selected_blocks.iter() {
                 base.get_mut_scope().set_current_slice(slice_id);
                 let base_label = base.get_mut_scope().get_scoped_label(block_id);
                 let label = format!("{}__{}", base_label, label_suffix);
@@ -252,12 +260,18 @@ impl InterleavingExecutor {
                 // Terminator handling per spec
                 match &block.terminator {
                     crate::cfg::Terminator::Jump(target) => {
-                        base.get_mut_scope().set_current_slice(slice_id);
-                        let base_target_label = base.get_mut_scope().get_scoped_label(*target);
-                        let target_label = format!("{}__{}", base_target_label, label_suffix);
-                        guarded_lines.push(Box::new(
-                            crate::verification::Boogie::BoogieLine::Goto(target_label),
-                        ));
+                        if selected_block_set.contains(target) {
+                            base.get_mut_scope().set_current_slice(slice_id);
+                            let base_target_label = base.get_mut_scope().get_scoped_label(*target);
+                            let target_label = format!("{}__{}", base_target_label, label_suffix);
+                            guarded_lines.push(Box::new(
+                                crate::verification::Boogie::BoogieLine::Goto(target_label),
+                            ));
+                        } else {
+                            guarded_lines.push(Box::new(
+                                crate::verification::Boogie::BoogieLine::Goto(hop_exit_label.clone()),
+                            ));
+                        }
                     }
                     crate::cfg::Terminator::Branch {
                         condition,
@@ -281,15 +295,19 @@ impl InterleavingExecutor {
                         let cond_expr =
                             base.generator
                                 .convert_operand(cfg_program, condition, cond_name)?;
-                        let t = {
+                        let t = if selected_block_set.contains(if_true) {
                             base.get_mut_scope().set_current_slice(slice_id);
                             let bl = base.get_mut_scope().get_scoped_label(*if_true);
                             format!("{}__{}", bl, label_suffix)
+                        } else {
+                            hop_exit_label.clone()
                         };
-                        let f = {
+                        let f = if selected_block_set.contains(if_false) {
                             base.get_mut_scope().set_current_slice(slice_id);
                             let bl = base.get_mut_scope().get_scoped_label(*if_false);
                             format!("{}__{}", bl, label_suffix)
+                        } else {
+                            hop_exit_label.clone()
                         };
                         guarded_lines.push(Box::new(crate::verification::Boogie::BoogieLine::If {
                             cond: cond_expr,
