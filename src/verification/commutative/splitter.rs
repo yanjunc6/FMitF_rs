@@ -123,6 +123,16 @@ impl SplitterState {
         &self.split_options.strategy
     }
 
+    fn trace_all_cuts_enabled() -> bool {
+        match std::env::var("FMITF_SPLIT_TRACE_ALL_CUTS") {
+            Ok(v) => {
+                let v = v.to_ascii_lowercase();
+                v == "1" || v == "true" || v == "yes" || v == "on"
+            }
+            Err(_) => false,
+        }
+    }
+
     pub fn try_split_task(
         &self,
         cfg_program: &cfg::Program,
@@ -155,7 +165,7 @@ impl SplitterState {
         let unit = CommutativeVerificationManager::create_unit_for_edge(edge);
         let strategy = SplitStrategy::from_str(&self.split_options.strategy);
         let split = choose_best_split(cfg_program, &unit, strategy);
-        let (sub_a, sub_b, summary) = match split {
+        let (sub_a, sub_b, summary, candidate_logs) = match split {
             Some(v) => v,
             None => {
                 self.stats
@@ -168,6 +178,14 @@ impl SplitterState {
                 return Ok((None, logs));
             }
         };
+
+        if Self::trace_all_cuts_enabled() {
+            logs.push(format!(
+                "Split candidate cuts for {} at depth {} using strategy={}",
+                task.program.name, task.depth, self.split_options.strategy
+            ));
+            logs.extend(candidate_logs);
+        }
 
         let p_a = CommutativeVerificationManager::build_boogie_program_for_unit(cfg_program, &sub_a)
             .map_err(|_| "Split sub-check generation failed")?;
@@ -309,7 +327,7 @@ fn choose_best_split(
     program: &cfg::Program,
     unit: &CommutativeUnit,
     strategy: SplitStrategy,
-) -> Option<(CommutativeUnit, CommutativeUnit, String)> {
+) -> Option<(CommutativeUnit, CommutativeUnit, String, Vec<String>)> {
     let blocks_a = current_blocks_for_slice(unit, 0, program);
     let blocks_b = current_blocks_for_slice(unit, 1, program);
 
@@ -338,6 +356,7 @@ fn choose_best_split(
     }
 
     let mut best: Option<(usize, (usize, usize, usize))> = None;
+    let mut candidate_logs: Vec<String> = Vec::new();
     for cut_idx in 1..(blocks.len() - 1) {
         let cut = blocks[cut_idx];
         let pred_in: Vec<_> = program.basic_blocks[cut]
@@ -400,6 +419,24 @@ fn choose_best_split(
             SplitStrategy::MinStateBalanced => (shared_tables, balance, cut_idx),
         };
 
+        let strategy_name = match strategy {
+            SplitStrategy::MinState => "min-state",
+            SplitStrategy::Balanced => "balanced",
+            SplitStrategy::MinStateBalanced => "min-state-balanced",
+        };
+
+        candidate_logs.push(format!(
+            "  candidate cut_idx={} block={} shared_tables={} balance={} strategy={} score=({},{},{})",
+            cut_idx,
+            cut.index(),
+            shared_tables,
+            balance,
+            strategy_name,
+            score.0,
+            score.1,
+            score.2
+        ));
+
         if best.as_ref().map(|(_, s)| score < *s).unwrap_or(true) {
             best = Some((cut_idx, score));
         }
@@ -418,6 +455,6 @@ fn choose_best_split(
         "split slice={} at block_index={} score=({},{},{})",
         split_slice, cut_idx, score.0, score.1, score.2
     );
-    Some((first, second, summary))
+    Some((first, second, summary, candidate_logs))
 }
 

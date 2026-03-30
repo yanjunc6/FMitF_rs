@@ -76,7 +76,7 @@ pub struct Args {
     pub split_max_depth: u32,
 
     /// Split strategy: min-state | balanced | min-state-balanced
-    #[arg(long, default_value = "min-state-balanced")]
+    #[arg(long, default_value = "balanced")]
     pub split_strategy: String,
 }
 
