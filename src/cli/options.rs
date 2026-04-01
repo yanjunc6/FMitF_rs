@@ -13,6 +13,7 @@ pub struct SplitOptions {
     pub enabled: bool,
     pub max_depth: u32,
     pub strategy: String,
+    pub debug: bool,
 }
 
 #[derive(Debug, Clone)]

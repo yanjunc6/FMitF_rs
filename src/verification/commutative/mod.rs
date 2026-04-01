@@ -8,15 +8,32 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 
 mod boogie_helpers;
-pub mod splitter;
 mod interleaving_generator;
+pub mod naming;
 mod slice_analyzer;
+pub mod splitter;
 mod strategy;
 
 // Re-exported modules used by strategy
 use strategy::CommutativeStrategy;
 
-#[derive(Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InstructionWindow {
+    pub start: usize,
+    pub end: usize,
+}
+
+impl InstructionWindow {
+    pub fn new(start: usize, end: usize) -> Self {
+        Self { start, end }
+    }
+
+    pub fn len(&self) -> usize {
+        self.end.saturating_sub(self.start)
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct CommutativeUnit {
     pub c_edge: SCGraphEdge,
     /// Continuous hops per slice; slice 0 corresponds to c_edge.source, slice 1 to c_edge.target
@@ -25,6 +42,10 @@ pub struct CommutativeUnit {
     /// Optional block subset per slice for recursive splitting.
     /// If absent, the whole hop blocks are used.
     pub blocks_per_slice: HashMap<SliceId, Vec<crate::cfg::BasicBlockId>>,
+    /// Optional instruction windows per block within each slice.
+    /// If absent for a block, the full block instruction range is used.
+    pub instruction_windows_per_slice:
+        HashMap<SliceId, HashMap<crate::cfg::BasicBlockId, InstructionWindow>>,
 }
 
 /// Represents an interleaving as a sequence of (slice_id, hop_id)
@@ -47,6 +68,7 @@ impl CommutativeVerificationManager {
             hops_per_slice: HashMap::new(),
             func_per_slice: HashMap::new(),
             blocks_per_slice: HashMap::new(),
+            instruction_windows_per_slice: HashMap::new(),
         };
         unit.hops_per_slice.insert(0, vec![edge.source.hop_id]);
         unit.hops_per_slice.insert(1, vec![edge.target.hop_id]);
@@ -60,7 +82,8 @@ impl CommutativeVerificationManager {
         // Analyze the SC-graph to identify commutative units
         for edge in &sc_graph.edges {
             if edge.edge_type == EdgeType::C {
-                self.commutative_units.push(Self::create_unit_for_edge(edge));
+                self.commutative_units
+                    .push(Self::create_unit_for_edge(edge));
             }
         }
     }
@@ -87,7 +110,8 @@ impl CommutativeVerificationManager {
             unit.c_edge.target.hop_id.index()
         );
 
-        let procedure = Self::create_commutative_verification_procedure(&mut unit_base, cfg_program, unit)?;
+        let procedure =
+            Self::create_commutative_verification_procedure(&mut unit_base, cfg_program, unit)?;
         unit_base.generator.program.procedures.push(procedure);
         Ok(Some(unit_base.generator.program))
     }

@@ -1897,7 +1897,8 @@ impl<'a> FunctionContext<'a> {
                                         let field_name_to_id: HashMap<String, cfg::FieldId> =
                                             table_fields.into_iter().collect();
 
-                                        let mut field_entries: Vec<_> = field_map.into_iter().collect();
+                                        let mut field_entries: Vec<_> =
+                                            field_map.into_iter().collect();
                                         field_entries.sort_by(|a, b| a.0.cmp(&b.0));
                                         for (field_name, field_var_id) in field_entries {
                                             if let Some(&field_id) =

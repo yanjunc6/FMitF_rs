@@ -263,9 +263,7 @@ impl DataCollector {
             VerificationResult::Pass => self.data.summary.verification_pass += 1,
             VerificationResult::Error => self.data.summary.verification_errors += 1,
             VerificationResult::Timeout => self.data.summary.verification_timeouts += 1,
-            VerificationResult::CompilationError => {
-                self.data.summary.boogie_compile_failures += 1
-            }
+            VerificationResult::CompilationError => self.data.summary.boogie_compile_failures += 1,
         }
         self.data.c_edge_verifications.push(edge_data);
     }

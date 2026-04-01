@@ -202,7 +202,13 @@ impl SliceAnalyzer {
             let first_hop_cfg_a = &cfg_program.hops[first_hop_a];
             if let Some(entry_block_a) = selected_blocks_a
                 .as_ref()
-                .and_then(|s| first_hop_cfg_a.blocks.iter().find(|bid| s.contains(bid)).cloned())
+                .and_then(|s| {
+                    first_hop_cfg_a
+                        .blocks
+                        .iter()
+                        .find(|bid| s.contains(bid))
+                        .cloned()
+                })
                 .or(first_hop_cfg_a.entry_block)
             {
                 live_in_a = collect_live_vars_entry(&liveness_results_a, entry_block_a);
@@ -226,7 +232,13 @@ impl SliceAnalyzer {
                 let first_hop_cfg_b = &cfg_program.hops[first_hop_b];
                 if let Some(entry_block_b) = selected_blocks_b
                     .as_ref()
-                    .and_then(|s| first_hop_cfg_b.blocks.iter().find(|bid| s.contains(bid)).cloned())
+                    .and_then(|s| {
+                        first_hop_cfg_b
+                            .blocks
+                            .iter()
+                            .find(|bid| s.contains(bid))
+                            .cloned()
+                    })
                     .or(first_hop_cfg_b.entry_block)
                 {
                     live_in_b = collect_live_vars_entry(&liveness_results_b, entry_block_b);
@@ -247,7 +259,13 @@ impl SliceAnalyzer {
                 let first_hop_cfg_b = &cfg_program.hops[first_hop_b];
                 if let Some(entry_block_b) = selected_blocks_b
                     .as_ref()
-                    .and_then(|s| first_hop_cfg_b.blocks.iter().find(|bid| s.contains(bid)).cloned())
+                    .and_then(|s| {
+                        first_hop_cfg_b
+                            .blocks
+                            .iter()
+                            .find(|bid| s.contains(bid))
+                            .cloned()
+                    })
                     .or(first_hop_cfg_b.entry_block)
                 {
                     live_in_b = collect_live_vars_entry(&liveness_results_a, entry_block_b);
@@ -266,8 +284,12 @@ impl SliceAnalyzer {
 
         // Analyze table access for both slices
         let table_analysis_a = analyze_table_mod_ref(func_a, cfg_program);
-        let (table_reads_a, table_writes_a) =
-            collect_table_accesses(&table_analysis_a, cfg_program, &slice_a, selected_blocks_a.as_ref());
+        let (table_reads_a, table_writes_a) = collect_table_accesses(
+            &table_analysis_a,
+            cfg_program,
+            &slice_a,
+            selected_blocks_a.as_ref(),
+        );
 
         let table_writes_last_hop_a = if let Some(&last_hop_a) = slice_a.last() {
             collect_last_hop_writes(
@@ -287,8 +309,12 @@ impl SliceAnalyzer {
             table_analysis_a
         };
 
-        let (table_reads_b, table_writes_b) =
-            collect_table_accesses(&table_analysis_b, cfg_program, &slice_b, selected_blocks_b.as_ref());
+        let (table_reads_b, table_writes_b) = collect_table_accesses(
+            &table_analysis_b,
+            cfg_program,
+            &slice_b,
+            selected_blocks_b.as_ref(),
+        );
 
         let table_writes_last_hop_b = if let Some(&last_hop_b) = slice_b.last() {
             collect_last_hop_writes(

@@ -77,15 +77,17 @@ impl LoopUnrollPass {
             return false;
         }
 
-        let cond_info = match Self::parse_condition(program, &program.basic_blocks[header_id], cond_operand) {
-            Some(v) => v,
-            None => return false,
-        };
+        let cond_info =
+            match Self::parse_condition(program, &program.basic_blocks[header_id], cond_operand) {
+                Some(v) => v,
+                None => return false,
+            };
 
-        let (step, update_idx) = match Self::parse_update(&program.basic_blocks[body_id], cond_info.induction_var) {
-            Some(v) => v,
-            None => return false,
-        };
+        let (step, update_idx) =
+            match Self::parse_update(&program.basic_blocks[body_id], cond_info.induction_var) {
+                Some(v) => v,
+                None => return false,
+            };
 
         if Self::has_other_induction_writes(
             &program.basic_blocks[body_id],
@@ -95,15 +97,17 @@ impl LoopUnrollPass {
             return false;
         }
 
-        let init_value = match Self::parse_init(&program.basic_blocks[preheader_id], cond_info.induction_var) {
-            Some(v) => v,
-            None => return false,
-        };
+        let init_value =
+            match Self::parse_init(&program.basic_blocks[preheader_id], cond_info.induction_var) {
+                Some(v) => v,
+                None => return false,
+            };
 
-        let trip_count = match Self::compute_trip_count(init_value, cond_info.bound, step, cond_info.cmp_op) {
-            Some(v) => v,
-            None => return false,
-        };
+        let trip_count =
+            match Self::compute_trip_count(init_value, cond_info.bound, step, cond_info.cmp_op) {
+                Some(v) => v,
+                None => return false,
+            };
 
         if trip_count > self.max_trip_count {
             return false;
@@ -131,7 +135,11 @@ impl LoopUnrollPass {
         }
     }
 
-    fn parse_condition(program: &Program, block: &BasicBlock, cond_operand: Operand) -> Option<LoopCondInfo> {
+    fn parse_condition(
+        program: &Program,
+        block: &BasicBlock,
+        cond_operand: Operand,
+    ) -> Option<LoopCondInfo> {
         let cond_var = match cond_operand {
             Operand::Variable(v) => v,
             _ => return None,
@@ -373,19 +381,31 @@ impl LoopUnrollPass {
 
         if trip_count == 0 {
             program.basic_blocks[preheader_id].terminator = Terminator::Jump(exit_id);
-            Self::remove_pred(&mut program.basic_blocks[header_id].predecessors, preheader_id);
+            Self::remove_pred(
+                &mut program.basic_blocks[header_id].predecessors,
+                preheader_id,
+            );
             Self::remove_pred(&mut program.basic_blocks[header_id].predecessors, body_id);
             Self::remove_pred(&mut program.basic_blocks[body_id].predecessors, header_id);
-            Self::add_pred_unique(&mut program.basic_blocks[exit_id].predecessors, preheader_id);
+            Self::add_pred_unique(
+                &mut program.basic_blocks[exit_id].predecessors,
+                preheader_id,
+            );
             return true;
         }
 
         // Rewire preheader to first unrolled iteration (reuse original body block).
         program.basic_blocks[preheader_id].terminator = Terminator::Jump(body_id);
-        Self::remove_pred(&mut program.basic_blocks[header_id].predecessors, preheader_id);
+        Self::remove_pred(
+            &mut program.basic_blocks[header_id].predecessors,
+            preheader_id,
+        );
         Self::remove_pred(&mut program.basic_blocks[header_id].predecessors, body_id);
         Self::remove_pred(&mut program.basic_blocks[body_id].predecessors, header_id);
-        Self::add_pred_unique(&mut program.basic_blocks[body_id].predecessors, preheader_id);
+        Self::add_pred_unique(
+            &mut program.basic_blocks[body_id].predecessors,
+            preheader_id,
+        );
 
         let mut prev_id = body_id;
         let body_template = program.basic_blocks[body_id].clone();
