@@ -1,7 +1,7 @@
 //! CLI Module - Simple compiler entry point
 
-pub mod compiler;
 pub mod cache_manager;
+pub mod compiler;
 pub mod data;
 pub mod log;
 pub mod options;
@@ -78,6 +78,10 @@ pub struct Args {
     /// Split strategy: min-state | balanced | min-state-balanced
     #[arg(long, default_value = "balanced")]
     pub split_strategy: String,
+
+    /// Print detailed split cut debugging information
+    #[arg(long, default_value_t = false)]
+    pub split_debug: bool,
 }
 
 impl Args {
@@ -117,6 +121,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             enabled: !args.disable_split,
             max_depth: args.split_max_depth,
             strategy: args.split_strategy,
+            debug: args.split_debug,
         },
     };
 

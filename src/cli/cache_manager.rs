@@ -386,7 +386,10 @@ fn deterministic_boogie_repr(program: &BoogieProgram) -> String {
     let mut gvars: Vec<_> = program.global_vars.iter().collect();
     gvars.sort_by(|a, b| a.0.cmp(b.0));
     for (name, decl) in gvars {
-        out.push_str(&format!("g:{}:{:?}:{}\n", name, decl.var_type, decl.is_const));
+        out.push_str(&format!(
+            "g:{}:{:?}:{}\n",
+            name, decl.var_type, decl.is_const
+        ));
     }
 
     let mut others = program.other_declarations.clone();
@@ -398,7 +401,10 @@ fn deterministic_boogie_repr(program: &BoogieProgram) -> String {
     let mut glits: Vec<_> = program.global_string_literals.iter().collect();
     glits.sort_by(|a, b| a.0.cmp(b.0));
     for (lit, decl) in glits {
-        out.push_str(&format!("str:{}:{}:{:?}\n", lit, decl.var_name, decl.var_type));
+        out.push_str(&format!(
+            "str:{}:{}:{:?}\n",
+            lit, decl.var_name, decl.var_type
+        ));
     }
 
     let mut procedures = program.procedures.clone();
@@ -427,8 +433,25 @@ fn deterministic_boogie_repr(program: &BoogieProgram) -> String {
 fn normalize_identifiers(s: &str) -> String {
     let mut map: HashMap<String, usize> = HashMap::new();
     let keywords: HashSet<&'static str> = [
-        "var", "const", "procedure", "modifies", "assert", "assume", "havoc", "goto", "if",
-        "else", "call", "type", "function", "axiom", "int", "real", "bool", "true", "false",
+        "var",
+        "const",
+        "procedure",
+        "modifies",
+        "assert",
+        "assume",
+        "havoc",
+        "goto",
+        "if",
+        "else",
+        "call",
+        "type",
+        "function",
+        "axiom",
+        "int",
+        "real",
+        "bool",
+        "true",
+        "false",
     ]
     .into_iter()
     .collect();

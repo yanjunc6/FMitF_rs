@@ -339,16 +339,17 @@ impl SCGraph {
                             let duration_us = (duration_ms * 1000.0) as u128;
 
                             // Use gray for timeout, otherwise calculate color based on position in dynamic range
-                            let color = if info.result == crate::cli::data::VerificationResult::Timeout {
-                                Self::timeout_color().to_string()
-                            } else {
-                                let ratio = if max_time_ms > min_time_ms {
-                                    (duration_ms - min_time_ms) / (max_time_ms - min_time_ms)
+                            let color =
+                                if info.result == crate::cli::data::VerificationResult::Timeout {
+                                    Self::timeout_color().to_string()
                                 } else {
-                                    0.5
+                                    let ratio = if max_time_ms > min_time_ms {
+                                        (duration_ms - min_time_ms) / (max_time_ms - min_time_ms)
+                                    } else {
+                                        0.5
+                                    };
+                                    Self::interpolate_color(ratio)
                                 };
-                                Self::interpolate_color(ratio)
-                            };
 
                             // Determine style based on elimination (use bold for dotted to make it thicker)
                             let style = if info.eliminated {
@@ -358,13 +359,14 @@ impl SCGraph {
                             };
                             let penwidth = ",penwidth=2.0";
 
-                            let label = if info.result == crate::cli::data::VerificationResult::Timeout {
-                                "C (timeout)".to_string()
-                            } else if duration_us < 1000 {
-                                format!("C ({}µs)", duration_us)
-                            } else {
-                                format!("C ({:.1}ms)", duration_ms)
-                            };
+                            let label =
+                                if info.result == crate::cli::data::VerificationResult::Timeout {
+                                    "C (timeout)".to_string()
+                                } else if duration_us < 1000 {
+                                    format!("C ({}µs)", duration_us)
+                                } else {
+                                    format!("C ({:.1}ms)", duration_ms)
+                                };
 
                             writeln!(
                                 w,

@@ -331,7 +331,8 @@ impl BoogieStateManager {
             tables_written_last_hop.extend(set);
         }
 
-        let mut tables_written_last_hop_sorted: Vec<&String> = tables_written_last_hop.into_iter().collect();
+        let mut tables_written_last_hop_sorted: Vec<&String> =
+            tables_written_last_hop.into_iter().collect();
         tables_written_last_hop_sorted.sort();
 
         for table_var_name in tables_written_last_hop_sorted {
@@ -666,7 +667,8 @@ impl BoogieStateManager {
             tables_written_last_hop.extend(set);
         }
 
-        let mut tables_written_last_hop_sorted: Vec<&String> = tables_written_last_hop.into_iter().collect();
+        let mut tables_written_last_hop_sorted: Vec<&String> =
+            tables_written_last_hop.into_iter().collect();
         tables_written_last_hop_sorted.sort();
 
         for table_var_name in tables_written_last_hop_sorted {

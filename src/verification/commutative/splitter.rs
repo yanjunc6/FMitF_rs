@@ -1,15 +1,20 @@
-use super::{CommutativeUnit, CommutativeVerificationManager};
+use super::{
+    naming::{parse_commutative_edge_ids, split_child_program_name},
+    CommutativeUnit, CommutativeVerificationManager, InstructionWindow,
+};
 use crate::cfg;
 use crate::sc_graph::{EdgeType, SCGraph};
-use crate::verification::Boogie::{BoogieProgram, VerificationNodeId};
+use crate::verification::Boogie::BoogieProgram;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 #[derive(Debug, Clone)]
 pub struct SplitRuntimeOptions {
     pub enabled: bool,
     pub max_depth: u32,
     pub strategy: String,
+    pub debug_cuts: bool,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -20,6 +25,16 @@ pub struct SplitStatsSnapshot {
     pub split_skipped_max_depth: usize,
     pub split_skipped_no_cutpoint: usize,
     pub split_budget_exhausted: usize,
+    pub total_cuts_recorded: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct AppliedCut {
+    pub depth: u32,
+    pub slice_id: usize,
+    pub function_id: usize,
+    pub block_id: usize,
+    pub op_pos: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -27,6 +42,8 @@ pub struct CommutativeTask {
     pub program: BoogieProgram,
     pub root_file_name: String,
     pub depth: u32,
+    pub unit: CommutativeUnit,
+    pub applied_cuts: Vec<AppliedCut>,
 }
 
 #[derive(Default)]
@@ -37,6 +54,7 @@ struct SplitStatsAtomic {
     split_skipped_max_depth: AtomicUsize,
     split_skipped_no_cutpoint: AtomicUsize,
     split_budget_exhausted: AtomicUsize,
+    total_cuts_recorded: AtomicUsize,
 }
 
 impl SplitStatsAtomic {
@@ -48,6 +66,7 @@ impl SplitStatsAtomic {
             split_skipped_max_depth: self.split_skipped_max_depth.load(Ordering::Relaxed),
             split_skipped_no_cutpoint: self.split_skipped_no_cutpoint.load(Ordering::Relaxed),
             split_budget_exhausted: self.split_budget_exhausted.load(Ordering::Relaxed),
+            total_cuts_recorded: self.total_cuts_recorded.load(Ordering::Relaxed),
         }
     }
 }
@@ -69,10 +88,21 @@ impl SplitStrategy {
     }
 }
 
+#[derive(Debug, Clone)]
+struct CandidateCut {
+    slice_id: usize,
+    block_id: cfg::BasicBlockId,
+    op_pos: usize,
+    score: (usize, usize, usize, usize),
+    summary: String,
+    candidate_log: String,
+}
+
 pub struct SplitterState {
     split_options: SplitRuntimeOptions,
     edge_map: HashMap<(usize, u32, usize, usize, u32, usize), crate::sc_graph::SCGraphEdge>,
     stats: SplitStatsAtomic,
+    cut_history: Mutex<Vec<AppliedCut>>,
 }
 
 impl SplitterState {
@@ -100,7 +130,21 @@ impl SplitterState {
             split_options: split_options.clone(),
             edge_map,
             stats: SplitStatsAtomic::default(),
+            cut_history: Mutex::new(Vec::new()),
         }
+    }
+
+    pub fn create_root_task(&self, program: BoogieProgram) -> Option<CommutativeTask> {
+        let root_file_name = format!("{}.bpl", program.name);
+        let edge_ids = parse_commutative_edge_ids(&root_file_name)?;
+        let edge = self.edge_map.get(&edge_ids)?;
+        Some(CommutativeTask {
+            program,
+            root_file_name,
+            depth: 0,
+            unit: CommutativeVerificationManager::create_unit_for_edge(edge),
+            applied_cuts: Vec::new(),
+        })
     }
 
     pub fn stats(&self) -> Option<SplitStatsSnapshot> {
@@ -123,7 +167,10 @@ impl SplitterState {
         &self.split_options.strategy
     }
 
-    fn trace_all_cuts_enabled() -> bool {
+    fn trace_all_cuts_enabled(&self) -> bool {
+        if self.split_options.debug_cuts {
+            return true;
+        }
         match std::env::var("FMITF_SPLIT_TRACE_ALL_CUTS") {
             Ok(v) => {
                 let v = v.to_ascii_lowercase();
@@ -131,6 +178,13 @@ impl SplitterState {
             }
             Err(_) => false,
         }
+    }
+
+    pub fn recorded_cuts(&self) -> Vec<AppliedCut> {
+        self.cut_history
+            .lock()
+            .map(|v| v.clone())
+            .unwrap_or_default()
     }
 
     pub fn try_split_task(
@@ -153,33 +207,23 @@ impl SplitterState {
             return Ok((None, logs));
         }
 
-        let ids = match parse_commutative_edge_ids(&task.root_file_name) {
-            Some(v) => v,
-            None => return Ok((None, logs)),
-        };
-        let edge = match self.edge_map.get(&ids) {
-            Some(e) => e,
-            None => return Ok((None, logs)),
-        };
-
-        let unit = CommutativeVerificationManager::create_unit_for_edge(edge);
         let strategy = SplitStrategy::from_str(&self.split_options.strategy);
-        let split = choose_best_split(cfg_program, &unit, strategy);
-        let (sub_a, sub_b, summary, candidate_logs) = match split {
-            Some(v) => v,
-            None => {
-                self.stats
-                    .split_skipped_no_cutpoint
-                    .fetch_add(1, Ordering::Relaxed);
-                logs.push(format!(
-                    "Split skipped for {} at depth {}: no valid cutpoint found",
-                    task.program.name, task.depth
-                ));
-                return Ok((None, logs));
-            }
-        };
+        let (sub_a, sub_b, cut, candidate_logs) =
+            match choose_best_split(cfg_program, &task.unit, strategy) {
+                Some(v) => v,
+                None => {
+                    self.stats
+                        .split_skipped_no_cutpoint
+                        .fetch_add(1, Ordering::Relaxed);
+                    logs.push(format!(
+                        "Split skipped for {} at depth {}: no valid cutpoint found",
+                        task.program.name, task.depth
+                    ));
+                    return Ok((None, logs));
+                }
+            };
 
-        if Self::trace_all_cuts_enabled() {
+        if self.trace_all_cuts_enabled() {
             logs.push(format!(
                 "Split candidate cuts for {} at depth {} using strategy={}",
                 task.program.name, task.depth, self.split_options.strategy
@@ -187,26 +231,51 @@ impl SplitterState {
             logs.extend(candidate_logs);
         }
 
-        let p_a = CommutativeVerificationManager::build_boogie_program_for_unit(cfg_program, &sub_a)
-            .map_err(|_| "Split sub-check generation failed")?;
-        let p_b = CommutativeVerificationManager::build_boogie_program_for_unit(cfg_program, &sub_b)
-            .map_err(|_| "Split sub-check generation failed")?;
+        let p_a =
+            CommutativeVerificationManager::build_boogie_program_for_unit(cfg_program, &sub_a)
+                .map_err(|_| "Split sub-check generation failed")?;
+        let p_b =
+            CommutativeVerificationManager::build_boogie_program_for_unit(cfg_program, &sub_b)
+                .map_err(|_| "Split sub-check generation failed")?;
+
+        let applied_cut = AppliedCut {
+            depth: task.depth,
+            slice_id: cut.slice_id,
+            function_id: cfg_program.basic_blocks[cut.block_id].function_id.index(),
+            block_id: cut.block_id.index(),
+            op_pos: cut.op_pos,
+        };
+
+        self.stats
+            .total_cuts_recorded
+            .fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut h) = self.cut_history.lock() {
+            h.push(applied_cut.clone());
+        }
 
         let mut out = Vec::new();
         if let Some(mut pa) = p_a {
-            pa.name = format!("{}__split_d{}_a", task.program.name, task.depth + 1);
+            pa.name = split_child_program_name(&task.program.name, task.depth + 1, 'a');
+            let mut cuts = task.applied_cuts.clone();
+            cuts.push(applied_cut.clone());
             out.push(CommutativeTask {
                 program: pa,
                 root_file_name: task.root_file_name.clone(),
                 depth: task.depth + 1,
+                unit: sub_a,
+                applied_cuts: cuts,
             });
         }
         if let Some(mut pb) = p_b {
-            pb.name = format!("{}__split_d{}_b", task.program.name, task.depth + 1);
+            pb.name = split_child_program_name(&task.program.name, task.depth + 1, 'b');
+            let mut cuts = task.applied_cuts.clone();
+            cuts.push(applied_cut.clone());
             out.push(CommutativeTask {
                 program: pb,
                 root_file_name: task.root_file_name.clone(),
                 depth: task.depth + 1,
+                unit: sub_b,
+                applied_cuts: cuts,
             });
         }
 
@@ -224,51 +293,28 @@ impl SplitterState {
         self.stats.split_performed.fetch_add(1, Ordering::Relaxed);
         logs.push(format!(
             "Split depth {} for {}: {}",
-            task.depth, task.program.name, summary
+            task.depth, task.program.name, cut.summary
         ));
+
+        if self.split_options.debug_cuts {
+            logs.extend(debug_cut_context(
+                cfg_program,
+                &task.unit,
+                cut.slice_id,
+                cut.block_id,
+                cut.op_pos,
+            ));
+        }
+
         Ok((Some(out), logs))
     }
 }
 
-fn parse_commutative_edge_ids(file_name: &str) -> Option<(usize, u32, usize, usize, u32, usize)> {
-    let trimmed = file_name.strip_suffix(".bpl").unwrap_or(file_name);
-    let canonical = trimmed.split("__split_").next().unwrap_or(trimmed);
-    if !canonical.starts_with("commutative_") {
-        return None;
-    }
-
-    let parts: Vec<&str> = canonical.split('_').collect();
-    if parts.len() != 8 || parts.get(4).copied() != Some("vs") {
-        return None;
-    }
-
-    let source = parse_node_from_parts(parts[1], parts[2], parts[3])?;
-    let target = parse_node_from_parts(parts[5], parts[6], parts[7])?;
-
-    Some((
-        source.function_id,
-        source.instance,
-        source.hop_id,
-        target.function_id,
-        target.instance,
-        target.hop_id,
-    ))
-}
-
-fn parse_node_from_parts(f_part: &str, i_part: &str, h_part: &str) -> Option<VerificationNodeId> {
-    let function_id = f_part.strip_prefix('f')?.parse().ok()?;
-    let instance = i_part.strip_prefix('i')?.parse().ok()?;
-    let hop_id = h_part.strip_prefix('h')?.parse().ok()?;
-
-    Some(VerificationNodeId {
-        function_id,
-        instance,
-        hop_id,
-    })
-}
-
-
-fn current_blocks_for_slice(unit: &CommutativeUnit, slice: usize, program: &cfg::Program) -> Vec<cfg::BasicBlockId> {
+fn current_blocks_for_slice(
+    unit: &CommutativeUnit,
+    slice: usize,
+    program: &cfg::Program,
+) -> Vec<cfg::BasicBlockId> {
     if let Some(v) = unit.blocks_per_slice.get(&slice) {
         return v.clone();
     }
@@ -279,182 +325,439 @@ fn current_blocks_for_slice(unit: &CommutativeUnit, slice: usize, program: &cfg:
     program.hops[hops[0]].blocks.clone()
 }
 
-fn terminator_successors(term: &cfg::Terminator) -> Vec<cfg::BasicBlockId> {
-    match term {
-        cfg::Terminator::Jump(target) => vec![*target],
-        cfg::Terminator::Branch { if_true, if_false, .. } => vec![*if_true, *if_false],
-        _ => Vec::new(),
+fn instruction_window_for_block(
+    unit: &CommutativeUnit,
+    slice: usize,
+    block_id: cfg::BasicBlockId,
+    program: &cfg::Program,
+) -> InstructionWindow {
+    if let Some(slice_windows) = unit.instruction_windows_per_slice.get(&slice) {
+        if let Some(window) = slice_windows.get(&block_id) {
+            return *window;
+        }
     }
+    let len = program.basic_blocks[block_id].instructions.len();
+    InstructionWindow::new(0, len)
 }
 
-fn collect_operand_tables(op: &cfg::Operand, out: &mut HashSet<cfg::TableId>) {
-    if let cfg::Operand::Table(t) = op {
-        out.insert(*t);
-    }
-}
-
-fn collect_table_access(inst: &cfg::Instruction, out: &mut HashSet<cfg::TableId>) {
+fn table_access_signature(inst: &cfg::Instruction) -> Option<(cfg::TableId, bool)> {
     match &inst.kind {
-        cfg::InstructionKind::Assign { src, .. } => collect_operand_tables(src, out),
-        cfg::InstructionKind::BinaryOp { left, right, .. } => {
-            collect_operand_tables(left, out);
-            collect_operand_tables(right, out);
-        }
-        cfg::InstructionKind::UnaryOp { operand, .. } => collect_operand_tables(operand, out),
-        cfg::InstructionKind::Call { args, .. } => {
-            for a in args {
-                collect_operand_tables(a, out);
-            }
-        }
-        cfg::InstructionKind::TableGet { table, keys, .. } => {
-            out.insert(*table);
-            for k in keys {
-                collect_operand_tables(k, out);
-            }
-        }
-        cfg::InstructionKind::TableSet { table, keys, value, .. } => {
-            out.insert(*table);
-            for k in keys {
-                collect_operand_tables(k, out);
-            }
-            collect_operand_tables(value, out);
-        }
-        cfg::InstructionKind::Assert { condition, .. } => collect_operand_tables(condition, out),
+        cfg::InstructionKind::TableGet { table, .. } => Some((*table, false)),
+        cfg::InstructionKind::TableSet { table, .. } => Some((*table, true)),
+        _ => None,
     }
+}
+
+fn db_rw_weight(inst: &cfg::Instruction) -> usize {
+    match inst.kind {
+        cfg::InstructionKind::TableGet { .. } | cfg::InstructionKind::TableSet { .. } => 1,
+        _ => 0,
+    }
+}
+
+fn cfg_successors_in_slice(
+    program: &cfg::Program,
+    block: cfg::BasicBlockId,
+    in_slice: &HashSet<cfg::BasicBlockId>,
+) -> Vec<cfg::BasicBlockId> {
+    let succs = match &program.basic_blocks[block].terminator {
+        cfg::Terminator::Jump(target) => vec![*target],
+        cfg::Terminator::Branch {
+            if_true, if_false, ..
+        } => vec![*if_true, *if_false],
+        _ => Vec::new(),
+    };
+    succs.into_iter().filter(|s| in_slice.contains(s)).collect()
+}
+
+fn blocks_in_cycles(
+    program: &cfg::Program,
+    blocks: &[cfg::BasicBlockId],
+) -> HashSet<cfg::BasicBlockId> {
+    let mut cycle_blocks = HashSet::new();
+    if blocks.is_empty() {
+        return cycle_blocks;
+    }
+
+    let block_set: HashSet<_> = blocks.iter().cloned().collect();
+    let mut visited = HashSet::new();
+    let mut finish_order = Vec::new();
+
+    fn dfs_forward(
+        program: &cfg::Program,
+        node: cfg::BasicBlockId,
+        block_set: &HashSet<cfg::BasicBlockId>,
+        visited: &mut HashSet<cfg::BasicBlockId>,
+        finish_order: &mut Vec<cfg::BasicBlockId>,
+    ) {
+        if !visited.insert(node) {
+            return;
+        }
+        let succs = cfg_successors_in_slice(program, node, block_set);
+        for succ in succs {
+            dfs_forward(program, succ, block_set, visited, finish_order);
+        }
+        finish_order.push(node);
+    }
+
+    for &b in blocks {
+        dfs_forward(program, b, &block_set, &mut visited, &mut finish_order);
+    }
+
+    let mut reverse_adj: HashMap<cfg::BasicBlockId, Vec<cfg::BasicBlockId>> = HashMap::new();
+    for &b in blocks {
+        reverse_adj.entry(b).or_default();
+        for succ in cfg_successors_in_slice(program, b, &block_set) {
+            reverse_adj.entry(succ).or_default().push(b);
+        }
+    }
+
+    let mut assigned = HashSet::new();
+    while let Some(node) = finish_order.pop() {
+        if assigned.contains(&node) {
+            continue;
+        }
+        let mut stack = vec![node];
+        let mut component = Vec::new();
+        assigned.insert(node);
+        while let Some(cur) = stack.pop() {
+            component.push(cur);
+            if let Some(preds) = reverse_adj.get(&cur) {
+                for &p in preds {
+                    if assigned.insert(p) {
+                        stack.push(p);
+                    }
+                }
+            }
+        }
+
+        if component.len() > 1 {
+            for c in component {
+                cycle_blocks.insert(c);
+            }
+            continue;
+        }
+
+        let only = component[0];
+        let has_self_loop = cfg_successors_in_slice(program, only, &block_set)
+            .into_iter()
+            .any(|s| s == only);
+        if has_self_loop {
+            cycle_blocks.insert(only);
+        }
+    }
+
+    cycle_blocks
+}
+
+fn slice_operation_count(program: &cfg::Program, unit: &CommutativeUnit, slice: usize) -> usize {
+    let blocks = current_blocks_for_slice(unit, slice, program);
+    blocks
+        .iter()
+        .map(|&b| instruction_window_for_block(unit, slice, b, program).len())
+        .sum()
+}
+
+fn cut_global_index(
+    program: &cfg::Program,
+    unit: &CommutativeUnit,
+    slice: usize,
+    blocks: &[cfg::BasicBlockId],
+    cut_block: cfg::BasicBlockId,
+    cut_pos: usize,
+) -> usize {
+    let mut acc = 0;
+    for &b in blocks {
+        let window = instruction_window_for_block(unit, slice, b, program);
+        if b == cut_block {
+            return acc + cut_pos.saturating_sub(window.start);
+        }
+        acc += window.len();
+    }
+    acc
+}
+
+#[derive(Default)]
+struct SplitMetrics {
+    pre_total_ops: usize,
+    post_total_ops: usize,
+    pre_db_ops: usize,
+    post_db_ops: usize,
+    pre_tables: HashSet<cfg::TableId>,
+    post_tables: HashSet<cfg::TableId>,
+}
+
+fn compute_split_metrics(
+    program: &cfg::Program,
+    unit: &CommutativeUnit,
+    slice: usize,
+    blocks: &[cfg::BasicBlockId],
+    cut_block: cfg::BasicBlockId,
+    cut_pos: usize,
+) -> SplitMetrics {
+    let mut m = SplitMetrics::default();
+    let mut before_cut = true;
+
+    for &b in blocks {
+        let window = instruction_window_for_block(unit, slice, b, program);
+        let instructions = &program.basic_blocks[b].instructions;
+        let start = window.start.min(instructions.len());
+        let end = window.end.min(instructions.len());
+        if start >= end {
+            continue;
+        }
+
+        for i in start..end {
+            if b == cut_block && i >= cut_pos {
+                before_cut = false;
+            }
+            let inst = &instructions[i];
+            if before_cut {
+                m.pre_total_ops += 1;
+                m.pre_db_ops += db_rw_weight(inst);
+                if let Some((table, _)) = table_access_signature(inst) {
+                    m.pre_tables.insert(table);
+                }
+            } else {
+                m.post_total_ops += 1;
+                m.post_db_ops += db_rw_weight(inst);
+                if let Some((table, _)) = table_access_signature(inst) {
+                    m.post_tables.insert(table);
+                }
+            }
+        }
+
+        if b == cut_block {
+            before_cut = false;
+        }
+    }
+
+    m
+}
+
+fn build_child_unit(
+    program: &cfg::Program,
+    unit: &CommutativeUnit,
+    slice: usize,
+    cut_block: cfg::BasicBlockId,
+    cut_pos: usize,
+    take_prefix: bool,
+) -> CommutativeUnit {
+    let mut child = unit.clone();
+    let blocks = current_blocks_for_slice(unit, slice, program);
+    let mut out_blocks = Vec::new();
+    let mut out_windows: HashMap<cfg::BasicBlockId, InstructionWindow> = HashMap::new();
+
+    for &b in &blocks {
+        let base_window = instruction_window_for_block(unit, slice, b, program);
+        let adjusted = if b == cut_block {
+            if take_prefix {
+                InstructionWindow::new(base_window.start, cut_pos)
+            } else {
+                InstructionWindow::new(cut_pos, base_window.end)
+            }
+        } else {
+            let is_before = blocks.iter().position(|bb| *bb == b).unwrap_or(usize::MAX)
+                < blocks
+                    .iter()
+                    .position(|bb| *bb == cut_block)
+                    .unwrap_or(usize::MAX);
+            if (take_prefix && is_before) || (!take_prefix && !is_before) {
+                base_window
+            } else {
+                InstructionWindow::new(0, 0)
+            }
+        };
+
+        if adjusted.len() > 0 {
+            out_blocks.push(b);
+            out_windows.insert(b, adjusted);
+        }
+    }
+
+    child.blocks_per_slice.insert(slice, out_blocks);
+    child
+        .instruction_windows_per_slice
+        .insert(slice, out_windows);
+    child
 }
 
 fn choose_best_split(
     program: &cfg::Program,
     unit: &CommutativeUnit,
     strategy: SplitStrategy,
-) -> Option<(CommutativeUnit, CommutativeUnit, String, Vec<String>)> {
-    let blocks_a = current_blocks_for_slice(unit, 0, program);
-    let blocks_b = current_blocks_for_slice(unit, 1, program);
+) -> Option<(CommutativeUnit, CommutativeUnit, CandidateCut, Vec<String>)> {
+    let ops_a = slice_operation_count(program, unit, 0);
+    let ops_b = slice_operation_count(program, unit, 1);
+    let split_slice = if ops_a >= ops_b { 0 } else { 1 };
 
-    let split_slice = if blocks_a.len() >= blocks_b.len() { 0 } else { 1 };
-    let blocks = if split_slice == 0 { blocks_a } else { blocks_b };
-    if blocks.len() < 3 {
+    let blocks = current_blocks_for_slice(unit, split_slice, program);
+    if blocks.is_empty() {
         return None;
     }
 
-    let mut pos = HashMap::new();
-    for (i, b) in blocks.iter().enumerate() {
-        pos.insert(*b, i);
+    let total_ops = slice_operation_count(program, unit, split_slice);
+    if total_ops < 2 {
+        return None;
     }
 
-    let mut loop_headers: HashSet<cfg::BasicBlockId> = HashSet::new();
-    let mut back_edges: Vec<(usize, usize)> = Vec::new();
-    for src in &blocks {
-        for succ in terminator_successors(&program.basic_blocks[*src].terminator) {
-            if let (Some(&s), Some(&t)) = (pos.get(src), pos.get(&succ)) {
-                if s >= t {
-                    loop_headers.insert(succ);
-                    back_edges.push((s, t));
-                }
+    let cycle_blocks = blocks_in_cycles(program, &blocks);
+    let mut candidates = Vec::new();
+
+    for &block_id in &blocks {
+        if cycle_blocks.contains(&block_id) {
+            continue;
+        }
+
+        let window = instruction_window_for_block(unit, split_slice, block_id, program);
+        if window.len() < 2 {
+            continue;
+        }
+
+        let max_pos = window
+            .end
+            .min(program.basic_blocks[block_id].instructions.len());
+        let min_pos = window.start.saturating_add(1);
+        if min_pos >= max_pos {
+            continue;
+        }
+
+        for op_pos in min_pos..max_pos {
+            let metrics =
+                compute_split_metrics(program, unit, split_slice, &blocks, block_id, op_pos);
+            if metrics.pre_total_ops == 0 || metrics.post_total_ops == 0 {
+                continue;
             }
-        }
-    }
 
-    let mut best: Option<(usize, (usize, usize, usize))> = None;
-    let mut candidate_logs: Vec<String> = Vec::new();
-    for cut_idx in 1..(blocks.len() - 1) {
-        let cut = blocks[cut_idx];
-        let pred_in: Vec<_> = program.basic_blocks[cut]
-            .predecessors
-            .iter()
-            .filter(|p| pos.contains_key(p))
-            .cloned()
-            .collect();
-        if pred_in.len() != 1 {
-            continue;
-        }
+            let shared_tables = metrics
+                .pre_tables
+                .intersection(&metrics.post_tables)
+                .count();
 
-        let succ_in: Vec<_> = terminator_successors(&program.basic_blocks[cut].terminator)
-            .into_iter()
-            .filter(|s| pos.contains_key(s))
-            .collect();
-        if succ_in.len() != 1 {
-            continue;
-        }
+            let db_balance =
+                (metrics.pre_db_ops as isize - metrics.post_db_ops as isize).unsigned_abs();
+            let op_balance =
+                (metrics.pre_total_ops as isize - metrics.post_total_ops as isize).unsigned_abs();
+            let balance = if metrics.pre_db_ops + metrics.post_db_ops > 0 {
+                db_balance
+            } else {
+                op_balance
+            };
 
-        let pred = pred_in[0];
-        let pred_succ_in: Vec<_> = terminator_successors(&program.basic_blocks[pred].terminator)
-            .into_iter()
-            .filter(|s| pos.contains_key(s))
-            .collect();
-        if pred_succ_in.len() != 1 {
-            continue;
-        }
+            let global_index =
+                cut_global_index(program, unit, split_slice, &blocks, block_id, op_pos);
+            let mid_bias = (total_ops as isize / 2 - global_index as isize).unsigned_abs();
 
-        if loop_headers.contains(&cut) {
-            continue;
-        }
+            let score = match strategy {
+                SplitStrategy::MinState => (shared_tables, balance, mid_bias, global_index),
+                SplitStrategy::Balanced => (balance, shared_tables, mid_bias, global_index),
+                SplitStrategy::MinStateBalanced => (shared_tables, balance, mid_bias, global_index),
+            };
 
-        let crosses_back_edge = back_edges.iter().any(|(s, t)| *s >= cut_idx && *t < cut_idx);
-        if crosses_back_edge {
-            continue;
-        }
+            let strategy_name = match strategy {
+                SplitStrategy::MinState => "min-state",
+                SplitStrategy::Balanced => "balanced",
+                SplitStrategy::MinStateBalanced => "min-state-balanced",
+            };
 
-        let prefix = &blocks[..cut_idx];
-        let suffix = &blocks[cut_idx..];
+            let summary = format!(
+                "slice={} function={} bb={} op={} score=({},{},{},{}) shared_tables={} pre_ops={} post_ops={} pre_db={} post_db={}",
+                split_slice,
+                program.basic_blocks[block_id].function_id.index(),
+                block_id.index(),
+                op_pos,
+                score.0,
+                score.1,
+                score.2,
+                score.3,
+                shared_tables,
+                metrics.pre_total_ops,
+                metrics.post_total_ops,
+                metrics.pre_db_ops,
+                metrics.post_db_ops
+            );
 
-        let mut pre_tables = HashSet::new();
-        let mut post_tables = HashSet::new();
-        for b in prefix {
-            for inst in &program.basic_blocks[*b].instructions {
-                collect_table_access(inst, &mut pre_tables);
-            }
-        }
-        for b in suffix {
-            for inst in &program.basic_blocks[*b].instructions {
-                collect_table_access(inst, &mut post_tables);
-            }
-        }
-        let shared_tables = pre_tables.intersection(&post_tables).count();
-        let balance = (blocks.len() as isize / 2 - cut_idx as isize).unsigned_abs();
+            let candidate_log = format!(
+                "  candidate {} strategy={} non_loop=true",
+                summary, strategy_name
+            );
 
-        let score = match strategy {
-            SplitStrategy::MinState => (shared_tables, balance, cut_idx),
-            SplitStrategy::Balanced => (balance, shared_tables, cut_idx),
-            SplitStrategy::MinStateBalanced => (shared_tables, balance, cut_idx),
-        };
-
-        let strategy_name = match strategy {
-            SplitStrategy::MinState => "min-state",
-            SplitStrategy::Balanced => "balanced",
-            SplitStrategy::MinStateBalanced => "min-state-balanced",
-        };
-
-        candidate_logs.push(format!(
-            "  candidate cut_idx={} block={} shared_tables={} balance={} strategy={} score=({},{},{})",
-            cut_idx,
-            cut.index(),
-            shared_tables,
-            balance,
-            strategy_name,
-            score.0,
-            score.1,
-            score.2
-        ));
-
-        if best.as_ref().map(|(_, s)| score < *s).unwrap_or(true) {
-            best = Some((cut_idx, score));
+            candidates.push(CandidateCut {
+                slice_id: split_slice,
+                block_id,
+                op_pos,
+                score,
+                summary,
+                candidate_log,
+            });
         }
     }
 
-    let (cut_idx, score) = best?;
-    let prefix_blocks = blocks[..cut_idx].to_vec();
-    let suffix_blocks = blocks[cut_idx..].to_vec();
-
-    let mut first = unit.clone();
-    first.blocks_per_slice.insert(split_slice, prefix_blocks);
-    let mut second = unit.clone();
-    second.blocks_per_slice.insert(split_slice, suffix_blocks);
-
-    let summary = format!(
-        "split slice={} at block_index={} score=({},{},{})",
-        split_slice, cut_idx, score.0, score.1, score.2
+    let best = candidates.into_iter().min_by_key(|c| c.score)?;
+    let sub_a = build_child_unit(
+        program,
+        unit,
+        best.slice_id,
+        best.block_id,
+        best.op_pos,
+        true,
     );
-    Some((first, second, summary, candidate_logs))
+    let sub_b = build_child_unit(
+        program,
+        unit,
+        best.slice_id,
+        best.block_id,
+        best.op_pos,
+        false,
+    );
+
+    let mut candidate_logs = vec![format!(
+        "non-loop blocks considered on slice {}: {}",
+        split_slice,
+        blocks
+            .iter()
+            .filter(|b| !cycle_blocks.contains(b))
+            .map(|b| b.index().to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    )];
+    candidate_logs.push(best.candidate_log.clone());
+
+    Some((sub_a, sub_b, best, candidate_logs))
 }
 
+fn debug_cut_context(
+    program: &cfg::Program,
+    unit: &CommutativeUnit,
+    slice: usize,
+    block_id: cfg::BasicBlockId,
+    op_pos: usize,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    let block = &program.basic_blocks[block_id];
+    let window = instruction_window_for_block(unit, slice, block_id, program);
+    let start = window.start.min(block.instructions.len());
+    let end = window.end.min(block.instructions.len());
+
+    lines.push(format!(
+        "Split debug: function={} slice={} bb={} window=[{}, {}) cut_op_pos={}",
+        block.function_id.index(),
+        slice,
+        block_id.index(),
+        start,
+        end,
+        op_pos
+    ));
+
+    let ctx_start = op_pos.saturating_sub(2).max(start);
+    let ctx_end = (op_pos + 2).min(end.saturating_sub(1));
+    for i in ctx_start..=ctx_end {
+        let marker = if i < op_pos { "pre" } else { "post" };
+        lines.push(format!(
+            "  {} op[{}]: {:?}",
+            marker, i, block.instructions[i].kind
+        ));
+    }
+
+    lines
+}

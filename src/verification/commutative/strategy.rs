@@ -240,6 +240,11 @@ impl InterleavingExecutor {
                 .get(&slice_id)
                 .cloned()
                 .unwrap_or_else(|| hop.blocks.clone());
+            let selected_windows = unit
+                .instruction_windows_per_slice
+                .get(&slice_id)
+                .cloned()
+                .unwrap_or_default();
             let selected_block_set: HashSet<_> = selected_blocks.iter().cloned().collect();
 
             for &block_id in selected_blocks.iter() {
@@ -252,7 +257,16 @@ impl InterleavingExecutor {
 
                 let block = cfg_program.basic_blocks[block_id].clone();
                 // Instructions
-                for instr in &block.instructions {
+                let (inst_start, inst_end) = selected_windows
+                    .get(&block_id)
+                    .map(|w| {
+                        (
+                            w.start.min(block.instructions.len()),
+                            w.end.min(block.instructions.len()),
+                        )
+                    })
+                    .unwrap_or((0, block.instructions.len()));
+                for instr in block.instructions[inst_start..inst_end].iter() {
                     let lines = base.convert_instruction(instr, slice_id, cfg_program)?;
                     for l in lines {
                         guarded_lines.push(Box::new(l));
@@ -271,7 +285,9 @@ impl InterleavingExecutor {
                             ));
                         } else {
                             guarded_lines.push(Box::new(
-                                crate::verification::Boogie::BoogieLine::Goto(hop_exit_label.clone()),
+                                crate::verification::Boogie::BoogieLine::Goto(
+                                    hop_exit_label.clone(),
+                                ),
                             ));
                         }
                     }

@@ -3,20 +3,26 @@
 //! This module contains the main compilation orchestration logic.
 
 use super::stage::execute_stage;
-use crate::cli::cache_manager::{CacheManager, CacheResult, CacheRuntimeOptions};
-use crate::cli::options::CompilerOptions;
 use crate::ast::Program;
 use crate::cfg;
-use crate::cli::data::{self, CEdgeVerificationData, DataCollector, MemoryStats, VerificationResult};
+use crate::cli::cache_manager::{CacheManager, CacheResult, CacheRuntimeOptions};
+use crate::cli::data::{
+    self, CEdgeVerificationData, DataCollector, MemoryStats, VerificationResult,
+};
 use crate::cli::log::Logger;
+use crate::cli::options::CompilerOptions;
 use crate::codegen;
 use crate::frontend::parse_and_analyze_program;
 use crate::optimization::CfgOptimizer;
 use crate::util::{CompilerError, DiagnosticReporter};
 use crate::verification::Boogie::{BoogieError, BoogieProgram, VerificationNodeId};
 use crate::verification::{
-    commutative::splitter::{CommutativeTask, SplitRuntimeOptions, SplitterState},
-    verify_result_process::VerifyResultProcessor, VerificationManager, VerificationType,
+    commutative::{
+        naming::{parse_commutative_edge_ids, parse_commutative_nodes},
+        splitter::{CommutativeTask, SplitRuntimeOptions, SplitterState},
+    },
+    verify_result_process::VerifyResultProcessor,
+    VerificationManager, VerificationType,
 };
 use colored::*;
 use std::collections::{HashMap, HashSet};
@@ -123,6 +129,7 @@ impl Compiler {
             enabled: options.split.enabled,
             max_depth: options.split.max_depth,
             strategy: options.split.strategy.clone(),
+            debug_cuts: options.split.debug,
         };
 
         // Initialize logger
@@ -133,11 +140,12 @@ impl Compiler {
             options.loop_unroll, options.timeout_secs
         ))?;
         self.logger.line(format!(
-            "Verification features: cache={}, split={}, split_max_depth={}, split_strategy={}",
+            "Verification features: cache={}, split={}, split_max_depth={}, split_strategy={}, split_debug={}",
             cache_options.enabled,
             split_options.enabled,
             split_options.max_depth,
-            split_options.strategy
+            split_options.strategy,
+            split_options.debug_cuts
         ))?;
 
         // Initialize data collector
@@ -149,8 +157,9 @@ impl Compiler {
         let mut data_collector = DataCollector::new(input_file_name, options.instances);
         data_collector.set_config(options.loop_unroll as usize, options.timeout_secs as usize);
 
-        let total_stages =
-            4 + if options.enable_verification { 1 } else { 0 } + if options.enable_optimization { 1 } else { 0 };
+        let total_stages = 4
+            + if options.enable_verification { 1 } else { 0 }
+            + if options.enable_optimization { 1 } else { 0 };
         let mut current_stage = 0;
 
         // Stage 1: Frontend (Parsing)
@@ -326,8 +335,10 @@ impl Compiler {
             // Write data.json
             let data_path = output_dir.join("data.json");
             data_collector.write_to_file(&data_path)?;
-            self.logger
-                .line(format!("📄 Benchmark data written: {}", data_path.display()))?;
+            self.logger.line(format!(
+                "📄 Benchmark data written: {}",
+                data_path.display()
+            ))?;
 
             // Plot histogram
             let histogram_path = output_dir.join("verification_time_histogram.png");
@@ -368,11 +379,7 @@ impl Compiler {
         // Generate Boogie programs
         let verifier = VerificationManager::new();
         let partition_programs = verifier
-            .generate_verification_programs(
-                program,
-                sc,
-                VerificationType::HopPartition,
-            )
+            .generate_verification_programs(program, sc, VerificationType::HopPartition)
             .map_err(|_errors| {
                 Box::<dyn std::error::Error>::from("Partition verification generation failed")
             })?;
@@ -395,8 +402,8 @@ impl Compiler {
         }
         fs::create_dir_all(&boogie_dir)?;
 
-        let (run_results, cache_stats_for_log, split_stats_for_log, feature_logs) =
-            self.run_boogie_task_box(
+        let (run_results, cache_stats_for_log, split_stats_for_log, feature_logs) = self
+            .run_boogie_task_box(
                 program,
                 sc,
                 &programs,
@@ -426,7 +433,7 @@ impl Compiler {
 
             // Extract C-edge info and add to data collector
             if let Some((src_f, src_i, src_h, tgt_f, tgt_i, tgt_h)) =
-                Self::parse_commutative_edge_ids(&result.file_name)
+                parse_commutative_edge_ids(&result.file_name)
             {
                 let edge_data = CEdgeVerificationData {
                     source_function_id: src_f,
@@ -507,8 +514,7 @@ impl Compiler {
         let simplified_combined = crate::sc_graph::combine_for_deadlock_elimination(&simplified);
 
         if !verification_errors.is_empty() {
-            self.logger
-                .line("⚠️  Verification completed with errors")?;
+            self.logger.line("⚠️  Verification completed with errors")?;
             self.logger
                 .line(format!("  Total errors: {}", verification_errors.len()))?;
         }
@@ -527,13 +533,14 @@ impl Compiler {
 
         if let Some(stats) = split_stats_for_log {
             self.logger.line_and_stdout(format!(
-                "Split stats: total_units={}, root_timeouts={}, split_performed={}, skipped_max_depth={}, skipped_no_cutpoint={}, budget_exhausted={}",
+                "Split stats: total_units={}, root_timeouts={}, split_performed={}, skipped_max_depth={}, skipped_no_cutpoint={}, budget_exhausted={}, cuts_recorded={}",
                 stats.total_units,
                 stats.root_timeouts,
                 stats.split_performed,
                 stats.split_skipped_max_depth,
                 stats.split_skipped_no_cutpoint,
-                stats.split_budget_exhausted
+                stats.split_budget_exhausted,
+                stats.total_cuts_recorded
             ))?;
         }
 
@@ -559,6 +566,8 @@ impl Compiler {
         ),
         Box<dyn std::error::Error>,
     > {
+        use indicatif::{ProgressBar, ProgressStyle};
+
         let mut partition_programs = Vec::new();
         let mut commutative_programs = Vec::new();
         for p in programs {
@@ -574,6 +583,7 @@ impl Compiler {
             boogie_dir,
             loop_unroll,
             timeout_secs,
+            true,
         )?;
 
         let cache_state = CacheManager::new(cache_options)?;
@@ -581,12 +591,18 @@ impl Compiler {
 
         let mut queue: Vec<CommutativeTask> = commutative_programs
             .into_iter()
-            .map(|p| CommutativeTask {
-                root_file_name: format!("{}.bpl", p.name),
-                program: p,
-                depth: 0,
-            })
+            .filter_map(|p| splitter_state.create_root_task(p))
             .collect();
+
+        let pb = ProgressBar::new(queue.len() as u64);
+        pb.set_style(
+            ProgressStyle::with_template(
+                "[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}",
+            )
+            .unwrap()
+            .progress_chars("=>-"),
+        );
+        pb.set_message("running commutative checks");
 
         let mut feature_logs = Vec::new();
         let mut aggregated: HashMap<String, AggregateResult> = HashMap::new();
@@ -598,13 +614,14 @@ impl Compiler {
 
             for task in queue.drain(..) {
                 splitter_state.record_total_unit();
-                let cache_key = cache_state.key_for_program(
-                    program,
-                    &task.program,
-                    loop_unroll,
-                    timeout_secs,
-                );
+                pb.set_message(format!(
+                    "processing {} (depth {})",
+                    task.program.name, task.depth
+                ));
+                let cache_key =
+                    cache_state.key_for_program(program, &task.program, loop_unroll, timeout_secs);
                 if let Some(hit) = cache_state.lookup(&cache_key) {
+                    pb.inc(1);
                     let mut hit_result = BoogieRunResult {
                         file_name: task.program.name.clone() + ".bpl",
                         duration_ms: 0.0,
@@ -618,6 +635,7 @@ impl Compiler {
                         let (split_tasks, logs) = splitter_state.try_split_task(program, &task)?;
                         feature_logs.extend(logs);
                         if let Some(children) = split_tasks {
+                            pb.inc_length(children.len().saturating_sub(1) as u64);
                             next_queue.extend(children);
                             continue;
                         }
@@ -638,8 +656,13 @@ impl Compiler {
             }
 
             if !runnable.is_empty() {
-                let batch_results =
-                    self.run_boogie_verifications_parallel(&runnable, boogie_dir, loop_unroll, timeout_secs)?;
+                let batch_results = self.run_boogie_verifications_parallel(
+                    &runnable,
+                    boogie_dir,
+                    loop_unroll,
+                    timeout_secs,
+                    false,
+                )?;
 
                 for mut result in batch_results {
                     let key = result.file_name.clone();
@@ -650,12 +673,14 @@ impl Compiler {
 
                     let kind = Self::classify_quick_result(&result.stdout);
                     cache_state.store(&cache_key, kind);
+                    pb.inc(1);
 
                     if kind == CacheResult::Timeout {
                         splitter_state.record_root_timeout();
                         let (split_tasks, logs) = splitter_state.try_split_task(program, &task)?;
                         feature_logs.extend(logs);
                         if let Some(children) = split_tasks {
+                            pb.inc_length(children.len().saturating_sub(1) as u64);
                             next_queue.extend(children);
                             continue;
                         }
@@ -673,6 +698,8 @@ impl Compiler {
             queue = next_queue;
         }
 
+        pb.finish_with_message("commutative checks complete");
+
         for (root_file_name, agg) in aggregated {
             run_results.push(BoogieRunResult {
                 file_name: root_file_name,
@@ -683,7 +710,12 @@ impl Compiler {
             });
         }
 
-        Ok((run_results, cache_state.stats(cache_options.enabled), splitter_state.stats(), feature_logs))
+        Ok((
+            run_results,
+            cache_state.stats(cache_options.enabled),
+            splitter_state.stats(),
+            feature_logs,
+        ))
     }
 
     fn classify_quick_result(stdout: &str) -> CacheResult {
@@ -714,8 +746,7 @@ impl Compiler {
             CacheResult::Timeout => "timed out".to_string(),
             CacheResult::CompilationError => "parse errors detected".to_string(),
             CacheResult::Error => {
-                if let Some((sf, si, sh, tf, ti, th)) = Self::parse_commutative_edge_ids(file_name)
-                {
+                if let Some((sf, si, sh, tf, ti, th)) = parse_commutative_edge_ids(file_name) {
                     let err = BoogieError::SpecialInterleavingNonEquivalence {
                         node_1: VerificationNodeId {
                             function_id: sf,
@@ -779,6 +810,7 @@ impl Compiler {
         boogie_dir: &PathBuf,
         loop_unroll: u32,
         timeout_secs: u32,
+        show_progress: bool,
     ) -> Result<Vec<BoogieRunResult>, Box<dyn std::error::Error>> {
         use indicatif::{ProgressBar, ProgressStyle};
         use rayon::prelude::*;
@@ -787,14 +819,18 @@ impl Compiler {
 
         let total = programs.len() as u64;
         let pb = ProgressBar::new(total);
-        pb.set_style(
-            ProgressStyle::with_template(
-                "[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}",
-            )
-            .unwrap()
-            .progress_chars("=>-"),
-        );
-        pb.set_message("running Boogie");
+        if show_progress {
+            pb.set_style(
+                ProgressStyle::with_template(
+                    "[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}",
+                )
+                .unwrap()
+                .progress_chars("=>-"),
+            );
+            pb.set_message("running Boogie");
+        } else {
+            pb.set_draw_target(indicatif::ProgressDrawTarget::hidden());
+        }
 
         let running_files: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
         let completed_count = Arc::new(AtomicUsize::new(0));
@@ -832,8 +868,10 @@ impl Compiler {
                                     files_list.len() - 3
                                 )
                             };
-                            pb.set_position(completed as u64);
-                            pb.set_message(msg);
+                            if show_progress {
+                                pb.set_position(completed as u64);
+                                pb.set_message(msg);
+                            }
                         }
 
                         // Run with /usr/bin/time -v
@@ -853,8 +891,7 @@ impl Compiler {
                         {
                             let mut files = running_files.lock().unwrap();
                             files.remove(&file_name);
-                            let new_completed =
-                                completed_count.fetch_add(1, Ordering::Relaxed) + 1;
+                            let new_completed = completed_count.fetch_add(1, Ordering::Relaxed) + 1;
                             let files_list: Vec<String> = files.iter().cloned().collect();
                             if !files_list.is_empty() {
                                 let msg = if files_list.len() <= 3 {
@@ -868,10 +905,14 @@ impl Compiler {
                                         files_list.len() - 3
                                     )
                                 };
-                                pb.set_position(new_completed as u64);
-                                pb.set_message(msg);
+                                if show_progress {
+                                    pb.set_position(new_completed as u64);
+                                    pb.set_message(msg);
+                                }
                             } else {
-                                pb.set_position(new_completed as u64);
+                                if show_progress {
+                                    pb.set_position(new_completed as u64);
+                                }
                             }
                         }
 
@@ -879,7 +920,7 @@ impl Compiler {
                             Ok(output) => {
                                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                                
+
                                 // Parse memory stats from stderr (/usr/bin/time output)
                                 let memory_stats = data::parse_time_output(&stderr);
 
@@ -911,7 +952,9 @@ impl Compiler {
             })
             .collect();
 
-        pb.finish_with_message("Boogie runs complete");
+        if show_progress {
+            pb.finish_with_message("Boogie runs complete");
+        }
         Ok(run_results)
     }
 
@@ -970,66 +1013,11 @@ impl Compiler {
         }
     }
 
-    /// Parse commutative edge IDs from filename
-    fn parse_commutative_edge_ids(
-        file_name: &str,
-    ) -> Option<(usize, u32, usize, usize, u32, usize)> {
-        let trimmed = file_name.strip_suffix(".bpl").unwrap_or(file_name);
-        if !trimmed.starts_with("commutative_") {
-            return None;
-        }
-
-        let parts: Vec<&str> = trimmed.split('_').collect();
-        if parts.len() != 8 || parts.get(4).copied() != Some("vs") {
-            return None;
-        }
-
-        let source = Self::parse_node_from_parts(parts[1], parts[2], parts[3])?;
-        let target = Self::parse_node_from_parts(parts[5], parts[6], parts[7])?;
-
-        Some((
-            source.function_id,
-            source.instance,
-            source.hop_id,
-            target.function_id,
-            target.instance,
-            target.hop_id,
-        ))
-    }
-
     /// Build timeout error from commutative filename
     fn build_timeout_error_from_commutative(file_name: &str) -> Option<BoogieError> {
-        let trimmed = file_name.strip_suffix(".bpl").unwrap_or(file_name);
-        if !trimmed.starts_with("commutative_") {
-            return None;
-        }
-
-        let parts: Vec<&str> = trimmed.split('_').collect();
-        if parts.len() != 8 || parts.get(4).copied() != Some("vs") {
-            return None;
-        }
-
-        let node_1 = Self::parse_node_from_parts(parts[1], parts[2], parts[3])?;
-        let node_2 = Self::parse_node_from_parts(parts[5], parts[6], parts[7])?;
+        let (node_1, node_2) = parse_commutative_nodes(file_name)?;
 
         Some(BoogieError::SpecialInterleavingTimeout { node_1, node_2 })
-    }
-
-    /// Parse node from filename parts (f#, i#, h#)
-    fn parse_node_from_parts(
-        f_part: &str,
-        i_part: &str,
-        h_part: &str,
-    ) -> Option<VerificationNodeId> {
-        let function_id = f_part.strip_prefix('f')?.parse().ok()?;
-        let instance = i_part.strip_prefix('i')?.parse().ok()?;
-        let hop_id = h_part.strip_prefix('h')?.parse().ok()?;
-
-        Some(VerificationNodeId {
-            function_id,
-            instance,
-            hop_id,
-        })
     }
 
     // ========================================================================
@@ -1076,7 +1064,7 @@ impl Compiler {
         prefix: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         use crate::pretty::{CombinedSCGraphDotPrinter, PrettyPrint, SCGraphDotPrinter};
-        
+
         fs::create_dir_all(output_dir)?;
 
         let sc_filename = if prefix.is_empty() {
