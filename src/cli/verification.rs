@@ -20,7 +20,7 @@ use crate::verification::{
     VerificationManager, VerificationType,
 };
 use indicatif::ProgressBar;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -40,6 +40,27 @@ struct AggregateResult {
     stdout: String,
     stderr: String,
     memory_stats: MemoryStats,
+}
+
+enum VerificationTask {
+    Partition(BoogieProgram),
+    Commutative(CommutativeTask),
+}
+
+struct VerificationParallelReport {
+    run_results: Vec<BoogieRunResult>,
+    cache_stats: Option<crate::cli::cache_manager::CacheStatsSnapshot>,
+    split_stats: Option<crate::verification::commutative::splitter::SplitStatsSnapshot>,
+    feature_logs: Vec<String>,
+    original_root_units: usize,
+    split_depth_counts: BTreeMap<usize, usize>,
+    max_depth_used: usize,
+}
+
+struct CommutativeProcessOutcome {
+    result: Option<BoogieRunResult>,
+    children: Vec<VerificationTask>,
+    feature_logs: Vec<String>,
 }
 
 pub fn run_verification_stage(
@@ -79,8 +100,7 @@ pub fn run_verification_stage(
     }
     fs::create_dir_all(&boogie_dir)?;
 
-    let (run_results, cache_stats_for_log, split_stats_for_log, feature_logs, original_root_units) =
-        run_boogie_task_box(
+    let report = run_verification_parallel(
             logger,
             program,
             sc,
@@ -92,7 +112,7 @@ pub fn run_verification_stage(
             split_options,
         )?;
 
-    if let Some(stats) = cache_stats_for_log {
+    if let Some(stats) = report.cache_stats {
         data_collector.set_verification_cache_stats(
             stats.hits,
             stats.misses,
@@ -102,9 +122,9 @@ pub fn run_verification_stage(
         );
     }
 
-    if let Some(stats) = split_stats_for_log {
+    if let Some(stats) = report.split_stats {
         data_collector.set_verification_split_stats(
-            original_root_units,
+            report.original_root_units,
             stats.total_units,
             stats.root_timeouts,
             stats.split_performed,
@@ -113,17 +133,22 @@ pub fn run_verification_stage(
             stats.split_budget_exhausted,
         );
     } else {
-        data_collector.set_verification_split_stats(original_root_units, 0, 0, 0, 0, 0, 0);
+        data_collector.set_verification_split_stats(report.original_root_units, 0, 0, 0, 0, 0, 0);
     }
 
-    for line in feature_logs {
+    data_collector.set_verification_split_depth_stats(
+        report.split_depth_counts,
+        report.max_depth_used,
+    );
+
+    for line in report.feature_logs {
         logger.line(line)?;
     }
 
     let mut all_boogie_errors: Vec<BoogieError> = Vec::new();
     let mut exec_errors = Vec::new();
 
-    for result in run_results {
+    for result in report.run_results {
         logger.line(format!("===== Boogie run for {} =====", result.file_name))?;
         logger.block("stdout:", &result.stdout)?;
         logger.block("stderr:", &result.stderr)?;
@@ -222,7 +247,7 @@ pub fn run_verification_stage(
     Ok((simplified, simplified_combined))
 }
 
-fn run_boogie_task_box(
+fn run_verification_parallel(
     _logger: &mut Logger,
     program: &cfg::Program,
     sc: &crate::sc_graph::SCGraph,
@@ -232,158 +257,108 @@ fn run_boogie_task_box(
     timeout_secs: u32,
     cache_options: &CacheRuntimeOptions,
     split_options: &SplitRuntimeOptions,
-) -> Result<
-    (
-        Vec<BoogieRunResult>,
-        Option<crate::cli::cache_manager::CacheStatsSnapshot>,
-        Option<crate::verification::commutative::splitter::SplitStatsSnapshot>,
-        Vec<String>,
-        usize,
-    ),
-    Box<dyn std::error::Error>,
-> {
-    use indicatif::ProgressStyle;
-
-    // TODO: why you first combine them in run_verification_stage and then separate them here? can we just keep them separate?
+) -> Result<VerificationParallelReport, Box<dyn std::error::Error>> {
     let mut partition_programs = Vec::new();
     let mut commutative_programs = Vec::new();
-    for p in programs {
-        if p.name.starts_with("commutative_") {
-            commutative_programs.push(p.clone());
+    for program in programs {
+        if program.name.starts_with("commutative_") {
+            commutative_programs.push(program.clone());
         } else {
-            partition_programs.push(p.clone());
+            partition_programs.push(program.clone());
         }
     }
 
     let cache_state = CacheManager::new(cache_options)?;
     let splitter_state = SplitterState::new(sc, split_options);
 
-    let mut queue: Vec<CommutativeTask> = commutative_programs
+    let mut queue: VecDeque<VerificationTask> = partition_programs
         .into_iter()
-        .filter_map(|p| splitter_state.create_root_task(p))
+        .map(VerificationTask::Partition)
+        .chain(
+            commutative_programs
+                .into_iter()
+                .filter_map(|program| splitter_state.create_root_task(program).map(VerificationTask::Commutative)),
+        )
         .collect();
 
-    let original_root_units = partition_programs.len() + queue.len();
+    let original_root_units = queue.len();
 
     let mut run_results = Vec::new();
+    let mut aggregated: HashMap<String, AggregateResult> = HashMap::new();
+    let mut feature_logs = Vec::new();
+    let mut split_count_for_message = 0usize;
+    let mut root_max_depths: HashMap<String, usize> = HashMap::new();
+
     let pb = ProgressBar::new(original_root_units as u64);
     pb.set_style(
-        ProgressStyle::with_template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+        indicatif::ProgressStyle::with_template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
             .unwrap()
             .progress_chars("=>-"),
     );
-    pb.set_message("running partition checks");
+    pb.set_message("running verification");
 
-    let partition_results = run_boogie_verifications_parallel(
-        &partition_programs,
-        boogie_dir,
-        loop_unroll,
-        timeout_secs,
-        Some(&pb),
-    )?;
-    pb.inc(partition_results.len() as u64);
-    run_results.extend(partition_results);
-    let mut split_count_for_message = 0usize;
-    pb.set_message(format!(
-        "running commutative checks ({} splitted)",
-        split_count_for_message
-    ));
+    while let Some(task) = queue.pop_front() {
+        splitter_state.record_total_unit();
+        match task {
+            VerificationTask::Partition(program) => {
+                let outcome = process_single_partition_verification(
+                    &program,
+                    boogie_dir,
+                    loop_unroll,
+                    timeout_secs,
+                )?;
+                pb.inc(1);
+                run_results.push(outcome);
+            }
+            VerificationTask::Commutative(task) => {
+                root_max_depths
+                    .entry(task.root_file_name.clone())
+                    .and_modify(|current| *current = (*current).max(task.depth as usize))
+                    .or_insert(task.depth as usize);
 
-    let mut feature_logs = Vec::new();
-    let mut aggregated: HashMap<String, AggregateResult> = HashMap::new();
+                let outcome = process_single_commutative_verification(
+                    program,
+                    &task,
+                    &cache_state,
+                    &splitter_state,
+                    boogie_dir,
+                    loop_unroll,
+                    timeout_secs,
+                )?;
 
-    while !queue.is_empty() {
-        let mut next_queue = Vec::new();
-        let mut runnable = Vec::new();
-        let mut runnable_keys: HashMap<String, (CommutativeTask, String)> = HashMap::new();
+                feature_logs.extend(outcome.feature_logs);
 
-        for task in queue.drain(..) {
-            splitter_state.record_total_unit();
-            let cache_key =
-                cache_state.key_for_program(program, &task.program, loop_unroll, timeout_secs);
-            if let Some(hit) = cache_state.lookup(&cache_key) {
-                let mut hit_result = BoogieRunResult {
-                    file_name: task.program.name.clone() + ".bpl",
-                    duration_ms: 0.0,
-                    stdout: cache_hit_synthetic_stdout(&task.root_file_name, hit),
-                    stderr: format!("cache hit: {:?}", hit).to_lowercase(),
-                    memory_stats: MemoryStats::default(),
-                };
-
-                if hit == CacheResult::Timeout {
-                    splitter_state.record_root_timeout();
-                    let (split_tasks, logs) = splitter_state.try_split_task(program, &task)?;
-                    feature_logs.extend(logs);
-                    if let Some(children) = split_tasks {
-                        pb.inc_length(children.len() as u64);
-                        next_queue.extend(children);
-                        pb.inc(1);
-                        continue;
-                    }
+                if let Some(mut result) = outcome.result {
+                    let kind = classify_quick_result(&result.stdout);
+                    merge_commutative_leaf(&mut aggregated, task.root_file_name.clone(), &mut result, kind);
                 }
 
-                pb.inc(1);
-                merge_commutative_leaf(&mut aggregated, task.root_file_name, &mut hit_result, hit);
-                continue;
-            }
-
-            let file_name = format!("{}.bpl", task.program.name);
-            runnable_keys.insert(file_name, (task.clone(), cache_key));
-            runnable.push(task.program.clone());
-        }
-
-        if !runnable.is_empty() {
-            let batch_results = run_boogie_verifications_parallel(
-                &runnable,
-                boogie_dir,
-                loop_unroll,
-                timeout_secs,
-                Some(&pb),
-            )?;
-
-            for mut result in batch_results {
-                let key = result.file_name.clone();
-                let (task, cache_key) = match runnable_keys.remove(&key) {
-                    Some(v) => v,
-                    None => continue,
-                };
-
-                let kind = classify_quick_result(&result.stdout);
-                cache_state.store(&cache_key, kind);
-
-                if kind == CacheResult::Timeout {
-                    splitter_state.record_root_timeout();
-                    let (split_tasks, logs) = splitter_state.try_split_task(program, &task)?;
-                    feature_logs.extend(logs);
-                    if let Some(children) = split_tasks {
-                        pb.inc_length(children.len() as u64);
-                        next_queue.extend(children);
-                        pb.inc(1);
-                        continue;
-                    }
+                if !outcome.children.is_empty() {
+                    pb.inc_length(outcome.children.len() as u64);
+                }
+                for child in outcome.children {
+                    queue.push_back(child);
                 }
 
+                split_count_for_message = splitter_state
+                    .stats()
+                    .map(|stats| stats.split_performed)
+                    .unwrap_or(0);
                 pb.inc(1);
-                merge_commutative_leaf(&mut aggregated, task.root_file_name, &mut result, kind);
+                pb.set_message(format!(
+                    "running commutative checks ({} splitted)",
+                    split_count_for_message
+                ));
             }
         }
-
-        split_count_for_message = splitter_state
-            .stats()
-            .map(|s| s.split_performed)
-            .unwrap_or(0);
-        pb.set_message(format!(
-            "running commutative checks ({} splitted)",
-            split_count_for_message
-        ));
-
-        queue = next_queue;
     }
 
-    pb.finish_with_message(format!(
-        "commutative checks complete ({} splitted)",
-        split_count_for_message
-    ));
+    let mut split_depth_counts: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut max_depth_used = 0usize;
+    for depth in root_max_depths.into_values() {
+        *split_depth_counts.entry(depth).or_insert(0) += 1;
+        max_depth_used = max_depth_used.max(depth);
+    }
 
     for (root_file_name, agg) in aggregated {
         run_results.push(BoogieRunResult {
@@ -395,13 +370,161 @@ fn run_boogie_task_box(
         });
     }
 
-    Ok((
+    pb.finish_with_message(format!(
+        "commutative checks complete ({} splitted)",
+        split_count_for_message
+    ));
+
+    Ok(VerificationParallelReport {
         run_results,
-        cache_state.stats(cache_options.enabled),
-        splitter_state.stats(),
+        cache_stats: cache_state.stats(cache_options.enabled),
+        split_stats: splitter_state.stats(),
         feature_logs,
         original_root_units,
-    ))
+        split_depth_counts,
+        max_depth_used,
+    })
+}
+
+fn process_single_partition_verification(
+    program: &BoogieProgram,
+    boogie_dir: &PathBuf,
+    loop_unroll: u32,
+    timeout_secs: u32,
+) -> Result<BoogieRunResult, Box<dyn std::error::Error>> {
+    run_boogie_program(program, boogie_dir, loop_unroll, timeout_secs)
+}
+
+fn process_single_commutative_verification(
+    program: &cfg::Program,
+    task: &CommutativeTask,
+    cache_state: &CacheManager,
+    splitter_state: &SplitterState,
+    boogie_dir: &PathBuf,
+    loop_unroll: u32,
+    timeout_secs: u32,
+) -> Result<CommutativeProcessOutcome, Box<dyn std::error::Error>> {
+    let cache_key = cache_state.key_for_program(program, &task.program, loop_unroll, timeout_secs);
+    let mut feature_logs = Vec::new();
+
+    if let Some(hit) = cache_state.lookup(&cache_key) {
+        let result = BoogieRunResult {
+            file_name: task.program.name.clone() + ".bpl",
+            duration_ms: 0.0,
+            stdout: cache_hit_synthetic_stdout(&task.root_file_name, hit),
+            stderr: format!("cache hit: {:?}", hit).to_lowercase(),
+            memory_stats: MemoryStats::default(),
+        };
+
+        if hit == CacheResult::Timeout {
+            splitter_state.record_root_timeout();
+            let (split_tasks, logs) = splitter_state.try_split_task(program, task)?;
+            feature_logs.extend(logs);
+            cache_state.store(&cache_key, hit);
+            if let Some(children) = split_tasks {
+                let children = children.into_iter().map(VerificationTask::Commutative).collect();
+                return Ok(CommutativeProcessOutcome {
+                    result: None,
+                    children,
+                    feature_logs,
+                });
+            }
+        }
+
+        cache_state.store(&cache_key, hit);
+        return Ok(CommutativeProcessOutcome {
+            result: Some(result),
+            children: Vec::new(),
+            feature_logs,
+        });
+    }
+
+    let result = run_boogie_program(&task.program, boogie_dir, loop_unroll, timeout_secs)?;
+    let kind = classify_quick_result(&result.stdout);
+    cache_state.store(&cache_key, kind);
+
+    if kind == CacheResult::Timeout {
+        splitter_state.record_root_timeout();
+        let (split_tasks, logs) = splitter_state.try_split_task(program, task)?;
+        feature_logs.extend(logs);
+        cache_state.store(&cache_key, kind);
+        if let Some(children) = split_tasks {
+            let children = children.into_iter().map(VerificationTask::Commutative).collect();
+            return Ok(CommutativeProcessOutcome {
+                result: None,
+                children,
+                feature_logs,
+            });
+        }
+    }
+
+    Ok(CommutativeProcessOutcome {
+        result: Some(result),
+        children: Vec::new(),
+        feature_logs,
+    })
+}
+
+fn run_boogie_program(
+    program: &BoogieProgram,
+    boogie_dir: &PathBuf,
+    loop_unroll: u32,
+    timeout_secs: u32,
+) -> Result<BoogieRunResult, Box<dyn std::error::Error>> {
+    let file_name = format!("{}.bpl", program.name);
+    let file_path = boogie_dir.join(&file_name);
+
+    let write_res = (|| -> Result<(), std::io::Error> {
+        use std::io::Write;
+        let mut f = fs::File::create(&file_path)?;
+        write!(f, "{}", program)?;
+        Ok(())
+    })();
+
+    match write_res {
+        Ok(()) => {
+            let start_time = std::time::Instant::now();
+            let result = Command::new("/usr/bin/time")
+                .arg("-v")
+                .arg("boogie")
+                .arg("/quiet")
+                .arg("/errorTrace:0")
+                .arg(format!("/loopUnroll:{}", loop_unroll))
+                .arg(format!("/timeLimit:{}", timeout_secs))
+                .arg(file_path.to_string_lossy().to_string())
+                .output();
+            let duration = start_time.elapsed();
+
+            match result {
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    let memory_stats = data::parse_time_output(&stderr);
+                    Ok(BoogieRunResult {
+                        file_name,
+                        duration_ms: duration.as_secs_f64() * 1000.0,
+                        stdout,
+                        stderr,
+                        memory_stats,
+                    })
+                }
+                Err(e) => Ok(BoogieRunResult {
+                    file_name,
+                    duration_ms: 0.0,
+                    stdout: String::new(),
+                    stderr: format!("Failed to execute: {}", e),
+                    memory_stats: MemoryStats::default(),
+                }),
+            }
+        }
+        Err(e) => Ok(BoogieRunResult {
+            file_name,
+            duration_ms: 0.0,
+            stdout: String::new(),
+            stderr: format!("Failed to write .bpl file: {}", e),
+            memory_stats: MemoryStats::default(),
+        }),
+    }
 }
 
 fn classify_quick_result(stdout: &str) -> CacheResult {
@@ -487,82 +610,6 @@ fn result_rank(kind: CacheResult) -> u8 {
         CacheResult::Timeout => 3,
         CacheResult::Error => 4,
     }
-}
-
-fn run_boogie_verifications_parallel(
-    programs: &[BoogieProgram],
-    boogie_dir: &PathBuf,
-    loop_unroll: u32,
-    timeout_secs: u32,
-    progress: Option<&indicatif::ProgressBar>,
-) -> Result<Vec<BoogieRunResult>, Box<dyn std::error::Error>> {
-    use rayon::prelude::*;
-    let progress = progress.cloned();
-
-    let run_results: Vec<BoogieRunResult> = programs
-        .par_iter()
-        .map(|program| {
-            let file_name = format!("{}.bpl", program.name);
-            let file_path = boogie_dir.join(&file_name);
-
-            let write_res = (|| -> Result<(), std::io::Error> {
-                use std::io::Write;
-                let mut f = fs::File::create(&file_path)?;
-                write!(f, "{}", program)?;
-                Ok(())
-            })();
-
-            match write_res {
-                Ok(()) => {
-                    let start_time = std::time::Instant::now();
-                    let result = Command::new("/usr/bin/time")
-                        .arg("-v")
-                        .arg("boogie")
-                        .arg("/quiet")
-                        .arg("/errorTrace:0")
-                        .arg(format!("/loopUnroll:{}", loop_unroll))
-                        .arg(format!("/timeLimit:{}", timeout_secs))
-                        .arg(file_path.to_string_lossy().to_string())
-                        .output();
-                    let duration = start_time.elapsed();
-                    if let Some(pb) = &progress {
-                        pb.inc(1);
-                    }
-
-                    match result {
-                        Ok(output) => {
-                            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                            let memory_stats = data::parse_time_output(&stderr);
-                            BoogieRunResult {
-                                file_name,
-                                duration_ms: duration.as_secs_f64() * 1000.0,
-                                stdout,
-                                stderr,
-                                memory_stats,
-                            }
-                        }
-                        Err(e) => BoogieRunResult {
-                            file_name,
-                            duration_ms: 0.0,
-                            stdout: String::new(),
-                            stderr: format!("Failed to execute: {}", e),
-                            memory_stats: MemoryStats::default(),
-                        },
-                    }
-                }
-                Err(e) => BoogieRunResult {
-                    file_name,
-                    duration_ms: 0.0,
-                    stdout: String::new(),
-                    stderr: format!("Failed to write .bpl file: {}", e),
-                    memory_stats: MemoryStats::default(),
-                },
-            }
-        })
-        .collect();
-
-    Ok(run_results)
 }
 
 fn process_boogie_result(
