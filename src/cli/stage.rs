@@ -13,12 +13,11 @@ where
     F: FnOnce() -> Result<T, E>,
     E: std::fmt::Display,
 {
-    // Print the stage start message with proper formatting
-    // [Stage 1/5] in blue, stage name in bold green
-    print!(
-        "{} {} ",
+    // Print the stage start message on its own line so progress bars own subsequent lines.
+    println!(
+        "{} {}",
         format!("[Stage {}/{}]", current, total).blue(),
-        format!("{:<14}", stage_name)
+        stage_name
     );
 
     let start = Instant::now();

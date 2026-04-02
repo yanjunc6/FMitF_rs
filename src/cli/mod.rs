@@ -6,6 +6,7 @@ pub mod data;
 pub mod log;
 pub mod options;
 pub mod stage;
+pub mod verification;
 
 use clap::Parser;
 use std::path::PathBuf;
