@@ -5,6 +5,7 @@
 
 use colored::*;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// Memory statistics parsed from /usr/bin/time -v output
@@ -114,6 +115,8 @@ pub struct BenchmarkSummary {
     pub verification_split_skipped_max_depth: usize,
     pub verification_split_skipped_no_cutpoint: usize,
     pub verification_split_budget_exhausted: usize,
+    pub verification_split_depth_counts: BTreeMap<usize, usize>,
+    pub verification_split_max_depth_used: usize,
 }
 
 /// Complete benchmark data for output to JSON
@@ -158,6 +161,8 @@ impl BenchmarkData {
                 verification_split_skipped_max_depth: 0,
                 verification_split_skipped_no_cutpoint: 0,
                 verification_split_budget_exhausted: 0,
+                verification_split_depth_counts: BTreeMap::new(),
+                verification_split_max_depth_used: 0,
             },
             c_edge_verifications: Vec::new(),
             timestamp: chrono::Local::now().to_rfc3339(),
@@ -316,6 +321,16 @@ impl DataCollector {
         self.data.summary.verification_split_budget_exhausted = split_budget_exhausted;
     }
 
+    /// Set verification split depth distribution.
+    pub fn set_verification_split_depth_stats(
+        &mut self,
+        depth_counts: BTreeMap<usize, usize>,
+        max_depth_used: usize,
+    ) {
+        self.data.summary.verification_split_depth_counts = depth_counts;
+        self.data.summary.verification_split_max_depth_used = max_depth_used;
+    }
+
     /// Add a C-edge verification result
     pub fn add_c_edge_verification(&mut self, edge_data: CEdgeVerificationData) {
         self.data.summary.verification_total += 1;
@@ -435,6 +450,22 @@ impl DataCollector {
             s.verification_split_budget_exhausted
         );
 
+        let split_depth = if s.verification_split_depth_counts.is_empty() {
+            "  Split depth histogram: (empty)".to_string()
+        } else {
+            let parts: Vec<String> = s
+                .verification_split_depth_counts
+                .iter()
+                .map(|(depth, count)| format!("depth {}: {}", depth, count))
+                .collect();
+            format!(
+                "  Split depth histogram: {}  {} {}",
+                parts.join(", "),
+                term("Max depth used:"),
+                s.verification_split_max_depth_used
+            )
+        };
+
         vec![
             header,
             basic,
@@ -443,6 +474,7 @@ impl DataCollector {
             verification,
             verification_stats,
             split_stats,
+            split_depth,
         ]
         .join("\n")
     }
@@ -491,6 +523,21 @@ impl DataCollector {
             s.verification_split_budget_exhausted
         );
 
+        let split_depth = if s.verification_split_depth_counts.is_empty() {
+            "  Split depth histogram: (empty)".to_string()
+        } else {
+            let parts: Vec<String> = s
+                .verification_split_depth_counts
+                .iter()
+                .map(|(depth, count)| format!("depth {}: {}", depth, count))
+                .collect();
+            format!(
+                "  Split depth histogram: {}  Max depth used: {}",
+                parts.join(", "),
+                s.verification_split_max_depth_used
+            )
+        };
+
         vec![
             basic,
             sc,
@@ -498,6 +545,7 @@ impl DataCollector {
             verification,
             verification_stats,
             split_stats,
+            split_depth,
         ]
         .join("\n")
     }
