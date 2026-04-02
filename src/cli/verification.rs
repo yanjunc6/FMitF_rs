@@ -20,10 +20,12 @@ use crate::verification::{
     VerificationManager, VerificationType,
 };
 use indicatif::ProgressBar;
+use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
 
 struct BoogieRunResult {
     file_name: String,
@@ -61,6 +63,14 @@ struct CommutativeProcessOutcome {
     result: Option<BoogieRunResult>,
     children: Vec<VerificationTask>,
     feature_logs: Vec<String>,
+}
+
+struct ParallelTaskResult {
+    run_result: Option<BoogieRunResult>,
+    children: Vec<VerificationTask>,
+    feature_logs: Vec<String>,
+    aggregated_entry: Option<(String, AggregateResult)>,
+    root_max_depth: Option<(String, usize)>,
 }
 
 pub fn run_verification_stage(
@@ -268,8 +278,8 @@ fn run_verification_parallel(
         }
     }
 
-    let cache_state = CacheManager::new(cache_options)?;
-    let splitter_state = SplitterState::new(sc, split_options);
+    let cache_state = Arc::new(CacheManager::new(cache_options)?);
+    let splitter_state = Arc::new(SplitterState::new(sc, split_options));
 
     let mut queue: VecDeque<VerificationTask> = partition_programs
         .into_iter()
@@ -297,60 +307,140 @@ fn run_verification_parallel(
     );
     pb.set_message("running verification");
 
-    while let Some(task) = queue.pop_front() {
-        splitter_state.record_total_unit();
-        match task {
-            VerificationTask::Partition(program) => {
-                let outcome = process_single_partition_verification(
-                    &program,
-                    boogie_dir,
-                    loop_unroll,
-                    timeout_secs,
-                )?;
-                pb.inc(1);
-                run_results.push(outcome);
-            }
-            VerificationTask::Commutative(task) => {
-                root_max_depths
-                    .entry(task.root_file_name.clone())
-                    .and_modify(|current| *current = (*current).max(task.depth as usize))
-                    .or_insert(task.depth as usize);
+    while !queue.is_empty() {
+        let batch: Vec<_> = queue.drain(..).collect();
 
-                let outcome = process_single_commutative_verification(
-                    program,
-                    &task,
-                    &cache_state,
-                    &splitter_state,
-                    boogie_dir,
-                    loop_unroll,
-                    timeout_secs,
-                )?;
+        // Process tasks in parallel. Any worker failure must abort the stage;
+        // silently dropping a task can invalidate split-child aggregation.
+        let parallel_results: Vec<Result<ParallelTaskResult, String>> = batch
+            .into_par_iter()
+            .map(|task| {
+                let progress_bar = pb.clone();
+                let cache_state_clone = Arc::clone(&cache_state);
+                let splitter_state_clone = Arc::clone(&splitter_state);
 
-                feature_logs.extend(outcome.feature_logs);
+                // Record this unit in the split statistics
+                splitter_state_clone.record_total_unit();
 
-                if let Some(mut result) = outcome.result {
-                    let kind = classify_quick_result(&result.stdout);
-                    merge_commutative_leaf(&mut aggregated, task.root_file_name.clone(), &mut result, kind);
-                }
+                let task_result = match task {
+                    VerificationTask::Partition(program) => {
+                        match process_single_partition_verification(
+                            &program,
+                            boogie_dir,
+                            loop_unroll,
+                            timeout_secs,
+                        ) {
+                            Ok(result) => Ok(ParallelTaskResult {
+                                run_result: Some(result),
+                                children: Vec::new(),
+                                feature_logs: Vec::new(),
+                                aggregated_entry: None,
+                                root_max_depth: None,
+                            }),
+                            Err(e) => Err(format!("partition verification failed: {}", e)),
+                        }
+                    }
+                    VerificationTask::Commutative(task) => {
+                        match process_single_commutative_verification(
+                            program,
+                            &task,
+                            &cache_state_clone,
+                            &splitter_state_clone,
+                            boogie_dir,
+                            loop_unroll,
+                            timeout_secs,
+                        ) {
+                            Ok(outcome) => {
+                                let aggregated_entry = if let Some(result) = outcome.result {
+                                    let kind = classify_quick_result(&result.stdout);
+                                    Some((task.root_file_name.clone(), AggregateResult {
+                                        duration_ms: result.duration_ms,
+                                        result_kind: kind,
+                                        stdout: result.stdout.clone(),
+                                        stderr: result.stderr.clone(),
+                                        memory_stats: result.memory_stats.clone(),
+                                    }))
+                                } else {
+                                    None
+                                };
 
-                if !outcome.children.is_empty() {
-                    pb.inc_length(outcome.children.len() as u64);
-                }
-                for child in outcome.children {
-                    queue.push_back(child);
-                }
+                                let root_max_depth = Some((task.root_file_name.clone(), task.depth as usize));
 
-                split_count_for_message = splitter_state
-                    .stats()
-                    .map(|stats| stats.split_performed)
-                    .unwrap_or(0);
-                pb.inc(1);
-                pb.set_message(format!(
-                    "running commutative checks ({} splitted)",
-                    split_count_for_message
-                ));
+                                Ok(ParallelTaskResult {
+                                    run_result: None,
+                                    children: outcome.children,
+                                    feature_logs: outcome.feature_logs,
+                                    aggregated_entry,
+                                    root_max_depth,
+                                })
+                            }
+                            Err(e) => Err(format!(
+                                "commutative verification failed for {}: {}",
+                                task.program.name, e
+                            )),
+                        }
+                    }
+                };
+
+                // Update progress as each unit finishes to provide smoother feedback.
+                progress_bar.inc(1);
+                task_result
+            })
+            .collect();
+
+        let mut parallel_results_ok = Vec::with_capacity(parallel_results.len());
+        for result in parallel_results {
+            match result {
+                Ok(v) => parallel_results_ok.push(v),
+                Err(msg) => return Err(msg.into()),
             }
         }
+
+        // Aggregate results back into main state
+        for result in parallel_results_ok {
+            if let Some(run_result) = result.run_result {
+                run_results.push(run_result);
+            }
+
+            feature_logs.extend(result.feature_logs);
+
+            if let Some((root_file_name, agg)) = result.aggregated_entry {
+                let rank = result_rank(agg.result_kind);
+                aggregated
+                    .entry(root_file_name)
+                    .and_modify(|existing| {
+                        existing.duration_ms += agg.duration_ms;
+                        if rank > result_rank(existing.result_kind) {
+                            existing.result_kind = agg.result_kind;
+                            existing.stdout = agg.stdout.clone();
+                            existing.stderr = agg.stderr.clone();
+                            existing.memory_stats = agg.memory_stats.clone();
+                        }
+                    })
+                    .or_insert(agg);
+            }
+
+            if let Some((root_file_name, depth)) = result.root_max_depth {
+                root_max_depths
+                    .entry(root_file_name)
+                    .and_modify(|current| *current = (*current).max(depth))
+                    .or_insert(depth);
+            }
+
+            for child in result.children {
+                queue.push_back(child);
+                pb.inc_length(1);
+            }
+        }
+
+        split_count_for_message = splitter_state
+            .stats()
+            .map(|stats| stats.split_performed)
+            .unwrap_or(0);
+        pb.set_message(format!(
+            "running commutative checks ({} splitted)",
+            split_count_for_message
+        ));
     }
 
     let mut split_depth_counts: BTreeMap<usize, usize> = BTreeMap::new();
@@ -378,7 +468,7 @@ fn run_verification_parallel(
     Ok(VerificationParallelReport {
         run_results,
         cache_stats: cache_state.stats(cache_options.enabled),
-        split_stats: splitter_state.stats(),
+        split_stats: (*splitter_state).stats(),
         feature_logs,
         original_root_units,
         split_depth_counts,
@@ -574,33 +664,6 @@ fn cache_hit_synthetic_stdout(file_name: &str, hit: CacheResult) -> String {
             }
         }
     }
-}
-
-fn merge_commutative_leaf(
-    aggregated: &mut HashMap<String, AggregateResult>,
-    root_file_name: String,
-    result: &mut BoogieRunResult,
-    kind: CacheResult,
-) {
-    let rank = result_rank(kind);
-    aggregated
-        .entry(root_file_name)
-        .and_modify(|agg| {
-            agg.duration_ms += result.duration_ms;
-            if rank > result_rank(agg.result_kind) {
-                agg.result_kind = kind;
-                agg.stdout = result.stdout.clone();
-                agg.stderr = result.stderr.clone();
-                agg.memory_stats = result.memory_stats.clone();
-            }
-        })
-        .or_insert_with(|| AggregateResult {
-            duration_ms: result.duration_ms,
-            result_kind: kind,
-            stdout: result.stdout.clone(),
-            stderr: result.stderr.clone(),
-            memory_stats: result.memory_stats.clone(),
-        });
 }
 
 fn result_rank(kind: CacheResult) -> u8 {
