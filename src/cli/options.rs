@@ -14,6 +14,7 @@ pub struct SplitOptions {
     pub max_depth: u32,
     pub strategy: String,
     pub debug: bool,
+    pub debug_enforce_split: u32,
 }
 
 #[derive(Debug, Clone)]

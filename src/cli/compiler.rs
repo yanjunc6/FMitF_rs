@@ -100,6 +100,7 @@ impl Compiler {
             max_depth: options.split.max_depth,
             strategy: options.split.strategy.clone(),
             debug_cuts: options.split.debug,
+            debug_enforce_split: options.split.debug_enforce_split,
         };
 
         // Initialize logger

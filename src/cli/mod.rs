@@ -83,6 +83,11 @@ pub struct Args {
     /// Print detailed split cut debugging information
     #[arg(long, default_value_t = false)]
     pub split_debug: bool,
+
+    /// Debug mode: enforce splitting to a specific depth for all verifications
+    /// (0 = disabled, 1 = split once, 2 = split to depth 2, etc.)
+    #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..))]
+    pub debug_enforce_split: u32,
 }
 
 impl Args {
@@ -123,6 +128,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             max_depth: args.split_max_depth,
             strategy: args.split_strategy,
             debug: args.split_debug,
+            debug_enforce_split: args.debug_enforce_split,
         },
     };
 
