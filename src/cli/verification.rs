@@ -346,6 +346,8 @@ fn run_verification_parallel(
                             loop_unroll,
                             timeout_secs,
                             has_gnu_time,
+                            split_options,
+                            0,
                         ) {
                             Ok(result) => Ok(ParallelTaskResult {
                                 run_result: Some(result),
@@ -367,6 +369,7 @@ fn run_verification_parallel(
                             loop_unroll,
                             timeout_secs,
                             has_gnu_time,
+                            split_options,
                         ) {
                             Ok(outcome) => {
                                 let aggregated_entry = if let Some(result) = outcome.result {
@@ -504,8 +507,18 @@ fn process_single_partition_verification(
     loop_unroll: u32,
     timeout_secs: u32,
     has_gnu_time: bool,
+    split_options: &SplitRuntimeOptions,
+    current_depth: u32,
 ) -> Result<BoogieRunResult, Box<dyn std::error::Error>> {
-    run_boogie_program(program, boogie_dir, loop_unroll, timeout_secs, has_gnu_time)
+    run_boogie_program(
+        program,
+        boogie_dir,
+        loop_unroll,
+        timeout_secs,
+        has_gnu_time,
+        split_options.debug_enforce_split,
+        current_depth,
+    )
 }
 
 fn process_single_commutative_verification(
@@ -517,6 +530,7 @@ fn process_single_commutative_verification(
     loop_unroll: u32,
     timeout_secs: u32,
     has_gnu_time: bool,
+    split_options: &SplitRuntimeOptions,
 ) -> Result<CommutativeProcessOutcome, Box<dyn std::error::Error>> {
     let cache_key = cache_state.key_for_program(program, &task.program, loop_unroll, timeout_secs);
     let mut feature_logs = Vec::new();
@@ -562,6 +576,8 @@ fn process_single_commutative_verification(
         loop_unroll,
         timeout_secs,
         has_gnu_time,
+        split_options.debug_enforce_split,
+        task.depth,
     )?;
     let kind = classify_quick_result(&result.stdout);
     cache_state.store(&cache_key, kind);
@@ -597,7 +613,23 @@ fn run_boogie_program(
     loop_unroll: u32,
     timeout_secs: u32,
     has_gnu_time: bool,
+    debug_enforce_split: u32,
+    current_depth: u32,
 ) -> Result<BoogieRunResult, Box<dyn std::error::Error>> {
+    // Debug mode: enforce splitting by returning fake timeout if not at target depth
+    if debug_enforce_split > 0 && current_depth < debug_enforce_split {
+        return Ok(BoogieRunResult {
+            file_name: format!("{}.bpl", program.name),
+            duration_ms: 0.0,
+            stdout: "timed out".to_string(),
+            stderr: format!(
+                "DEBUG_ENFORCE_SPLIT: depth {} < target {}, forcing split",
+                current_depth, debug_enforce_split
+            ),
+            memory_stats: MemoryStats::default(),
+        });
+    }
+
     let file_name = format!("{}.bpl", program.name);
     let file_path = boogie_dir.join(&file_name);
 
