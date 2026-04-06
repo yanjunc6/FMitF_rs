@@ -26,13 +26,26 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
-
 struct BoogieRunResult {
     file_name: String,
     duration_ms: f64,
     stdout: String,
     stderr: String,
     memory_stats: MemoryStats,
+}
+
+/// Check if GNU time is available (with -v support)
+/// Returns true if /usr/bin/time -v works correctly
+fn is_gnu_time_available() -> bool {
+    let result = Command::new("/usr/bin/time").arg("-v").arg("echo").output();
+
+    match result {
+        Ok(output) => {
+            output.status.success()
+                && !String::from_utf8_lossy(&output.stderr).contains("illegal option")
+        }
+        Err(_) => false,
+    }
 }
 
 #[derive(Clone)]
@@ -86,6 +99,7 @@ pub fn run_verification_stage(
     data_collector: &mut DataCollector,
 ) -> Result<(crate::sc_graph::SCGraph, crate::sc_graph::CombinedSCGraph), Box<dyn std::error::Error>>
 {
+    let has_gnu_time = is_gnu_time_available();
     let verifier = VerificationManager::new();
     let partition_programs = verifier
         .generate_verification_programs(program, sc, VerificationType::HopPartition)
@@ -111,16 +125,17 @@ pub fn run_verification_stage(
     fs::create_dir_all(&boogie_dir)?;
 
     let report = run_verification_parallel(
-            logger,
-            program,
-            sc,
-            &programs,
-            &boogie_dir,
-            loop_unroll,
-            timeout_secs,
-            cache_options,
-            split_options,
-        )?;
+        logger,
+        program,
+        sc,
+        &programs,
+        &boogie_dir,
+        loop_unroll,
+        timeout_secs,
+        cache_options,
+        split_options,
+        has_gnu_time,
+    )?;
 
     if let Some(stats) = report.cache_stats {
         data_collector.set_verification_cache_stats(
@@ -146,10 +161,8 @@ pub fn run_verification_stage(
         data_collector.set_verification_split_stats(report.original_root_units, 0, 0, 0, 0, 0, 0);
     }
 
-    data_collector.set_verification_split_depth_stats(
-        report.split_depth_counts,
-        report.max_depth_used,
-    );
+    data_collector
+        .set_verification_split_depth_stats(report.split_depth_counts, report.max_depth_used);
 
     for line in report.feature_logs {
         logger.line(line)?;
@@ -267,6 +280,7 @@ fn run_verification_parallel(
     timeout_secs: u32,
     cache_options: &CacheRuntimeOptions,
     split_options: &SplitRuntimeOptions,
+    has_gnu_time: bool,
 ) -> Result<VerificationParallelReport, Box<dyn std::error::Error>> {
     let mut partition_programs = Vec::new();
     let mut commutative_programs = Vec::new();
@@ -284,11 +298,11 @@ fn run_verification_parallel(
     let mut queue: VecDeque<VerificationTask> = partition_programs
         .into_iter()
         .map(VerificationTask::Partition)
-        .chain(
-            commutative_programs
-                .into_iter()
-                .filter_map(|program| splitter_state.create_root_task(program).map(VerificationTask::Commutative)),
-        )
+        .chain(commutative_programs.into_iter().filter_map(|program| {
+            splitter_state
+                .create_root_task(program)
+                .map(VerificationTask::Commutative)
+        }))
         .collect();
 
     let original_root_units = queue.len();
@@ -301,9 +315,11 @@ fn run_verification_parallel(
 
     let pb = ProgressBar::new(original_root_units as u64);
     pb.set_style(
-        indicatif::ProgressStyle::with_template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
-            .unwrap()
-            .progress_chars("=>-"),
+        indicatif::ProgressStyle::with_template(
+            "[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}",
+        )
+        .unwrap()
+        .progress_chars("=>-"),
     );
     pb.set_message("running verification");
 
@@ -329,6 +345,7 @@ fn run_verification_parallel(
                             boogie_dir,
                             loop_unroll,
                             timeout_secs,
+                            has_gnu_time,
                         ) {
                             Ok(result) => Ok(ParallelTaskResult {
                                 run_result: Some(result),
@@ -349,22 +366,27 @@ fn run_verification_parallel(
                             boogie_dir,
                             loop_unroll,
                             timeout_secs,
+                            has_gnu_time,
                         ) {
                             Ok(outcome) => {
                                 let aggregated_entry = if let Some(result) = outcome.result {
                                     let kind = classify_quick_result(&result.stdout);
-                                    Some((task.root_file_name.clone(), AggregateResult {
-                                        duration_ms: result.duration_ms,
-                                        result_kind: kind,
-                                        stdout: result.stdout.clone(),
-                                        stderr: result.stderr.clone(),
-                                        memory_stats: result.memory_stats.clone(),
-                                    }))
+                                    Some((
+                                        task.root_file_name.clone(),
+                                        AggregateResult {
+                                            duration_ms: result.duration_ms,
+                                            result_kind: kind,
+                                            stdout: result.stdout.clone(),
+                                            stderr: result.stderr.clone(),
+                                            memory_stats: result.memory_stats.clone(),
+                                        },
+                                    ))
                                 } else {
                                     None
                                 };
 
-                                let root_max_depth = Some((task.root_file_name.clone(), task.depth as usize));
+                                let root_max_depth =
+                                    Some((task.root_file_name.clone(), task.depth as usize));
 
                                 Ok(ParallelTaskResult {
                                     run_result: None,
@@ -481,8 +503,9 @@ fn process_single_partition_verification(
     boogie_dir: &PathBuf,
     loop_unroll: u32,
     timeout_secs: u32,
+    has_gnu_time: bool,
 ) -> Result<BoogieRunResult, Box<dyn std::error::Error>> {
-    run_boogie_program(program, boogie_dir, loop_unroll, timeout_secs)
+    run_boogie_program(program, boogie_dir, loop_unroll, timeout_secs, has_gnu_time)
 }
 
 fn process_single_commutative_verification(
@@ -493,6 +516,7 @@ fn process_single_commutative_verification(
     boogie_dir: &PathBuf,
     loop_unroll: u32,
     timeout_secs: u32,
+    has_gnu_time: bool,
 ) -> Result<CommutativeProcessOutcome, Box<dyn std::error::Error>> {
     let cache_key = cache_state.key_for_program(program, &task.program, loop_unroll, timeout_secs);
     let mut feature_logs = Vec::new();
@@ -512,7 +536,10 @@ fn process_single_commutative_verification(
             feature_logs.extend(logs);
             cache_state.store(&cache_key, hit);
             if let Some(children) = split_tasks {
-                let children = children.into_iter().map(VerificationTask::Commutative).collect();
+                let children = children
+                    .into_iter()
+                    .map(VerificationTask::Commutative)
+                    .collect();
                 return Ok(CommutativeProcessOutcome {
                     result: None,
                     children,
@@ -529,7 +556,13 @@ fn process_single_commutative_verification(
         });
     }
 
-    let result = run_boogie_program(&task.program, boogie_dir, loop_unroll, timeout_secs)?;
+    let result = run_boogie_program(
+        &task.program,
+        boogie_dir,
+        loop_unroll,
+        timeout_secs,
+        has_gnu_time,
+    )?;
     let kind = classify_quick_result(&result.stdout);
     cache_state.store(&cache_key, kind);
 
@@ -539,7 +572,10 @@ fn process_single_commutative_verification(
         feature_logs.extend(logs);
         cache_state.store(&cache_key, kind);
         if let Some(children) = split_tasks {
-            let children = children.into_iter().map(VerificationTask::Commutative).collect();
+            let children = children
+                .into_iter()
+                .map(VerificationTask::Commutative)
+                .collect();
             return Ok(CommutativeProcessOutcome {
                 result: None,
                 children,
@@ -560,6 +596,7 @@ fn run_boogie_program(
     boogie_dir: &PathBuf,
     loop_unroll: u32,
     timeout_secs: u32,
+    has_gnu_time: bool,
 ) -> Result<BoogieRunResult, Box<dyn std::error::Error>> {
     let file_name = format!("{}.bpl", program.name);
     let file_path = boogie_dir.join(&file_name);
@@ -574,22 +611,41 @@ fn run_boogie_program(
     match write_res {
         Ok(()) => {
             let start_time = std::time::Instant::now();
-            let result = Command::new("/usr/bin/time")
-                .arg("-v")
-                .arg("boogie")
-                .arg("/quiet")
-                .arg("/errorTrace:0")
-                .arg(format!("/loopUnroll:{}", loop_unroll))
-                .arg(format!("/timeLimit:{}", timeout_secs))
-                .arg(file_path.to_string_lossy().to_string())
-                .output();
+
+            let result = if has_gnu_time {
+                Command::new("/usr/bin/time")
+                    .arg("-v")
+                    .arg("boogie")
+                    .arg("/quiet")
+                    .arg("/errorTrace:0")
+                    .arg(format!("/loopUnroll:{}", loop_unroll))
+                    .arg(format!("/timeLimit:{}", timeout_secs))
+                    .arg(file_path.to_string_lossy().to_string())
+                    .output()
+            } else {
+                Command::new("boogie")
+                    .arg("/quiet")
+                    .arg("/errorTrace:0")
+                    .arg(format!("/loopUnroll:{}", loop_unroll))
+                    .arg(format!("/timeLimit:{}", timeout_secs))
+                    .arg(file_path.to_string_lossy().to_string())
+                    .output()
+            };
+
             let duration = start_time.elapsed();
 
             match result {
                 Ok(output) => {
                     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                    let memory_stats = data::parse_time_output(&stderr);
+
+                    // Only parse time output if we used GNU time
+                    let memory_stats = if has_gnu_time {
+                        data::parse_time_output(&stderr)
+                    } else {
+                        MemoryStats::default()
+                    };
+
                     Ok(BoogieRunResult {
                         file_name,
                         duration_ms: duration.as_secs_f64() * 1000.0,
