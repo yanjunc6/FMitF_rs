@@ -37,15 +37,16 @@ struct BoogieRunResult {
 /// Check if GNU time is available (with -v support)
 /// Returns true if /usr/bin/time -v works correctly
 fn is_gnu_time_available() -> bool {
-    let result = Command::new("/usr/bin/time").arg("-v").arg("echo").output();
+    // let _result = Command::new("/usr/bin/time").arg("-v").arg("echo").output();
+    // match result {
+    //     Ok(output) => {
+    //         output.status.success()
+    //             && !String::from_utf8_lossy(&output.stderr).contains("illegal option")
+    //     }
+    //     Err(_) => false,
+    // }
 
-    match result {
-        Ok(output) => {
-            output.status.success()
-                && !String::from_utf8_lossy(&output.stderr).contains("illegal option")
-        }
-        Err(_) => false,
-    }
+    false
 }
 
 #[derive(Clone)]
