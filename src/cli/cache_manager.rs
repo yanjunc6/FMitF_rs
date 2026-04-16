@@ -29,7 +29,7 @@ pub struct CacheStatsSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum CacheResult {
+pub enum VerificationResult {
     Pass,
     Error,
     Timeout,
@@ -46,7 +46,7 @@ struct CacheIndexEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CacheEntry {
     key: String,
-    result: CacheResult,
+    result: VerificationResult,
     compiler_version: String,
     solver_version: String,
     created_at: u64,
@@ -181,7 +181,7 @@ impl VerificationCache {
         Ok(())
     }
 
-    fn get(&self, key: &str) -> Option<CacheResult> {
+    fn get(&self, key: &str) -> Option<VerificationResult> {
         if !self.enabled {
             return None;
         }
@@ -250,7 +250,7 @@ impl VerificationCache {
         Ok(payload.len() as u64)
     }
 
-    fn store(&self, key: &str, result: CacheResult) -> Result<(), Box<dyn std::error::Error>> {
+    fn store(&self, key: &str, result: VerificationResult) -> Result<(), Box<dyn std::error::Error>> {
         if !self.enabled {
             return Ok(());
         }
@@ -358,11 +358,11 @@ impl CacheManager {
         )
     }
 
-    pub fn lookup(&self, key: &str) -> Option<CacheResult> {
+    pub fn lookup(&self, key: &str) -> Option<VerificationResult> {
         self.inner.get(key)
     }
 
-    pub fn store(&self, key: &str, result: CacheResult) {
+    pub fn store(&self, key: &str, result: VerificationResult) {
         let _ = self.inner.store(key, result);
     }
 

@@ -23,6 +23,7 @@ impl BoogieProgramGenerator {
                 other_declarations: Vec::new(),
                 global_string_literals: HashMap::new(),
                 procedures: Vec::new(),
+                stats: super::BoogieProgramStats::default(),
             },
             current_procedure_index: None,
         };

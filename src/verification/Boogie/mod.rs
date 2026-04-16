@@ -4,6 +4,16 @@ use std::collections::HashMap;
 mod Boogie_printer;
 pub mod gen_Boogie;
 
+#[derive(Debug, Clone, Default)]
+pub struct BoogieProgramStats {
+    pub total_boogie_file_len: usize,
+    pub real_procedure_len: usize,
+    pub branch_count: usize,
+    pub has_loop: bool,
+    pub db_read_count: usize,
+    pub db_write_count: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct BoogieProgram {
     pub name: String, // program name, usually the input file name without extension
@@ -11,6 +21,18 @@ pub struct BoogieProgram {
     pub other_declarations: Vec<String>, // axiom, function, types; for global var, const: use global_vars
     pub global_string_literals: HashMap<String, BoogieVarDecl>, // string literal -> global string literals
     pub procedures: Vec<BoogieProcedure>,                       // procedures
+    pub stats: BoogieProgramStats,
+}
+
+impl BoogieProgram {
+    pub fn refresh_text_length_stats(&mut self) {
+        self.stats.total_boogie_file_len = format!("{}", self).len();
+        self.stats.real_procedure_len = self
+            .procedures
+            .iter()
+            .map(|procedure| format!("{}", procedure).len())
+            .sum();
+    }
 }
 
 #[derive(Debug, Clone)]

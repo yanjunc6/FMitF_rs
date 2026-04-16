@@ -5,12 +5,12 @@
 //! result collection.
 
 use crate::cfg;
-use crate::cli::cache_manager::{CacheManager, CacheResult, CacheRuntimeOptions};
-use crate::cli::data::{
-    self, CEdgeVerificationData, DataCollector, MemoryStats, VerificationResult,
+use crate::cli::cache_manager::{
+    CacheManager, CacheRuntimeOptions, VerificationResult as CacheVerificationResult,
 };
+use crate::cli::data::{CEdgeVerificationData, DataCollector, VerificationResult as DataVerificationResult};
 use crate::cli::log::Logger;
-use crate::verification::Boogie::{BoogieError, BoogieProgram, VerificationNodeId};
+use crate::verification::Boogie::{BoogieError, BoogieProgram, BoogieProgramStats, VerificationNodeId};
 use crate::verification::{
     commutative::{
         naming::{parse_commutative_edge_ids, parse_commutative_nodes},
@@ -26,36 +26,22 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
+
 struct BoogieRunResult {
     file_name: String,
     duration_ms: f64,
     stdout: String,
     stderr: String,
-    memory_stats: MemoryStats,
-}
-
-/// Check if GNU time is available (with -v support)
-/// Returns true if /usr/bin/time -v works correctly
-fn is_gnu_time_available() -> bool {
-    // let _result = Command::new("/usr/bin/time").arg("-v").arg("echo").output();
-    // match result {
-    //     Ok(output) => {
-    //         output.status.success()
-    //             && !String::from_utf8_lossy(&output.stderr).contains("illegal option")
-    //     }
-    //     Err(_) => false,
-    // }
-
-    false
+    program_stats: BoogieProgramStats,
 }
 
 #[derive(Clone)]
 struct AggregateResult {
     duration_ms: f64,
-    result_kind: CacheResult,
+    result_kind: CacheVerificationResult,
     stdout: String,
     stderr: String,
-    memory_stats: MemoryStats,
+    program_stats: BoogieProgramStats,
 }
 
 enum VerificationTask {
@@ -100,7 +86,6 @@ pub fn run_verification_stage(
     data_collector: &mut DataCollector,
 ) -> Result<(crate::sc_graph::SCGraph, crate::sc_graph::CombinedSCGraph), Box<dyn std::error::Error>>
 {
-    let has_gnu_time = is_gnu_time_available();
     let verifier = VerificationManager::new();
     let partition_programs = verifier
         .generate_verification_programs(program, sc, VerificationType::HopPartition)
@@ -135,7 +120,6 @@ pub fn run_verification_stage(
         timeout_secs,
         cache_options,
         split_options,
-        has_gnu_time,
     )?;
 
     if let Some(stats) = report.cache_stats {
@@ -177,8 +161,11 @@ pub fn run_verification_stage(
         logger.block("stdout:", &result.stdout)?;
         logger.block("stderr:", &result.stderr)?;
 
-        let verification_result =
-            process_boogie_result(&result, &mut all_boogie_errors, &mut exec_errors);
+        let analysis = analyze_boogie_output(&result.file_name, &result.stdout, &result.stderr);
+        all_boogie_errors.extend(analysis.boogie_errors);
+        if let Some(error) = analysis.exec_error {
+            exec_errors.push(error);
+        }
 
         if let Some((src_f, src_i, src_h, tgt_f, tgt_i, tgt_h)) =
             parse_commutative_edge_ids(&result.file_name)
@@ -191,9 +178,14 @@ pub fn run_verification_stage(
                 target_instance: tgt_i,
                 target_hop_id: tgt_h,
                 duration_ms: result.duration_ms,
-                result: verification_result,
+                result: analysis.result,
                 eliminated: false,
-                memory_stats: result.memory_stats,
+                boogie_file_len: result.program_stats.total_boogie_file_len,
+                real_procedure_len: result.program_stats.real_procedure_len,
+                branch_count: result.program_stats.branch_count,
+                has_loop: result.program_stats.has_loop,
+                db_read_count: result.program_stats.db_read_count,
+                db_write_count: result.program_stats.db_write_count,
                 boogie_stdout: result.stdout,
                 boogie_stderr: result.stderr,
                 boogie_file: result.file_name,
@@ -281,7 +273,6 @@ fn run_verification_parallel(
     timeout_secs: u32,
     cache_options: &CacheRuntimeOptions,
     split_options: &SplitRuntimeOptions,
-    has_gnu_time: bool,
 ) -> Result<VerificationParallelReport, Box<dyn std::error::Error>> {
     let mut partition_programs = Vec::new();
     let mut commutative_programs = Vec::new();
@@ -296,15 +287,20 @@ fn run_verification_parallel(
     let cache_state = Arc::new(CacheManager::new(cache_options)?);
     let splitter_state = Arc::new(SplitterState::new(sc, split_options));
 
-    let mut queue: VecDeque<VerificationTask> = partition_programs
-        .into_iter()
-        .map(VerificationTask::Partition)
-        .chain(commutative_programs.into_iter().filter_map(|program| {
-            splitter_state
-                .create_root_task(program)
-                .map(VerificationTask::Commutative)
-        }))
-        .collect();
+    let mut root_program_stats: HashMap<String, BoogieProgramStats> = HashMap::new();
+    let mut queue: VecDeque<VerificationTask> = VecDeque::new();
+
+    for program in partition_programs {
+        root_program_stats.insert(format!("{}.bpl", program.name), program.stats.clone());
+        queue.push_back(VerificationTask::Partition(program));
+    }
+
+    for program in commutative_programs {
+        if let Some(task) = splitter_state.create_root_task(program) {
+            root_program_stats.insert(task.root_file_name.clone(), task.program.stats.clone());
+            queue.push_back(VerificationTask::Commutative(task));
+        }
+    }
 
     let original_root_units = queue.len();
 
@@ -346,7 +342,6 @@ fn run_verification_parallel(
                             boogie_dir,
                             loop_unroll,
                             timeout_secs,
-                            has_gnu_time,
                             split_options,
                             0,
                         ) {
@@ -369,12 +364,16 @@ fn run_verification_parallel(
                             boogie_dir,
                             loop_unroll,
                             timeout_secs,
-                            has_gnu_time,
                             split_options,
                         ) {
                             Ok(outcome) => {
                                 let aggregated_entry = if let Some(result) = outcome.result {
-                                    let kind = classify_quick_result(&result.stdout);
+                                    let kind = to_cache_result(&analyze_boogie_output(
+                                        &result.file_name,
+                                        &result.stdout,
+                                        &result.stderr,
+                                    )
+                                    .result);
                                     Some((
                                         task.root_file_name.clone(),
                                         AggregateResult {
@@ -382,7 +381,7 @@ fn run_verification_parallel(
                                             result_kind: kind,
                                             stdout: result.stdout.clone(),
                                             stderr: result.stderr.clone(),
-                                            memory_stats: result.memory_stats.clone(),
+                                            program_stats: result.program_stats.clone(),
                                         },
                                     ))
                                 } else {
@@ -440,7 +439,7 @@ fn run_verification_parallel(
                             existing.result_kind = agg.result_kind;
                             existing.stdout = agg.stdout.clone();
                             existing.stderr = agg.stderr.clone();
-                            existing.memory_stats = agg.memory_stats.clone();
+                            existing.program_stats = agg.program_stats.clone();
                         }
                     })
                     .or_insert(agg);
@@ -477,12 +476,16 @@ fn run_verification_parallel(
     }
 
     for (root_file_name, agg) in aggregated {
+        let program_stats = root_program_stats
+            .get(&root_file_name)
+            .cloned()
+            .unwrap_or_else(|| agg.program_stats.clone());
         run_results.push(BoogieRunResult {
             file_name: root_file_name,
             duration_ms: agg.duration_ms,
             stdout: agg.stdout,
             stderr: agg.stderr,
-            memory_stats: agg.memory_stats,
+            program_stats,
         });
     }
 
@@ -507,7 +510,6 @@ fn process_single_partition_verification(
     boogie_dir: &PathBuf,
     loop_unroll: u32,
     timeout_secs: u32,
-    has_gnu_time: bool,
     split_options: &SplitRuntimeOptions,
     current_depth: u32,
 ) -> Result<BoogieRunResult, Box<dyn std::error::Error>> {
@@ -516,7 +518,6 @@ fn process_single_partition_verification(
         boogie_dir,
         loop_unroll,
         timeout_secs,
-        has_gnu_time,
         split_options.debug_enforce_split,
         current_depth,
     )
@@ -530,7 +531,6 @@ fn process_single_commutative_verification(
     boogie_dir: &PathBuf,
     loop_unroll: u32,
     timeout_secs: u32,
-    has_gnu_time: bool,
     split_options: &SplitRuntimeOptions,
 ) -> Result<CommutativeProcessOutcome, Box<dyn std::error::Error>> {
     let cache_key = cache_state.key_for_program(program, &task.program, loop_unroll, timeout_secs);
@@ -542,10 +542,12 @@ fn process_single_commutative_verification(
             duration_ms: 0.0,
             stdout: cache_hit_synthetic_stdout(&task.root_file_name, hit),
             stderr: format!("cache hit: {:?}", hit).to_lowercase(),
-            memory_stats: MemoryStats::default(),
+            program_stats: task.program.stats.clone(),
         };
 
-        if hit == CacheResult::Timeout {
+        let analysis = analyze_boogie_output(&result.file_name, &result.stdout, &result.stderr);
+
+        if matches!(&analysis.result, DataVerificationResult::Timeout) {
             splitter_state.record_root_timeout();
             let (split_tasks, logs) = splitter_state.try_split_task(program, task)?;
             feature_logs.extend(logs);
@@ -576,18 +578,18 @@ fn process_single_commutative_verification(
         boogie_dir,
         loop_unroll,
         timeout_secs,
-        has_gnu_time,
         split_options.debug_enforce_split,
         task.depth,
     )?;
-    let kind = classify_quick_result(&result.stdout);
-    cache_state.store(&cache_key, kind);
+    let analysis = analyze_boogie_output(&result.file_name, &result.stdout, &result.stderr);
+    let analysis_kind = to_cache_result(&analysis.result);
+    cache_state.store(&cache_key, analysis_kind);
 
-    if kind == CacheResult::Timeout {
+    if matches!(&analysis.result, DataVerificationResult::Timeout) {
         splitter_state.record_root_timeout();
         let (split_tasks, logs) = splitter_state.try_split_task(program, task)?;
         feature_logs.extend(logs);
-        cache_state.store(&cache_key, kind);
+        cache_state.store(&cache_key, analysis_kind);
         if let Some(children) = split_tasks {
             let children = children
                 .into_iter()
@@ -613,7 +615,6 @@ fn run_boogie_program(
     boogie_dir: &PathBuf,
     loop_unroll: u32,
     timeout_secs: u32,
-    has_gnu_time: bool,
     debug_enforce_split: u32,
     current_depth: u32,
 ) -> Result<BoogieRunResult, Box<dyn std::error::Error>> {
@@ -627,7 +628,7 @@ fn run_boogie_program(
                 "DEBUG_ENFORCE_SPLIT: depth {} < target {}, forcing split",
                 current_depth, debug_enforce_split
             ),
-            memory_stats: MemoryStats::default(),
+            program_stats: program.stats.clone(),
         });
     }
 
@@ -644,26 +645,13 @@ fn run_boogie_program(
     match write_res {
         Ok(()) => {
             let start_time = std::time::Instant::now();
-
-            let result = if has_gnu_time {
-                Command::new("/usr/bin/time")
-                    .arg("-v")
-                    .arg("boogie")
-                    .arg("/quiet")
-                    .arg("/errorTrace:0")
-                    .arg(format!("/loopUnroll:{}", loop_unroll))
-                    .arg(format!("/timeLimit:{}", timeout_secs))
-                    .arg(file_path.to_string_lossy().to_string())
-                    .output()
-            } else {
-                Command::new("boogie")
-                    .arg("/quiet")
-                    .arg("/errorTrace:0")
-                    .arg(format!("/loopUnroll:{}", loop_unroll))
-                    .arg(format!("/timeLimit:{}", timeout_secs))
-                    .arg(file_path.to_string_lossy().to_string())
-                    .output()
-            };
+            let result = Command::new("boogie")
+                .arg("/quiet")
+                .arg("/errorTrace:0")
+                .arg(format!("/loopUnroll:{}", loop_unroll))
+                .arg(format!("/timeLimit:{}", timeout_secs))
+                .arg(file_path.to_string_lossy().to_string())
+                .output();
 
             let duration = start_time.elapsed();
 
@@ -672,19 +660,12 @@ fn run_boogie_program(
                     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-                    // Only parse time output if we used GNU time
-                    let memory_stats = if has_gnu_time {
-                        data::parse_time_output(&stderr)
-                    } else {
-                        MemoryStats::default()
-                    };
-
                     Ok(BoogieRunResult {
                         file_name,
                         duration_ms: duration.as_secs_f64() * 1000.0,
                         stdout,
                         stderr,
-                        memory_stats,
+                        program_stats: program.stats.clone(),
                     })
                 }
                 Err(e) => Ok(BoogieRunResult {
@@ -692,7 +673,7 @@ fn run_boogie_program(
                     duration_ms: 0.0,
                     stdout: String::new(),
                     stderr: format!("Failed to execute: {}", e),
-                    memory_stats: MemoryStats::default(),
+                    program_stats: program.stats.clone(),
                 }),
             }
         }
@@ -701,39 +682,17 @@ fn run_boogie_program(
             duration_ms: 0.0,
             stdout: String::new(),
             stderr: format!("Failed to write .bpl file: {}", e),
-            memory_stats: MemoryStats::default(),
+            program_stats: program.stats.clone(),
         }),
     }
 }
 
-fn classify_quick_result(stdout: &str) -> CacheResult {
-    if stdout.contains("parse errors detected")
-        || stdout.contains("name resolution errors detected")
-        || stdout.contains("type errors detected")
-        || stdout.contains("type checking errors detected")
-    {
-        return CacheResult::CompilationError;
-    }
-    if stdout.contains("timed out") {
-        return CacheResult::Timeout;
-    }
-    for line in stdout.lines() {
-        let line = line.trim();
-        if line.starts_with('(') && line.ends_with(')') {
-            if BoogieError::from_boogie_string(line).is_some() {
-                return CacheResult::Error;
-            }
-        }
-    }
-    CacheResult::Pass
-}
-
-fn cache_hit_synthetic_stdout(file_name: &str, hit: CacheResult) -> String {
+fn cache_hit_synthetic_stdout(file_name: &str, hit: CacheVerificationResult) -> String {
     match hit {
-        CacheResult::Pass => String::new(),
-        CacheResult::Timeout => "timed out".to_string(),
-        CacheResult::CompilationError => "parse errors detected".to_string(),
-        CacheResult::Error => {
+        CacheVerificationResult::Pass => String::new(),
+        CacheVerificationResult::Timeout => "timed out".to_string(),
+        CacheVerificationResult::CompilationError => "parse errors detected".to_string(),
+        CacheVerificationResult::Error => {
             if let Some((sf, si, sh, tf, ti, th)) = parse_commutative_edge_ids(file_name) {
                 let err = BoogieError::SpecialInterleavingNonEquivalence {
                     node_1: VerificationNodeId {
@@ -755,60 +714,102 @@ fn cache_hit_synthetic_stdout(file_name: &str, hit: CacheResult) -> String {
     }
 }
 
-fn result_rank(kind: CacheResult) -> u8 {
+fn result_rank(kind: CacheVerificationResult) -> u8 {
     match kind {
-        CacheResult::Pass => 1,
-        CacheResult::CompilationError => 2,
-        CacheResult::Timeout => 3,
-        CacheResult::Error => 4,
+        CacheVerificationResult::Pass => 1,
+        CacheVerificationResult::CompilationError => 2,
+        CacheVerificationResult::Timeout => 3,
+        CacheVerificationResult::Error => 4,
     }
 }
 
-fn process_boogie_result(
-    result: &BoogieRunResult,
-    all_boogie_errors: &mut Vec<BoogieError>,
-    exec_errors: &mut Vec<String>,
-) -> VerificationResult {
-    if result.stdout.contains("parse errors detected")
-        || result.stdout.contains("name resolution errors detected")
-        || result.stdout.contains("type errors detected")
-        || result.stdout.contains("type checking errors detected")
-    {
-        exec_errors.push(format!(
-            "Boogie compilation failed for {}: Check compiler.log for details.",
-            result.file_name
-        ));
-        return VerificationResult::CompilationError;
-    }
+struct BoogieOutputAnalysis {
+    result: DataVerificationResult,
+    boogie_errors: Vec<BoogieError>,
+    exec_error: Option<String>,
+}
 
-    if result.stdout.contains("timed out") {
-        if let Some(timeout_error) = build_timeout_error_from_commutative(&result.file_name) {
-            all_boogie_errors.push(timeout_error);
-            return VerificationResult::Timeout;
-        } else {
-            exec_errors.push(format!(
-                "Boogie verification timed out for unknown file {}.",
-                result.file_name
-            ));
-            return VerificationResult::CompilationError;
+fn analyze_boogie_output(file_name: &str, stdout: &str, stderr: &str) -> BoogieOutputAnalysis {
+    let mut output = String::new();
+    if !stdout.trim().is_empty() {
+        output.push_str(stdout);
+    }
+    if !stderr.trim().is_empty() {
+        if !output.is_empty() {
+            output.push('\n');
         }
+        output.push_str(stderr);
     }
 
-    let mut has_errors = false;
-    for line in result.stdout.lines() {
+    if output.trim().is_empty() {
+        return BoogieOutputAnalysis {
+            result: DataVerificationResult::Pass,
+            boogie_errors: Vec::new(),
+            exec_error: None,
+        };
+    }
+
+    if output.contains("parse errors detected")
+        || output.contains("name resolution errors detected")
+        || output.contains("type errors detected")
+        || output.contains("type checking errors detected")
+    {
+        return BoogieOutputAnalysis {
+            result: DataVerificationResult::CompilationError,
+            boogie_errors: Vec::new(),
+            exec_error: Some(format!(
+                "Boogie compilation failed for {}: Check compiler.log for details.",
+                file_name
+            )),
+        };
+    }
+
+    if output.contains("timed out") {
+        let mut boogie_errors = Vec::new();
+        if let Some(timeout_error) = build_timeout_error_from_commutative(file_name) {
+            boogie_errors.push(timeout_error);
+        }
+        return BoogieOutputAnalysis {
+            result: DataVerificationResult::Timeout,
+            boogie_errors,
+            exec_error: None,
+        };
+    }
+
+    let mut boogie_errors = Vec::new();
+    for line in output.lines() {
         let line = line.trim();
         if line.starts_with('(') && line.ends_with(')') {
             if let Some(err) = BoogieError::from_boogie_string(line) {
-                all_boogie_errors.push(err);
-                has_errors = true;
+                boogie_errors.push(err);
             }
         }
     }
 
-    if has_errors {
-        VerificationResult::Error
-    } else {
-        VerificationResult::Pass
+    if !boogie_errors.is_empty() {
+        return BoogieOutputAnalysis {
+            result: DataVerificationResult::Error,
+            boogie_errors,
+            exec_error: None,
+        };
+    }
+
+    BoogieOutputAnalysis {
+        result: DataVerificationResult::CompilationError,
+        boogie_errors: Vec::new(),
+        exec_error: Some(format!(
+            "Boogie returned unrecognized output for {}.",
+            file_name
+        )),
+    }
+}
+
+fn to_cache_result(result: &DataVerificationResult) -> CacheVerificationResult {
+    match result {
+        DataVerificationResult::Pass => CacheVerificationResult::Pass,
+        DataVerificationResult::Error => CacheVerificationResult::Error,
+        DataVerificationResult::Timeout => CacheVerificationResult::Timeout,
+        DataVerificationResult::CompilationError => CacheVerificationResult::CompilationError,
     }
 }
 
