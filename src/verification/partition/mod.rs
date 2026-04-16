@@ -43,8 +43,9 @@ impl HopPartitionVerificationManager {
             let mut verifier = HopPartitionVerifier::new(&mut base, cfg_program, function_id);
             let procedure = verifier.run()?;
             base.generator.program.procedures.push(procedure);
-
-            programs.push(base.generator.program);
+            let mut program = base.generator.program;
+            program.refresh_text_length_stats();
+            programs.push(program);
         }
 
         Ok(programs)

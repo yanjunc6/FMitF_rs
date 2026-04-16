@@ -1,54 +1,12 @@
 //! Data collection and benchmarking module
 //!
 //! This module provides comprehensive data collection for benchmarking purposes.
-//! It tracks verification times, memory usage, Boogie outputs, and more for each C-edge.
+//! It tracks verification times, Boogie outputs, and per-check metrics for each C-edge.
 
 use colored::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
-
-/// Memory statistics parsed from /usr/bin/time -v output
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemoryStats {
-    /// Maximum resident set size (KB)
-    pub max_rss_kb: Option<u64>,
-    /// Average resident set size (KB)
-    pub avg_rss_kb: Option<u64>,
-    /// Minor page faults
-    pub minor_page_faults: Option<u64>,
-    /// Major page faults
-    pub major_page_faults: Option<u64>,
-    /// Voluntary context switches
-    pub voluntary_context_switches: Option<u64>,
-    /// Involuntary context switches
-    pub involuntary_context_switches: Option<u64>,
-    /// User time (seconds)
-    pub user_time_secs: Option<f64>,
-    /// System time (seconds)
-    pub system_time_secs: Option<f64>,
-    /// Percent of CPU
-    pub cpu_percent: Option<u64>,
-    /// Elapsed wall clock time (seconds)
-    pub elapsed_secs: Option<f64>,
-}
-
-impl Default for MemoryStats {
-    fn default() -> Self {
-        Self {
-            max_rss_kb: None,
-            avg_rss_kb: None,
-            minor_page_faults: None,
-            major_page_faults: None,
-            voluntary_context_switches: None,
-            involuntary_context_switches: None,
-            user_time_secs: None,
-            system_time_secs: None,
-            cpu_percent: None,
-            elapsed_secs: None,
-        }
-    }
-}
 
 /// Verification result type
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -78,8 +36,18 @@ pub struct CEdgeVerificationData {
     pub result: VerificationResult,
     /// Whether this edge was eliminated by verification
     pub eliminated: bool,
-    /// Memory and resource statistics from /usr/bin/time -v
-    pub memory_stats: MemoryStats,
+    /// Total generated Boogie file length in bytes/chars
+    pub boogie_file_len: usize,
+    /// Real procedure text length in bytes/chars
+    pub real_procedure_len: usize,
+    /// Number of branch terminators in the analyzed unit
+    pub branch_count: usize,
+    /// Whether the analyzed unit contains a control-flow cycle
+    pub has_loop: bool,
+    /// Number of table read operations
+    pub db_read_count: usize,
+    /// Number of table write operations
+    pub db_write_count: usize,
     /// Raw Boogie stdout
     pub boogie_stdout: String,
     /// Raw Boogie stderr
@@ -175,82 +143,6 @@ impl BenchmarkData {
         let json = serde_json::to_string_pretty(self)?;
         std::fs::write(output_path, json)?;
         Ok(())
-    }
-}
-
-/// Parse /usr/bin/time -v output from stderr
-pub fn parse_time_output(stderr: &str) -> MemoryStats {
-    let mut stats = MemoryStats::default();
-
-    for line in stderr.lines() {
-        let line = line.trim();
-        if let Some(colon_pos) = line.find(':') {
-            let key = line[..colon_pos].trim();
-            let value = line[colon_pos + 1..].trim();
-
-            match key {
-                "Maximum resident set size (kbytes)" => {
-                    stats.max_rss_kb = value.parse().ok();
-                }
-                "Average resident set size (kbytes)" => {
-                    stats.avg_rss_kb = value.parse().ok();
-                }
-                "Minor (reclaiming a frame) page faults" => {
-                    stats.minor_page_faults = value.parse().ok();
-                }
-                "Major (requiring I/O) page faults" => {
-                    stats.major_page_faults = value.parse().ok();
-                }
-                "Voluntary context switches" => {
-                    stats.voluntary_context_switches = value.parse().ok();
-                }
-                "Involuntary context switches" => {
-                    stats.involuntary_context_switches = value.parse().ok();
-                }
-                "User time (seconds)" => {
-                    stats.user_time_secs = value.parse().ok();
-                }
-                "System time (seconds)" => {
-                    stats.system_time_secs = value.parse().ok();
-                }
-                "Percent of CPU this job got" => {
-                    // Remove trailing '%' if present
-                    let cleaned = value.trim_end_matches('%');
-                    stats.cpu_percent = cleaned.parse().ok();
-                }
-                "Elapsed (wall clock) time (h:mm:ss or m:ss)" => {
-                    stats.elapsed_secs = parse_elapsed_time(value);
-                }
-                _ => {}
-            }
-        }
-    }
-
-    stats
-}
-
-/// Parse elapsed time string like "0:01.23" or "1:02:03.45" to seconds
-fn parse_elapsed_time(time_str: &str) -> Option<f64> {
-    let parts: Vec<&str> = time_str.split(':').collect();
-    match parts.len() {
-        1 => {
-            // Just seconds: "1.23"
-            time_str.parse().ok()
-        }
-        2 => {
-            // mm:ss.ss
-            let minutes: f64 = parts[0].parse().ok()?;
-            let seconds: f64 = parts[1].parse().ok()?;
-            Some(minutes * 60.0 + seconds)
-        }
-        3 => {
-            // h:mm:ss.ss
-            let hours: f64 = parts[0].parse().ok()?;
-            let minutes: f64 = parts[1].parse().ok()?;
-            let seconds: f64 = parts[2].parse().ok()?;
-            Some(hours * 3600.0 + minutes * 60.0 + seconds)
-        }
-        _ => None,
     }
 }
 

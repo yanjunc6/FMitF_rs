@@ -5,7 +5,7 @@ use crate::verification::errors::Results;
 use crate::verification::scope::SliceId;
 use crate::verification::Boogie::{self, BoogieProcedure};
 use rayon::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 mod boogie_helpers;
 mod interleaving_generator;
@@ -113,7 +113,9 @@ impl CommutativeVerificationManager {
         let procedure =
             Self::create_commutative_verification_procedure(&mut unit_base, cfg_program, unit)?;
         unit_base.generator.program.procedures.push(procedure);
-        Ok(Some(unit_base.generator.program))
+        let mut program = unit_base.generator.program;
+        program.stats = compute_commutative_program_stats(cfg_program, unit, &program);
+        Ok(Some(program))
     }
 
     /// Generate Commutative (Slice Commutativity) verification Boogie programs
@@ -156,4 +158,136 @@ impl CommutativeVerificationManager {
         let mut strat = CommutativeStrategy::new(base, cfg_program, unit);
         strat.run()
     }
+}
+
+fn compute_commutative_program_stats(
+    cfg_program: &CfgProgram,
+    unit: &CommutativeUnit,
+    program: &Boogie::BoogieProgram,
+) -> Boogie::BoogieProgramStats {
+    let mut stats = Boogie::BoogieProgramStats::default();
+
+    let mut tmp_program = program.clone();
+    tmp_program.refresh_text_length_stats();
+    stats.total_boogie_file_len = tmp_program.stats.total_boogie_file_len;
+    stats.real_procedure_len = tmp_program.stats.real_procedure_len;
+
+    for slice_id in [0usize, 1usize] {
+        let blocks = selected_blocks_for_slice(unit, slice_id, cfg_program);
+        if has_cycle(cfg_program, &blocks) {
+            stats.has_loop = true;
+        }
+
+        for block_id in &blocks {
+            let block = &cfg_program.basic_blocks[*block_id];
+            if matches!(block.terminator, crate::cfg::Terminator::Branch { .. }) {
+                stats.branch_count += 1;
+            }
+
+            let (start, end) = selected_instruction_window(unit, slice_id, *block_id, block);
+            for inst in &block.instructions[start..end] {
+                match inst.kind {
+                    crate::cfg::InstructionKind::TableGet { .. } => stats.db_read_count += 1,
+                    crate::cfg::InstructionKind::TableSet { .. } => stats.db_write_count += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    stats
+}
+
+fn selected_blocks_for_slice(
+    unit: &CommutativeUnit,
+    slice_id: usize,
+    cfg_program: &CfgProgram,
+) -> Vec<crate::cfg::BasicBlockId> {
+    if let Some(blocks) = unit.blocks_per_slice.get(&slice_id) {
+        return blocks.clone();
+    }
+
+    unit.hops_per_slice
+        .get(&slice_id)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .flat_map(|hop_id| cfg_program.hops[hop_id].blocks.clone())
+        .collect()
+}
+
+fn selected_instruction_window(
+    unit: &CommutativeUnit,
+    slice_id: usize,
+    block_id: crate::cfg::BasicBlockId,
+    block: &crate::cfg::BasicBlock,
+) -> (usize, usize) {
+    let full_end = block.instructions.len();
+    if let Some(windows_by_block) = unit.instruction_windows_per_slice.get(&slice_id) {
+        if let Some(window) = windows_by_block.get(&block_id) {
+            let start = window.start.min(full_end);
+            let end = window.end.min(full_end).max(start);
+            return (start, end);
+        }
+    }
+    (0, full_end)
+}
+
+fn has_cycle(cfg_program: &CfgProgram, blocks: &[crate::cfg::BasicBlockId]) -> bool {
+    let block_set: HashSet<_> = blocks.iter().copied().collect();
+    let mut visiting = HashSet::new();
+    let mut visited = HashSet::new();
+
+    fn dfs(
+        cfg_program: &CfgProgram,
+        block_set: &HashSet<crate::cfg::BasicBlockId>,
+        node: crate::cfg::BasicBlockId,
+        visiting: &mut HashSet<crate::cfg::BasicBlockId>,
+        visited: &mut HashSet<crate::cfg::BasicBlockId>,
+    ) -> bool {
+        if visited.contains(&node) {
+            return false;
+        }
+        if !visiting.insert(node) {
+            return true;
+        }
+
+        let successors: Vec<crate::cfg::BasicBlockId> = match cfg_program.basic_blocks[node].terminator
+        {
+            crate::cfg::Terminator::Jump(target) => vec![target],
+            crate::cfg::Terminator::Branch {
+                if_true, if_false, ..
+            } => vec![if_true, if_false],
+            _ => Vec::new(),
+        };
+
+        for succ in successors {
+            if !block_set.contains(&succ) {
+                continue;
+            }
+            if visiting.contains(&succ) {
+                return true;
+            }
+            if dfs(cfg_program, block_set, succ, visiting, visited) {
+                return true;
+            }
+        }
+
+        visiting.remove(&node);
+        visited.insert(node);
+        false
+    }
+
+    for block_id in blocks {
+        if dfs(
+            cfg_program,
+            &block_set,
+            *block_id,
+            &mut visiting,
+            &mut visited,
+        ) {
+            return true;
+        }
+    }
+    false
 }
