@@ -9,6 +9,12 @@
 // built into the language runtime and cannot be redefined.
 
 // ===========================================
+// Intrinsic Decorators
+// ===========================================
+// a speicial value that can be assigned to any type T, used to represent null or uninitialized values
+const __null__: T = 0;
+
+// ===========================================
 // Built-in Types
 // ===========================================
 
