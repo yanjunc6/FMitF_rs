@@ -221,6 +221,7 @@ impl<W: Write> CfgPrinter<W> {
                             ConstantValue::Float(f) => write!(self.writer, "{}", f)?,
                             ConstantValue::Bool(b) => write!(self.writer, "{}", b)?,
                             ConstantValue::String(s) => write!(self.writer, "\"{}\"", s)?,
+                            ConstantValue::Null => write!(self.writer, "null")?,
                         },
                     }
                 }
@@ -1185,6 +1186,7 @@ impl<W: Write> CfgPrinter<W> {
             ConstantValue::Float(val) => write!(self.writer, "{}", val)?,
             ConstantValue::Bool(val) => write!(self.writer, "{}", val)?,
             ConstantValue::String(val) => write!(self.writer, "\"{}\"", val)?,
+            ConstantValue::Null => write!(self.writer, "null")?,
         }
         Ok(())
     }

@@ -304,6 +304,7 @@ fn build_global_source(
                         cfg::ConstantValue::Float(f) => f.to_string(),
                         cfg::ConstantValue::Bool(b) => b.to_string(),
                         cfg::ConstantValue::String(s) => format!("\"{}\"", s),
+                        cfg::ConstantValue::Null => "nil".to_string(),
                     },
                 })
                 .collect();
@@ -517,6 +518,7 @@ fn go_constant_literal(value: &cfg::ConstantValue) -> String {
         cfg::ConstantValue::Float(f) => f.into_inner().to_string(),
         cfg::ConstantValue::Bool(b) => b.to_string(),
         cfg::ConstantValue::String(s) => format!("\"{}\"", s.escape_default()),
+        cfg::ConstantValue::Null => "nil".to_string(),
     }
 }
 

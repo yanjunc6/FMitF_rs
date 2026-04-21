@@ -1170,6 +1170,7 @@ impl AstBuilder {
                 Literal::String(s[1..s.len() - 1].to_string())
             }
             Rule::bool => Literal::Bool(inner.as_str().parse().unwrap()),
+            Rule::null => Literal::Null,
             Rule::list_literal => {
                 let items = inner
                     .into_inner()

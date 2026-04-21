@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use super::Boogie::{
     gen_Boogie::BoogieProgramGenerator, BoogieExpr, BoogieExprKind, BoogieLine, BoogieProgram,
 };
+use crate::cfg as cfg;
 use crate::cfg::{
     BasicBlock, FunctionId, Instruction, InstructionKind, Operand, Program as CfgProgram,
 };
@@ -99,11 +100,14 @@ impl BaseVerificationGenerator {
                 );
                 self.generator
                     .ensure_local_variable_exists(&dest_name, dest_type);
+                if matches!(src, Operand::Constant(cfg::ConstantValue::Null)) {
+                    lines.push(BoogieLine::Havoc(dest_name));
+                } else {
+                    let src_name = self.get_operand_name(src, slice_id, cfg_program)?;
+                    let src_expr = self.generator.convert_operand(cfg_program, src, src_name)?;
 
-                let src_name = self.get_operand_name(src, slice_id, cfg_program)?;
-                let src_expr = self.generator.convert_operand(cfg_program, src, src_name)?;
-
-                lines.push(BoogieLine::Assign(dest_name, src_expr));
+                    lines.push(BoogieLine::Assign(dest_name, src_expr));
+                }
             }
             InstructionKind::BinaryOp {
                 dest,
@@ -331,28 +335,32 @@ impl BaseVerificationGenerator {
                     key_exprs.push(self.generator.convert_operand(cfg_program, key, key_name)?);
                 }
                 let value_name = self.get_operand_name(value, slice_id, cfg_program)?;
-                if let Operand::Variable(var_id) = value {
-                    let vty = BoogieProgramGenerator::convert_type_id(
-                        cfg_program,
-                        &cfg_program.variables[*var_id].ty,
-                    );
-                    self.generator
-                        .ensure_local_variable_exists(&value_name, vty);
-                }
-                let value_expr = self
-                    .generator
-                    .convert_operand(cfg_program, value, value_name)?;
+                if matches!(value, Operand::Constant(cfg::ConstantValue::Null)) {
+                    lines.push(BoogieLine::Havoc(var_name));
+                } else {
+                    if let Operand::Variable(var_id) = value {
+                        let vty = BoogieProgramGenerator::convert_type_id(
+                            cfg_program,
+                            &cfg_program.variables[*var_id].ty,
+                        );
+                        self.generator
+                            .ensure_local_variable_exists(&value_name, vty);
+                    }
+                    let value_expr = self
+                        .generator
+                        .convert_operand(cfg_program, value, value_name)?;
 
-                let map_store = BoogieExpr {
-                    kind: BoogieExprKind::MapStore {
-                        base: Box::new(BoogieExpr {
-                            kind: BoogieExprKind::Var(var_name.clone()),
-                        }),
-                        indices: key_exprs,
-                        value: Box::new(value_expr),
-                    },
-                };
-                lines.push(BoogieLine::Assign(var_name, map_store));
+                    let map_store = BoogieExpr {
+                        kind: BoogieExprKind::MapStore {
+                            base: Box::new(BoogieExpr {
+                                kind: BoogieExprKind::Var(var_name.clone()),
+                            }),
+                            indices: key_exprs,
+                            value: Box::new(value_expr),
+                        },
+                    };
+                    lines.push(BoogieLine::Assign(var_name, map_store));
+                }
             }
             InstructionKind::Assert { .. } => {
                 // let cond_name = self.get_operand_name(condition)?;

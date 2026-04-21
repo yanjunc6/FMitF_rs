@@ -86,6 +86,7 @@ pub enum Literal {
     Float(String),
     String(String),
     Bool(bool),
+    Null,
     List(Vec<ExprId>),
     RowLiteral(Vec<KeyValue>),
 }

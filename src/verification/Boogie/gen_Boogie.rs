@@ -704,6 +704,9 @@ impl BoogieProgramGenerator {
                     kind: BoogieExprKind::Var(const_name),
                 })
             }
+            ConstantValue::Null => Ok(BoogieExpr {
+                kind: BoogieExprKind::Var("null".to_string()),
+            }),
         }
     }
 
