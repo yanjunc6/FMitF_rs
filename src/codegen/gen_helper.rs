@@ -46,6 +46,7 @@ pub fn operand_to_go(program: &cfg::Program, operand: &Operand) -> String {
             cfg::ConstantValue::Float(f) => f.to_string(),
             cfg::ConstantValue::Bool(b) => b.to_string(),
             cfg::ConstantValue::String(s) => go_string_literal(s),
+            cfg::ConstantValue::Null => "nil".to_string(),
         },
         Operand::Global(global_id) => {
             let global = &program.global_consts[*global_id];
@@ -155,6 +156,7 @@ pub fn operand_to_string(program: &cfg::Program, operand: &Operand) -> String {
             cfg::ConstantValue::Float(f) => format!("strconv.FormatFloat({}, 'f', -1, 32)", f),
             cfg::ConstantValue::Bool(b) => format!("strconv.FormatBool({})", b),
             cfg::ConstantValue::String(s) => go_string_literal(s),
+            cfg::ConstantValue::Null => "\"null\"".to_string(),
         },
         Operand::Global(global_id) => {
             let global = &program.global_consts[*global_id];
@@ -396,8 +398,12 @@ pub fn lower_instruction(
     match &inst.kind {
         InstructionKind::Assign { dest, src } => {
             let dest_name = go_var_name(program, *dest);
-            let source_expr = operand_to_go(program, src);
-            writeln!(out, "{}{} = {}", indent, dest_name, source_expr)?;
+            if matches!(src, Operand::Constant(cfg::ConstantValue::Null)) {
+                writeln!(out, "{}// TODO: handle null deletion for {}", indent, dest_name)?;
+            } else {
+                let source_expr = operand_to_go(program, src);
+                writeln!(out, "{}{} = {}", indent, dest_name, source_expr)?;
+            }
             initialized_vars.insert(*dest);
         }
 
@@ -695,12 +701,20 @@ pub fn lower_instruction(
 
             if let Some(field_id) = field {
                 let field_accessor = table_field_accessor(program, table_info, *field_id, &row_var);
-                let value_expr = operand_to_go(program, value);
-                writeln!(out, "{}{} = {}", indent, field_accessor, value_expr)?;
+                if matches!(value, Operand::Constant(cfg::ConstantValue::Null)) {
+                    writeln!(out, "{}// TODO: handle null deletion for {}", indent, field_accessor)?;
+                } else {
+                    let value_expr = operand_to_go(program, value);
+                    writeln!(out, "{}{} = {}", indent, field_accessor, value_expr)?;
+                }
             } else {
                 // Write whole row
-                let value_expr = operand_to_go(program, value);
-                writeln!(out, "{}{} = {}", indent, row_var, value_expr)?;
+                if matches!(value, Operand::Constant(cfg::ConstantValue::Null)) {
+                    writeln!(out, "{}// TODO: handle null deletion for {}", indent, row_var)?;
+                } else {
+                    let value_expr = operand_to_go(program, value);
+                    writeln!(out, "{}{} = {}", indent, row_var, value_expr)?;
+                }
             }
 
             writeln!(

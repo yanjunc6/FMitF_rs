@@ -296,6 +296,9 @@ impl CfgBuilder {
                                 .types
                                 .alloc(cfg::Type::Primitive(cfg::PrimitiveType::Bool))
                         }
+                        ast::Literal::Null => {
+                            panic!("Constant '{}' has unresolved type and null literal - should have been resolved in frontend", ast_const.name.name);
+                        }
                         _ => {
                             panic!("Constant '{}' has unresolved type and unsupported literal - should have been resolved in frontend", ast_const.name.name);
                         }
@@ -693,6 +696,7 @@ impl CfgBuilder {
                 }
                 ast::Literal::String(s) => cfg::ConstantValue::String(s.clone()),
                 ast::Literal::Bool(b) => cfg::ConstantValue::Bool(*b),
+                ast::Literal::Null => cfg::ConstantValue::Null,
                 ast::Literal::List(_exprs) => {
                     // For now, we don't support list literals in constant evaluation
                     // This would require evaluating each expression and creating a list constant
@@ -1237,7 +1241,8 @@ impl<'a> FunctionContext<'a> {
                     ast::Literal::Integer(_)
                     | ast::Literal::Float(_)
                     | ast::Literal::String(_)
-                    | ast::Literal::Bool(_) => {
+                    | ast::Literal::Bool(_)
+                    | ast::Literal::Null => {
                         cfg::Operand::Constant(self.builder.evaluate_const_expr(expr_id))
                     }
                     // Complex literals need to be built as runtime expressions

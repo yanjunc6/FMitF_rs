@@ -732,6 +732,7 @@ impl<W: Write> AstPrinter<W> {
             Literal::Float(val) => write!(self.writer, "{}", val)?,
             Literal::String(val) => write!(self.writer, "\"{}\"", val)?,
             Literal::Bool(val) => write!(self.writer, "{}", val)?,
+            Literal::Null => write!(self.writer, "null")?,
             Literal::List(elements) => {
                 write!(self.writer, "[")?;
                 for (i, elem) in elements.iter().enumerate() {

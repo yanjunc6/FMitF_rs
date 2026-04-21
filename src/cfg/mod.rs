@@ -270,6 +270,7 @@ pub enum ConstantValue {
     Float(ordered_float::OrderedFloat<f64>),
     Bool(bool),
     String(String),
+    Null,
 }
 
 impl ConstantValue {

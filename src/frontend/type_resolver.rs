@@ -1606,6 +1606,7 @@ impl<'ast> VisitorMut<'ast, (), CompilerError> for TypeChecker {
                 Literal::Bool(_) => self.find_type_by_name(prog, "bool", expr_span)?,
                 Literal::String(_) => self.find_type_by_name(prog, "string", expr_span)?,
                 Literal::Float(_) => self.find_type_by_name(prog, "float", expr_span)?,
+                Literal::Null => self.fresh_infer_var(),
                 Literal::List(elements) => {
                     if elements.is_empty() {
                         // For empty lists, we can't infer the element type, use a fresh type variable
