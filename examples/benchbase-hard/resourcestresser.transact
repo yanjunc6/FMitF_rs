@@ -1,0 +1,133 @@
+// ============================================================================
+// ResourceStresser — CPU / Lock-Contention / IO Stress Benchmark
+//
+// Designed to selectively stress CPU, lock contention, or I/O subsystems.
+//
+// Tables
+//   cputable        — CPU stress (complex hash computation on read)
+//   locktable       — Lock-contention stress (update two rows to induce conflict)
+//   iotable         — I/O stress with wide rows (large string data)
+//   iotablesmallrow — I/O stress with narrow rows
+//
+// Partition strategy: all tables partitioned by empid.
+//
+// Chopping:
+//   CPU1 / CPU2     — range scan on cputable (empid 0..99); modeled as hops for
+//                     to show multi-partition access across the key range.
+//   Contention1 / 2 — two updates on different empid keys → 2 hops.
+//   IO1             — two wide-row writes on adjacent keys → 2 hops.
+//   IO2             — single-row flag update → 1 hop.
+// ============================================================================
+
+partition f(x: int) -> int { return x; }
+
+const CPU_RANGE: int = 100;
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+table cputable {
+    primary empid: int;
+    node f(empid);
+    passwd: string;
+}
+
+table locktable {
+    primary empid: int;
+    node f(empid);
+    salary: int;
+}
+
+// iotable has configurable-width data; modeled with two string columns.
+table iotable {
+    primary empid: int;
+    node f(empid);
+    data1: string;
+    data2: string;
+}
+
+table iotablesmallrow {
+    primary empid: int;
+    node f(empid);
+    flag1: int;
+}
+
+// ============================================================================
+// Transactions
+// ============================================================================
+
+// CPU1: SELECT with nested MD5-style hash over empid range [0, CPU_RANGE).
+// Multi-partition range scan — one hop per record to stress CPU.
+transaction CPU1() {
+    hops for i: int = 0 to CPU_RANGE {
+        var r: Row<cputable> = cputable[empid: i];
+        var p: string = r.passwd;
+        to_unit_return(p);
+    }
+}
+
+// CPU2: Same structure as CPU1 but with a different hash expression pattern.
+transaction CPU2() {
+    hops for i: int = 0 to CPU_RANGE {
+        var r: Row<cputable> = cputable[empid: i];
+        var p: string = r.passwd;
+        to_unit_return(p);
+    }
+}
+
+// Contention1: Update salary on two arbitrary keys to induce lock contention.
+// Chop: Hop 1 on key1's partition; Hop 2 on key2's partition.
+transaction Contention1(key1: int, key2: int, newSalary: int) {
+    hop {
+        var r1: Row<locktable> = locktable[empid: key1];
+        r1.salary = newSalary;
+        locktable[empid: key1] = r1;
+    }
+    hop {
+        var r2: Row<locktable> = locktable[empid: key2];
+        r2.salary = newSalary;
+        locktable[empid: key2] = r2;
+    }
+}
+
+// Contention2: Update salary on two adjacent keys (leftKey, leftKey+1).
+// Chop: Hop 1 on leftKey's partition; Hop 2 on (leftKey+1)'s partition.
+transaction Contention2(leftKey: int, newSalary: int) {
+    hop {
+        var r1: Row<locktable> = locktable[empid: leftKey];
+        r1.salary = newSalary;
+        locktable[empid: leftKey] = r1;
+    }
+    hop {
+        var r2: Row<locktable> = locktable[empid: leftKey + 1];
+        r2.salary = newSalary;
+        locktable[empid: leftKey + 1] = r2;
+    }
+}
+
+// IO1: Write wide-row data to two adjacent keys to stress I/O bandwidth.
+// Chop: Hop 1 on leftKey's partition; Hop 2 on (leftKey+1)'s partition.
+transaction IO1(leftKey: int, newData1: string, newData2: string) {
+    hop {
+        var r1: Row<iotable> = iotable[empid: leftKey];
+        r1.data1 = newData1;
+        r1.data2 = newData2;
+        iotable[empid: leftKey] = r1;
+    }
+    hop {
+        var r2: Row<iotable> = iotable[empid: leftKey + 1];
+        r2.data1 = newData1;
+        r2.data2 = newData2;
+        iotable[empid: leftKey + 1] = r2;
+    }
+}
+
+// IO2: Single-row flag update on the narrow-row I/O table.
+transaction IO2(key: int, value: int) {
+    hop {
+        var r: Row<iotablesmallrow> = iotablesmallrow[empid: key];
+        r.flag1 = value;
+        iotablesmallrow[empid: key] = r;
+    }
+}

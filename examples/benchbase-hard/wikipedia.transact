@@ -1,0 +1,347 @@
+// ============================================================================
+// Wikipedia — Collaborative Encyclopedia Benchmark
+//
+// Models Wikipedia's read-heavy workload with occasional page edits that
+// fan out to all users watching a page.
+//
+// Partition strategy:
+//   user / user_groups / ipblocks — partitioned by user_id
+//   watchlist                     — partitioned by wl_user (user partition)
+//   page / page_restrictions      — partitioned by page_id
+//   revision                      — co-located with page: PK (rev_page, rev_id)
+//   text                          — partitioned by old_id (own surrogate key)
+//   recentchanges                 — partitioned by rc_id (sequential, no fan-out key)
+//   logging                       — partitioned by log_user (user partition)
+//
+// Chopping:
+//   GetPageAnonymous:  page partition → text partition (2 hops)
+//   GetPageAuthenticated: user partition → page partition → text partition (3 hops)
+//   AddWatchList / RemoveWatchList: user partition only (1 hop)
+//   UpdatePage: page/text partition → watcher partition → editor-user partition (3 hops)
+//
+// Notes:
+//   - DELETE is not supported in TransAct; RemoveWatchList models deletion as a
+//     read-touch (the SC-graph edge suffices for commutativity analysis).
+//   - INSERT is modeled via row-literal assignment: Table[keys] = {fields}.
+//   - nextTextId / nextRevId are passed as parameters (generated before the
+//     transaction begins, e.g., by a sequence table or application counter).
+// ============================================================================
+
+partition f(x: int) -> int { return x; }
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+table user {
+    primary user_id: int;
+    node f(user_id);
+    user_name: string;
+    user_touched: int;   // timestamp as int
+    user_editcount: int;
+}
+
+// watchlist co-located with the watcher (wl_user partition).
+table watchlist {
+    primary wl_user: int;
+    primary wl_namespace: int;
+    primary wl_title: string;
+    node f(wl_user);
+    wl_notificationtimestamp: int;
+}
+
+table page {
+    primary page_id: int;
+    node f(page_id);
+    page_namespace: int;
+    page_title: string;
+    page_latest: int;    // rev_id of the current revision
+    page_touched: int;
+    page_is_new: int;
+    page_is_redirect: int;
+    page_len: int;
+}
+
+// page_restrictions co-located with page.
+table page_restrictions {
+    primary pr_page: int;
+    primary pr_type: string;
+    node f(pr_page);
+    pr_level: string;
+}
+
+// ipblocks keyed by (ipb_user, ipb_id) so it is co-located with users.
+table ipblocks {
+    primary ipb_user: int;
+    primary ipb_id: int;
+    node f(ipb_user);
+    ipb_address: string;
+    ipb_expiry: int;
+}
+
+// revision co-located with page via composite PK (rev_page, rev_id).
+table revision {
+    primary rev_page: int;
+    primary rev_id: int;
+    node f(rev_page);
+    rev_text_id: int;
+    rev_comment: string;
+    rev_user: int;
+    rev_user_text: string;
+    rev_timestamp: int;
+    rev_len: int;
+    rev_parent_id: int;
+}
+
+// text has its own partition key (old_id), separate from page.
+table text {
+    primary old_id: int;
+    node f(old_id);
+    old_page: int;
+    old_text: string;
+    old_flags: string;
+}
+
+// user_groups co-located with the user.
+table user_groups {
+    primary ug_user: int;
+    primary ug_group: string;
+    node f(ug_user);
+}
+
+// recentchanges partitioned by rc_id (auto-increment surrogate).
+table recentchanges {
+    primary rc_id: int;
+    node f(rc_id);
+    rc_timestamp: int;
+    rc_namespace: int;
+    rc_title: string;
+    rc_cur_id: int;
+    rc_user: int;
+    rc_user_text: string;
+    rc_comment: string;
+    rc_this_oldid: int;
+    rc_last_oldid: int;
+    rc_ip: string;
+    rc_old_len: int;
+    rc_new_len: int;
+}
+
+// logging co-located with the acting user (log_user partition).
+table logging {
+    primary log_user: int;
+    primary log_id: int;
+    node f(log_user);
+    log_type: string;
+    log_action: string;
+    log_timestamp: int;
+    log_user_text: string;
+    log_namespace: int;
+    log_title: string;
+    log_page: int;
+    log_comment: string;
+    log_params: string;
+}
+
+// ============================================================================
+// Transactions
+// ============================================================================
+
+// AddWatchList:
+//   INSERT INTO watchlist ... ; UPDATE user SET user_touched = NOW() WHERE user_id = ?
+// Both watchlist and user are on the watcher's partition → single hop.
+// A second entry (namespace=1) is added when the main namespace is 0.
+transaction AddWatchList(userId: int, nameSpace: int, pageTitle: string) {
+    hop {
+        // Add the requested page to the watchlist.
+        watchlist[wl_user: userId, wl_namespace: nameSpace, wl_title: pageTitle] = {
+            wl_notificationtimestamp: 0
+        };
+        // If main namespace (0), also watch the corresponding talk page (namespace 1).
+        if (nameSpace == 0) {
+            watchlist[wl_user: userId, wl_namespace: 1, wl_title: pageTitle] = {
+                wl_notificationtimestamp: 0
+            };
+        }
+        // Touch the user record.
+        var u: Row<user> = user[user_id: userId];
+        u.user_touched = 1;
+        user[user_id: userId] = u;
+    }
+}
+
+// GetPageAnonymous:
+//   SELECT page, page_restrictions, revision WHERE rev_id = page.page_latest
+//   SELECT text WHERE old_id = revision.rev_text_id
+// Chop: Hop 1 on page partition (page + restrictions + current revision header);
+//       Hop 2 on text partition (revision body).
+// pr_type is a representative restriction type; latest_rev_id is page.page_latest.
+transaction GetPageAnonymous(pageId: int, pr_type: string, latest_rev_id: int, text_id: int) {
+    hop {
+        // Page partition: read page metadata, restrictions, and current revision.
+        var p: Row<page> = page[page_id: pageId];
+        to_unit_return(p);
+        var pr: Row<page_restrictions> = page_restrictions[pr_page: pageId, pr_type: pr_type];
+        to_unit_return(pr);
+        var r: Row<revision> = revision[rev_page: pageId, rev_id: latest_rev_id];
+        var textId: int = r.rev_text_id;
+    }
+    hop {
+        // Text partition: fetch the actual page content.
+        // textId flows from Hop 1 as a continuation variable.
+        var t: Row<text> = text[old_id: textId];
+        var content: string = t.old_text;
+        to_unit_return(content);
+    }
+}
+
+// GetPageAuthenticated:
+//   SELECT user, user_groups, ipblocks WHERE ipb_user = userId
+//   SELECT page, page_restrictions, revision, text  (same as anonymous path)
+// Chop: Hop 1 on user partition (auth + IP-block check);
+//       Hop 2 on page partition (page + restrictions + revision);
+//       Hop 3 on text partition (content).
+transaction GetPageAuthenticated(userId: int, pageId: int, ug_group: string,
+                                 pr_type: string, latest_rev_id: int, text_id: int,
+                                 ipb_id: int) {
+    hop {
+        // User partition: verify identity and check for IP blocks.
+        var u: Row<user> = user[user_id: userId];
+        to_unit_return(u);
+        var ug: Row<user_groups> = user_groups[ug_user: userId, ug_group: ug_group];
+        to_unit_return(ug);
+        var ip: Row<ipblocks> = ipblocks[ipb_user: userId, ipb_id: ipb_id];
+        to_unit_return(ip);
+    }
+    hop {
+        // Page partition: same as anonymous path.
+        var p: Row<page> = page[page_id: pageId];
+        to_unit_return(p);
+        var pr: Row<page_restrictions> = page_restrictions[pr_page: pageId, pr_type: pr_type];
+        to_unit_return(pr);
+        var r: Row<revision> = revision[rev_page: pageId, rev_id: latest_rev_id];
+        var textId: int = r.rev_text_id;
+    }
+    hop {
+        // Text partition: fetch content.
+        var t: Row<text> = text[old_id: textId];
+        var content: string = t.old_text;
+        to_unit_return(content);
+    }
+}
+
+// RemoveWatchList:
+//   DELETE FROM watchlist WHERE wl_user = ? AND wl_namespace = ? AND wl_title = ?
+//   UPDATE user SET user_touched = NOW()
+// DELETE is not supported in TransAct; modeled as a read-touch so the
+// SC-graph captures the write dependency.
+transaction RemoveWatchList(userId: int, nameSpace: int, pageTitle: string) {
+    hop {
+        // Read-touch the watchlist entry (models deletion for SC-graph analysis).
+        var wl: Row<watchlist> = watchlist[wl_user: userId, wl_namespace: nameSpace, wl_title: pageTitle];
+        watchlist[wl_user: userId, wl_namespace: nameSpace, wl_title: pageTitle] = wl;
+        if (nameSpace == 0) {
+            var wl2: Row<watchlist> = watchlist[wl_user: userId, wl_namespace: 1, wl_title: pageTitle];
+            watchlist[wl_user: userId, wl_namespace: 1, wl_title: pageTitle] = wl2;
+        }
+        // Touch the user record.
+        var u: Row<user> = user[user_id: userId];
+        u.user_touched = 0;
+        user[user_id: userId] = u;
+    }
+}
+
+// UpdatePage:
+//   INSERT INTO text ...; INSERT INTO revision ...; UPDATE page ...
+//   INSERT INTO recentchanges ...; UPDATE watchlist (for each watcher);
+//   INSERT INTO logging ...; UPDATE user SET user_editcount = user_editcount + 1
+//
+// nextTextId / nextRevId are sequence values assigned before the transaction.
+// rcId is the new recentchanges surrogate key (pre-assigned).
+//
+// Chop:
+//   Hop 1 (page/text/revision partition): Insert new text row, new revision,
+//          update page metadata, insert recentchanges entry.
+//   Hop 2 (watcher partition): Update one representative watcher's watchlist entry.
+//          In production this hop repeats for every watcher (fan-out).
+//   Hop 3 (editor-user partition): Append log entry, increment user edit count.
+transaction UpdatePage(nextTextId: int, nextRevId: int, rcId: int,
+                       pageId: int, pageTitle: string, pageText: string,
+                       pageNamespace: int, pageLen: int,
+                       userId: int, userText: string,
+                       revisionId: int, revComment: string,
+                       otherUserId: int) {
+    // Hop 1: Page partition — insert text, revision, update page, log recent change.
+    hop {
+        // Insert new text body.
+        text[old_id: nextTextId] = {
+            old_page: pageId,
+            old_text: pageText,
+            old_flags: "utf-8"
+        };
+
+        // Insert new revision header (co-located with page via rev_page).
+        revision[rev_page: pageId, rev_id: nextRevId] = {
+            rev_text_id: nextTextId,
+            rev_comment: revComment,
+            rev_user: userId,
+            rev_user_text: userText,
+            rev_timestamp: 1,
+            rev_len: pageLen,
+            rev_parent_id: revisionId
+        };
+
+        // Update page to point to the new revision.
+        var p: Row<page> = page[page_id: pageId];
+        p.page_latest = nextRevId;
+        p.page_touched = 1;
+        p.page_len = pageLen;
+        page[page_id: pageId] = p;
+
+        // Insert recent-change record (partitioned by rc_id, not page).
+        recentchanges[rc_id: rcId] = {
+            rc_timestamp: 1,
+            rc_namespace: pageNamespace,
+            rc_title: pageTitle,
+            rc_cur_id: pageId,
+            rc_user: userId,
+            rc_user_text: userText,
+            rc_comment: revComment,
+            rc_this_oldid: nextTextId,
+            rc_last_oldid: revisionId,
+            rc_ip: "",
+            rc_old_len: 0,
+            rc_new_len: pageLen
+        };
+    }
+
+    // Hop 2: Watcher partition — notify one representative watching user.
+    // The IC3 protocol repeats this hop for every watcher in the watchlist.
+    hop {
+        var wl: Row<watchlist> = watchlist[wl_user: otherUserId,
+                                           wl_namespace: pageNamespace,
+                                           wl_title: pageTitle];
+        wl.wl_notificationtimestamp = 1;
+        watchlist[wl_user: otherUserId, wl_namespace: pageNamespace, wl_title: pageTitle] = wl;
+    }
+
+    // Hop 3: Editor-user partition — log the patrol action and increment edit count.
+    hop {
+        logging[log_user: userId, log_id: nextRevId] = {
+            log_type: "patrol",
+            log_action: "patrol",
+            log_timestamp: 1,
+            log_user_text: userText,
+            log_namespace: pageNamespace,
+            log_title: pageTitle,
+            log_page: pageId,
+            log_comment: "",
+            log_params: ""
+        };
+
+        var u: Row<user> = user[user_id: userId];
+        u.user_editcount = u.user_editcount + 1;
+        u.user_touched = 1;
+        user[user_id: userId] = u;
+    }
+}

@@ -1,0 +1,398 @@
+// ============================================================================
+// AuctionMark — Online Auction Benchmark
+//
+// Models an eBay-style auction site.  Users list items for auction; other
+// users bid, comment, and purchase items.
+//
+// Partition strategy:
+//   userPartition(u_id)  — all user-keyed tables, partitioned by the
+//                          relevant user ID (seller, buyer, or recipient).
+//   globalPartition(x)   — REGION only; a tiny static reference table that
+//                          never changes after load, so it maps all rows to
+//                          partition 0 (effectively replicated/global).
+//
+// Table placement:
+//   USERACCT                          — partitioned by u_id
+//   REGION                            — global (partition 0), read-only
+//   ITEM, ITEM_BID, ITEM_MAX_BID,
+//   ITEM_COMMENT                      — co-located with SELLER (i_u_id /
+//                                       ib_u_id / imb_u_id / ic_u_id)
+//   USERACCT_ITEM, USERACCT_WATCH     — co-located with BUYER  (ui_u_id /
+//                                       uw_u_id)
+//   USERACCT_FEEDBACK                 — co-located with RECIPIENT (uf_u_id)
+//
+// Rationale: placing all of a seller's auction data on the same partition
+// eliminates cross-partition coordination for the hot path (bidding,
+// commenting).  Only transactions that involve two distinct users cross a
+// partition boundary (seller_id ≠ buyer_id).
+//
+// Chopping:
+//   CloseAuctions      — seller partition (ITEM, bids) → buyer partition
+//                        (USERACCT_ITEM)                               [2 hops]
+//   CloseAuctionsNoBids— seller partition only                         [1 hop]
+//   GetItem            — seller partition only (ITEM, USERACCT)        [1 hop]
+//                        REGION omitted: read-only reference, does not
+//                        affect commutativity analysis.
+//   GetUserInfo        — single user's partition (seller + buyer roles
+//                        both use the same user_id → same partition)   [1 hop]
+//   NewBid             — seller partition only                          [1 hop]
+//   NewComment         — seller partition only                          [1 hop]
+//   NewCommentResponse — seller partition only                          [1 hop]
+//   NewFeedback        — recipient's partition only                     [1 hop]
+//   NewItem            — seller partition only                          [1 hop]
+//   NewPurchase        — seller partition (close item, credit seller)
+//                        → buyer partition (debit buyer)               [2 hops]
+//   UpdateItem         — seller partition only                          [1 hop]
+//
+// Notes:
+//   - All IDs use int (AuctionMark uses composite string IDs internally,
+//     but int surrogates simplify the partition function).
+//   - Timestamps are represented as int (seconds since epoch).
+//   - INSERT is modeled via row-literal assignment: Table[keys] = {fields}.
+// ============================================================================
+
+partition userPartition(u_id: int) -> int { return u_id; }
+
+// REGION is a tiny static reference table (never written after load).
+// Mapping all rows to partition 0 models it as a globally accessible table.
+partition globalPartition(x: int) -> int { return 0; }
+
+const ITEM_STATUS_OPEN: int = 0;
+const ITEM_STATUS_WAITING_FOR_PURCHASE: int = 1;
+const ITEM_STATUS_CLOSED: int = 2;
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+table USERACCT {
+    primary u_id: int;
+    node userPartition(u_id);
+    u_rating: int;
+    u_balance: float;
+    u_comments: int;
+    u_r_id: int;
+    u_sattr0: string;
+    u_sattr1: string;
+    u_sattr2: string;
+    u_sattr3: string;
+    u_sattr4: string;
+}
+
+// Static reference table; never written by any transaction.
+// Excluded from hop bodies — read-only tables trivially commute with all
+// writes and do not need to appear in commutativity proofs.
+table REGION {
+    primary r_id: int;
+    node globalPartition(r_id);
+    r_name: string;
+}
+
+// ITEM co-located with seller: all of a seller's items live on
+// userPartition(i_u_id).
+table ITEM {
+    primary i_id: int;
+    primary i_u_id: int;    // seller id — drives partition placement
+    node userPartition(i_u_id);
+    i_name: string;
+    i_initial_price: float;
+    i_current_price: float;
+    i_num_bids: int;
+    i_end_date: int;
+    i_start_date: int;
+    i_status: int;
+    i_num_comments: int;
+    i_c_id: int;
+}
+
+// ITEM_BID co-located with item (seller's partition).
+table ITEM_BID {
+    primary ib_id: int;
+    primary ib_i_id: int;
+    primary ib_u_id: int;   // seller id
+    node userPartition(ib_u_id);
+    ib_buyer_id: int;
+    ib_bid: float;
+    ib_max_bid: float;
+}
+
+// ITEM_MAX_BID tracks the current highest bid per item (seller's partition).
+table ITEM_MAX_BID {
+    primary imb_i_id: int;
+    primary imb_u_id: int;  // seller id
+    node userPartition(imb_u_id);
+    imb_ib_id: int;
+    imb_ib_i_id: int;
+    imb_ib_u_id: int;
+}
+
+// ITEM_COMMENT co-located with item/seller.
+table ITEM_COMMENT {
+    primary ic_id: int;
+    primary ic_i_id: int;
+    primary ic_u_id: int;   // seller id
+    node userPartition(ic_u_id);
+    ic_buyer_id: int;
+    ic_question: string;
+    ic_response: string;
+}
+
+// USERACCT_ITEM records items won by a buyer; lives on the BUYER's partition.
+table USERACCT_ITEM {
+    primary ui_u_id: int;   // buyer id — drives partition placement
+    primary ui_i_id: int;
+    primary ui_i_u_id: int; // seller id
+    node userPartition(ui_u_id);
+}
+
+// USERACCT_FEEDBACK lives on the feedback recipient's partition.
+table USERACCT_FEEDBACK {
+    primary uf_u_id: int;   // recipient user id
+    primary uf_i_id: int;
+    primary uf_i_u_id: int; // seller id
+    primary uf_from_id: int;
+    node userPartition(uf_u_id);
+    uf_rating: int;
+}
+
+// USERACCT_WATCH lives on the watcher/buyer's partition.
+table USERACCT_WATCH {
+    primary uw_u_id: int;   // buyer/watcher id
+    primary uw_i_id: int;
+    primary uw_i_u_id: int; // seller id
+    node userPartition(uw_u_id);
+}
+
+// ============================================================================
+// Transactions
+// ============================================================================
+
+// CloseAuctions: Close one auction that has received bids.
+//
+// Hop 1 (seller partition): Read ITEM, ITEM_MAX_BID, winning ITEM_BID;
+//         update ITEM status to WAITING_FOR_PURCHASE; capture buyer_id.
+// Hop 2 (buyer partition):  Insert USERACCT_ITEM record for the winner.
+//
+// buyer_id flows from Hop 1 to Hop 2 as a continuation variable.
+transaction CloseAuctions(item_id: int, seller_id: int) {
+    hop {
+        var item: Row<ITEM> = ITEM[i_id: item_id, i_u_id: seller_id];
+        item.i_status = ITEM_STATUS_WAITING_FOR_PURCHASE;
+        ITEM[i_id: item_id, i_u_id: seller_id] = item;
+
+        var max_bid: Row<ITEM_MAX_BID> = ITEM_MAX_BID[imb_i_id: item_id, imb_u_id: seller_id];
+        var winning_bid: Row<ITEM_BID> = ITEM_BID[ib_id: max_bid.imb_ib_id,
+                                                   ib_i_id: item_id,
+                                                   ib_u_id: seller_id];
+        var buyer_id: int = winning_bid.ib_buyer_id;
+    }
+    hop {
+        USERACCT_ITEM[ui_u_id: buyer_id, ui_i_id: item_id, ui_i_u_id: seller_id] = {};
+    }
+}
+
+// CloseAuctionsNoBids: Close an auction that received zero bids.
+// Single hop on seller's partition — no buyer interaction needed.
+transaction CloseAuctionsNoBids(item_id: int, seller_id: int) {
+    hop {
+        var item: Row<ITEM> = ITEM[i_id: item_id, i_u_id: seller_id];
+        item.i_status = ITEM_STATUS_CLOSED;
+        ITEM[i_id: item_id, i_u_id: seller_id] = item;
+    }
+}
+
+// GetItem: Read auction item details together with the seller's profile.
+// Both ITEM and USERACCT are on userPartition(seller_id) → single hop.
+// REGION is omitted: it is read-only and does not affect commutativity.
+transaction GetItem(item_id: int, seller_id: int) {
+    hop {
+        var item: Row<ITEM> = ITEM[i_id: item_id, i_u_id: seller_id];
+        to_unit_return(item);
+        var seller: Row<USERACCT> = USERACCT[u_id: seller_id];
+        to_unit_return(seller);
+    }
+}
+
+// GetUserInfo: Read a user's full profile — as both seller and buyer.
+//
+// All tables are partitioned by userPartition(user_id): the user acts as
+// seller (ITEM, ITEM_COMMENT), as feedback recipient (USERACCT_FEEDBACK),
+// as buyer (USERACCT_ITEM, USERACCT_WATCH), and as account holder
+// (USERACCT) — all on the same partition. Single hop suffices.
+transaction GetUserInfo(user_id: int, other_user_id: int,
+                        item_id: int, comment_id: int) {
+    hop {
+        var u: Row<USERACCT> = USERACCT[u_id: user_id];
+        to_unit_return(u);
+        var feedback: Row<USERACCT_FEEDBACK> = USERACCT_FEEDBACK[uf_u_id: user_id,
+                                                                  uf_i_id: item_id,
+                                                                  uf_i_u_id: other_user_id,
+                                                                  uf_from_id: other_user_id];
+        to_unit_return(feedback);
+        var comment: Row<ITEM_COMMENT> = ITEM_COMMENT[ic_id: comment_id,
+                                                       ic_i_id: item_id,
+                                                       ic_u_id: user_id];
+        to_unit_return(comment);
+        var item: Row<ITEM> = ITEM[i_id: item_id, i_u_id: user_id];
+        to_unit_return(item);
+        var purchase: Row<USERACCT_ITEM> = USERACCT_ITEM[ui_u_id: user_id,
+                                                          ui_i_id: item_id,
+                                                          ui_i_u_id: other_user_id];
+        to_unit_return(purchase);
+        var watch: Row<USERACCT_WATCH> = USERACCT_WATCH[uw_u_id: user_id,
+                                                         uw_i_id: item_id,
+                                                         uw_i_u_id: other_user_id];
+        to_unit_return(watch);
+    }
+}
+
+// NewBid: Place or update a bid on an auction item.
+//
+// All bid data (ITEM, ITEM_BID, ITEM_MAX_BID) is co-located on the seller's
+// partition → single hop.
+//
+// new_bid_id: next available bid ID (assigned before the transaction).
+transaction NewBid(item_id: int, seller_id: int, buyer_id: int,
+                   new_bid: float, new_bid_id: int) {
+    hop {
+        var item: Row<ITEM> = ITEM[i_id: item_id, i_u_id: seller_id];
+        var cur_price: float = item.i_current_price;
+
+        // Update item: increment bid count and advance current price.
+        item.i_num_bids = item.i_num_bids + 1;
+        if (new_bid > cur_price) {
+            item.i_current_price = new_bid;
+        }
+        ITEM[i_id: item_id, i_u_id: seller_id] = item;
+
+        // Insert new bid record.
+        ITEM_BID[ib_id: new_bid_id, ib_i_id: item_id, ib_u_id: seller_id] = {
+            ib_buyer_id: buyer_id,
+            ib_bid: new_bid,
+            ib_max_bid: new_bid
+        };
+
+        // Update max-bid tracker to point to this bid if it's the highest.
+        if (new_bid > cur_price) {
+            ITEM_MAX_BID[imb_i_id: item_id, imb_u_id: seller_id] = {
+                imb_ib_id: new_bid_id,
+                imb_ib_i_id: item_id,
+                imb_ib_u_id: seller_id
+            };
+        }
+    }
+}
+
+// NewComment: Buyer posts a question on a seller's auction item.
+// ITEM and ITEM_COMMENT are co-located on the seller's partition → single hop.
+// comment_id: next available comment ID (pre-assigned).
+transaction NewComment(item_id: int, seller_id: int, buyer_id: int,
+                       comment_id: int, question: string) {
+    hop {
+        var item: Row<ITEM> = ITEM[i_id: item_id, i_u_id: seller_id];
+        item.i_num_comments = item.i_num_comments + 1;
+        ITEM[i_id: item_id, i_u_id: seller_id] = item;
+
+        ITEM_COMMENT[ic_id: comment_id, ic_i_id: item_id, ic_u_id: seller_id] = {
+            ic_buyer_id: buyer_id,
+            ic_question: question,
+            ic_response: ""
+        };
+
+        var seller: Row<USERACCT> = USERACCT[u_id: seller_id];
+        seller.u_comments = seller.u_comments + 1;
+        USERACCT[u_id: seller_id] = seller;
+    }
+}
+
+// NewCommentResponse: Seller replies to a buyer's comment on their item.
+// ITEM_COMMENT and USERACCT (seller) are on the seller's partition → single hop.
+transaction NewCommentResponse(comment_id: int, item_id: int, seller_id: int,
+                               response: string) {
+    hop {
+        var c: Row<ITEM_COMMENT> = ITEM_COMMENT[ic_id: comment_id,
+                                                ic_i_id: item_id,
+                                                ic_u_id: seller_id];
+        c.ic_response = response;
+        ITEM_COMMENT[ic_id: comment_id, ic_i_id: item_id, ic_u_id: seller_id] = c;
+
+        var seller: Row<USERACCT> = USERACCT[u_id: seller_id];
+        seller.u_comments = seller.u_comments - 1;
+        USERACCT[u_id: seller_id] = seller;
+    }
+}
+
+// NewFeedback: Post a rating for another user after a completed transaction.
+// USERACCT_FEEDBACK and USERACCT of the recipient are on the recipient's
+// partition → single hop.
+transaction NewFeedback(from_id: int, to_id: int, item_id: int,
+                        seller_id: int, rating: int) {
+    hop {
+        USERACCT_FEEDBACK[uf_u_id: to_id, uf_i_id: item_id,
+                          uf_i_u_id: seller_id, uf_from_id: from_id] = {
+            uf_rating: rating
+        };
+
+        var u: Row<USERACCT> = USERACCT[u_id: to_id];
+        u.u_rating = u.u_rating + rating;
+        USERACCT[u_id: to_id] = u;
+    }
+}
+
+// NewItem: Create a new auction listing on the seller's partition.
+// Decrements seller's balance by the listing fee.
+transaction NewItem(item_id: int, seller_id: int, name: string,
+                    initial_price: float, end_date: int, start_date: int, c_id: int) {
+    hop {
+        ITEM[i_id: item_id, i_u_id: seller_id] = {
+            i_name: name,
+            i_initial_price: initial_price,
+            i_current_price: initial_price,
+            i_num_bids: 0,
+            i_end_date: end_date,
+            i_start_date: start_date,
+            i_status: ITEM_STATUS_OPEN,
+            i_num_comments: 0,
+            i_c_id: c_id
+        };
+
+        var seller: Row<USERACCT> = USERACCT[u_id: seller_id];
+        seller.u_balance = seller.u_balance - initial_price;
+        USERACCT[u_id: seller_id] = seller;
+    }
+}
+
+// NewPurchase: Complete a Buy-Now purchase for an open auction item.
+//
+// Hop 1 (seller partition): Close the item, credit the seller's balance.
+// Hop 2 (buyer partition):  Debit the buyer's balance.
+//
+// buy_now_price flows implicitly (it is a transaction parameter accessible
+// in both hops).
+transaction NewPurchase(item_id: int, seller_id: int, buyer_id: int,
+                        buy_now_price: float) {
+    hop {
+        var item: Row<ITEM> = ITEM[i_id: item_id, i_u_id: seller_id];
+        item.i_status = ITEM_STATUS_CLOSED;
+        ITEM[i_id: item_id, i_u_id: seller_id] = item;
+
+        var seller: Row<USERACCT> = USERACCT[u_id: seller_id];
+        seller.u_balance = seller.u_balance + buy_now_price;
+        USERACCT[u_id: seller_id] = seller;
+    }
+    hop {
+        var buyer: Row<USERACCT> = USERACCT[u_id: buyer_id];
+        buyer.u_balance = buyer.u_balance - buy_now_price;
+        USERACCT[u_id: buyer_id] = buyer;
+    }
+}
+
+// UpdateItem: Modify an auction listing's description.
+// ITEM is on the seller's partition → single hop.
+transaction UpdateItem(item_id: int, seller_id: int, new_name: string) {
+    hop {
+        var item: Row<ITEM> = ITEM[i_id: item_id, i_u_id: seller_id];
+        item.i_name = new_name;
+        ITEM[i_id: item_id, i_u_id: seller_id] = item;
+    }
+}
