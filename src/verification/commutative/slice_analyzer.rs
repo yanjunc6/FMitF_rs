@@ -14,6 +14,8 @@ pub struct SliceAnalysisInfo {
     pub live_in: HashMap<usize, HashSet<VariableId>>,
     /// Variables live-out per slice
     pub live_out: HashMap<usize, HashSet<VariableId>>,
+    /// Explicit return values (to_unit_return arguments and explicit Return operands) per slice
+    pub explicit_return_vars: HashMap<usize, HashSet<VariableId>>,
     /// Tables read per slice
     pub tables_read: HashMap<usize, HashSet<String>>,
     /// Tables written per slice
@@ -104,6 +106,75 @@ impl SliceAnalyzer {
                 }
             }
             vars
+        }
+
+        // Helper function to collect explicit return values from a hop
+        // Returns: arguments to to_unit() and to_unit_return() calls + operands from Return statements
+        fn collect_explicit_return_values(
+            cfg_program: &CfgProgram,
+            hop_id: HopId,
+            selected_blocks: Option<&HashSet<crate::cfg::BasicBlockId>>,
+        ) -> HashSet<VariableId> {
+            let mut return_vars = HashSet::new();
+            let hop = &cfg_program.hops[hop_id];
+
+            for &block_id in &hop.blocks {
+                if let Some(sel) = selected_blocks {
+                    if !sel.contains(&block_id) {
+                        continue;
+                    }
+                }
+                let block = &cfg_program.basic_blocks[block_id];
+
+                // Check if this is an exit block of the hop
+                let is_exit = if let Some(sel) = selected_blocks {
+                    let successors = match &block.terminator {
+                        crate::cfg::Terminator::Jump(target) => vec![*target],
+                        crate::cfg::Terminator::Branch {
+                            if_true, if_false, ..
+                        } => vec![*if_true, *if_false],
+                        crate::cfg::Terminator::HopExit { .. }
+                        | crate::cfg::Terminator::Return(_)
+                        | crate::cfg::Terminator::Abort => vec![],
+                    };
+                    successors.is_empty() || successors.iter().any(|s| !sel.contains(s))
+                } else {
+                    matches!(
+                        block.terminator,
+                        crate::cfg::Terminator::HopExit { .. }
+                            | crate::cfg::Terminator::Return(_)
+                            | crate::cfg::Terminator::Abort
+                    )
+                };
+
+                if is_exit {
+                    // Collect arguments to to_unit() and to_unit_return() calls
+                    // Note: Both to_unit and to_unit_return may be aliased to the same function ID,
+                    // so we collect from both names to be safe.
+                    for inst in &block.instructions {
+                        if let crate::cfg::InstructionKind::Call { func, args, .. } = &inst.kind {
+                            let called_func = &cfg_program.functions[*func];
+                            // Collect arguments from both to_unit and to_unit_return calls
+                            // These represent values that should be treated as part of the hop's return contract
+                            if called_func.name == "to_unit" || called_func.name == "to_unit_return" {
+                                for arg in args {
+                                    if let crate::cfg::Operand::Variable(var_id) = arg {
+                                        return_vars.insert(*var_id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Collect explicit Return operand
+                    if let crate::cfg::Terminator::Return(Some(operand)) = &block.terminator {
+                        if let crate::cfg::Operand::Variable(var_id) = operand {
+                            return_vars.insert(*var_id);
+                        }
+                    }
+                }
+            }
+            return_vars
         }
 
         // Helper function to collect table accesses from slice
@@ -415,9 +486,30 @@ impl SliceAnalyzer {
         tables_written_last_hop.insert(0, tables_written_last_hop_a_strings);
         tables_written_last_hop.insert(1, tables_written_last_hop_b_strings);
 
+        // Collect explicit return values (to_unit_return arguments + Return operands) for each slice
+        let mut explicit_return_vars = HashMap::new();
+        if let Some(&last_hop_a) = slice_a.last() {
+            explicit_return_vars.insert(
+                0,
+                collect_explicit_return_values(cfg_program, last_hop_a, selected_blocks_a.as_ref()),
+            );
+        } else {
+            explicit_return_vars.insert(0, HashSet::new());
+        }
+
+        if let Some(&last_hop_b) = slice_b.last() {
+            explicit_return_vars.insert(
+                1,
+                collect_explicit_return_values(cfg_program, last_hop_b, selected_blocks_b.as_ref()),
+            );
+        } else {
+            explicit_return_vars.insert(1, HashSet::new());
+        }
+
         Ok(SliceAnalysisInfo {
             live_in,
             live_out,
+            explicit_return_vars,
             tables_read,
             tables_written,
             tables_written_last_hop,
