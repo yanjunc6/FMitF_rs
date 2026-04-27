@@ -1,0 +1,166 @@
+// ============================================================================
+// Epinions — Social Product Review Benchmark
+//
+// Tables
+//   item     — partitioned by i_id
+//   useracct — partitioned by u_id
+//   review   — partitioned by i_id (item partition); composite PK (u_id, i_id)
+//   trust    — partitioned by source_u_id (user partition)
+//
+// Partition strategy:
+//   Reviews are co-located with items (f_item(i_id)).
+//   Trust relationships are co-located with the source user (f_user(source_u_id)).
+//
+// Chopping:
+//   GetAverageRatingByTrustedUser / GetItemReviewsByTrustedUser span two
+//   partitions (item partition for reviews, user partition for trust) → 2 hops.
+//   All other transactions are single-partition.
+// ============================================================================
+
+partition f_item(x: int) -> int { return x; }
+partition f_user(x: int) -> int { return x; }
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+table item {
+    primary i_id: int;
+    node f_item(i_id);
+    title: string;
+}
+
+table useracct {
+    primary u_id: int;
+    node f_user(u_id);
+    name: string;
+}
+
+// Review co-located with item: all reviews for a given item are on the same partition.
+table review {
+    primary u_id: int;
+    primary i_id: int;
+    node f_item(i_id);
+    rating: int;
+    creation_date: int;
+}
+
+// Trust relationships live on the source user's partition.
+table trust {
+    primary source_u_id: int;
+    primary target_u_id: int;
+    node f_user(source_u_id);
+    trust: int;
+}
+
+// ============================================================================
+// Transactions
+// ============================================================================
+
+// GetAverageRatingByTrustedUser:
+//   SQL: SELECT AVG(r.rating) FROM review r, trust t
+//        WHERE r.u_id = t.target_u_id AND r.i_id = ? AND t.source_u_id = ?
+// Chop: Hop 1 on item partition (read review for iid by reviewer_uid);
+//       Hop 2 on user partition (read trust entry uid → reviewer_uid).
+transaction GetAverageRatingByTrustedUser(iid: int, uid: int, reviewer_uid: int) {
+    hop {
+        var r: Row<review> = review[u_id: reviewer_uid, i_id: iid];
+        var rating: int = r.rating;
+        to_unit_return(rating);
+    }
+    hop {
+        var t: Row<trust> = trust[source_u_id: uid, target_u_id: reviewer_uid];
+        var trust_level: int = t.trust;
+        to_unit_return(trust_level);
+    }
+}
+
+// GetItemAverageRating:
+//   SQL: SELECT AVG(rating) FROM review WHERE i_id = ?
+// Single-partition scan on item partition — one hop.
+transaction GetItemAverageRating(iid: int, reviewer_uid: int) {
+    hop {
+        var r: Row<review> = review[u_id: reviewer_uid, i_id: iid];
+        var rating: int = r.rating;
+        to_unit_return(rating);
+    }
+}
+
+// GetItemReviewsByTrustedUser:
+//   SQL: SELECT r.* FROM review r, trust t
+//        WHERE r.u_id = t.target_u_id AND r.i_id = ? AND t.source_u_id = ?
+// Chop: Hop 1 on item partition; Hop 2 on user partition.
+transaction GetItemReviewsByTrustedUser(iid: int, uid: int, reviewer_uid: int) {
+    hop {
+        var r: Row<review> = review[u_id: reviewer_uid, i_id: iid];
+        to_unit_return(r);
+    }
+    hop {
+        var t: Row<trust> = trust[source_u_id: uid, target_u_id: reviewer_uid];
+        to_unit_return(t);
+    }
+}
+
+// GetReviewItemById:
+//   SQL: SELECT r.*, i.* FROM review r JOIN item i ON r.i_id = i.i_id WHERE r.i_id = ?
+// Both review and item are on the item partition → single hop.
+transaction GetReviewItemById(iid: int, reviewer_uid: int) {
+    hop {
+        var r: Row<review> = review[u_id: reviewer_uid, i_id: iid];
+        to_unit_return(r);
+        var i: Row<item> = item[i_id: iid];
+        to_unit_return(i);
+    }
+}
+
+// GetReviewsByUser:
+//   SQL: SELECT * FROM review WHERE u_id = ?
+// Reviews are partitioned by i_id; looking up only by u_id is a scatter-gather.
+// Modeled as a two-partition access: user partition to confirm user, then one
+// representative review on the item partition.
+transaction GetReviewsByUser(uid: int, iid: int) {
+    hop {
+        var u: Row<useracct> = useracct[u_id: uid];
+        to_unit_return(u);
+    }
+    hop {
+        var r: Row<review> = review[u_id: uid, i_id: iid];
+        to_unit_return(r);
+    }
+}
+
+// UpdateItemTitle: UPDATE item SET title = ? WHERE i_id = ?
+transaction UpdateItemTitle(iid: int, title: string) {
+    hop {
+        var i: Row<item> = item[i_id: iid];
+        i.title = title;
+        item[i_id: iid] = i;
+    }
+}
+
+// UpdateReviewRating: UPDATE review SET rating = ? WHERE u_id = ? AND i_id = ?
+transaction UpdateReviewRating(iid: int, uid: int, rating: int) {
+    hop {
+        var r: Row<review> = review[u_id: uid, i_id: iid];
+        r.rating = rating;
+        review[u_id: uid, i_id: iid] = r;
+    }
+}
+
+// UpdateTrustRating: UPDATE trust SET trust = ? WHERE source_u_id = ? AND target_u_id = ?
+transaction UpdateTrustRating(source_uid: int, target_uid: int, trust_val: int) {
+    hop {
+        var t: Row<trust> = trust[source_u_id: source_uid, target_u_id: target_uid];
+        t.trust = trust_val;
+        trust[source_u_id: source_uid, target_u_id: target_uid] = t;
+    }
+}
+
+// UpdateUserName: UPDATE useracct SET name = ? WHERE u_id = ?
+transaction UpdateUserName(uid: int, name: string) {
+    hop {
+        var u: Row<useracct> = useracct[u_id: uid];
+        u.name = name;
+        useracct[u_id: uid] = u;
+    }
+}

@@ -1,0 +1,382 @@
+// ============================================================================
+// TPC-DS — Decision-Support (Data Warehouse) Benchmark
+//
+// TPC-DS models a multi-channel retail environment with three sales channels:
+// store, catalog, and web.  All queries are read-only analytical workloads.
+//
+// Partition strategy:
+//   Fact tables partitioned by their item key so all sales of an item are
+//   co-located.  Dimension tables (date_dim, customer, store, etc.) are
+//   small relative to facts and are treated as replicated or partitioned by
+//   their own surrogate key.
+//
+// Chopping:
+//   Each query joins multiple tables across partition boundaries.
+//   Hops are drawn at partition-family boundaries (e.g., fact → dimension).
+//   Since all queries are read-only, hops within a transaction are independent
+//   and can be parallelized by the IC3 scheduler.
+//
+// Note: dates are represented as int (surrogate keys from date_dim).
+// ============================================================================
+
+partition f_item(x: int) -> int { return x; }
+partition f_cust(x: int) -> int { return x; }
+partition f_store(x: int) -> int { return x; }
+partition g(x: int) -> int { return 0; }    // replicated dimension tables
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+// -- Replicated dimension tables --
+
+table date_dim {
+    primary d_date_sk: int;
+    node g(d_date_sk);
+    d_date: int;
+    d_year: int;
+    d_month_seq: int;
+    d_qoy: int;
+    d_moy: int;
+    d_day_name: string;
+}
+
+table time_dim {
+    primary t_time_sk: int;
+    node g(t_time_sk);
+    t_hour: int;
+    t_minute: int;
+    t_am_pm: string;
+}
+
+table promotion {
+    primary p_promo_sk: int;
+    node g(p_promo_sk);
+    p_promo_name: string;
+    p_channel_email: string;
+    p_channel_tv: string;
+    p_channel_radio: string;
+}
+
+// -- Partitioned dimension tables --
+
+table item {
+    primary i_item_sk: int;
+    node f_item(i_item_sk);
+    i_item_id: string;
+    i_item_desc: string;
+    i_current_price: float;
+    i_class: string;
+    i_category: string;
+    i_manufact: string;
+}
+
+table customer {
+    primary c_customer_sk: int;
+    node f_cust(c_customer_sk);
+    c_customer_id: string;
+    c_first_name: string;
+    c_last_name: string;
+    c_birth_year: int;
+    c_email_address: string;
+}
+
+table customer_demographics {
+    primary cd_demo_sk: int;
+    node f_cust(cd_demo_sk);
+    cd_gender: string;
+    cd_marital_status: string;
+    cd_education_status: string;
+    cd_purchase_estimate: int;
+    cd_credit_rating: string;
+}
+
+table customer_address {
+    primary ca_address_sk: int;
+    node f_cust(ca_address_sk);
+    ca_street_number: string;
+    ca_street_name: string;
+    ca_city: string;
+    ca_state: string;
+    ca_zip: string;
+    ca_country: string;
+    ca_gmt_offset: float;
+}
+
+table store {
+    primary s_store_sk: int;
+    node f_store(s_store_sk);
+    s_store_id: string;
+    s_store_name: string;
+    s_number_employees: int;
+    s_state: string;
+    s_country: string;
+}
+
+table warehouse {
+    primary w_warehouse_sk: int;
+    node f_store(w_warehouse_sk);
+    w_warehouse_name: string;
+    w_state: string;
+    w_country: string;
+}
+
+// -- Fact tables (partitioned by item key) --
+
+// Store sales fact table.
+table store_sales {
+    primary ss_item_sk: int;
+    primary ss_ticket_number: int;
+    node f_item(ss_item_sk);
+    ss_sold_date_sk: int;
+    ss_customer_sk: int;
+    ss_store_sk: int;
+    ss_promo_sk: int;
+    ss_quantity: int;
+    ss_list_price: float;
+    ss_sales_price: float;
+    ss_ext_sales_price: float;
+    ss_net_paid: float;
+    ss_net_profit: float;
+}
+
+// Store returns fact table.
+table store_returns {
+    primary sr_item_sk: int;
+    primary sr_ticket_number: int;
+    node f_item(sr_item_sk);
+    sr_returned_date_sk: int;
+    sr_customer_sk: int;
+    sr_store_sk: int;
+    sr_return_quantity: int;
+    sr_return_amount: float;
+    sr_net_loss: float;
+}
+
+// Catalog sales fact table.
+table catalog_sales {
+    primary cs_item_sk: int;
+    primary cs_order_number: int;
+    node f_item(cs_item_sk);
+    cs_sold_date_sk: int;
+    cs_bill_customer_sk: int;
+    cs_ship_customer_sk: int;
+    cs_quantity: int;
+    cs_list_price: float;
+    cs_sales_price: float;
+    cs_ext_sales_price: float;
+    cs_net_profit: float;
+}
+
+// Catalog returns fact table.
+table catalog_returns {
+    primary cr_item_sk: int;
+    primary cr_order_number: int;
+    node f_item(cr_item_sk);
+    cr_returned_date_sk: int;
+    cr_returning_customer_sk: int;
+    cr_return_amount: float;
+    cr_net_loss: float;
+}
+
+// Web sales fact table.
+table web_sales {
+    primary ws_item_sk: int;
+    primary ws_order_number: int;
+    node f_item(ws_item_sk);
+    ws_sold_date_sk: int;
+    ws_bill_customer_sk: int;
+    ws_quantity: int;
+    ws_list_price: float;
+    ws_sales_price: float;
+    ws_ext_sales_price: float;
+    ws_net_profit: float;
+}
+
+// Web returns fact table.
+table web_returns {
+    primary wr_item_sk: int;
+    primary wr_order_number: int;
+    node f_item(wr_item_sk);
+    wr_returned_date_sk: int;
+    wr_returning_customer_sk: int;
+    wr_return_amount: float;
+    wr_net_loss: float;
+}
+
+// ============================================================================
+// Transactions (TPC-DS representative queries)
+// ============================================================================
+
+// Q1: Compute net loss per store for customers whose returns exceed the
+//     average return amount.
+// Joins store_returns → store → customer.
+// Chop: fact (item partition) → store partition → customer partition.
+transaction Q1(item_sk: int, ticket_num: int, store_sk: int, cust_sk: int) {
+    hop {
+        var sr: Row<store_returns> = store_returns[sr_item_sk: item_sk, sr_ticket_number: ticket_num];
+        var net_loss: float = sr.sr_net_loss;
+        to_unit_return(net_loss);
+    }
+    hop {
+        var s: Row<store> = store[s_store_sk: store_sk];
+        var sname: string = s.s_store_name;
+        to_unit_return(sname);
+    }
+    hop {
+        var c: Row<customer> = customer[c_customer_sk: cust_sk];
+        var cname: string = c.c_first_name;
+        to_unit_return(cname);
+    }
+}
+
+// Q7: Average quantity/list price/coupon amount/sales price by demographics.
+// Joins store_sales → item → customer_demographics → promotion.
+// Chop: fact → customer_demographics → promotion (replicated).
+transaction Q7(item_sk: int, ticket_num: int, cd_demo_sk: int, promo_sk: int) {
+    hop {
+        var ss: Row<store_sales> = store_sales[ss_item_sk: item_sk, ss_ticket_number: ticket_num];
+        var i: Row<item> = item[i_item_sk: item_sk];
+        to_unit_return(i);
+        var qty: int = ss.ss_quantity;
+        to_unit_return(qty);
+        var price: float = ss.ss_list_price;
+        to_unit_return(price);
+    }
+    hop {
+        var cd: Row<customer_demographics> = customer_demographics[cd_demo_sk: cd_demo_sk];
+        var gender: string = cd.cd_gender;
+        to_unit_return(gender);
+    }
+    hop {
+        var promo: Row<promotion> = promotion[p_promo_sk: promo_sk];
+        var pname: string = promo.p_promo_name;
+        to_unit_return(pname);
+    }
+}
+
+// Q12: Web sales revenue for items in a specific category over a date range.
+// Joins web_sales → item → date_dim (replicated).
+// Chop: fact → date dimension.
+transaction Q12(item_sk: int, order_num: int, date_sk: int) {
+    hop {
+        var ws: Row<web_sales> = web_sales[ws_item_sk: item_sk, ws_order_number: order_num];
+        var i: Row<item> = item[i_item_sk: item_sk];
+        to_unit_return(i);
+        var revenue: float = ws.ws_ext_sales_price;
+        to_unit_return(revenue);
+    }
+    hop {
+        var d: Row<date_dim> = date_dim[d_date_sk: date_sk];
+        var yr: int = d.d_year;
+        to_unit_return(yr);
+    }
+}
+
+// Q19: Catalog sales revenue by brand/class for items shipped to specific states.
+// Joins catalog_sales → item → customer → customer_address → date_dim.
+// Chop: fact → item → customer → customer_address → date_dim.
+transaction Q19(item_sk: int, order_num: int, cust_sk: int, addr_sk: int, date_sk: int) {
+    hop {
+        var cs: Row<catalog_sales> = catalog_sales[cs_item_sk: item_sk, cs_order_number: order_num];
+        var revenue: float = cs.cs_ext_sales_price;
+        to_unit_return(revenue);
+    }
+    hop {
+        var i: Row<item> = item[i_item_sk: item_sk];
+        var brand: string = i.i_manufact;
+        to_unit_return(brand);
+    }
+    hop {
+        var c: Row<customer> = customer[c_customer_sk: cust_sk];
+        to_unit_return(c);
+    }
+    hop {
+        var ca: Row<customer_address> = customer_address[ca_address_sk: addr_sk];
+        var state: string = ca.ca_state;
+        to_unit_return(state);
+    }
+    hop {
+        var d: Row<date_dim> = date_dim[d_date_sk: date_sk];
+        to_unit_return(d);
+    }
+}
+
+// Q34: Store sales counts by customer demographics for a specific date range.
+// Joins store_sales → customer → customer_demographics → store → date_dim.
+// Chop: fact → customer → demographics → store → date.
+transaction Q34(item_sk: int, ticket_num: int, cust_sk: int, cd_sk: int, store_sk: int, date_sk: int) {
+    hop {
+        var ss: Row<store_sales> = store_sales[ss_item_sk: item_sk, ss_ticket_number: ticket_num];
+        var qty: int = ss.ss_quantity;
+        to_unit_return(qty);
+    }
+    hop {
+        var c: Row<customer> = customer[c_customer_sk: cust_sk];
+        to_unit_return(c);
+    }
+    hop {
+        var cd: Row<customer_demographics> = customer_demographics[cd_demo_sk: cd_sk];
+        var marital: string = cd.cd_marital_status;
+        to_unit_return(marital);
+    }
+    hop {
+        var s: Row<store> = store[s_store_sk: store_sk];
+        to_unit_return(s);
+    }
+    hop {
+        var d: Row<date_dim> = date_dim[d_date_sk: date_sk];
+        var yr: int = d.d_year;
+        to_unit_return(yr);
+    }
+}
+
+// Q50: Store returns within a time window after original sale.
+// Joins store_returns → store_sales → store → date_dim.
+// Chop: returns fact → sales fact → store → date.
+transaction Q50(item_sk: int, ticket_num: int, ret_date_sk: int, store_sk: int) {
+    hop {
+        var sr: Row<store_returns> = store_returns[sr_item_sk: item_sk, sr_ticket_number: ticket_num];
+        var ss: Row<store_sales> = store_sales[ss_item_sk: item_sk, ss_ticket_number: ticket_num];
+        var ret_amt: float = sr.sr_return_amount;
+        to_unit_return(ret_amt);
+        var sale_amt: float = ss.ss_net_paid;
+        to_unit_return(sale_amt);
+    }
+    hop {
+        var s: Row<store> = store[s_store_sk: store_sk];
+        var sname: string = s.s_store_name;
+        to_unit_return(sname);
+    }
+    hop {
+        var d: Row<date_dim> = date_dim[d_date_sk: ret_date_sk];
+        var yr: int = d.d_year;
+        to_unit_return(yr);
+    }
+}
+
+// Q96: Count late-night internet orders (web sales between 8pm and midnight).
+// Joins web_sales → time_dim (replicated) → warehouse → date_dim.
+// Chop: web fact → warehouse → time/date dimensions.
+transaction Q96(item_sk: int, order_num: int, warehouse_sk: int, time_sk: int, date_sk: int) {
+    hop {
+        var ws: Row<web_sales> = web_sales[ws_item_sk: item_sk, ws_order_number: order_num];
+        var qty: int = ws.ws_quantity;
+        to_unit_return(qty);
+    }
+    hop {
+        var w: Row<warehouse> = warehouse[w_warehouse_sk: warehouse_sk];
+        var wname: string = w.w_warehouse_name;
+        to_unit_return(wname);
+    }
+    hop {
+        var t: Row<time_dim> = time_dim[t_time_sk: time_sk];
+        var hr: int = t.t_hour;
+        to_unit_return(hr);
+    }
+    hop {
+        var d: Row<date_dim> = date_dim[d_date_sk: date_sk];
+        var yr: int = d.d_year;
+        to_unit_return(yr);
+    }
+}

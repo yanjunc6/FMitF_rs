@@ -1,0 +1,87 @@
+// ============================================================================
+// Voter — Real-time Voting Benchmark
+//
+// Models a phone-in voting system (e.g., American Idol).
+// Voters call in via phone number; each call tries to vote for a contestant.
+//
+// Tables
+//   CONTESTANTS — keyed by contestant_number
+//   LOCATIONS   — maps area_code → state
+//   VOTES       — keyed by (phone_number, vote_id); partitioned by phone_number
+//
+// Partition strategy:
+//   CONTESTANTS partitioned by contestant_number.
+//   LOCATIONS   partitioned by area_code.
+//   VOTES       partitioned by phone_number (all votes from one phone co-located).
+//
+// Chopping: Vote spans three partitions in sequence (contestant → location → vote).
+//   No hop can be reordered because each depends on the previous result.
+//   Chop into 3 sequential hops to enable per-partition locking.
+// ============================================================================
+
+partition p_contestant(key: int) -> int { return key; }
+partition p_location(key: int) -> int { return key; }
+partition p_phone(key: int) -> int { return key; }
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+table CONTESTANTS {
+    primary contestant_number: int;
+    node p_contestant(contestant_number);
+    contestant_name: string;
+}
+
+table LOCATIONS {
+    primary area_code: int;
+    node p_location(area_code);
+    state: string;
+}
+
+// VOTES partitioned by phone_number so all votes from the same caller are
+// co-located, enabling efficient vote-count checks.
+table VOTES {
+    primary phone_number: int;
+    primary vote_id: int;
+    node p_phone(phone_number);
+    state: string;
+    contestant_number: int;
+}
+
+// ============================================================================
+// Transactions
+// ============================================================================
+
+// Vote: Cast a vote for a contestant.
+//
+// Hop 1 (contestant partition): Validate that the contestant exists.
+// Hop 2 (location  partition): Map caller's area code to a state.
+// Hop 3 (phone     partition): Insert the vote (assumes vote-limit enforcement
+//                              happens at the application layer before calling).
+//
+// area_code = phoneNumber / 10_000_000 (first 3 digits of a 10-digit US number).
+transaction Vote(voteId: int, phoneNumber: int, contestantNumber: int) {
+    // Hop 1: Contestant partition — verify contestant is valid.
+    hop {
+        var c: Row<CONTESTANTS> = CONTESTANTS[contestant_number: contestantNumber];
+        var cname: string = c.contestant_name;
+        to_unit_return(cname);
+    }
+
+    // Hop 2: Location partition — resolve area code to state.
+    hop {
+        var area_code: int = phoneNumber / 10000000;
+        var loc: Row<LOCATIONS> = LOCATIONS[area_code: area_code];
+        var state: string = loc.state;
+    }
+
+    // Hop 3: Phone/vote partition — record the vote.
+    // 'state' flows from Hop 2 as an implicit continuation variable.
+    hop {
+        VOTES[phone_number: phoneNumber, vote_id: voteId] = {
+            state: state,
+            contestant_number: contestantNumber
+        };
+    }
+}

@@ -1,0 +1,193 @@
+// ============================================================================
+// Partitions
+//
+// Two-partition design:
+//   subscriberPartition — the core subscriber identity/location record
+//   servicePartition    — all service configuration tables (AccessInfo,
+//                         SpecialFacility, CallForwarding)
+//
+// Rationale:
+//   - No transaction co-accesses Subscriber + AccessInfo, so there is no
+//     co-location benefit to grouping them together.
+//   - SpecialFacility and CallForwarding are always accessed together
+//     (GetNewDestination, InsertCallForwarding), so they must be co-located.
+//   - AccessInfo is service configuration data (access privileges), not core
+//     subscriber identity — it belongs with the other service tables.
+//   - Load balance: subscriberPartition ~49% of traffic, servicePartition ~47%,
+//     cross-partition hops only 4% (InsertCallForwarding + UpdateSubscriberData).
+// ============================================================================
+
+partition subscriberPartition(s_id: int) -> int {
+    return s_id;
+}
+
+partition servicePartition(s_id: int) -> int {
+    return s_id;
+}
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+// Core identity record: location data, authentication bit/hex/byte arrays.
+// Accessed by GetSubscriberData (35%) and UpdateLocation (14%) alone.
+table Subscriber {
+    primary s_id: int;
+    node subscriberPartition(s_id);
+
+    sub_nbr: string;
+    bit_1: int;
+    bit_2: int;
+    bit_3: int;
+    bit_4: int;
+    bit_5: int;
+    bit_6: int;
+    bit_7: int;
+    bit_8: int;
+    bit_9: int;
+    bit_10: int;
+    hex_1: int;
+    hex_2: int;
+    hex_3: int;
+    hex_4: int;
+    hex_5: int;
+    hex_6: int;
+    hex_7: int;
+    hex_8: int;
+    hex_9: int;
+    hex_10: int;
+    byte2_1: int;
+    byte2_2: int;
+    byte2_3: int;
+    byte2_4: int;
+    byte2_5: int;
+    byte2_6: int;
+    byte2_7: int;
+    byte2_8: int;
+    byte2_9: int;
+    byte2_10: int;
+    msc_location: int;
+    vlr_location: int;
+}
+
+// Service configuration: access privileges per subscriber and access type.
+// Accessed by GetAccessData (35%) alone; never together with Subscriber.
+table AccessInfo {
+    primary s_id: int;
+    primary ai_type: int;
+    node servicePartition(s_id);
+
+    data1: int;
+    data2: int;
+    data3: string;
+    data4: string;
+}
+
+// Service configuration: active special services (e.g., call forwarding on/off).
+// Always accessed together with CallForwarding; never accessed with AccessInfo.
+table SpecialFacility {
+    primary s_id: int;
+    primary sf_type: int;
+    node servicePartition(s_id);
+
+    is_active: int;
+    error_cntrl: int;
+    data_a: int;
+    data_b: string;
+}
+
+// Service configuration: specific call forwarding rules per facility type.
+// Always co-accessed with SpecialFacility; shares servicePartition for locality.
+table CallForwarding {
+    primary s_id: int;
+    primary sf_type: int;
+    primary start_time: int;
+    node servicePartition(s_id);
+
+    end_time: int;
+    numberx: string;
+}
+
+// ============================================================================
+// Transactions
+// ============================================================================
+
+// Single-hop on servicePartition: CallForwarding only.
+transaction DeleteCallForwarding(s_id: int, sf_type: int, start_time: int) {
+    hop {
+        var cf: Row<CallForwarding> = CallForwarding[s_id: s_id, sf_type: sf_type, start_time: start_time];
+        to_unit_return(cf);
+    }
+}
+
+// Single-hop on servicePartition: AccessInfo only.
+transaction GetAccessData(s_id: int, ai_type: int) {
+    hop {
+        var ai: Row<AccessInfo> = AccessInfo[s_id: s_id, ai_type: ai_type];
+        var d1: int = ai.data1;
+        to_unit_return(d1);
+    }
+}
+
+// Single-hop on servicePartition: SpecialFacility and CallForwarding co-located.
+transaction GetNewDestination(s_id: int, sf_type: int, start_time: int, end_time: int) {
+    hop {
+        var sf: Row<SpecialFacility> = SpecialFacility[s_id: s_id, sf_type: sf_type];
+        var sf_active: int = sf.is_active;
+        if sf_active == 1 {
+            var cf: Row<CallForwarding> = CallForwarding[s_id: s_id, sf_type: sf_type, start_time: start_time];
+            var num: string = cf.numberx;
+            to_unit_return(num);
+        }
+    }
+}
+
+// Single-hop on subscriberPartition: Subscriber only.
+transaction GetSubscriberData(s_id: int) {
+    hop {
+        var sub: Row<Subscriber> = Subscriber[s_id: s_id];
+        var bit1: int = sub.bit_1;
+        to_unit_return(bit1);
+    }
+}
+
+// Two-hop: hop 1 verifies Subscriber exists (subscriberPartition),
+//          hop 2 verifies SpecialFacility and inserts CallForwarding (servicePartition).
+transaction InsertCallForwarding(s_id: int, sf_type: int, start_time: int, end_time: int, numberx: string) {
+    hop {
+        var sub: Row<Subscriber> = Subscriber[s_id: s_id];
+        to_unit_return(sub);
+    }
+    hop {
+        var sf: Row<SpecialFacility> = SpecialFacility[s_id: s_id, sf_type: sf_type];
+        to_unit_return(sf);
+        CallForwarding[s_id: s_id, sf_type: sf_type, start_time: start_time] = {
+            end_time: end_time,
+            numberx: numberx
+        };
+    }
+}
+
+// Single-hop on subscriberPartition: Subscriber only.
+transaction UpdateLocation(s_id: int, vlr_location: int) {
+    hop {
+        var sub: Row<Subscriber> = Subscriber[s_id: s_id];
+        sub.vlr_location = vlr_location;
+        Subscriber[s_id: s_id] = sub;
+    }
+}
+
+// Two-hop: hop 1 updates Subscriber.bit_1 (subscriberPartition),
+//          hop 2 updates SpecialFacility.data_a (servicePartition).
+transaction UpdateSubscriberData(s_id: int, bit_1: int, data_a: int, sf_type: int) {
+    hop {
+        var sub: Row<Subscriber> = Subscriber[s_id: s_id];
+        sub.bit_1 = bit_1;
+        Subscriber[s_id: s_id] = sub;
+    }
+    hop {
+        var sf: Row<SpecialFacility> = SpecialFacility[s_id: s_id, sf_type: sf_type];
+        sf.data_a = data_a;
+        SpecialFacility[s_id: s_id, sf_type: sf_type] = sf;
+    }
+}

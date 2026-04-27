@@ -1,0 +1,49 @@
+// ============================================================================
+// SiBench — Serializable Isolation Benchmark
+//
+// Tests whether the database enforces serializable isolation.
+// MinRecord performs a global aggregate (SELECT ORDER BY value LIMIT 1) that
+// spans all partitions; UpdateRecord is a single-partition read-modify-write.
+//
+// Partition strategy: hash by primary key id.
+// MinRecord cannot be chopped — it is a global coordination hop.
+// ============================================================================
+
+partition f(x: int) -> int {
+    return x;
+}
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+table SITable {
+    primary id: int;
+    node f(id);
+    value: int;
+}
+
+// ============================================================================
+// Transactions
+// ============================================================================
+
+// MinRecord: Global read-only aggregate — SELECT id, value ORDER BY value LIMIT 1.
+// Modeled as a single coordination hop (cannot be chopped across partitions).
+// representative_id stands for the partition we send the coordinating read to.
+transaction MinRecord(representative_id: int) {
+    hop {
+        var r: Row<SITable> = SITable[id: representative_id];
+        var v: int = r.value;
+        to_unit_return(v);
+    }
+}
+
+// UpdateRecord: Single-partition read-modify-write.
+// SQL: UPDATE SITable SET value = value + 1 WHERE id = ?
+transaction UpdateRecord(id: int) {
+    hop {
+        var row: Row<SITable> = SITable[id: id];
+        row.value = row.value + 1;
+        SITable[id: id] = row;
+    }
+}
