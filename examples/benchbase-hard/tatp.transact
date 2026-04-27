@@ -134,11 +134,12 @@ transaction GetNewDestination(s_id: int, sf_type: int, start_time: int, end_time
     hop {
         var sf: Row<SpecialFacility> = SpecialFacility[s_id: s_id, sf_type: sf_type];
         var sf_active: int = sf.is_active;
+        var num: string = "";
         if sf_active == 1 {
             var cf: Row<CallForwarding> = CallForwarding[s_id: s_id, sf_type: sf_type, start_time: start_time];
-            var num: string = cf.numberx;
-            to_unit_return(num);
+            num = cf.numberx;
         }
+        to_unit_return(num);
     }
 }
 
