@@ -24,10 +24,28 @@ impl TransferFunction<MapLattice<VariableId, VariableId>> for CopyTransfer {
 
         let mut result = state.clone();
 
+        fn kill_stale_aliases(
+            result: &mut MapLattice<VariableId, VariableId>,
+            stale_source: VariableId,
+        ) {
+            let stale_destinations: Vec<_> = result
+                .iter()
+                .filter_map(|(dest, flat_src)| match flat_src {
+                    Flat::Value(src) if *src == stale_source => Some(*dest),
+                    _ => None,
+                })
+                .collect();
+
+            for dest in stale_destinations {
+                result.insert(dest, Flat::Bottom);
+            }
+        }
+
         match &inst.kind {
             InstructionKind::Assign { dest, src } => {
                 // Kill: remove any copy relation for this variable
                 result.insert(*dest, Flat::Bottom);
+                kill_stale_aliases(&mut result, *dest);
 
                 // Gen: If src is a simple variable use, add copy relation
                 if let Operand::Variable(source_var) = src {
@@ -39,11 +57,13 @@ impl TransferFunction<MapLattice<VariableId, VariableId>> for CopyTransfer {
             | InstructionKind::TableGet { dest, .. } => {
                 // These create new values, not copies
                 result.insert(*dest, Flat::Bottom);
+                kill_stale_aliases(&mut result, *dest);
             }
             InstructionKind::Call { dest, .. } => {
                 // Function calls create new values, not copies
                 if let Some(dest_var) = dest {
                     result.insert(*dest_var, Flat::Bottom);
+                    kill_stale_aliases(&mut result, *dest_var);
                 }
             }
             InstructionKind::TableSet { .. } | InstructionKind::Assert { .. } => {

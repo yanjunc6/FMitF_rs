@@ -399,7 +399,11 @@ pub fn lower_instruction(
         InstructionKind::Assign { dest, src } => {
             let dest_name = go_var_name(program, *dest);
             if matches!(src, Operand::Constant(cfg::ConstantValue::Null)) {
-                writeln!(out, "{}// TODO: handle null deletion for {}", indent, dest_name)?;
+                writeln!(
+                    out,
+                    "{}// TODO: handle null deletion for {}",
+                    indent, dest_name
+                )?;
             } else {
                 let source_expr = operand_to_go(program, src);
                 writeln!(out, "{}{} = {}", indent, dest_name, source_expr)?;
@@ -453,8 +457,8 @@ pub fn lower_instruction(
 
             // Special handling for built-in functions
             match function.name.as_str() {
-                "to_unit" => {
-                    // to_unit consumes its argument but returns nothing
+                "to_unit" | "to_unit_return" => {
+                    // to_unit and to_unit_return consume their argument and return unit.
                     if !arg_exprs.is_empty() {
                         writeln!(out, "{}_ = {}", indent, arg_exprs[0])?;
                     }
@@ -702,7 +706,11 @@ pub fn lower_instruction(
             if let Some(field_id) = field {
                 let field_accessor = table_field_accessor(program, table_info, *field_id, &row_var);
                 if matches!(value, Operand::Constant(cfg::ConstantValue::Null)) {
-                    writeln!(out, "{}// TODO: handle null deletion for {}", indent, field_accessor)?;
+                    writeln!(
+                        out,
+                        "{}// TODO: handle null deletion for {}",
+                        indent, field_accessor
+                    )?;
                 } else {
                     let value_expr = operand_to_go(program, value);
                     writeln!(out, "{}{} = {}", indent, field_accessor, value_expr)?;
@@ -710,7 +718,11 @@ pub fn lower_instruction(
             } else {
                 // Write whole row
                 if matches!(value, Operand::Constant(cfg::ConstantValue::Null)) {
-                    writeln!(out, "{}// TODO: handle null deletion for {}", indent, row_var)?;
+                    writeln!(
+                        out,
+                        "{}// TODO: handle null deletion for {}",
+                        indent, row_var
+                    )?;
                 } else {
                     let value_expr = operand_to_go(program, value);
                     writeln!(out, "{}{} = {}", indent, row_var, value_expr)?;

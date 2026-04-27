@@ -252,14 +252,14 @@ fn has_cycle(cfg_program: &CfgProgram, blocks: &[crate::cfg::BasicBlockId]) -> b
             return true;
         }
 
-        let successors: Vec<crate::cfg::BasicBlockId> = match cfg_program.basic_blocks[node].terminator
-        {
-            crate::cfg::Terminator::Jump(target) => vec![target],
-            crate::cfg::Terminator::Branch {
-                if_true, if_false, ..
-            } => vec![if_true, if_false],
-            _ => Vec::new(),
-        };
+        let successors: Vec<crate::cfg::BasicBlockId> =
+            match cfg_program.basic_blocks[node].terminator {
+                crate::cfg::Terminator::Jump(target) => vec![target],
+                crate::cfg::Terminator::Branch {
+                    if_true, if_false, ..
+                } => vec![if_true, if_false],
+                _ => Vec::new(),
+            };
 
         for succ in successors {
             if !block_set.contains(&succ) {

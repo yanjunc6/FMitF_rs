@@ -69,6 +69,17 @@ fn build_converters_source() -> Result<String, std::fmt::Error> {
     writeln!(out, "}}")?;
     writeln!(out)?;
 
+    // to_unit_return function
+    writeln!(
+        out,
+        "// to_unit_return is a runtime no-op marker for values that should be returned"
+    )?;
+    writeln!(out, "func to_unit_return[T any](value T, result *Unit) {{")?;
+    writeln!(out, "\t_ = value")?;
+    writeln!(out, "\t*result = Unit{{}}")?;
+    writeln!(out, "}}")?;
+    writeln!(out)?;
+
     // String -> typed converters
     writeln!(out, "// toUint64 converts string to uint64")?;
     writeln!(out, "func toUint64(s string) uint64 {{")?;

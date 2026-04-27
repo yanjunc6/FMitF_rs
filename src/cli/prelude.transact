@@ -116,6 +116,7 @@ const __shards__: int = 1;
 
 // vague function
 @intrinsic @Boogie @go function to_unit<T>(x: T) -> unit; // it does nothing at runtime
+@intrinsic @Boogie @go function to_unit_return<T>(x: T) -> unit; // marks a value to be included in txn results
 
 // only used in partition function
 @intrinsic @go function hashStr(s: string) -> int;

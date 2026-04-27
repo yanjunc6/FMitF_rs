@@ -168,7 +168,7 @@ transaction newOrder(
     itemIDs: List<int>,
     supplierWarehouseIDs: List<int>,
     orderQuantities: List<int>
-)
+) -> float
     assume length(itemIDs) == O_OL_CNT;
     assume length(supplierWarehouseIDs) == O_OL_CNT;
     assume length(orderQuantities) == O_OL_CNT;
@@ -255,7 +255,8 @@ transaction newOrder(
                 OL_AMOUNT: int(price * float(qty)) // TODO: rounding
             };
         }
-        to_unit(w_tax); // to avoid unused variable elimination
+        // to_unit(w_tax); // to avoid unused variable elimination
+        return w_tax;
     }
 }
 
