@@ -123,8 +123,7 @@ transaction DeleteCallForwarding(s_id: int, sf_type: int, start_time: int) {
 // Single-hop on servicePartition: AccessInfo only.
 transaction GetAccessData(s_id: int, ai_type: int) {
     hop {
-        var ai: Row<AccessInfo> = AccessInfo[s_id: s_id, ai_type: ai_type];
-        var d1: int = ai.data1;
+        var d1: int = AccessInfo[s_id: s_id, ai_type: ai_type].data1;
         to_unit_return(d1);
     }
 }
@@ -132,8 +131,7 @@ transaction GetAccessData(s_id: int, ai_type: int) {
 // Single-hop on servicePartition: SpecialFacility and CallForwarding co-located.
 transaction GetNewDestination(s_id: int, sf_type: int, start_time: int, end_time: int) {
     hop {
-        var sf: Row<SpecialFacility> = SpecialFacility[s_id: s_id, sf_type: sf_type];
-        var sf_active: int = sf.is_active;
+        var sf_active: int = SpecialFacility[s_id: s_id, sf_type: sf_type].is_active;
         var num: string = "";
         if sf_active == 1 {
             var cf: Row<CallForwarding> = CallForwarding[s_id: s_id, sf_type: sf_type, start_time: start_time];
@@ -172,9 +170,7 @@ transaction InsertCallForwarding(s_id: int, sf_type: int, start_time: int, end_t
 // Single-hop on subscriberPartition: Subscriber only.
 transaction UpdateLocation(s_id: int, vlr_location: int) {
     hop {
-        var sub: Row<Subscriber> = Subscriber[s_id: s_id];
-        sub.vlr_location = vlr_location;
-        Subscriber[s_id: s_id] = sub;
+        Subscriber[s_id: s_id].vlr_location = vlr_location;
     }
 }
 
@@ -182,13 +178,9 @@ transaction UpdateLocation(s_id: int, vlr_location: int) {
 //          hop 2 updates SpecialFacility.data_a (servicePartition).
 transaction UpdateSubscriberData(s_id: int, bit_1: int, data_a: int, sf_type: int) {
     hop {
-        var sub: Row<Subscriber> = Subscriber[s_id: s_id];
-        sub.bit_1 = bit_1;
-        Subscriber[s_id: s_id] = sub;
+        Subscriber[s_id: s_id].bit_1 = bit_1;
     }
     hop {
-        var sf: Row<SpecialFacility> = SpecialFacility[s_id: s_id, sf_type: sf_type];
-        sf.data_a = data_a;
-        SpecialFacility[s_id: s_id, sf_type: sf_type] = sf;
+        SpecialFacility[s_id: s_id, sf_type: sf_type].data_a = data_a;
     }
 }
