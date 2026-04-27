@@ -692,9 +692,10 @@ impl BoogieStateManager {
             }
         }
 
-        // Compare live-OUT variables only
-        if let Some(vars_a) = analysis_info.live_out.get(&0) {
-            let mut vars_sorted: Vec<_> = vars_a.iter().cloned().collect();
+        // Compare explicit return values (to_unit_return arguments and Return operands) from each slice
+        // These represent the actual "return contract" of each hop
+        if let Some(return_vars_a) = analysis_info.explicit_return_vars.get(&0) {
+            let mut vars_sorted: Vec<_> = return_vars_a.iter().cloned().collect();
             vars_sorted.sort_by_key(|v| v.index());
             for var_id in vars_sorted {
                 if let (Some(a_then_b_snapshot), Some(b_then_a_snapshot)) = (
@@ -723,8 +724,8 @@ impl BoogieStateManager {
                 }
             }
         }
-        if let Some(vars_b) = analysis_info.live_out.get(&1) {
-            let mut vars_sorted: Vec<_> = vars_b.iter().cloned().collect();
+        if let Some(return_vars_b) = analysis_info.explicit_return_vars.get(&1) {
+            let mut vars_sorted: Vec<_> = return_vars_b.iter().cloned().collect();
             vars_sorted.sort_by_key(|v| v.index());
             for var_id in vars_sorted {
                 if let (Some(a_then_b_snapshot), Some(b_then_a_snapshot)) = (
