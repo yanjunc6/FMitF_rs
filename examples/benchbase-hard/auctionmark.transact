@@ -176,9 +176,7 @@ table USERACCT_WATCH {
 // buyer_id flows from Hop 1 to Hop 2 as a continuation variable.
 transaction CloseAuctions(item_id: int, seller_id: int) {
     hop {
-        var item: Row<ITEM> = ITEM[i_id: item_id, i_u_id: seller_id];
-        item.i_status = ITEM_STATUS_WAITING_FOR_PURCHASE;
-        ITEM[i_id: item_id, i_u_id: seller_id] = item;
+        ITEM[i_id: item_id, i_u_id: seller_id].i_status = ITEM_STATUS_WAITING_FOR_PURCHASE;
 
         var max_bid: Row<ITEM_MAX_BID> = ITEM_MAX_BID[imb_i_id: item_id, imb_u_id: seller_id];
         var winning_bid: Row<ITEM_BID> = ITEM_BID[ib_id: max_bid.imb_ib_id,
@@ -195,9 +193,7 @@ transaction CloseAuctions(item_id: int, seller_id: int) {
 // Single hop on seller's partition — no buyer interaction needed.
 transaction CloseAuctionsNoBids(item_id: int, seller_id: int) {
     hop {
-        var item: Row<ITEM> = ITEM[i_id: item_id, i_u_id: seller_id];
-        item.i_status = ITEM_STATUS_CLOSED;
-        ITEM[i_id: item_id, i_u_id: seller_id] = item;
+        ITEM[i_id: item_id, i_u_id: seller_id].i_status = ITEM_STATUS_CLOSED;
     }
 }
 
@@ -289,9 +285,8 @@ transaction NewBid(item_id: int, seller_id: int, buyer_id: int,
 transaction NewComment(item_id: int, seller_id: int, buyer_id: int,
                        comment_id: int, question: string) {
     hop {
-        var item: Row<ITEM> = ITEM[i_id: item_id, i_u_id: seller_id];
-        item.i_num_comments = item.i_num_comments + 1;
-        ITEM[i_id: item_id, i_u_id: seller_id] = item;
+        var i_comments: int = ITEM[i_id: item_id, i_u_id: seller_id].i_num_comments;
+        ITEM[i_id: item_id, i_u_id: seller_id].i_num_comments = i_comments + 1;
 
         ITEM_COMMENT[ic_id: comment_id, ic_i_id: item_id, ic_u_id: seller_id] = {
             ic_buyer_id: buyer_id,
@@ -299,9 +294,8 @@ transaction NewComment(item_id: int, seller_id: int, buyer_id: int,
             ic_response: ""
         };
 
-        var seller: Row<USERACCT> = USERACCT[u_id: seller_id];
-        seller.u_comments = seller.u_comments + 1;
-        USERACCT[u_id: seller_id] = seller;
+        var scomments: int = USERACCT[u_id: seller_id].u_comments;
+        USERACCT[u_id: seller_id].u_comments = scomments + 1;
     }
 }
 
@@ -310,15 +304,10 @@ transaction NewComment(item_id: int, seller_id: int, buyer_id: int,
 transaction NewCommentResponse(comment_id: int, item_id: int, seller_id: int,
                                response: string) {
     hop {
-        var c: Row<ITEM_COMMENT> = ITEM_COMMENT[ic_id: comment_id,
-                                                ic_i_id: item_id,
-                                                ic_u_id: seller_id];
-        c.ic_response = response;
-        ITEM_COMMENT[ic_id: comment_id, ic_i_id: item_id, ic_u_id: seller_id] = c;
+        ITEM_COMMENT[ic_id: comment_id, ic_i_id: item_id, ic_u_id: seller_id].ic_response = response;
 
-        var seller: Row<USERACCT> = USERACCT[u_id: seller_id];
-        seller.u_comments = seller.u_comments - 1;
-        USERACCT[u_id: seller_id] = seller;
+        var comments: int = USERACCT[u_id: seller_id].u_comments;
+        USERACCT[u_id: seller_id].u_comments = comments - 1;
     }
 }
 
@@ -333,9 +322,8 @@ transaction NewFeedback(from_id: int, to_id: int, item_id: int,
             uf_rating: rating
         };
 
-        var u: Row<USERACCT> = USERACCT[u_id: to_id];
-        u.u_rating = u.u_rating + rating;
-        USERACCT[u_id: to_id] = u;
+        var rating = USERACCT[u_id: to_id].u_rating;
+        USERACCT[u_id: to_id].u_rating = USERACCT[u_id: to_id].u_rating + rating;
     }
 }
 
@@ -356,9 +344,8 @@ transaction NewItem(item_id: int, seller_id: int, name: string,
             i_c_id: c_id
         };
 
-        var seller: Row<USERACCT> = USERACCT[u_id: seller_id];
-        seller.u_balance = seller.u_balance - initial_price;
-        USERACCT[u_id: seller_id] = seller;
+        var balance = USERACCT[u_id: seller_id].u_balance;
+        USERACCT[u_id: seller_id].u_balance = balance - initial_price;
     }
 }
 
@@ -372,18 +359,14 @@ transaction NewItem(item_id: int, seller_id: int, name: string,
 transaction NewPurchase(item_id: int, seller_id: int, buyer_id: int,
                         buy_now_price: float) {
     hop {
-        var item: Row<ITEM> = ITEM[i_id: item_id, i_u_id: seller_id];
-        item.i_status = ITEM_STATUS_CLOSED;
-        ITEM[i_id: item_id, i_u_id: seller_id] = item;
+        ITEM[i_id: item_id, i_u_id: seller_id].i_status = ITEM_STATUS_CLOSED;
 
-        var seller: Row<USERACCT> = USERACCT[u_id: seller_id];
-        seller.u_balance = seller.u_balance + buy_now_price;
-        USERACCT[u_id: seller_id] = seller;
+        var sbalance: float = USERACCT[u_id: seller_id].u_balance;
+        USERACCT[u_id: seller_id].u_balance = sbalance + buy_now_price;
     }
     hop {
-        var buyer: Row<USERACCT> = USERACCT[u_id: buyer_id];
-        buyer.u_balance = buyer.u_balance - buy_now_price;
-        USERACCT[u_id: buyer_id] = buyer;
+        var balance: float = USERACCT[u_id: buyer_id].u_balance;
+        USERACCT[u_id: buyer_id].u_balance = balance - buy_now_price;
     }
 }
 
@@ -391,8 +374,6 @@ transaction NewPurchase(item_id: int, seller_id: int, buyer_id: int,
 // ITEM is on the seller's partition → single hop.
 transaction UpdateItem(item_id: int, seller_id: int, new_name: string) {
     hop {
-        var item: Row<ITEM> = ITEM[i_id: item_id, i_u_id: seller_id];
-        item.i_name = new_name;
-        ITEM[i_id: item_id, i_u_id: seller_id] = item;
+        ITEM[i_id: item_id, i_u_id: seller_id].i_name = new_name;
     }
 }
