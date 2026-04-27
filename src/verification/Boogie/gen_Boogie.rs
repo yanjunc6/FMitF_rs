@@ -73,6 +73,8 @@ impl BoogieProgramGenerator {
 
         // function to_unit<T>(x: T): unit;
         decls.push("function to_unit<a>(x: a): unit;".to_string());
+        // function to_unit_return<T>(x: T): unit;
+        decls.push("function to_unit_return<a>(x: a): unit;".to_string());
 
         self.program.other_declarations.extend(decls);
     }

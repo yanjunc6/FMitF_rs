@@ -8,9 +8,13 @@ use crate::cfg;
 use crate::cli::cache_manager::{
     CacheManager, CacheRuntimeOptions, VerificationResult as CacheVerificationResult,
 };
-use crate::cli::data::{CEdgeVerificationData, DataCollector, VerificationResult as DataVerificationResult};
+use crate::cli::data::{
+    CEdgeVerificationData, DataCollector, VerificationResult as DataVerificationResult,
+};
 use crate::cli::log::Logger;
-use crate::verification::Boogie::{BoogieError, BoogieProgram, BoogieProgramStats, VerificationNodeId};
+use crate::verification::Boogie::{
+    BoogieError, BoogieProgram, BoogieProgramStats, VerificationNodeId,
+};
 use crate::verification::{
     commutative::{
         naming::{parse_commutative_edge_ids, parse_commutative_nodes},
@@ -368,12 +372,14 @@ fn run_verification_parallel(
                         ) {
                             Ok(outcome) => {
                                 let aggregated_entry = if let Some(result) = outcome.result {
-                                    let kind = to_cache_result(&analyze_boogie_output(
-                                        &result.file_name,
-                                        &result.stdout,
-                                        &result.stderr,
-                                    )
-                                    .result);
+                                    let kind = to_cache_result(
+                                        &analyze_boogie_output(
+                                            &result.file_name,
+                                            &result.stdout,
+                                            &result.stderr,
+                                        )
+                                        .result,
+                                    );
                                     Some((
                                         task.root_file_name.clone(),
                                         AggregateResult {

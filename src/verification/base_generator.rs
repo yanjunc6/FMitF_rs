@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use super::Boogie::{
     gen_Boogie::BoogieProgramGenerator, BoogieExpr, BoogieExprKind, BoogieLine, BoogieProgram,
 };
-use crate::cfg as cfg;
+use crate::cfg;
 use crate::cfg::{
     BasicBlock, FunctionId, Instruction, InstructionKind, Operand, Program as CfgProgram,
 };
@@ -346,9 +346,9 @@ impl BaseVerificationGenerator {
                         self.generator
                             .ensure_local_variable_exists(&value_name, vty);
                     }
-                    let value_expr = self
-                        .generator
-                        .convert_operand(cfg_program, value, value_name)?;
+                    let value_expr =
+                        self.generator
+                            .convert_operand(cfg_program, value, value_name)?;
 
                     let map_store = BoogieExpr {
                         kind: BoogieExprKind::MapStore {

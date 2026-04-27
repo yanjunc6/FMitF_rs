@@ -250,7 +250,11 @@ impl VerificationCache {
         Ok(payload.len() as u64)
     }
 
-    fn store(&self, key: &str, result: VerificationResult) -> Result<(), Box<dyn std::error::Error>> {
+    fn store(
+        &self,
+        key: &str,
+        result: VerificationResult,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if !self.enabled {
             return Ok(());
         }

@@ -3,9 +3,10 @@ use super::{
     StmtLoc, TransferFunction,
 };
 use crate::cfg::{
-    BasicBlock, BasicBlockId, Function, Instruction, InstructionKind, Operand, Terminator,
+    BasicBlock, BasicBlockId, Function, Instruction, InstructionKind, Operand, Program, Terminator,
     VariableId,
 };
+use std::collections::HashSet;
 
 /// Variable identifier for liveness analysis
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -140,6 +141,56 @@ impl LivenessTransfer {
     }
 }
 
+fn collect_to_unit_return_vars(block: &BasicBlock, program: &Program) -> HashSet<VariableId> {
+    let mut vars = HashSet::new();
+    for inst in &block.instructions {
+        if let InstructionKind::Call { func, args, .. } = &inst.kind {
+            let called = &program.functions[*func];
+            if called.name == "to_unit_return" {
+                for arg in args {
+                    if let Operand::Variable(var_id) = arg {
+                        vars.insert(*var_id);
+                    }
+                }
+            }
+        }
+    }
+    vars
+}
+
+fn augment_exit_liveness_with_to_unit_return(
+    func: &Function,
+    program: &Program,
+    results: &mut DataflowResults<SetLattice<LiveVar>>,
+) {
+    for &block_id in &func.all_blocks {
+        let block = &program.basic_blocks[block_id];
+        if !matches!(
+            block.terminator,
+            Terminator::HopExit { .. } | Terminator::Return(_)
+        ) {
+            continue;
+        }
+
+        let explicit_return_vars = collect_to_unit_return_vars(block, program);
+        if explicit_return_vars.is_empty() {
+            continue;
+        }
+
+        let mut merged = results
+            .block_exit
+            .get(&block_id)
+            .and_then(|lattice| lattice.as_set().cloned())
+            .unwrap_or_default();
+
+        for var_id in explicit_return_vars {
+            merged.insert(LiveVar(var_id));
+        }
+
+        results.block_exit.insert(block_id, SetLattice::new(merged));
+    }
+}
+
 /// Analyze live variables in a function (backward, function-level)
 pub fn analyze_live_variables(
     func: &Function,
@@ -151,7 +202,9 @@ pub fn analyze_live_variables(
         AnalysisKind::May,
         LivenessTransfer,
     );
-    analysis.analyze(func, program)
+    let mut results = analysis.analyze(func, program);
+    augment_exit_liveness_with_to_unit_return(func, program, &mut results);
+    results
 }
 
 /// Analyze live variables in a function (backward, hop-level)
@@ -165,5 +218,7 @@ pub fn analyze_live_variables_hop(
         AnalysisKind::May,
         LivenessTransfer,
     );
-    analysis.analyze(func, program)
+    let mut results = analysis.analyze(func, program);
+    augment_exit_liveness_with_to_unit_return(func, program, &mut results);
+    results
 }

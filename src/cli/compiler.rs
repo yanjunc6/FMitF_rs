@@ -145,7 +145,8 @@ impl Compiler {
             total_stages,
             || -> Result<Program, Box<dyn std::error::Error>> {
                 // Parse prelude
-                let prelude_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/cli/prelude.transact");
+                let prelude_path =
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/cli/prelude.transact");
                 let prelude = self.read_file(&prelude_path)?;
                 let prelude_filename = prelude_path.to_string_lossy();
                 let prelude_filename_static =

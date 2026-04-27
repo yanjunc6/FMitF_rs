@@ -242,12 +242,21 @@ fn generate_aggregate_function(
         }
     }
 
-    // Variables to write back: live-out at function level AND defined in this hop
+    let explicit_return_vars = collect_explicit_return_vars(program, hop);
+
+    // Variables to write back: live-out AND defined in this hop, plus explicit to_unit_return vars
     let mut vars_to_write_back: Vec<cfg::VariableId> = func_live_out
         .iter()
         .filter(|var_id| vars_defined_in_hop.contains(var_id))
         .copied()
         .collect();
+
+    for var_id in explicit_return_vars {
+        if !vars_to_write_back.contains(&var_id) {
+            vars_to_write_back.push(var_id);
+        }
+    }
+
     vars_to_write_back.sort_by_key(|var_id| var_id.index());
 
     // Generate aggregation code for each return variable
@@ -275,6 +284,31 @@ fn generate_aggregate_function(
     writeln!(out)?;
 
     Ok(())
+}
+
+fn collect_explicit_return_vars(program: &cfg::Program, hop: &cfg::Hop) -> Vec<cfg::VariableId> {
+    let mut vars = Vec::new();
+    let mut seen = HashSet::new();
+
+    for &block_id in &hop.blocks {
+        let block = &program.basic_blocks[block_id];
+        for inst in &block.instructions {
+            if let InstructionKind::Call { func, args, .. } = &inst.kind {
+                let called = &program.functions[*func];
+                if called.name == "to_unit_return" {
+                    for arg in args {
+                        if let cfg::Operand::Variable(var_id) = arg {
+                            if seen.insert(*var_id) {
+                                vars.push(*var_id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    vars
 }
 
 fn generate_hop_function_impl(
@@ -399,12 +433,21 @@ fn generate_hop_function_impl(
         }
     }
 
-    // Variables to write back: live-out at function level AND defined in this hop
+    let explicit_return_vars = collect_explicit_return_vars(program, hop);
+
+    // Variables to write back: live-out AND defined in this hop, plus explicit to_unit_return vars
     let mut vars_to_write_back: Vec<cfg::VariableId> = func_live_out
         .iter()
         .filter(|var_id| vars_defined_in_hop.contains(var_id))
         .copied()
         .collect();
+
+    for var_id in explicit_return_vars {
+        if !vars_to_write_back.contains(&var_id) {
+            vars_to_write_back.push(var_id);
+        }
+    }
+
     vars_to_write_back.sort_by_key(|var_id| var_id.index());
 
     // Run table mod/ref analysis at HOP level to determine which tables are written
