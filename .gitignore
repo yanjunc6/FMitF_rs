@@ -29,5 +29,11 @@ nohup.out
 .github/
 .vscode/
 .idea/
+scripts/
+
+# uv
+uv.lock
+.python-version
+pyproject.toml
 
 **/.DS_Store
