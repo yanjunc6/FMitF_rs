@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 use super::{
-    count_sc_cycles_before_merging, count_sc_cycles_in_combined_graph, EdgeType, SCGraph,
-    SCGraphNodeId,
+    count_sc_cycles_before_merging, count_sc_cycles_in_combined_graph, CycleCountMode, EdgeType,
+    SCGraph, SCGraphNodeId,
 };
 use crate::cfg::{FunctionId, HopId};
 
@@ -87,6 +87,7 @@ pub struct CombinedEdge {
 pub fn collect_deadlock_elimination_stats(
     scg: &SCGraph,
     combined: &CombinedSCGraph,
+    mode: CycleCountMode,
 ) -> DeadlockEliminationStats {
     let mut merged_node_count = 0usize;
     let mut merged_hop_count = 0usize;
@@ -109,8 +110,8 @@ pub fn collect_deadlock_elimination_stats(
         merged_node_count,
         merged_hop_count,
         average_merged_node_size,
-        sc_cycle_count: count_sc_cycles_before_merging(scg),
-        merged_sc_cycle_count: count_sc_cycles_in_combined_graph(combined),
+        sc_cycle_count: count_sc_cycles_before_merging(scg, mode),
+        merged_sc_cycle_count: count_sc_cycles_in_combined_graph(combined, mode),
     }
 }
 

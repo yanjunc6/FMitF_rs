@@ -240,7 +240,7 @@ impl Compiler {
 
         let original_sc = sc.clone();
         let pre_deadlock_stats =
-            crate::sc_graph::collect_deadlock_elimination_stats(&sc, &combined);
+            crate::sc_graph::collect_deadlock_elimination_stats(&sc, &combined, options.mode);
         data_collector.set_pre_verification_deadlock_stats(pre_deadlock_stats);
 
         // Stage 5: Verification (optional)
@@ -274,7 +274,7 @@ impl Compiler {
             sc = simplified_sc;
             combined = simplified_combined;
             let post_deadlock_stats =
-                crate::sc_graph::collect_deadlock_elimination_stats(&sc, &combined);
+                crate::sc_graph::collect_deadlock_elimination_stats(&sc, &combined, options.mode);
             data_collector.set_post_verification_deadlock_stats(post_deadlock_stats);
         }
 

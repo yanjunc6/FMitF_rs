@@ -12,7 +12,7 @@ use clap::Parser;
 use std::path::PathBuf;
 
 use crate::cli::compiler::Compiler;
-use crate::cli::options::{CacheOptions, CompilerOptions, SplitOptions};
+use crate::cli::options::{CacheOptions, CompilerOptions, CycleCountMode, SplitOptions};
 
 // ============================================================================
 // --- CLI Arguments
@@ -88,6 +88,12 @@ pub struct Args {
     /// (0 = disabled, 1 = split once, 2 = split to depth 2, etc.)
     #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..))]
     pub debug_enforce_split: u32,
+
+    /// Cycle counting mode: fundamental | simple
+    ///   fundamental — count independent cycles (cyclomatic number, fast)
+    ///   simple      — count all distinct simple cycles (exponential, accurate)
+    #[arg(long, default_value = "fundamental")]
+    pub count_mode: String,
 }
 
 impl Args {
@@ -108,6 +114,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Create compiler and run pipeline
     let mut compiler = Compiler::new();
     let output_dir = args.output_dir();
+
+    let count_mode = match args.count_mode.as_str() {
+        "simple" => CycleCountMode::Simple,
+        _ => CycleCountMode::Fundamental,
+    };
 
     let compiler_options = CompilerOptions {
         instances: args.instances,
@@ -130,6 +141,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             debug: args.split_debug,
             debug_enforce_split: args.debug_enforce_split,
         },
+        mode: count_mode,
     };
 
     compiler.run_pipeline(&args.input, &output_dir, compiler_options)

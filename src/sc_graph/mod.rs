@@ -14,7 +14,9 @@ pub use sc_graph_deadlock_elimination::{
 };
 
 mod count_cycle;
-pub use count_cycle::{count_sc_cycles_before_merging, count_sc_cycles_in_combined_graph};
+pub use count_cycle::{
+    count_sc_cycles_before_merging, count_sc_cycles_in_combined_graph, CycleCountMode,
+};
 
 /// Represents a unique node identifier in the SC-Graph.
 /// Since HopId is only unique within a function, we need both FunctionId and HopId.

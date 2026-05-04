@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+// Re-export CycleCountMode from sc_graph so the CLI layer can configure it.
+pub use crate::sc_graph::CycleCountMode;
 
 #[derive(Debug, Clone)]
 pub struct CacheOptions {
@@ -26,4 +28,5 @@ pub struct CompilerOptions {
     pub enable_verification: bool,
     pub cache: CacheOptions,
     pub split: SplitOptions,
+    pub mode: CycleCountMode,
 }
