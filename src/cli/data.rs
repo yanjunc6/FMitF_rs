@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use crate::sc_graph::DeadlockEliminationStats;
+
 /// Verification result type
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum VerificationResult {
@@ -85,6 +87,16 @@ pub struct BenchmarkSummary {
     pub verification_split_budget_exhausted: usize,
     pub verification_split_depth_counts: BTreeMap<usize, usize>,
     pub verification_split_max_depth_used: usize,
+    pub verification_pre_merged_node_count: usize,
+    pub verification_pre_merged_hop_count: usize,
+    pub verification_pre_average_merged_node_size: f64,
+    pub verification_pre_sc_cycle_count: usize,
+    pub verification_pre_merged_sc_cycle_count: usize,
+    pub verification_post_merged_node_count: usize,
+    pub verification_post_merged_hop_count: usize,
+    pub verification_post_average_merged_node_size: f64,
+    pub verification_post_sc_cycle_count: usize,
+    pub verification_post_merged_sc_cycle_count: usize,
 }
 
 /// Complete benchmark data for output to JSON
@@ -131,6 +143,16 @@ impl BenchmarkData {
                 verification_split_budget_exhausted: 0,
                 verification_split_depth_counts: BTreeMap::new(),
                 verification_split_max_depth_used: 0,
+                verification_pre_merged_node_count: 0,
+                verification_pre_merged_hop_count: 0,
+                verification_pre_average_merged_node_size: 0.0,
+                verification_pre_sc_cycle_count: 0,
+                verification_pre_merged_sc_cycle_count: 0,
+                verification_post_merged_node_count: 0,
+                verification_post_merged_hop_count: 0,
+                verification_post_average_merged_node_size: 0.0,
+                verification_post_sc_cycle_count: 0,
+                verification_post_merged_sc_cycle_count: 0,
             },
             c_edge_verifications: Vec::new(),
             timestamp: chrono::Local::now().to_rfc3339(),
@@ -221,6 +243,26 @@ impl DataCollector {
     ) {
         self.data.summary.verification_split_depth_counts = depth_counts;
         self.data.summary.verification_split_max_depth_used = max_depth_used;
+    }
+
+    /// Set deadlock-elimination stats collected before verification.
+    pub fn set_pre_verification_deadlock_stats(&mut self, stats: DeadlockEliminationStats) {
+        self.data.summary.verification_pre_merged_node_count = stats.merged_node_count;
+        self.data.summary.verification_pre_merged_hop_count = stats.merged_hop_count;
+        self.data.summary.verification_pre_average_merged_node_size =
+            stats.average_merged_node_size;
+        self.data.summary.verification_pre_sc_cycle_count = stats.sc_cycle_count;
+        self.data.summary.verification_pre_merged_sc_cycle_count = stats.merged_sc_cycle_count;
+    }
+
+    /// Set deadlock-elimination stats collected after verification.
+    pub fn set_post_verification_deadlock_stats(&mut self, stats: DeadlockEliminationStats) {
+        self.data.summary.verification_post_merged_node_count = stats.merged_node_count;
+        self.data.summary.verification_post_merged_hop_count = stats.merged_hop_count;
+        self.data.summary.verification_post_average_merged_node_size =
+            stats.average_merged_node_size;
+        self.data.summary.verification_post_sc_cycle_count = stats.sc_cycle_count;
+        self.data.summary.verification_post_merged_sc_cycle_count = stats.merged_sc_cycle_count;
     }
 
     /// Add a C-edge verification result
@@ -358,6 +400,34 @@ impl DataCollector {
             )
         };
 
+        let pre_deadlock = format!(
+            "  {} {}  {} {}  {} {:.2}  {} {}  {} {}",
+            term("Before verification merged nodes:"),
+            s.verification_pre_merged_node_count,
+            term("merged hops:"),
+            s.verification_pre_merged_hop_count,
+            term("avg size:"),
+            s.verification_pre_average_merged_node_size,
+            term("SC-cycles before merge:"),
+            s.verification_pre_sc_cycle_count,
+            term("SC-cycles in merged graph:"),
+            s.verification_pre_merged_sc_cycle_count
+        );
+
+        let post_deadlock = format!(
+            "  {} {}  {} {}  {} {:.2}  {} {}  {} {}",
+            term("After verification merged nodes:"),
+            s.verification_post_merged_node_count,
+            term("merged hops:"),
+            s.verification_post_merged_hop_count,
+            term("avg size:"),
+            s.verification_post_average_merged_node_size,
+            term("SC-cycles before merge:"),
+            s.verification_post_sc_cycle_count,
+            term("SC-cycles in merged graph:"),
+            s.verification_post_merged_sc_cycle_count
+        );
+
         vec![
             header,
             basic,
@@ -367,6 +437,8 @@ impl DataCollector {
             verification_stats,
             split_stats,
             split_depth,
+            pre_deadlock,
+            post_deadlock,
         ]
         .join("\n")
     }
@@ -430,6 +502,24 @@ impl DataCollector {
             )
         };
 
+        let pre_deadlock = format!(
+            "  Before verification merged nodes: {}  merged hops: {}  avg size: {:.2}  SC-cycles before merge: {}  SC-cycles in merged graph: {}",
+            s.verification_pre_merged_node_count,
+            s.verification_pre_merged_hop_count,
+            s.verification_pre_average_merged_node_size,
+            s.verification_pre_sc_cycle_count,
+            s.verification_pre_merged_sc_cycle_count
+        );
+
+        let post_deadlock = format!(
+            "  After verification merged nodes: {}  merged hops: {}  avg size: {:.2}  SC-cycles before merge: {}  SC-cycles in merged graph: {}",
+            s.verification_post_merged_node_count,
+            s.verification_post_merged_hop_count,
+            s.verification_post_average_merged_node_size,
+            s.verification_post_sc_cycle_count,
+            s.verification_post_merged_sc_cycle_count
+        );
+
         vec![
             basic,
             sc,
@@ -438,6 +528,8 @@ impl DataCollector {
             verification_stats,
             split_stats,
             split_depth,
+            pre_deadlock,
+            post_deadlock,
         ]
         .join("\n")
     }

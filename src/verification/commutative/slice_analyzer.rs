@@ -156,7 +156,8 @@ impl SliceAnalyzer {
                             let called_func = &cfg_program.functions[*func];
                             // Collect arguments from both to_unit and to_unit_return calls
                             // These represent values that should be treated as part of the hop's return contract
-                            if called_func.name == "to_unit" || called_func.name == "to_unit_return" {
+                            if called_func.name == "to_unit" || called_func.name == "to_unit_return"
+                            {
                                 for arg in args {
                                     if let crate::cfg::Operand::Variable(var_id) = arg {
                                         return_vars.insert(*var_id);

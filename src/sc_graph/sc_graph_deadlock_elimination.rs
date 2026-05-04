@@ -22,6 +22,30 @@ pub struct CombinedSCGraph {
     pub original_to_combined: HashMap<SCGraphNodeId, CombinedVertexId>,
 }
 
+/// Statistics for deadlock elimination on an SC-graph.
+///
+/// Cycle counting is defined as follows:
+/// - Project the SC-graph to an undirected graph.
+/// - Use a deterministic DFS spanning forest.
+/// - Count each fundamental cycle induced by a non-tree edge when that cycle contains at
+///   least one S-edge and at least one C-edge.
+///
+/// This avoids duplicated counting because every non-tree edge generates at most one
+/// fundamental cycle in the chosen spanning forest.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct DeadlockEliminationStats {
+    /// Number of combined vertices whose hop set contains more than one hop.
+    pub merged_node_count: usize,
+    /// Total number of hops contained in merged vertices.
+    pub merged_hop_count: usize,
+    /// Average number of hops per merged vertex.
+    pub average_merged_node_size: f64,
+    /// Number of SC-cycles before deadlock elimination.
+    pub sc_cycle_count: usize,
+    /// Number of SC-cycles after deadlock elimination.
+    pub merged_sc_cycle_count: usize,
+}
+
 /// Identifier for a combined vertex in the final graph.
 pub type CombinedVertexId = usize;
 
@@ -63,6 +87,37 @@ impl CombinedSCGraph {
     }
 }
 
+/// Collect deadlock-elimination statistics for an SC-graph and its combined graph.
+pub fn collect_deadlock_elimination_stats(
+    scg: &SCGraph,
+    combined: &CombinedSCGraph,
+) -> DeadlockEliminationStats {
+    let mut merged_node_count = 0usize;
+    let mut merged_hop_count = 0usize;
+
+    for vertex in &combined.vertices {
+        let vertex_hop_count: usize = vertex.pieces.iter().map(|piece| piece.hop_ids.len()).sum();
+        if vertex_hop_count > 1 {
+            merged_node_count += 1;
+            merged_hop_count += vertex_hop_count;
+        }
+    }
+
+    let average_merged_node_size = if merged_node_count == 0 {
+        0.0
+    } else {
+        merged_hop_count as f64 / merged_node_count as f64
+    };
+
+    DeadlockEliminationStats {
+        merged_node_count,
+        merged_hop_count,
+        average_merged_node_size,
+        sc_cycle_count: count_sc_cycles_before_merging(scg),
+        merged_sc_cycle_count: count_sc_cycles_in_combined_graph(combined),
+    }
+}
+
 /// Main entry: eliminate deadlock-prone SC-cycles using the described steps:
 /// 1) Ensure S-edges are directed (already given by the SCGraphEdge).
 /// 2) Contract all nodes connected by C-edges (undirected) into single vertices.
@@ -81,7 +136,8 @@ pub fn combine_for_deadlock_elimination(scg: &SCGraph) -> CombinedSCGraph {
 
     // Step 3: Merge all vertices involved in the same directed cycle into one until acyclic.
     // This is exactly computing the SCCs of the component S-graph, and contracting them.
-    let (scc_id_of_ccomp, scc_count) = scc_kosaraju(&sgraph);
+    let (scc_id_of_ccomp, scc_sizes) = scc_kosaraju(&sgraph);
+    let scc_count = scc_sizes.len();
 
     // Build per-SCC grouping of original nodes by transaction (function_id + instance).
     // scc_groups[scc_id][(function_id, instance)] -> Vec<SCGraphNodeId>
@@ -278,7 +334,7 @@ fn build_component_sgraph(
 /// Compute SCCs using Kosaraju's algorithm.
 /// Input: adjacency list for 0..n-1
 /// Returns (mapping from node -> scc_id, scc_count).
-fn scc_kosaraju(adj: &Vec<Vec<usize>>) -> (HashMap<usize, usize>, usize) {
+fn scc_kosaraju(adj: &Vec<Vec<usize>>) -> (HashMap<usize, usize>, Vec<usize>) {
     let n = adj.len();
 
     // 1) Order by finish time in DFS on original graph.
@@ -337,7 +393,190 @@ fn scc_kosaraju(adj: &Vec<Vec<usize>>) -> (HashMap<usize, usize>, usize) {
         }
     }
 
-    (comp_id, current_id)
+    let mut comp_sizes = vec![0usize; current_id];
+    for &id in comp_id.values() {
+        comp_sizes[id] += 1;
+    }
+
+    (comp_id, comp_sizes)
+}
+
+/// Count SC-cycles in the original graph using an undirected DFS spanning forest.
+pub fn count_sc_cycles_before_merging(scg: &SCGraph) -> usize {
+    let mut nodes: Vec<SCGraphNodeId> = scg.nodes.iter().copied().collect();
+    nodes.sort();
+
+    let node_to_index: HashMap<SCGraphNodeId, usize> = nodes
+        .iter()
+        .enumerate()
+        .map(|(index, node)| (*node, index))
+        .collect();
+
+    let adjacency = build_labeled_undirected_adjacency(
+        nodes.len(),
+        scg.edges.iter().filter_map(|edge| {
+            let source = node_to_index.get(&edge.source).copied()?;
+            let target = node_to_index.get(&edge.target).copied()?;
+            Some((source, target, edge.edge_type.clone()))
+        }),
+    );
+
+    count_mixed_cycles_in_undirected_graph(&adjacency)
+}
+
+/// Count SC-cycles in the merged graph using an undirected DFS spanning forest.
+pub fn count_sc_cycles_in_combined_graph(combined: &CombinedSCGraph) -> usize {
+    let adjacency = build_labeled_undirected_adjacency(
+        combined.vertices.len(),
+        combined
+            .edges
+            .iter()
+            .map(|edge| (edge.source, edge.target, edge.edge_type.clone())),
+    );
+
+    count_mixed_cycles_in_undirected_graph(&adjacency)
+}
+
+const EDGE_KIND_S: u8 = 1;
+const EDGE_KIND_C: u8 = 2;
+
+fn build_labeled_undirected_adjacency<I>(vertex_count: usize, edges: I) -> Vec<Vec<(usize, u8)>>
+where
+    I: IntoIterator<Item = (usize, usize, EdgeType)>,
+{
+    let mut edge_map: HashMap<(usize, usize), u8> = HashMap::new();
+
+    for (source, target, edge_type) in edges {
+        if source == target {
+            continue;
+        }
+
+        let (a, b) = if source < target {
+            (source, target)
+        } else {
+            (target, source)
+        };
+        let kind = match edge_type {
+            EdgeType::S => EDGE_KIND_S,
+            EdgeType::C => EDGE_KIND_C,
+        };
+        edge_map
+            .entry((a, b))
+            .and_modify(|mask| *mask |= kind)
+            .or_insert(kind);
+    }
+
+    let mut adjacency = vec![Vec::new(); vertex_count];
+    for ((a, b), mask) in edge_map {
+        adjacency[a].push((b, mask));
+        adjacency[b].push((a, mask));
+    }
+
+    for neighbors in &mut adjacency {
+        neighbors.sort_by_key(|(neighbor, _)| *neighbor);
+    }
+
+    adjacency
+}
+
+fn count_mixed_cycles_in_undirected_graph(graph: &[Vec<(usize, u8)>]) -> usize {
+    let vertex_count = graph.len();
+    if vertex_count == 0 {
+        return 0;
+    }
+
+    let mut pair_has_both = HashSet::new();
+    for (u, neighbors) in graph.iter().enumerate() {
+        for &(v, mask) in neighbors {
+            if u < v && mask == (EDGE_KIND_S | EDGE_KIND_C) {
+                pair_has_both.insert((u, v));
+            }
+        }
+    }
+
+    let mut total = pair_has_both.len();
+    let mut visited = vec![false; vertex_count];
+    let mut path: Vec<usize> = Vec::new();
+    let mut path_key_set: HashSet<Vec<usize>> = HashSet::new();
+
+    for start in 0..vertex_count {
+        visited.fill(false);
+        path.clear();
+        visited[start] = true;
+        path.push(start);
+        enumerate_cycles_from_start(
+            start,
+            start,
+            graph,
+            &mut visited,
+            &mut path,
+            0,
+            0,
+            &mut path_key_set,
+            &mut total,
+        );
+    }
+
+    total
+}
+
+fn enumerate_cycles_from_start(
+    start: usize,
+    current: usize,
+    graph: &[Vec<(usize, u8)>],
+    visited: &mut [bool],
+    path: &mut Vec<usize>,
+    s_count: usize,
+    c_count: usize,
+    path_key_set: &mut HashSet<Vec<usize>>,
+    total: &mut usize,
+) {
+    for &(neighbor, kind_mask) in &graph[current] {
+        if neighbor == start {
+            if path.len() >= 3 {
+                let next_s_count = s_count + usize::from(kind_mask & EDGE_KIND_S != 0);
+                let next_c_count = c_count + usize::from(kind_mask & EDGE_KIND_C != 0);
+                if next_s_count > 0 && next_c_count > 0 {
+                    let canonical = canonicalize_cycle(path);
+                    if path_key_set.insert(canonical) {
+                        *total += 1;
+                    }
+                }
+            }
+            continue;
+        }
+
+        if neighbor <= start || visited[neighbor] {
+            continue;
+        }
+
+        visited[neighbor] = true;
+        path.push(neighbor);
+        enumerate_cycles_from_start(
+            start,
+            neighbor,
+            graph,
+            visited,
+            path,
+            s_count + usize::from(kind_mask & EDGE_KIND_S != 0),
+            c_count + usize::from(kind_mask & EDGE_KIND_C != 0),
+            path_key_set,
+            total,
+        );
+        path.pop();
+        visited[neighbor] = false;
+    }
+}
+
+fn canonicalize_cycle(path: &[usize]) -> Vec<usize> {
+    let forward = path.to_vec();
+    let mut reverse = path.to_vec();
+    reverse[1..].reverse();
+    if reverse < forward {
+        reverse
+    } else {
+        forward
+    }
 }
 
 /// Check acyclicity under S-edges of a directed graph given number of vertices and edges.
