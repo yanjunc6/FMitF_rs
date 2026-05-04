@@ -42,8 +42,6 @@ transaction MinRecord(representative_id: int) {
 // SQL: UPDATE SITable SET value = value + 1 WHERE id = ?
 transaction UpdateRecord(id: int) {
     hop {
-        var row: Row<SITable> = SITable[id: id];
-        row.value = row.value + 1;
-        SITable[id: id] = row;
+        SITable[id: id].value = SITable[id: id].value + 1;
     }
 }
