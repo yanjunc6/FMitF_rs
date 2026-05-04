@@ -9,10 +9,12 @@ pub use sc_graph_simplify::update_scgraph_for_commutative_errors;
 
 mod sc_graph_deadlock_elimination;
 pub use sc_graph_deadlock_elimination::{
-    collect_deadlock_elimination_stats, combine_for_deadlock_elimination,
-    count_sc_cycles_before_merging, count_sc_cycles_in_combined_graph, CombinedEdge, CombinedPiece,
-    CombinedSCGraph, CombinedVertex, CombinedVertexId, DeadlockEliminationStats,
+    collect_deadlock_elimination_stats, combine_for_deadlock_elimination, CombinedEdge,
+    CombinedPiece, CombinedSCGraph, CombinedVertex, CombinedVertexId, DeadlockEliminationStats,
 };
+
+mod count_cycle;
+pub use count_cycle::{count_sc_cycles_before_merging, count_sc_cycles_in_combined_graph};
 
 /// Represents a unique node identifier in the SC-Graph.
 /// Since HopId is only unique within a function, we need both FunctionId and HopId.

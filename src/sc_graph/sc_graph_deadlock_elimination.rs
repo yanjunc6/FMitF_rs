@@ -2,7 +2,10 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
-use super::{EdgeType, SCGraph, SCGraphNodeId};
+use super::{
+    count_sc_cycles_before_merging, count_sc_cycles_in_combined_graph, EdgeType, SCGraph,
+    SCGraphNodeId,
+};
 use crate::cfg::{FunctionId, HopId};
 
 /// The final, combined SC-Graph after eliminating deadlock-prone SC-cycles.
@@ -78,13 +81,6 @@ pub struct CombinedEdge {
     pub source: CombinedVertexId,
     pub target: CombinedVertexId,
     pub edge_type: EdgeType,
-}
-
-impl CombinedSCGraph {
-    /// Sanity check that this combined graph is acyclic under S-edges.
-    pub fn is_acyclic(&self) -> bool {
-        is_acyclic_dag(self.vertices.len(), &self.edges)
-    }
 }
 
 /// Collect deadlock-elimination statistics for an SC-graph and its combined graph.
@@ -399,14 +395,4 @@ fn scc_kosaraju(adj: &Vec<Vec<usize>>) -> (HashMap<usize, usize>, Vec<usize>) {
     }
 
     (comp_id, comp_sizes)
-}
-
-/// Count SC-cycles in the original graph using an undirected DFS spanning forest.
-pub fn count_sc_cycles_before_merging(scg: &SCGraph) -> usize {
-
-} 
-
-/// Count SC-cycles in the merged graph using an undirected DFS spanning forest.
-pub fn count_sc_cycles_in_combined_graph(combined: &CombinedSCGraph) -> usize {
-
 }
