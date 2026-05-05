@@ -42,19 +42,14 @@ transaction Amalgamate(custId0: int, custId1: int) {
         var c0: Row<Checking> = Checking[custid: custId0];
 
         var total: float = s0.bal + c0.bal;
-        s0.bal = 0.0;
-        c0.bal = 0.0;
-
-        Savings[custid: custId0] = s0;
-        Checking[custid: custId0] = c0;
+        Savings[custid: custId0].bal = 0.0;
+        Checking[custid: custId0].bal = 0.0;
     }
 
     // Hop 2: custId1 partition — deposit total into custId1's checking.
     // total flows from Hop 1 as a continuation variable.
     hop {
-        var c1: Row<Checking> = Checking[custid: custId1];
-        c1.bal = c1.bal + total;
-        Checking[custid: custId1] = c1;
+        Checking[custid: custId1].bal = Checking[custid: custId1].bal + total;
     }
 }
 
@@ -73,25 +68,19 @@ transaction DepositChecking(custId: int, amount: float) {
     hop {
         var a: Row<Accounts> = Accounts[custid: custId];
         to_unit_return(a);
-        var c: Row<Checking> = Checking[custid: custId];
-        c.bal = c.bal + amount;
-        Checking[custid: custId] = c;
+        Checking[custid: custId].bal = Checking[custid: custId].bal + amount;
     }
 }
 
 transaction SendPayment(sendAcct: int, destAcct: int, amount: float) {
     // Hop 1: sender partition — debit checking account.
     hop {
-        var c0: Row<Checking> = Checking[custid: sendAcct];
-        c0.bal = c0.bal - amount;
-        Checking[custid: sendAcct] = c0;
+        Checking[custid: sendAcct].bal = Checking[custid: sendAcct].bal - amount;
     }
 
     // Hop 2: destination partition — credit checking account.
     hop {
-        var c1: Row<Checking> = Checking[custid: destAcct];
-        c1.bal = c1.bal + amount;
-        Checking[custid: destAcct] = c1;
+        Checking[custid: destAcct].bal = Checking[custid: destAcct].bal + amount;
     }
 }
 
@@ -99,10 +88,7 @@ transaction TransactSavings(custId: int, amount: float) {
     hop {
         var a: Row<Accounts> = Accounts[custid: custId];
         to_unit_return(a);
-        var s: Row<Savings> = Savings[custid: custId];
-        
-        s.bal = s.bal - amount;
-        Savings[custid: custId] = s;
+        Savings[custid: custId].bal = Savings[custid: custId].bal - amount;
     }
 }
 

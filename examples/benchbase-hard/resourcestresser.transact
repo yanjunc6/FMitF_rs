@@ -80,14 +80,10 @@ transaction CPU2() {
 // Chop: Hop 1 on key1's partition; Hop 2 on key2's partition.
 transaction Contention1(key1: int, key2: int, newSalary: int) {
     hop {
-        var r1: Row<locktable> = locktable[empid: key1];
-        r1.salary = newSalary;
-        locktable[empid: key1] = r1;
+        locktable[empid: key1].salary = newSalary;
     }
     hop {
-        var r2: Row<locktable> = locktable[empid: key2];
-        r2.salary = newSalary;
-        locktable[empid: key2] = r2;
+        locktable[empid: key2].salary = newSalary;
     }
 }
 
@@ -95,14 +91,10 @@ transaction Contention1(key1: int, key2: int, newSalary: int) {
 // Chop: Hop 1 on leftKey's partition; Hop 2 on (leftKey+1)'s partition.
 transaction Contention2(leftKey: int, newSalary: int) {
     hop {
-        var r1: Row<locktable> = locktable[empid: leftKey];
-        r1.salary = newSalary;
-        locktable[empid: leftKey] = r1;
+        locktable[empid: leftKey].salary = newSalary;
     }
     hop {
-        var r2: Row<locktable> = locktable[empid: leftKey + 1];
-        r2.salary = newSalary;
-        locktable[empid: leftKey + 1] = r2;
+        locktable[empid: leftKey + 1].salary = newSalary;
     }
 }
 
@@ -126,8 +118,6 @@ transaction IO1(leftKey: int, newData1: string, newData2: string) {
 // IO2: Single-row flag update on the narrow-row I/O table.
 transaction IO2(key: int, value: int) {
     hop {
-        var r: Row<iotablesmallrow> = iotablesmallrow[empid: key];
-        r.flag1 = value;
-        iotablesmallrow[empid: key] = r;
+        iotablesmallrow[empid: key].flag1 = value;
     }
 }

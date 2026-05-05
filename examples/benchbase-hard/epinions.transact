@@ -132,35 +132,27 @@ transaction GetReviewsByUser(uid: int, iid: int) {
 // UpdateItemTitle: UPDATE item SET title = ? WHERE i_id = ?
 transaction UpdateItemTitle(iid: int, title: string) {
     hop {
-        var i: Row<item> = item[i_id: iid];
-        i.title = title;
-        item[i_id: iid] = i;
+        item[i_id: iid].title = title;
     }
 }
 
 // UpdateReviewRating: UPDATE review SET rating = ? WHERE u_id = ? AND i_id = ?
 transaction UpdateReviewRating(iid: int, uid: int, rating: int) {
     hop {
-        var r: Row<review> = review[u_id: uid, i_id: iid];
-        r.rating = rating;
-        review[u_id: uid, i_id: iid] = r;
+        review[u_id: uid, i_id: iid].rating = rating;
     }
 }
 
 // UpdateTrustRating: UPDATE trust SET trust = ? WHERE source_u_id = ? AND target_u_id = ?
 transaction UpdateTrustRating(source_uid: int, target_uid: int, trust_val: int) {
     hop {
-        var t: Row<trust> = trust[source_u_id: source_uid, target_u_id: target_uid];
-        t.trust = trust_val;
-        trust[source_u_id: source_uid, target_u_id: target_uid] = t;
+        trust[source_u_id: source_uid, target_u_id: target_uid].trust = trust_val;
     }
 }
 
 // UpdateUserName: UPDATE useracct SET name = ? WHERE u_id = ?
 transaction UpdateUserName(uid: int, name: string) {
     hop {
-        var u: Row<useracct> = useracct[u_id: uid];
-        u.name = name;
-        useracct[u_id: uid] = u;
+        useracct[u_id: uid].name = name;
     }
 }

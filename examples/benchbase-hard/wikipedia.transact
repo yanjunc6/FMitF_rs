@@ -164,9 +164,7 @@ transaction AddWatchList(userId: int, nameSpace: int, pageTitle: string) {
             };
         }
         // Touch the user record.
-        var u: Row<user> = user[user_id: userId];
-        u.user_touched = 1;
-        user[user_id: userId] = u;
+        user[user_id: userId].user_touched = 1;
     }
 }
 
@@ -245,9 +243,7 @@ transaction RemoveWatchList(userId: int, nameSpace: int, pageTitle: string) {
             watchlist[wl_user: userId, wl_namespace: 1, wl_title: pageTitle] = wl2;
         }
         // Touch the user record.
-        var u: Row<user> = user[user_id: userId];
-        u.user_touched = 0;
-        user[user_id: userId] = u;
+        user[user_id: userId].user_touched = 0;
     }
 }
 
@@ -318,11 +314,7 @@ transaction UpdatePage(nextTextId: int, nextRevId: int, rcId: int,
     // Hop 2: Watcher partition — notify one representative watching user.
     // The IC3 protocol repeats this hop for every watcher in the watchlist.
     hop {
-        var wl: Row<watchlist> = watchlist[wl_user: otherUserId,
-                                           wl_namespace: pageNamespace,
-                                           wl_title: pageTitle];
-        wl.wl_notificationtimestamp = 1;
-        watchlist[wl_user: otherUserId, wl_namespace: pageNamespace, wl_title: pageTitle] = wl;
+        watchlist[wl_user: otherUserId, wl_namespace: pageNamespace, wl_title: pageTitle].wl_notificationtimestamp = 1;
     }
 
     // Hop 3: Editor-user partition — log the patrol action and increment edit count.
@@ -339,9 +331,7 @@ transaction UpdatePage(nextTextId: int, nextRevId: int, rcId: int,
             log_params: ""
         };
 
-        var u: Row<user> = user[user_id: userId];
-        u.user_editcount = u.user_editcount + 1;
-        u.user_touched = 1;
-        user[user_id: userId] = u;
+        user[user_id: userId].user_editcount = user[user_id: userId].user_editcount + 1;
+        user[user_id: userId].user_touched = 1;
     }
 }
