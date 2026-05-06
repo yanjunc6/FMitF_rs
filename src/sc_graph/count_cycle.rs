@@ -295,8 +295,8 @@ fn is_simple_cycle(graph: &Graph<(), (), Undirected>, edge_bits: &[bool]) -> boo
 /// # Panics
 ///
 /// Panics if ν > 63 (would overflow the `u64` subset mask).
-fn count_simple_cycles(graph: &Graph<(), (), Undirected>) -> usize { let basis =
-    fundamental_cycle_basis(graph);
+fn count_simple_cycles(graph: &Graph<(), (), Undirected>) -> usize {
+    let basis = fundamental_cycle_basis(graph);
     let nu = basis.len();
 
     if nu == 0 {

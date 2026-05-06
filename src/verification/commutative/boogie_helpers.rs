@@ -7,7 +7,7 @@ use crate::verification::errors::Results;
 use crate::verification::scope::SliceId;
 use crate::verification::Boogie::{
     gen_Boogie::BoogieProgramGenerator, BoogieBinOp, BoogieError, BoogieExpr, BoogieExprKind,
-    BoogieLine, BoogieQuantifierKind, ErrorMessage, VerificationNodeId,
+    BoogieLine, BoogieQuantifierKind, BoogieType, ErrorMessage, VerificationNodeId,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -650,7 +650,7 @@ impl BoogieStateManager {
     pub fn assert_special_interleavings_equivalence(
         &self,
         base: &mut BaseVerificationGenerator,
-        _cfg_program: &CfgProgram,
+        cfg_program: &CfgProgram,
         analysis_info: &SliceAnalysisInfo,
         a_then_b_vars: &VariableSnapshots,
         b_then_a_vars: &VariableSnapshots,
@@ -662,33 +662,175 @@ impl BoogieStateManager {
         let mut equality_conditions = Vec::new();
 
         // Compare tables written by last hop only
+        // Group field variables by their table name so we can generate
+        // element-wise forall comparisons over the table's primary key dimensions
         let mut tables_written_last_hop = HashSet::new();
         for set in analysis_info.tables_written_last_hop.values() {
             tables_written_last_hop.extend(set);
         }
 
-        let mut tables_written_last_hop_sorted: Vec<&String> =
-            tables_written_last_hop.into_iter().collect();
-        tables_written_last_hop_sorted.sort();
+        let tables_written_last_hop_sorted: Vec<String> = tables_written_last_hop
+            .into_iter()
+            .map(|s| s.clone())
+            .collect();
 
-        for table_var_name in tables_written_last_hop_sorted {
-            if let (Some(a_then_b_snapshot), Some(b_then_a_snapshot)) = (
-                a_then_b_vars.table_snapshots.get(table_var_name),
-                b_then_a_vars.table_snapshots.get(table_var_name),
-            ) {
-                let a_then_b_expr = BoogieExpr {
-                    kind: BoogieExprKind::Var(a_then_b_snapshot.clone()),
-                };
-                let b_then_a_expr = BoogieExpr {
-                    kind: BoogieExprKind::Var(b_then_a_snapshot.clone()),
-                };
-                equality_conditions.push(BoogieExpr {
-                    kind: BoogieExprKind::BinOp(
-                        Box::new(a_then_b_expr),
-                        BoogieBinOp::Eq,
-                        Box::new(b_then_a_expr),
-                    ),
-                });
+        // Build a lookup from field variable name (e.g. "Graph_UID1") to its table
+        let mut field_to_table: HashMap<String, String> = HashMap::new();
+        for (table_id, table) in &cfg_program.tables {
+            for field_id in table
+                .primary_key_fields
+                .iter()
+                .chain(table.other_fields.iter())
+            {
+                let field = &cfg_program.table_fields[*field_id];
+                let var_name =
+                    BoogieProgramGenerator::gen_table_field_var_name(&table.name, &field.name);
+                field_to_table.insert(var_name, table_id.index().to_string());
+            }
+        }
+
+        // Group field variables by table
+        let mut table_fields: HashMap<String, Vec<String>> = HashMap::new();
+        for field_name in &tables_written_last_hop_sorted {
+            if let Some(table_idx) = field_to_table.get(field_name).cloned() {
+                table_fields
+                    .entry(table_idx)
+                    .or_default()
+                    .push(field_name.clone());
+            }
+        }
+
+        // For each table, generate a forall quantification comparing all fields
+        let mut table_indices: Vec<String> = table_fields.keys().cloned().collect();
+        table_indices.sort();
+
+        for (_table_idx_str, field_names) in table_indices.into_iter().map(|idx| {
+            (
+                idx.clone(),
+                table_fields.get(&idx).cloned().unwrap_or_default(),
+            )
+        }) {
+            // Skip tables with no fields (should not happen but be safe)
+            if field_names.is_empty() {
+                continue;
+            }
+
+            // Sort fields within each table
+            let mut sorted_field_names: Vec<String> = field_names.clone();
+            sorted_field_names.sort();
+
+            // Get the type of the first field to determine dimensions
+            let first_field = sorted_field_names.first().unwrap();
+            let field_type = analysis_info
+                .table_var_types
+                .get(first_field)
+                .cloned()
+                .unwrap_or_else(|| BoogieType::Int.into());
+
+            // Extract dimensions from Map type: Map[key_types, value_type]
+            let (key_types, _value_type) = match &field_type {
+                BoogieType::Map(kt, vt) => (kt.clone(), vt.clone()),
+                _ => (vec![Box::new(BoogieType::Int)], Box::new(BoogieType::Int)),
+            };
+
+            // Generate bound variable names: k1, k2, k3, ... with corresponding types
+            let bound_vars: Vec<(String, BoogieType)> = key_types
+                .iter()
+                .enumerate()
+                .map(|(i, ty)| (format!("k{}", i + 1), (**ty).clone()))
+                .collect();
+
+            // Build the body: AND of element-wise comparisons for all fields
+            let mut field_comparisons: Vec<BoogieExpr> = Vec::new();
+            for field_name in &sorted_field_names {
+                if let (Some(a_then_b_snapshot), Some(b_then_a_snapshot)) = (
+                    a_then_b_vars.table_snapshots.get(field_name.as_str()),
+                    b_then_a_vars.table_snapshots.get(field_name.as_str()),
+                ) {
+                    // Build key expressions for MapSelect
+                    let key_exprs: Vec<BoogieExpr> = (1..=key_types.len())
+                        .map(|i| BoogieExpr {
+                            kind: BoogieExprKind::Var(format!("k{}", i)),
+                        })
+                        .collect();
+
+                    // a_then_b_snapshot[k1][k2]...
+                    let a_select = BoogieExpr {
+                        kind: BoogieExprKind::MapSelect {
+                            base: Box::new(BoogieExpr {
+                                kind: BoogieExprKind::Var(a_then_b_snapshot.clone()),
+                            }),
+                            indices: key_exprs.clone(),
+                        },
+                    };
+                    // b_then_a_snapshot[k1][k2]...
+                    let b_select = BoogieExpr {
+                        kind: BoogieExprKind::MapSelect {
+                            base: Box::new(BoogieExpr {
+                                kind: BoogieExprKind::Var(b_then_a_snapshot.clone()),
+                            }),
+                            indices: key_exprs,
+                        },
+                    };
+
+                    field_comparisons.push(BoogieExpr {
+                        kind: BoogieExprKind::BinOp(
+                            Box::new(a_select),
+                            BoogieBinOp::Eq,
+                            Box::new(b_select),
+                        ),
+                    });
+                }
+            }
+
+            // Combine all field comparisons with AND
+            if field_comparisons.is_empty() {
+                continue;
+            }
+            let body = if field_comparisons.len() == 1 {
+                field_comparisons.pop().unwrap()
+            } else {
+                let mut iter = field_comparisons.into_iter();
+                let first = iter.next().unwrap();
+                iter.fold(first, |acc, e| BoogieExpr {
+                    kind: BoogieExprKind::BinOp(Box::new(acc), BoogieBinOp::And, Box::new(e)),
+                })
+            };
+
+            // Wrap in forall quantification
+            let quant_expr = BoogieExpr {
+                kind: BoogieExprKind::Quantifier {
+                    kind: BoogieQuantifierKind::Forall,
+                    bound_vars,
+                    body: Box::new(body),
+                },
+            };
+            equality_conditions.push(quant_expr);
+        }
+
+        // Fallback: if somehow no forall comparisons were generated (e.g., tables with
+        // no primary key fields that can't be quantified), do the old-style whole-field
+        // equality comparison as a safety net
+        if equality_conditions.is_empty() {
+            for table_var_name in &tables_written_last_hop_sorted {
+                if let (Some(a_then_b_snapshot), Some(b_then_a_snapshot)) = (
+                    a_then_b_vars.table_snapshots.get(table_var_name.as_str()),
+                    b_then_a_vars.table_snapshots.get(table_var_name.as_str()),
+                ) {
+                    let a_then_b_expr = BoogieExpr {
+                        kind: BoogieExprKind::Var(a_then_b_snapshot.clone()),
+                    };
+                    let b_then_a_expr = BoogieExpr {
+                        kind: BoogieExprKind::Var(b_then_a_snapshot.clone()),
+                    };
+                    equality_conditions.push(BoogieExpr {
+                        kind: BoogieExprKind::BinOp(
+                            Box::new(a_then_b_expr),
+                            BoogieBinOp::Eq,
+                            Box::new(b_then_a_expr),
+                        ),
+                    });
+                }
             }
         }
 
