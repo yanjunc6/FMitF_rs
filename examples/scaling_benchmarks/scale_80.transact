@@ -350,9 +350,7 @@ transaction GetEventInfo(eventId: int)
 transaction UpdatePlayerStatus(playerId: int, newStatus: int)
 {
     hop {
-        var p: Row<Player> = Player[id: playerId];
-        p.status = newStatus;
-        Player[id: playerId] = p;
+        Player[id: playerId].status = newStatus;
     }
 }
 
@@ -361,8 +359,7 @@ transaction GainXP(playerId: int, amount: int)
 {
     hop {
         var p: Row<Player> = Player[id: playerId];
-        p.xp = p.xp + amount;
-        Player[id: playerId] = p;
+        Player[id: playerId].xp = p.xp + amount;
     }
 }
 
@@ -373,8 +370,7 @@ transaction HealCharacter(charId: int, playerId: int, healAmount: int)
         var c: Row<Character> = Character[id: charId];
         var newHp: int = c.hp + healAmount;
         if newHp > c.max_hp { newHp = c.max_hp; }
-        c.hp = newHp;
-        Character[id: charId] = c;
+        Character[id: charId].hp = newHp;
     }
 }
 
@@ -384,7 +380,6 @@ transaction DamageCharacter(charId: int, playerId: int, dmg: int)
     hop {
         var c: Row<Character> = Character[id: charId];
         if c.hp <= dmg { c.hp = 0; } else { c.hp = c.hp - dmg; }
-        Character[id: charId] = c;
     }
 }
 
@@ -393,8 +388,7 @@ transaction AddGold(playerId: int, amount: int)
 {
     hop {
         var cur: Row<Currency> = Currency[player_id: playerId];
-        cur.gold = cur.gold + amount;
-        Currency[player_id: playerId] = cur;
+        Currency[player_id: playerId].gold = cur.gold + amount;
     }
 }
 
@@ -403,8 +397,7 @@ transaction AddGems(playerId: int, amount: int)
 {
     hop {
         var cur: Row<Currency> = Currency[player_id: playerId];
-        cur.gems = cur.gems + amount;
-        Currency[player_id: playerId] = cur;
+        Currency[player_id: playerId].gems = cur.gems + amount;
     }
 }
 
@@ -414,8 +407,7 @@ transaction SpendTokens(playerId: int, amount: int)
     hop {
         var cur: Row<Currency> = Currency[player_id: playerId];
         if cur.tokens < amount { return; }
-        cur.tokens = cur.tokens - amount;
-        Currency[player_id: playerId] = cur;
+        Currency[player_id: playerId].tokens = cur.tokens - amount;
     }
 }
 
@@ -423,9 +415,8 @@ transaction RecordKill(matchId: int, playerId: int)
 {
     hop {
         var mp: Row<MatchPlayer> = MatchPlayer[match_id: matchId];
-        mp.kills = mp.kills + 1;
-        mp.score = mp.score + 10;
-        MatchPlayer[match_id: matchId] = mp;
+        MatchPlayer[match_id: matchId].kills = mp.kills + 1;
+        MatchPlayer[match_id: matchId].score = mp.score + 10;
     }
 }
 
@@ -433,8 +424,7 @@ transaction RecordDeath(matchId: int, playerId: int)
 {
     hop {
         var mp: Row<MatchPlayer> = MatchPlayer[match_id: matchId];
-        mp.deaths = mp.deaths + 1;
-        MatchPlayer[match_id: matchId] = mp;
+        MatchPlayer[match_id: matchId].deaths = mp.deaths + 1;
     }
 }
 
@@ -442,9 +432,8 @@ transaction RecordAssist(matchId: int, playerId: int)
 {
     hop {
         var mp: Row<MatchPlayer> = MatchPlayer[match_id: matchId];
-        mp.assists = mp.assists + 1;
-        mp.score = mp.score + 5;
-        MatchPlayer[match_id: matchId] = mp;
+        MatchPlayer[match_id: matchId].assists = mp.assists + 1;
+        MatchPlayer[match_id: matchId].score = mp.score + 5;
     }
 }
 
@@ -454,8 +443,7 @@ transaction UpdateRating(playerId: int, season: int, delta: int)
         var r: Row<Rank> = Rank[player_id: playerId];
         var newRating: int = r.rating + delta;
         if newRating < 0 { newRating = 0; }
-        r.rating = newRating;
-        Rank[player_id: playerId] = r;
+        Rank[player_id: playerId].rating = newRating;
     }
 }
 
@@ -463,8 +451,7 @@ transaction IncrementWin(playerId: int, season: int)
 {
     hop {
         var r: Row<Rank> = Rank[player_id: playerId];
-        r.wins = r.wins + 1;
-        Rank[player_id: playerId] = r;
+        Rank[player_id: playerId].wins = r.wins + 1;
     }
 }
 
@@ -472,8 +459,7 @@ transaction IncrementLoss(playerId: int, season: int)
 {
     hop {
         var r: Row<Rank> = Rank[player_id: playerId];
-        r.losses = r.losses + 1;
-        Rank[player_id: playerId] = r;
+        Rank[player_id: playerId].losses = r.losses + 1;
     }
 }
 
@@ -482,8 +468,7 @@ transaction AddGuildXP(guildId: int, amount: int)
 {
     hop {
         var g: Row<Guild> = Guild[id: guildId];
-        g.guild_xp = g.guild_xp + amount;
-        Guild[id: guildId] = g;
+        Guild[id: guildId].guild_xp = g.guild_xp + amount;
     }
 }
 
@@ -492,8 +477,7 @@ transaction DonateToGuildTreasury(guildId: int, amount: int)
 {
     hop {
         var g: Row<Guild> = Guild[id: guildId];
-        g.treasury = g.treasury + amount;
-        Guild[id: guildId] = g;
+        Guild[id: guildId].treasury = g.treasury + amount;
     }
 }
 
@@ -502,8 +486,7 @@ transaction UpdateMemberContribution(guildId: int, playerId: int, amount: int)
 {
     hop {
         var gm: Row<GuildMember> = GuildMember[player_id: playerId];
-        gm.contribution = gm.contribution + amount;
-        GuildMember[player_id: playerId] = gm;
+        GuildMember[player_id: playerId].contribution = gm.contribution + amount;
     }
 }
 
@@ -512,8 +495,7 @@ transaction AdvanceQuestProgress(playerId: int, questId: int, amount: int)
 {
     hop {
         var qp: Row<QuestProgress> = QuestProgress[player_id: playerId];
-        qp.progress = qp.progress + amount;
-        QuestProgress[player_id: playerId] = qp;
+        QuestProgress[player_id: playerId].progress = qp.progress + amount;
     }
 }
 
@@ -522,8 +504,7 @@ transaction CancelMarketListing(listingId: int, marketId: int)
     hop {
         var ml: Row<MarketListing> = MarketListing[id: listingId];
         if ml.status != 0 { return; }
-        ml.status = 2;
-        MarketListing[id: listingId] = ml;
+        MarketListing[id: listingId].status = 2;
     }
 }
 
@@ -532,20 +513,17 @@ transaction AcceptFriendRequest(playerId: int, friendId: int)
     hop {
         var f: Row<Friend> = Friend[player_id: playerId];
         if f.status != 0 { return; }
-        f.status = 1;
-        Friend[player_id: playerId] = f;
+        Friend[player_id: playerId].status = 1;
     }
 }
 
 transaction SendChatMessage(senderId: int, channelId: int, msgId: int, content: string, sentAt: int)
 {
     hop {
-        var msg: Row<ChatMessage> = ChatMessage[id: msgId];
-        msg.sender_id = senderId;
-        msg.channel_id = channelId;
-        msg.content = content;
-        msg.sent_at = sentAt;
-        ChatMessage[id: msgId] = msg;
+        ChatMessage[id: msgId].sender_id = senderId;
+        ChatMessage[id: msgId].channel_id = channelId;
+        ChatMessage[id: msgId].content = content;
+        ChatMessage[id: msgId].sent_at = sentAt;
     }
 }
 
@@ -557,13 +535,11 @@ transaction SpendGold(playerId: int, amount: int)
     hop {
         var cur: Row<Currency> = Currency[player_id: playerId];
         if cur.gold < amount { return; }
-        cur.gold = cur.gold - amount;
-        Currency[player_id: playerId] = cur;
+        Currency[player_id: playerId].gold = cur.gold - amount;
     }
     hop {
         var p: Row<Player> = Player[id: playerId];
-        p.xp = p.xp + 1;
-        Player[id: playerId] = p;
+        Player[id: playerId].xp = p.xp + 1;
     }
 }
 
@@ -573,17 +549,15 @@ transaction LevelUp(playerId: int, charId: int, xpThreshold: int)
     hop {
         var p: Row<Player> = Player[id: playerId];
         if p.xp < xpThreshold { return; }
-        p.xp = p.xp - xpThreshold;
-        p.level = p.level + 1;
-        Player[id: playerId] = p;
+        Player[id: playerId].xp = p.xp - xpThreshold;
+        Player[id: playerId].level = p.level + 1;
     }
     hop {
         var c: Row<Character> = Character[id: charId];
-        c.max_hp = c.max_hp + 10;
-        c.hp = c.hp + 10;
-        c.attack = c.attack + 2;
-        c.defense = c.defense + 1;
-        Character[id: charId] = c;
+        Character[id: charId].max_hp = c.max_hp + 10;
+        Character[id: charId].hp = c.hp + 10;
+        Character[id: charId].attack = c.attack + 2;
+        Character[id: charId].defense = c.defense + 1;
     }
 }
 
@@ -595,16 +569,13 @@ transaction CompleteQuest(playerId: int, questId: int, xpReward: int, goldReward
         var qp: Row<QuestProgress> = QuestProgress[player_id: playerId];
         if qp.status != 0 { return; }
         if qp.progress < qp.goal { return; }
-        qp.status = 1;
-        QuestProgress[player_id: playerId] = qp;
+        QuestProgress[player_id: playerId].status = 1;
     }
     hop {
         var p: Row<Player> = Player[id: playerId];
-        p.xp = p.xp + xpReward;
-        Player[id: playerId] = p;
+        Player[id: playerId].xp = p.xp + xpReward;
         var cur: Row<Currency> = Currency[player_id: playerId];
-        cur.gold = cur.gold + goldReward;
-        Currency[player_id: playerId] = cur;
+        Currency[player_id: playerId].gold = cur.gold + goldReward;
     }
 }
 
@@ -612,14 +583,11 @@ transaction UnlockAchievement(playerId: int, achievementId: int, unlockTime: int
 {
     hop {
         var ach: Row<Achievement> = Achievement[id: achievementId];
-        ach.unlock_count = ach.unlock_count + 1;
-        Achievement[id: achievementId] = ach;
+        Achievement[id: achievementId].unlock_count = ach.unlock_count + 1;
     }
     hop {
-        var pa: Row<PlayerAchievement> = PlayerAchievement[player_id: playerId];
-        pa.achievement_id = achievementId;
-        pa.unlocked_at = unlockTime;
-        PlayerAchievement[player_id: playerId] = pa;
+        PlayerAchievement[player_id: playerId].achievement_id = achievementId;
+        PlayerAchievement[player_id: playerId].unlocked_at = unlockTime;
     }
 }
 
@@ -629,14 +597,12 @@ transaction JoinMatch(matchId: int, playerId: int)
         var m: Row<Match> = Match[id: matchId];
         if m.status != 0 { return; }
         if m.player_count >= m.max_players { return; }
-        m.player_count = m.player_count + 1;
-        Match[id: matchId] = m;
+        Match[id: matchId].player_count = m.player_count + 1;
     }
     hop {
         var p: Row<Player> = Player[id: playerId];
         if p.status != 1 { return; }
-        p.status = 2;
-        Player[id: playerId] = p;
+        Player[id: playerId].status = 2;
     }
 }
 
@@ -645,13 +611,10 @@ transaction LeaveMatch(matchId: int, playerId: int)
     hop {
         var m: Row<Match> = Match[id: matchId];
         if m.player_count <= 0 { return; }
-        m.player_count = m.player_count - 1;
-        Match[id: matchId] = m;
+        Match[id: matchId].player_count = m.player_count - 1;
     }
     hop {
-        var p: Row<Player> = Player[id: playerId];
-        p.status = 1;
-        Player[id: playerId] = p;
+        Player[id: playerId].status = 1;
     }
 }
 
@@ -660,14 +623,11 @@ transaction FinishMatch(matchId: int, winnerId: int)
     hop {
         var m: Row<Match> = Match[id: matchId];
         if m.status != 1 { return; }
-        m.status = 2;
-        m.winner_id = winnerId;
-        Match[id: matchId] = m;
+        Match[id: matchId].status = 2;
+        Match[id: matchId].winner_id = winnerId;
     }
     hop {
-        var mp: Row<MatchPlayer> = MatchPlayer[match_id: matchId];
-        mp.result = 1;
-        MatchPlayer[match_id: matchId] = mp;
+        MatchPlayer[match_id: matchId].result = 1;
     }
 }
 
@@ -677,8 +637,7 @@ transaction StartMatch(matchId: int)
         var m: Row<Match> = Match[id: matchId];
         if m.status != 0 { return; }
         if m.player_count < 2 { return; }
-        m.status = 1;
-        Match[id: matchId] = m;
+        Match[id: matchId].status = 1;
     }
     hop {
         var m2: Row<Match> = Match[id: matchId];
@@ -691,18 +650,15 @@ transaction BuyItemFromMarket(buyerId: int, listingId: int, marketId: int)
     hop {
         var ml: Row<MarketListing> = MarketListing[id: listingId];
         if ml.status != 0 { return; }
-        ml.status = 1;
-        MarketListing[id: listingId] = ml;
+        MarketListing[id: listingId].status = 1;
     }
     hop {
         var cur: Row<Currency> = Currency[player_id: buyerId];
-        cur.gold = cur.gold - 1;
-        Currency[player_id: buyerId] = cur;
+        Currency[player_id: buyerId].gold = cur.gold - 1;
         var m: Row<Market> = Market[id: marketId];
         if m.listing_count > 0 {
-            m.listing_count = m.listing_count - 1;
+            Market[id: marketId].listing_count = m.listing_count - 1;
         }
-        Market[id: marketId] = m;
     }
 }
 
@@ -713,21 +669,17 @@ transaction ListItemOnMarket(sellerId: int, marketId: int, listingId: int, itemI
     hop {
         var inv: Row<Inventory> = Inventory[player_id: sellerId];
         if inv.quantity < qty { return; }
-        inv.quantity = inv.quantity - qty;
-        Inventory[player_id: sellerId] = inv;
+        Inventory[player_id: sellerId].quantity = inv.quantity - qty;
     }
     hop {
         var m: Row<Market> = Market[id: marketId];
-        m.listing_count = m.listing_count + 1;
-        Market[id: marketId] = m;
-        var ml: Row<MarketListing> = MarketListing[id: listingId];
-        ml.market_id = marketId;
-        ml.seller_id = sellerId;
-        ml.item_id = itemId;
-        ml.quantity = qty;
-        ml.price = price;
-        ml.status = 0;
-        MarketListing[id: listingId] = ml;
+        Market[id: marketId].listing_count = m.listing_count + 1;
+        MarketListing[id: listingId].market_id = marketId;
+        MarketListing[id: listingId].seller_id = sellerId;
+        MarketListing[id: listingId].item_id = itemId;
+        MarketListing[id: listingId].quantity = qty;
+        MarketListing[id: listingId].price = price;
+        MarketListing[id: listingId].status = 0;
     }
 }
 
@@ -737,13 +689,11 @@ transaction TransferGoldToGuild(playerId: int, guildId: int, amount: int)
     hop {
         var cur: Row<Currency> = Currency[player_id: playerId];
         if cur.gold < amount { return; }
-        cur.gold = cur.gold - amount;
-        Currency[player_id: playerId] = cur;
+        Currency[player_id: playerId].gold = cur.gold - amount;
     }
     hop {
         var g: Row<Guild> = Guild[id: guildId];
-        g.treasury = g.treasury + amount;
-        Guild[id: guildId] = g;
+        Guild[id: guildId].treasury = g.treasury + amount;
     }
 }
 
@@ -753,13 +703,11 @@ transaction WithdrawFromGuildTreasury(guildId: int, playerId: int, amount: int)
     hop {
         var g: Row<Guild> = Guild[id: guildId];
         if g.treasury < amount { return; }
-        g.treasury = g.treasury - amount;
-        Guild[id: guildId] = g;
+        Guild[id: guildId].treasury = g.treasury - amount;
     }
     hop {
         var cur: Row<Currency> = Currency[player_id: playerId];
-        cur.gold = cur.gold + amount;
-        Currency[player_id: playerId] = cur;
+        Currency[player_id: playerId].gold = cur.gold + amount;
     }
 }
 
@@ -768,17 +716,14 @@ transaction JoinGuild(playerId: int, guildId: int, joinTime: int)
     hop {
         var g: Row<Guild> = Guild[id: guildId];
         if g.member_count >= g.max_members { return; }
-        g.member_count = g.member_count + 1;
-        Guild[id: guildId] = g;
+        Guild[id: guildId].member_count = g.member_count + 1;
     }
     hop {
-        var gm: Row<GuildMember> = GuildMember[player_id: playerId];
-        gm.guild_id = guildId;
-        gm.player_id = playerId;
-        gm.role = 0;
-        gm.contribution = 0;
-        gm.joined_at = joinTime;
-        GuildMember[player_id: playerId] = gm;
+        GuildMember[player_id: playerId].guild_id = guildId;
+        GuildMember[player_id: playerId].player_id = playerId;
+        GuildMember[player_id: playerId].role = 0;
+        GuildMember[player_id: playerId].contribution = 0;
+        GuildMember[player_id: playerId].joined_at = joinTime;
     }
 }
 
@@ -787,8 +732,7 @@ transaction LeaveGuild(playerId: int, guildId: int)
     hop {
         var g: Row<Guild> = Guild[id: guildId];
         if g.member_count <= 0 { return; }
-        g.member_count = g.member_count - 1;
-        Guild[id: guildId] = g;
+        Guild[id: guildId].member_count = g.member_count - 1;
     }
     hop {
         var p: Row<Player> = Player[id: playerId];
@@ -801,8 +745,7 @@ transaction PromoteGuildMember(guildId: int, playerId: int)
     hop {
         var gm: Row<GuildMember> = GuildMember[player_id: playerId];
         if gm.role >= 2 { return; }
-        gm.role = gm.role + 1;
-        GuildMember[player_id: playerId] = gm;
+        GuildMember[player_id: playerId].role = gm.role + 1;
     }
     hop {
         var g: Row<Guild> = Guild[id: guildId];
@@ -816,16 +759,13 @@ transaction JoinEvent(eventId: int, playerId: int, joinTime: int)
         var ev: Row<Event> = Event[id: eventId];
         if !ev.is_active { return; }
         if ev.participant_count >= ev.max_participants { return; }
-        ev.participant_count = ev.participant_count + 1;
-        Event[id: eventId] = ev;
+        Event[id: eventId].participant_count = ev.participant_count + 1;
     }
     hop {
-        var ep: Row<EventParticipant> = EventParticipant[player_id: playerId];
-        ep.event_id = eventId;
-        ep.player_id = playerId;
-        ep.score = 0;
-        ep.joined_at = joinTime;
-        EventParticipant[player_id: playerId] = ep;
+        EventParticipant[player_id: playerId].event_id = eventId;
+        EventParticipant[player_id: playerId].player_id = playerId;
+        EventParticipant[player_id: playerId].score = 0;
+        EventParticipant[player_id: playerId].joined_at = joinTime;
     }
 }
 
@@ -835,8 +775,7 @@ transaction SubmitEventScore(eventId: int, playerId: int, score: int)
     hop {
         var ep: Row<EventParticipant> = EventParticipant[player_id: playerId];
         if ep.score >= score { return; }
-        ep.score = score;
-        EventParticipant[player_id: playerId] = ep;
+        EventParticipant[player_id: playerId].score = score;
     }
     hop {
         var ev: Row<Event> = Event[id: eventId];
@@ -850,14 +789,12 @@ transaction EquipItem(playerId: int, charId: int, itemId: int)
         var inv: Row<Inventory> = Inventory[player_id: playerId];
         if inv.item_id != itemId { return; }
         if inv.quantity <= 0 { return; }
-        inv.quantity = inv.quantity - 1;
-        Inventory[player_id: playerId] = inv;
+        Inventory[player_id: playerId].quantity = inv.quantity - 1;
     }
     hop {
         var c: Row<Character> = Character[id: charId];
-        c.attack = c.attack + 5;
-        c.defense = c.defense + 3;
-        Character[id: charId] = c;
+        Character[id: charId].attack = c.attack + 5;
+        Character[id: charId].defense = c.defense + 3;
     }
 }
 
@@ -868,13 +805,11 @@ transaction CraftItem(playerId: int, materialId: int, craftedItemId: int, cost: 
         var inv: Row<Inventory> = Inventory[player_id: playerId];
         if inv.item_id != materialId { return; }
         if inv.quantity < cost { return; }
-        inv.quantity = inv.quantity - cost;
-        Inventory[player_id: playerId] = inv;
+        Inventory[player_id: playerId].quantity = inv.quantity - cost;
     }
     hop {
         var cur: Row<Currency> = Currency[player_id: playerId];
-        cur.gold = cur.gold + 1;
-        Currency[player_id: playerId] = cur;
+        Currency[player_id: playerId].gold = cur.gold + 1;
     }
 }
 
@@ -885,13 +820,11 @@ transaction ExchangeGemsForGold(playerId: int, gems: int, goldRate: int)
     hop {
         var cur: Row<Currency> = Currency[player_id: playerId];
         if cur.gems < gems { return; }
-        cur.gems = cur.gems - gems;
-        Currency[player_id: playerId] = cur;
+        Currency[player_id: playerId].gems = cur.gems - gems;
     }
     hop {
         var cur2: Row<Currency> = Currency[player_id: playerId];
-        cur2.gold = cur2.gold + gems * goldRate;
-        Currency[player_id: playerId] = cur2;
+        Currency[player_id: playerId].gold = cur2.gold + gems * goldRate;
     }
 }
 
@@ -902,13 +835,11 @@ transaction TransferItem(senderId: int, receiverId: int, itemId: int, qty: int)
         var inv: Row<Inventory> = Inventory[player_id: senderId];
         if inv.item_id != itemId { return; }
         if inv.quantity < qty { return; }
-        inv.quantity = inv.quantity - qty;
-        Inventory[player_id: senderId] = inv;
+        Inventory[player_id: senderId].quantity = inv.quantity - qty;
     }
     hop {
         var inv2: Row<Inventory> = Inventory[player_id: receiverId];
-        inv2.quantity = inv2.quantity + qty;
-        Inventory[player_id: receiverId] = inv2;
+        Inventory[player_id: receiverId].quantity = inv2.quantity + qty;
     }
 }
 
@@ -922,12 +853,10 @@ transaction PostMatchReward(matchId: int, playerId: int, xp: int, gold: int)
     }
     hop {
         var p: Row<Player> = Player[id: playerId];
-        p.xp = p.xp + xp;
-        p.status = 1;
-        Player[id: playerId] = p;
+        Player[id: playerId].xp = p.xp + xp;
+        Player[id: playerId].status = 1;
         var cur: Row<Currency> = Currency[player_id: playerId];
-        cur.gold = cur.gold + gold;
-        Currency[player_id: playerId] = cur;
+        Currency[player_id: playerId].gold = cur.gold + gold;
     }
 }
 
@@ -937,13 +866,10 @@ transaction RenameCharacter(playerId: int, charId: int, newName: string, gemCost
     hop {
         var cur: Row<Currency> = Currency[player_id: playerId];
         if cur.gems < gemCost { return; }
-        cur.gems = cur.gems - gemCost;
-        Currency[player_id: playerId] = cur;
+        Currency[player_id: playerId].gems = cur.gems - gemCost;
     }
     hop {
-        var c: Row<Character> = Character[id: charId];
-        c.name = newName;
-        Character[id: charId] = c;
+        Character[id: charId].name = newName;
     }
 }
 
@@ -954,9 +880,7 @@ transaction SetActiveCharacter(playerId: int, charId: int)
         to_unit(p.level);
     }
     hop {
-        var c: Row<Character> = Character[id: charId];
-        c.is_active = true;
-        Character[id: charId] = c;
+        Character[id: charId].is_active = true;
     }
 }
 
@@ -968,23 +892,19 @@ transaction SellItemToShop(playerId: int, itemId: int, qty: int, goldValue: int)
         var inv: Row<Inventory> = Inventory[player_id: playerId];
         if inv.item_id != itemId { return; }
         if inv.quantity < qty { return; }
-        inv.quantity = inv.quantity - qty;
-        Inventory[player_id: playerId] = inv;
+        Inventory[player_id: playerId].quantity = inv.quantity - qty;
     }
     hop {
         var cur: Row<Currency> = Currency[player_id: playerId];
-        cur.gold = cur.gold + goldValue;
-        Currency[player_id: playerId] = cur;
+        Currency[player_id: playerId].gold = cur.gold + goldValue;
     }
 }
 
 transaction BlockPlayer(playerId: int, targetId: int)
 {
     hop {
-        var f: Row<Friend> = Friend[player_id: playerId];
-        f.friend_id = targetId;
-        f.status = 2;
-        Friend[player_id: playerId] = f;
+        Friend[player_id: playerId].friend_id = targetId;
+        Friend[player_id: playerId].status = 2;
     }
     hop {
         var p: Row<Player> = Player[id: targetId];
@@ -997,13 +917,11 @@ transaction UnlockQuestReward(playerId: int, questId: int, tokens: int)
 {
     hop {
         var q: Row<Quest> = Quest[id: questId];
-        q.total_completions = q.total_completions + 1;
-        Quest[id: questId] = q;
+        Quest[id: questId].total_completions = q.total_completions + 1;
     }
     hop {
         var cur: Row<Currency> = Currency[player_id: playerId];
-        cur.tokens = cur.tokens + tokens;
-        Currency[player_id: playerId] = cur;
+        Currency[player_id: playerId].tokens = cur.tokens + tokens;
     }
 }
 
@@ -1011,8 +929,7 @@ transaction ResetCharacterHP(charId: int, playerId: int)
 {
     hop {
         var c: Row<Character> = Character[id: charId];
-        c.hp = c.max_hp;
-        Character[id: charId] = c;
+        Character[id: charId].hp = c.max_hp;
     }
     hop {
         var p: Row<Player> = Player[id: playerId];
@@ -1026,15 +943,13 @@ transaction UpgradeCharacterStat(charId: int, playerId: int, gemCost: int)
     hop {
         var cur: Row<Currency> = Currency[player_id: playerId];
         if cur.gems < gemCost { return; }
-        cur.gems = cur.gems - gemCost;
-        Currency[player_id: playerId] = cur;
+        Currency[player_id: playerId].gems = cur.gems - gemCost;
     }
     hop {
         var c: Row<Character> = Character[id: charId];
-        c.attack = c.attack + 3;
-        c.defense = c.defense + 2;
-        c.max_hp = c.max_hp + 20;
-        Character[id: charId] = c;
+        Character[id: charId].attack = c.attack + 3;
+        Character[id: charId].defense = c.defense + 2;
+        Character[id: charId].max_hp = c.max_hp + 20;
     }
 }
 
@@ -1045,13 +960,11 @@ transaction BuyTokenBundle(playerId: int, goldCost: int, tokens: int)
     hop {
         var cur: Row<Currency> = Currency[player_id: playerId];
         if cur.gold < goldCost { return; }
-        cur.gold = cur.gold - goldCost;
-        Currency[player_id: playerId] = cur;
+        Currency[player_id: playerId].gold = cur.gold - goldCost;
     }
     hop {
         var cur2: Row<Currency> = Currency[player_id: playerId];
-        cur2.tokens = cur2.tokens + tokens;
-        Currency[player_id: playerId] = cur2;
+        Currency[player_id: playerId].tokens = cur2.tokens + tokens;
     }
 }
 

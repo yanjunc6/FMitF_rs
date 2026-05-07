@@ -525,9 +525,7 @@ transaction GetTerritory(territoryId: int)
 transaction UpdateLeadStatus(leadId: int, ownerId: int, newStatus: int)
 {
     hop {
-        var l: Row<Lead> = Lead[id: leadId];
-        l.status = newStatus;
-        Lead[id: leadId] = l;
+        Lead[id: leadId].status = newStatus;
     }
 }
 
@@ -536,17 +534,14 @@ transaction IncrementLeadScore(leadId: int, ownerId: int, delta: int)
 {
     hop {
         var l: Row<Lead> = Lead[id: leadId];
-        l.score = l.score + delta;
-        Lead[id: leadId] = l;
+        Lead[id: leadId].score = l.score + delta;
     }
 }
 
 transaction AdvanceOpportunityStage(oppId: int, accountId: int, newStage: int)
 {
     hop {
-        var o: Row<Opportunity> = Opportunity[id: oppId];
-        o.stage = newStage;
-        Opportunity[id: oppId] = o;
+        Opportunity[id: oppId].stage = newStage;
     }
 }
 
@@ -555,10 +550,8 @@ transaction UpdateOpportunityAmount(oppId: int, accountId: int, amount: int, pro
     assume probability >= 0;
 {
     hop {
-        var o: Row<Opportunity> = Opportunity[id: oppId];
-        o.amount = amount;
-        o.probability = probability;
-        Opportunity[id: oppId] = o;
+        Opportunity[id: oppId].amount = amount;
+        Opportunity[id: oppId].probability = probability;
     }
 }
 
@@ -567,8 +560,7 @@ transaction CompleteTask(taskId: int, ownerId: int)
     hop {
         var t: Row<Task> = Task[id: taskId];
         if t.status == 2 { return; }
-        t.status = 2;
-        Task[id: taskId] = t;
+        Task[id: taskId].status = 2;
     }
 }
 
@@ -577,17 +569,14 @@ transaction CancelTask(taskId: int, ownerId: int)
     hop {
         var t: Row<Task> = Task[id: taskId];
         if t.status == 2 { return; }
-        t.status = 3;
-        Task[id: taskId] = t;
+        Task[id: taskId].status = 3;
     }
 }
 
 transaction UpdateCaseStatus(caseId: int, accountId: int, newStatus: int)
 {
     hop {
-        var cs: Row<Case> = Case[id: caseId];
-        cs.status = newStatus;
-        Case[id: caseId] = cs;
+        Case[id: caseId].status = newStatus;
     }
 }
 
@@ -596,8 +585,7 @@ transaction RecordEmailOpen(emailId: int, senderId: int)
     hop {
         var el: Row<EmailLog> = EmailLog[id: emailId];
         if el.status != 0 { return; }
-        el.status = 1;
-        EmailLog[id: emailId] = el;
+        EmailLog[id: emailId].status = 1;
     }
 }
 
@@ -606,8 +594,7 @@ transaction RecordEmailClick(emailId: int, senderId: int)
     hop {
         var el: Row<EmailLog> = EmailLog[id: emailId];
         if el.status >= 2 { return; }
-        el.status = 2;
-        EmailLog[id: emailId] = el;
+        EmailLog[id: emailId].status = 2;
     }
 }
 
@@ -615,8 +602,7 @@ transaction IncrementCampaignLeadCount(campaignId: int)
 {
     hop {
         var c: Row<Campaign> = Campaign[id: campaignId];
-        c.lead_count = c.lead_count + 1;
-        Campaign[id: campaignId] = c;
+        Campaign[id: campaignId].lead_count = c.lead_count + 1;
     }
 }
 
@@ -624,8 +610,7 @@ transaction IncrementCampaignResponseCount(campaignId: int)
 {
     hop {
         var c: Row<Campaign> = Campaign[id: campaignId];
-        c.response_count = c.response_count + 1;
-        Campaign[id: campaignId] = c;
+        Campaign[id: campaignId].response_count = c.response_count + 1;
     }
 }
 
@@ -634,17 +619,14 @@ transaction AddCampaignSpend(campaignId: int, amount: int)
 {
     hop {
         var c: Row<Campaign> = Campaign[id: campaignId];
-        c.spent = c.spent + amount;
-        Campaign[id: campaignId] = c;
+        Campaign[id: campaignId].spent = c.spent + amount;
     }
 }
 
 transaction UpdateCampaignMemberStatus(campaignId: int, memberId: int, newStatus: int)
 {
     hop {
-        var cm: Row<CampaignMember> = CampaignMember[id: memberId];
-        cm.status = newStatus;
-        CampaignMember[id: memberId] = cm;
+        CampaignMember[id: memberId].status = newStatus;
     }
 }
 
@@ -653,8 +635,7 @@ transaction IncrementUserAchieved(userId: int, amount: int)
 {
     hop {
         var u: Row<CRMUser> = CRMUser[id: userId];
-        u.achieved = u.achieved + amount;
-        CRMUser[id: userId] = u;
+        CRMUser[id: userId].achieved = u.achieved + amount;
     }
 }
 
@@ -663,8 +644,7 @@ transaction AddTeamAchieved(teamId: int, amount: int)
 {
     hop {
         var t: Row<Team> = Team[id: teamId];
-        t.total_achieved = t.total_achieved + amount;
-        Team[id: teamId] = t;
+        Team[id: teamId].total_achieved = t.total_achieved + amount;
     }
 }
 
@@ -672,8 +652,7 @@ transaction IncrementTerritoryAccounts(territoryId: int)
 {
     hop {
         var ter: Row<Territory> = Territory[id: territoryId];
-        ter.account_count = ter.account_count + 1;
-        Territory[id: territoryId] = ter;
+        Territory[id: territoryId].account_count = ter.account_count + 1;
     }
 }
 
@@ -681,8 +660,7 @@ transaction IncrementTerritoryOpportunities(territoryId: int)
 {
     hop {
         var ter: Row<Territory> = Territory[id: territoryId];
-        ter.opportunity_count = ter.opportunity_count + 1;
-        Territory[id: territoryId] = ter;
+        Territory[id: territoryId].opportunity_count = ter.opportunity_count + 1;
     }
 }
 
@@ -690,9 +668,7 @@ transaction UpdateProductPrice(productId: int, newPrice: int)
     assume newPrice >= 0;
 {
     hop {
-        var p: Row<Product> = Product[id: productId];
-        p.unit_price = newPrice;
-        Product[id: productId] = p;
+        Product[id: productId].unit_price = newPrice;
     }
 }
 
@@ -701,8 +677,7 @@ transaction RestockProduct(productId: int, quantity: int)
 {
     hop {
         var p: Row<Product> = Product[id: productId];
-        p.stock = p.stock + quantity;
-        Product[id: productId] = p;
+        Product[id: productId].stock = p.stock + quantity;
     }
 }
 
@@ -712,12 +687,10 @@ transaction UpdateForecast(userId: int, period: int, forecastAmount: int, commit
     assume bestCase >= 0;
 {
     hop {
-        var f: Row<Forecast> = Forecast[user_id: userId];
-        f.forecast_amount = forecastAmount;
-        f.committed_amount = committedAmount;
-        f.best_case_amount = bestCase;
-        f.updated_at = updatedAt;
-        Forecast[user_id: userId] = f;
+        Forecast[user_id: userId].forecast_amount = forecastAmount;
+        Forecast[user_id: userId].committed_amount = committedAmount;
+        Forecast[user_id: userId].best_case_amount = bestCase;
+        Forecast[user_id: userId].updated_at = updatedAt;
     }
 }
 
@@ -726,43 +699,36 @@ transaction RecordForecastClosed(userId: int, amount: int)
 {
     hop {
         var f: Row<Forecast> = Forecast[user_id: userId];
-        f.closed_amount = f.closed_amount + amount;
-        Forecast[user_id: userId] = f;
+        Forecast[user_id: userId].closed_amount = f.closed_amount + amount;
     }
 }
 
 transaction SetContractAutoRenew(contractId: int, accountId: int, autoRenew: bool)
 {
     hop {
-        var c: Row<Contract> = Contract[id: contractId];
-        c.auto_renew = autoRenew;
-        Contract[id: contractId] = c;
+        Contract[id: contractId].auto_renew = autoRenew;
     }
 }
 
 transaction AddCaseComment(caseId: int, commentId: int, authorId: int, content: string, isPublic: bool, createdAt: int)
 {
     hop {
-        var cc: Row<CaseComment> = CaseComment[id: commentId];
-        cc.case_id = caseId;
-        cc.author_id = authorId;
-        cc.content = content;
-        cc.is_public = isPublic;
-        cc.created_at = createdAt;
-        CaseComment[id: commentId] = cc;
+        CaseComment[id: commentId].case_id = caseId;
+        CaseComment[id: commentId].author_id = authorId;
+        CaseComment[id: commentId].content = content;
+        CaseComment[id: commentId].is_public = isPublic;
+        CaseComment[id: commentId].created_at = createdAt;
     }
 }
 
 transaction AddNote(noteId: int, authorId: int, relatedId: int, relatedType: int, content: string, createdAt: int)
 {
     hop {
-        var n: Row<Note> = Note[id: noteId];
-        n.author_id = authorId;
-        n.related_id = relatedId;
-        n.related_type = relatedType;
-        n.content = content;
-        n.created_at = createdAt;
-        Note[id: noteId] = n;
+        Note[id: noteId].author_id = authorId;
+        Note[id: noteId].related_id = relatedId;
+        Note[id: noteId].related_type = relatedType;
+        Note[id: noteId].content = content;
+        Note[id: noteId].created_at = createdAt;
     }
 }
 
@@ -770,14 +736,12 @@ transaction LogCallOutcome(callId: int, callerId: int, accountId: int, contactId
     assume durationSec >= 0;
 {
     hop {
-        var cl: Row<CallLog> = CallLog[id: callId];
-        cl.caller_id = callerId;
-        cl.account_id = accountId;
-        cl.contact_id = contactId;
-        cl.duration_sec = durationSec;
-        cl.outcome = outcome;
-        cl.called_at = calledAt;
-        CallLog[id: callId] = cl;
+        CallLog[id: callId].caller_id = callerId;
+        CallLog[id: callId].account_id = accountId;
+        CallLog[id: callId].contact_id = contactId;
+        CallLog[id: callId].duration_sec = durationSec;
+        CallLog[id: callId].outcome = outcome;
+        CallLog[id: callId].called_at = calledAt;
     }
 }
 
@@ -788,15 +752,12 @@ transaction ConvertLeadToContact(leadId: int, ownerId: int, accountId: int, cont
     hop {
         var l: Row<Lead> = Lead[id: leadId];
         if l.status == 3 { return; }
-        l.status = 3;
-        Lead[id: leadId] = l;
+        Lead[id: leadId].status = 3;
     }
     hop {
-        var c: Row<Contact> = Contact[id: contactId];
-        c.account_id = accountId;
-        c.first_name = "converted";
-        c.is_primary = false;
-        Contact[id: contactId] = c;
+        Contact[id: contactId].account_id = accountId;
+        Contact[id: contactId].first_name = "converted";
+        Contact[id: contactId].is_primary = false;
     }
 }
 
@@ -809,16 +770,13 @@ transaction CreateOpportunity(accountId: int, oppId: int, ownerId: int, amount: 
         to_unit(a.owner_id);
     }
     hop {
-        var o: Row<Opportunity> = Opportunity[id: oppId];
-        o.account_id = accountId;
-        o.stage = 0;
-        o.amount = amount;
-        o.probability = 10;
-        o.owner_id = ownerId;
-        Opportunity[id: oppId] = o;
+        Opportunity[id: oppId].account_id = accountId;
+        Opportunity[id: oppId].stage = 0;
+        Opportunity[id: oppId].amount = amount;
+        Opportunity[id: oppId].probability = 10;
+        Opportunity[id: oppId].owner_id = ownerId;
         var ter: Row<Territory> = Territory[id: territoryId];
-        ter.opportunity_count = ter.opportunity_count + 1;
-        Territory[id: territoryId] = ter;
+        Territory[id: territoryId].opportunity_count = ter.opportunity_count + 1;
     }
 }
 
@@ -828,17 +786,14 @@ transaction CloseOpportunityWon(oppId: int, accountId: int, userId: int, teamId:
     hop {
         var o: Row<Opportunity> = Opportunity[id: oppId];
         if o.stage == 4 { return; }
-        o.stage = 4;
-        o.probability = 100;
-        Opportunity[id: oppId] = o;
+        Opportunity[id: oppId].stage = 4;
+        Opportunity[id: oppId].probability = 100;
     }
     hop {
         var u: Row<CRMUser> = CRMUser[id: userId];
-        u.achieved = u.achieved + amount;
-        CRMUser[id: userId] = u;
+        CRMUser[id: userId].achieved = u.achieved + amount;
         var t: Row<Team> = Team[id: teamId];
-        t.total_achieved = t.total_achieved + amount;
-        Team[id: teamId] = t;
+        Team[id: teamId].total_achieved = t.total_achieved + amount;
     }
 }
 
@@ -847,9 +802,8 @@ transaction CloseOpportunityLost(oppId: int, accountId: int)
     hop {
         var o: Row<Opportunity> = Opportunity[id: oppId];
         if o.stage == 5 { return; }
-        o.stage = 5;
-        o.probability = 0;
-        Opportunity[id: oppId] = o;
+        Opportunity[id: oppId].stage = 5;
+        Opportunity[id: oppId].probability = 0;
     }
     hop {
         var a: Row<Account> = Account[id: accountId];
@@ -866,13 +820,11 @@ transaction CreateQuote(oppId: int, accountId: int, quoteId: int, total: int, va
         to_unit(o.amount);
     }
     hop {
-        var q: Row<Quote> = Quote[id: quoteId];
-        q.opportunity_id = oppId;
-        q.account_id = accountId;
-        q.status = 0;
-        q.total = total;
-        q.valid_until = validUntil;
-        Quote[id: quoteId] = q;
+        Quote[id: quoteId].opportunity_id = oppId;
+        Quote[id: quoteId].account_id = accountId;
+        Quote[id: quoteId].status = 0;
+        Quote[id: quoteId].total = total;
+        Quote[id: quoteId].valid_until = validUntil;
     }
 }
 
@@ -881,13 +833,10 @@ transaction AcceptQuote(quoteId: int, accountId: int, oppId: int)
     hop {
         var q: Row<Quote> = Quote[id: quoteId];
         if q.status != 1 { return; }
-        q.status = 2;
-        Quote[id: quoteId] = q;
+        Quote[id: quoteId].status = 2;
     }
     hop {
-        var o: Row<Opportunity> = Opportunity[id: oppId];
-        o.stage = 3;
-        Opportunity[id: oppId] = o;
+        Opportunity[id: oppId].stage = 3;
     }
 }
 
@@ -896,8 +845,7 @@ transaction RejectQuote(quoteId: int, accountId: int)
     hop {
         var q: Row<Quote> = Quote[id: quoteId];
         if q.status != 1 { return; }
-        q.status = 3;
-        Quote[id: quoteId] = q;
+        Quote[id: quoteId].status = 3;
     }
     hop {
         var a: Row<Account> = Account[id: accountId];
@@ -910,16 +858,13 @@ transaction SendQuote(quoteId: int, accountId: int, emailId: int, senderId: int,
     hop {
         var q: Row<Quote> = Quote[id: quoteId];
         if q.status != 0 { return; }
-        q.status = 1;
-        Quote[id: quoteId] = q;
+        Quote[id: quoteId].status = 1;
     }
     hop {
-        var el: Row<EmailLog> = EmailLog[id: emailId];
-        el.sender_id = senderId;
-        el.subject = "quote_sent";
-        el.status = 0;
-        el.sent_at = sentAt;
-        EmailLog[id: emailId] = el;
+        EmailLog[id: emailId].sender_id = senderId;
+        EmailLog[id: emailId].subject = "quote_sent";
+        EmailLog[id: emailId].status = 0;
+        EmailLog[id: emailId].sent_at = sentAt;
     }
 }
 
@@ -932,13 +877,11 @@ transaction PlaceOrder(accountId: int, orderId: int, quoteId: int, ownerId: int,
         to_unit(q.total);
     }
     hop {
-        var o: Row<Order> = Order[id: orderId];
-        o.account_id = accountId;
-        o.quote_id = quoteId;
-        o.status = 0;
-        o.total_amount = totalAmount;
-        o.owner_id = ownerId;
-        Order[id: orderId] = o;
+        Order[id: orderId].account_id = accountId;
+        Order[id: orderId].quote_id = quoteId;
+        Order[id: orderId].status = 0;
+        Order[id: orderId].total_amount = totalAmount;
+        Order[id: orderId].owner_id = ownerId;
     }
 }
 
@@ -948,15 +891,13 @@ transaction ConfirmOrder(orderId: int, accountId: int, productId: int, qty: int)
     hop {
         var p: Row<Product> = Product[id: productId];
         if p.stock < qty { return; }
-        p.stock = p.stock - qty;
-        p.sold_count = p.sold_count + qty;
-        Product[id: productId] = p;
+        Product[id: productId].stock = p.stock - qty;
+        Product[id: productId].sold_count = p.sold_count + qty;
     }
     hop {
         var o: Row<Order> = Order[id: orderId];
         if o.status != 0 { return; }
-        o.status = 1;
-        Order[id: orderId] = o;
+        Order[id: orderId].status = 1;
     }
 }
 
@@ -965,8 +906,7 @@ transaction ShipOrder(orderId: int, accountId: int)
     hop {
         var o: Row<Order> = Order[id: orderId];
         if o.status != 2 { return; }
-        o.status = 3;
-        Order[id: orderId] = o;
+        Order[id: orderId].status = 3;
     }
     hop {
         var a: Row<Account> = Account[id: accountId];
@@ -979,13 +919,11 @@ transaction DeliverOrder(orderId: int, accountId: int)
     hop {
         var o: Row<Order> = Order[id: orderId];
         if o.status != 3 { return; }
-        o.status = 4;
-        Order[id: orderId] = o;
+        Order[id: orderId].status = 4;
     }
     hop {
         var a: Row<Account> = Account[id: accountId];
         if a.status == 0 { a.status = 1; }
-        Account[id: accountId] = a;
     }
 }
 
@@ -995,16 +933,14 @@ transaction CancelOrder(orderId: int, accountId: int, productId: int, qty: int)
     hop {
         var o: Row<Order> = Order[id: orderId];
         if o.status >= 3 { return; }
-        o.status = 5;
-        Order[id: orderId] = o;
+        Order[id: orderId].status = 5;
     }
     hop {
         var p: Row<Product> = Product[id: productId];
-        p.stock = p.stock + qty;
+        Product[id: productId].stock = p.stock + qty;
         if p.sold_count >= qty {
-            p.sold_count = p.sold_count - qty;
+            Product[id: productId].sold_count = p.sold_count - qty;
         }
-        Product[id: productId] = p;
     }
 }
 
@@ -1017,14 +953,12 @@ transaction GenerateInvoice(orderId: int, accountId: int, invoiceId: int, amount
         to_unit(o.total_amount);
     }
     hop {
-        var inv: Row<Invoice> = Invoice[id: invoiceId];
-        inv.account_id = accountId;
-        inv.order_id = orderId;
-        inv.status = 1;
-        inv.amount = amount;
-        inv.paid_amount = 0;
-        inv.due_date = dueDate;
-        Invoice[id: invoiceId] = inv;
+        Invoice[id: invoiceId].account_id = accountId;
+        Invoice[id: invoiceId].order_id = orderId;
+        Invoice[id: invoiceId].status = 1;
+        Invoice[id: invoiceId].amount = amount;
+        Invoice[id: invoiceId].paid_amount = 0;
+        Invoice[id: invoiceId].due_date = dueDate;
     }
 }
 
@@ -1045,14 +979,12 @@ transaction ApplyPayment(accountId: int, invoiceId: int, paymentId: int, amount:
         Invoice[id: invoiceId] = inv;
     }
     hop {
-        var pmt: Row<Payment> = Payment[id: paymentId];
-        pmt.account_id = accountId;
-        pmt.invoice_id = invoiceId;
-        pmt.amount = amount;
-        pmt.method = method;
-        pmt.status = 1;
-        pmt.processed_at = processedAt;
-        Payment[id: paymentId] = pmt;
+        Payment[id: paymentId].account_id = accountId;
+        Payment[id: paymentId].invoice_id = invoiceId;
+        Payment[id: paymentId].amount = amount;
+        Payment[id: paymentId].method = method;
+        Payment[id: paymentId].status = 1;
+        Payment[id: paymentId].processed_at = processedAt;
     }
 }
 
@@ -1063,8 +995,7 @@ transaction RefundPaymentCRM(accountId: int, invoiceId: int, paymentId: int, amo
         var pmt: Row<Payment> = Payment[id: paymentId];
         if pmt.status != 1 { return; }
         if pmt.amount < amount { return; }
-        pmt.status = 3;
-        Payment[id: paymentId] = pmt;
+        Payment[id: paymentId].status = 3;
     }
     hop {
         var inv: Row<Invoice> = Invoice[id: invoiceId];
@@ -1082,8 +1013,7 @@ transaction MarkInvoiceOverdue(invoiceId: int, accountId: int)
     hop {
         var inv: Row<Invoice> = Invoice[id: invoiceId];
         if inv.status != 1 { return; }
-        inv.status = 4;
-        Invoice[id: invoiceId] = inv;
+        Invoice[id: invoiceId].status = 4;
     }
     hop {
         var a: Row<Account> = Account[id: accountId];
@@ -1096,8 +1026,7 @@ transaction VoidInvoice(invoiceId: int, accountId: int)
     hop {
         var inv: Row<Invoice> = Invoice[id: invoiceId];
         if inv.status == 3 { return; }
-        inv.status = 5;
-        Invoice[id: invoiceId] = inv;
+        Invoice[id: invoiceId].status = 5;
     }
     hop {
         var a: Row<Account> = Account[id: accountId];
@@ -1110,8 +1039,7 @@ transaction SignContract(contractId: int, accountId: int, oppId: int)
     hop {
         var c: Row<Contract> = Contract[id: contractId];
         if c.status != 0 { return; }
-        c.status = 1;
-        Contract[id: contractId] = c;
+        Contract[id: contractId].status = 1;
     }
     hop {
         var o: Row<Opportunity> = Opportunity[id: oppId];
@@ -1125,8 +1053,7 @@ transaction TerminateContract(contractId: int, accountId: int)
     hop {
         var c: Row<Contract> = Contract[id: contractId];
         if c.status != 1 { return; }
-        c.status = 3;
-        Contract[id: contractId] = c;
+        Contract[id: contractId].status = 3;
     }
     hop {
         var a: Row<Account> = Account[id: accountId];
@@ -1140,8 +1067,7 @@ transaction RenewContract(contractId: int, accountId: int, newEndDate: int)
         var c: Row<Contract> = Contract[id: contractId];
         if c.status != 1 { return; }
         if !c.auto_renew { return; }
-        c.end_date = newEndDate;
-        Contract[id: contractId] = c;
+        Contract[id: contractId].end_date = newEndDate;
     }
     hop {
         var a: Row<Account> = Account[id: accountId];
@@ -1157,8 +1083,7 @@ transaction AssignAccountToTerritory(accountId: int, territoryId: int)
     }
     hop {
         var ter: Row<Territory> = Territory[id: territoryId];
-        ter.account_count = ter.account_count + 1;
-        Territory[id: territoryId] = ter;
+        Territory[id: territoryId].account_count = ter.account_count + 1;
     }
 }
 
@@ -1167,14 +1092,12 @@ transaction AssignUserToTeam(userId: int, teamId: int)
     hop {
         var u: Row<CRMUser> = CRMUser[id: userId];
         if !u.is_active { return; }
-        u.team_id = teamId;
-        CRMUser[id: userId] = u;
+        CRMUser[id: userId].team_id = teamId;
     }
     hop {
         var t: Row<Team> = Team[id: teamId];
-        t.member_count = t.member_count + 1;
-        t.total_quota = t.total_quota + 1;
-        Team[id: teamId] = t;
+        Team[id: teamId].member_count = t.member_count + 1;
+        Team[id: teamId].total_quota = t.total_quota + 1;
     }
 }
 
@@ -1183,8 +1106,7 @@ transaction RemoveUserFromTeam(userId: int, teamId: int)
     hop {
         var t: Row<Team> = Team[id: teamId];
         if t.member_count <= 0 { return; }
-        t.member_count = t.member_count - 1;
-        Team[id: teamId] = t;
+        Team[id: teamId].member_count = t.member_count - 1;
     }
     hop {
         var u: Row<CRMUser> = CRMUser[id: userId];
@@ -1198,16 +1120,12 @@ transaction SetUserQuota(userId: int, teamId: int, quota: int)
     hop {
         var u: Row<CRMUser> = CRMUser[id: userId];
         var oldQuota: int = u.quota;
-        u.quota = quota;
-        CRMUser[id: userId] = u;
+        CRMUser[id: userId].quota = quota;
         var t: Row<Team> = Team[id: teamId];
-        t.total_quota = t.total_quota - oldQuota + quota;
-        Team[id: teamId] = t;
+        Team[id: teamId].total_quota = t.total_quota - oldQuota + quota;
     }
     hop {
-        var f: Row<Forecast> = Forecast[user_id: userId];
-        f.forecast_amount = quota;
-        Forecast[user_id: userId] = f;
+        Forecast[user_id: userId].forecast_amount = quota;
     }
 }
 
@@ -1219,16 +1137,14 @@ transaction OpenCase(caseId: int, accountId: int, contactId: int, ownerId: int, 
         to_unit(a.id);
     }
     hop {
-        var cs: Row<Case> = Case[id: caseId];
-        cs.account_id = accountId;
-        cs.contact_id = contactId;
-        cs.subject = subject;
-        cs.status = 0;
-        cs.priority = priority;
-        cs.case_type = caseType;
-        cs.owner_id = ownerId;
-        cs.created_at = createdAt;
-        Case[id: caseId] = cs;
+        Case[id: caseId].account_id = accountId;
+        Case[id: caseId].contact_id = contactId;
+        Case[id: caseId].subject = subject;
+        Case[id: caseId].status = 0;
+        Case[id: caseId].priority = priority;
+        Case[id: caseId].case_type = caseType;
+        Case[id: caseId].owner_id = ownerId;
+        Case[id: caseId].created_at = createdAt;
     }
 }
 
@@ -1237,9 +1153,8 @@ transaction ResolveCase(caseId: int, accountId: int, resolvedAt: int)
     hop {
         var cs: Row<Case> = Case[id: caseId];
         if cs.status == 3 { return; }
-        cs.status = 3;
-        cs.resolved_at = resolvedAt;
-        Case[id: caseId] = cs;
+        Case[id: caseId].status = 3;
+        Case[id: caseId].resolved_at = resolvedAt;
     }
     hop {
         var a: Row<Account> = Account[id: accountId];
@@ -1250,10 +1165,8 @@ transaction ResolveCase(caseId: int, accountId: int, resolvedAt: int)
 transaction AssignCase(caseId: int, accountId: int, newOwnerId: int)
 {
     hop {
-        var cs: Row<Case> = Case[id: caseId];
-        cs.owner_id = newOwnerId;
-        cs.status = 1;
-        Case[id: caseId] = cs;
+        Case[id: caseId].owner_id = newOwnerId;
+        Case[id: caseId].status = 1;
     }
     hop {
         var u: Row<CRMUser> = CRMUser[id: newOwnerId];
@@ -1267,16 +1180,13 @@ transaction LaunchCampaign(campaignId: int, emailId: int, senderId: int, sentAt:
     hop {
         var c: Row<Campaign> = Campaign[id: campaignId];
         if c.status != 0 { return; }
-        c.status = 1;
-        Campaign[id: campaignId] = c;
+        Campaign[id: campaignId].status = 1;
     }
     hop {
-        var el: Row<EmailLog> = EmailLog[id: emailId];
-        el.sender_id = senderId;
-        el.subject = "campaign_launch";
-        el.status = 0;
-        el.sent_at = sentAt;
-        EmailLog[id: emailId] = el;
+        EmailLog[id: emailId].sender_id = senderId;
+        EmailLog[id: emailId].subject = "campaign_launch";
+        EmailLog[id: emailId].status = 0;
+        EmailLog[id: emailId].sent_at = sentAt;
     }
 }
 
@@ -1285,8 +1195,7 @@ transaction CompleteCampaign(campaignId: int)
     hop {
         var c: Row<Campaign> = Campaign[id: campaignId];
         if c.status != 1 { return; }
-        c.status = 2;
-        Campaign[id: campaignId] = c;
+        Campaign[id: campaignId].status = 2;
     }
     hop {
         var c2: Row<Campaign> = Campaign[id: campaignId];
@@ -1299,17 +1208,14 @@ transaction AddCampaignMember(campaignId: int, memberId: int, contactId: int, le
     hop {
         var c: Row<Campaign> = Campaign[id: campaignId];
         if c.status != 1 { return; }
-        c.lead_count = c.lead_count + 1;
-        Campaign[id: campaignId] = c;
+        Campaign[id: campaignId].lead_count = c.lead_count + 1;
     }
     hop {
-        var cm: Row<CampaignMember> = CampaignMember[id: memberId];
-        cm.campaign_id = campaignId;
-        cm.contact_id = contactId;
-        cm.lead_id = leadId;
-        cm.status = 0;
-        cm.added_at = addedAt;
-        CampaignMember[id: memberId] = cm;
+        CampaignMember[id: memberId].campaign_id = campaignId;
+        CampaignMember[id: memberId].contact_id = contactId;
+        CampaignMember[id: memberId].lead_id = leadId;
+        CampaignMember[id: memberId].status = 0;
+        CampaignMember[id: memberId].added_at = addedAt;
     }
 }
 
@@ -1326,13 +1232,11 @@ transaction AddQuoteItem(quoteId: int, itemId: int, productId: int, qty: int, un
         Quote[id: quoteId] = q;
     }
     hop {
-        var qi: Row<QuoteItem> = QuoteItem[id: itemId];
-        qi.quote_id = quoteId;
-        qi.product_id = productId;
-        qi.quantity = qty;
-        qi.unit_price = unitPrice;
-        qi.line_total = qty * unitPrice;
-        QuoteItem[id: itemId] = qi;
+        QuoteItem[id: itemId].quote_id = quoteId;
+        QuoteItem[id: itemId].product_id = productId;
+        QuoteItem[id: itemId].quantity = qty;
+        QuoteItem[id: itemId].unit_price = unitPrice;
+        QuoteItem[id: itemId].line_total = qty * unitPrice;
     }
 }
 
@@ -1358,8 +1262,7 @@ transaction TransferOpportunity(oppId: int, accountId: int, fromUserId: int, toU
     hop {
         var o: Row<Opportunity> = Opportunity[id: oppId];
         if o.owner_id != fromUserId { return; }
-        o.owner_id = toUserId;
-        Opportunity[id: oppId] = o;
+        Opportunity[id: oppId].owner_id = toUserId;
     }
     hop {
         var u: Row<CRMUser> = CRMUser[id: toUserId];
@@ -1371,9 +1274,7 @@ transaction TransferOpportunity(oppId: int, accountId: int, fromUserId: int, toU
 transaction ReassignAccountOwner(accountId: int, newOwnerId: int, territoryId: int)
 {
     hop {
-        var a: Row<Account> = Account[id: accountId];
-        a.owner_id = newOwnerId;
-        Account[id: accountId] = a;
+        Account[id: accountId].owner_id = newOwnerId;
     }
     hop {
         var u: Row<CRMUser> = CRMUser[id: newOwnerId];

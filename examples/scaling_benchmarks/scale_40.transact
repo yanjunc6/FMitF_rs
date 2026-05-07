@@ -311,9 +311,7 @@ transaction UpdatePrice(product_id: int, new_price: float)
     assume new_price > 0.0;
 {
     hop {
-        var p: Row<Product> = Product[product_id: product_id];
-        p.price = new_price;
-        Product[product_id: product_id] = p;
+        Product[product_id: product_id].price = new_price;
     }
 }
 
@@ -323,38 +321,31 @@ transaction RestockInventory(product_id: int, qty: int)
 {
     hop {
         var inv: Row<Inventory> = Inventory[product_id: product_id];
-        inv.stock = inv.stock + qty;
-        Inventory[product_id: product_id] = inv;
+        Inventory[product_id: product_id].stock = inv.stock + qty;
     }
 }
 
 // 14. DeactivateProduct — seller removes product from listing.
 transaction DeactivateProduct(product_id: int) {
     hop {
-        var p: Row<Product> = Product[product_id: product_id];
-        p.active = 0;
-        Product[product_id: product_id] = p;
+        Product[product_id: product_id].active = 0;
     }
 }
 
 // 15. UpdateShipmentStatus — carrier updates shipment tracking.
 transaction UpdateShipmentStatus(shipment_id: int, new_status: int, ts: int) {
     hop {
-        var s: Row<Shipment> = Shipment[shipment_id: shipment_id];
-        s.status = new_status;
+        Shipment[shipment_id: shipment_id].status = new_status;
         if new_status == 2 {
-            s.delivered_at = ts;
+            Shipment[shipment_id: shipment_id].delivered_at = ts;
         }
-        Shipment[shipment_id: shipment_id] = s;
     }
 }
 
 // 16. MarkOrderDelivered — update order to delivered status.
 transaction MarkOrderDelivered(order_id: int) {
     hop {
-        var o: Row<Order> = Order[order_id: order_id];
-        o.status = 4;
-        Order[order_id: order_id] = o;
+        Order[order_id: order_id].status = 4;
     }
 }
 
@@ -377,8 +368,7 @@ transaction AddCoupon(coupon_id: int, code: string, discount_pct: int,
 transaction VoteReviewHelpful(review_id: int) {
     hop {
         var r: Row<Review> = Review[review_id: review_id];
-        r.helpful_votes = r.helpful_votes + 1;
-        Review[review_id: review_id] = r;
+        Review[review_id: review_id].helpful_votes = r.helpful_votes + 1;
     }
 }
 
@@ -388,8 +378,7 @@ transaction CreditCustomer(customer_id: int, amount: float)
 {
     hop {
         var c: Row<Customer> = Customer[customer_id: customer_id];
-        c.credit_balance = c.credit_balance + amount;
-        Customer[customer_id: customer_id] = c;
+        Customer[customer_id: customer_id].credit_balance = c.credit_balance + amount;
     }
 }
 
@@ -399,8 +388,7 @@ transaction CreditSellerBalance(seller_id: int, amount: float)
 {
     hop {
         var s: Row<Seller> = Seller[seller_id: seller_id];
-        s.balance = s.balance + amount;
-        Seller[seller_id: seller_id] = s;
+        Seller[seller_id: seller_id].balance = s.balance + amount;
     }
 }
 
@@ -423,9 +411,8 @@ transaction AddToCart(customer_id: int, product_id: int, qty: int, ts: int) {
             added_at: ts
         };
         var cart: Row<Cart> = Cart[customer_id: customer_id];
-        cart.item_count = cart.item_count + 1;
-        cart.last_updated = ts;
-        Cart[customer_id: customer_id] = cart;
+        Cart[customer_id: customer_id].item_count = cart.item_count + 1;
+        Cart[customer_id: customer_id].last_updated = ts;
     }
 }
 
@@ -434,13 +421,10 @@ transaction AddToCart(customer_id: int, product_id: int, qty: int, ts: int) {
 transaction RemoveFromCart(customer_id: int, product_id: int, ts: int) {
     hop {
         var cart: Row<Cart> = Cart[customer_id: customer_id];
-        cart.item_count = cart.item_count - 1;
-        cart.last_updated = ts;
-        Cart[customer_id: customer_id] = cart;
+        Cart[customer_id: customer_id].item_count = cart.item_count - 1;
+        Cart[customer_id: customer_id].last_updated = ts;
         // Note: in Transact, delete is modeled as tombstone or qty=0.
-        var ci: Row<CartItem> = CartItem[customer_id: customer_id, product_id: product_id];
-        ci.qty = 0;
-        CartItem[customer_id: customer_id, product_id: product_id] = ci;
+        CartItem[customer_id: customer_id, product_id: product_id].qty = 0;
     }
 }
 
@@ -455,9 +439,8 @@ transaction PlaceOrder(order_id: int, customer_id: int, seller_id: int,
         if inv.stock < qty {
             return;
         }
-        inv.stock = inv.stock - qty;
-        inv.reserved = inv.reserved + qty;
-        Inventory[product_id: product_id] = inv;
+        Inventory[product_id: product_id].stock = inv.stock - qty;
+        Inventory[product_id: product_id].reserved = inv.reserved + qty;
     }
     hop {
         Order[order_id: order_id] = {
@@ -485,14 +468,12 @@ transaction CancelOrder(order_id: int, product_id: int, qty: int) {
         if o.status != 1 {
             return;
         }
-        o.status = 0;
-        Order[order_id: order_id] = o;
+        Order[order_id: order_id].status = 0;
     }
     hop {
         var inv: Row<Inventory> = Inventory[product_id: product_id];
-        inv.stock = inv.stock + qty;
-        inv.reserved = inv.reserved - qty;
-        Inventory[product_id: product_id] = inv;
+        Inventory[product_id: product_id].stock = inv.stock + qty;
+        Inventory[product_id: product_id].reserved = inv.reserved - qty;
     }
 }
 
@@ -505,8 +486,7 @@ transaction ProcessPayment(pay_id: int, order_id: int, amount: float, method: st
         if o.status != 1 {
             return;
         }
-        o.status = 2;
-        Order[order_id: order_id] = o;
+        Order[order_id: order_id].status = 2;
     }
     hop {
         Payment[pay_id: pay_id] = {
@@ -525,9 +505,7 @@ transaction ProcessPayment(pay_id: int, order_id: int, amount: float, method: st
 transaction ShipOrder(shipment_id: int, order_id: int, tracking_no: string,
                        carrier: string, ts: int) {
     hop {
-        var o: Row<Order> = Order[order_id: order_id];
-        o.status = 3;
-        Order[order_id: order_id] = o;
+        Order[order_id: order_id].status = 3;
     }
     hop {
         Shipment[shipment_id: shipment_id] = {
@@ -558,9 +536,8 @@ transaction WriteReview(review_id: int, product_id: int, customer_id: int,
     }
     hop {
         var p: Row<Product> = Product[product_id: product_id];
-        p.review_count = p.review_count + 1;
-        p.rating_sum = p.rating_sum + rating;
-        Product[product_id: product_id] = p;
+        Product[product_id: product_id].review_count = p.review_count + 1;
+        Product[product_id: product_id].rating_sum = p.rating_sum + rating;
     }
 }
 
@@ -573,14 +550,12 @@ transaction ApplyCouponToOrder(order_id: int, coupon_id: int, discount: float) {
         if c.used_count >= c.max_uses {
             return;
         }
-        c.used_count = c.used_count + 1;
-        Coupon[coupon_id: coupon_id] = c;
+        Coupon[coupon_id: coupon_id].used_count = c.used_count + 1;
     }
     hop {
         var o: Row<Order> = Order[order_id: order_id];
-        o.discount = discount;
-        o.total = o.subtotal - discount;
-        Order[order_id: order_id] = o;
+        Order[order_id: order_id].discount = discount;
+        Order[order_id: order_id].total = o.subtotal - discount;
     }
 }
 
@@ -600,8 +575,7 @@ transaction AddToWishlist(customer_id: int, product_id: int, ts: int) {
             added_at: ts
         };
         var wl: Row<Wishlist> = Wishlist[customer_id: customer_id];
-        wl.item_count = wl.item_count + 1;
-        Wishlist[customer_id: customer_id] = wl;
+        Wishlist[customer_id: customer_id].item_count = wl.item_count + 1;
     }
 }
 
@@ -609,11 +583,8 @@ transaction AddToWishlist(customer_id: int, product_id: int, ts: int) {
 transaction RemoveFromWishlist(customer_id: int, product_id: int) {
     hop {
         var wl: Row<Wishlist> = Wishlist[customer_id: customer_id];
-        wl.item_count = wl.item_count - 1;
-        Wishlist[customer_id: customer_id] = wl;
-        var wi: Row<WishlistItem> = WishlistItem[customer_id: customer_id, product_id: product_id];
-        wi.added_at = 0;
-        WishlistItem[customer_id: customer_id, product_id: product_id] = wi;
+        Wishlist[customer_id: customer_id].item_count = wl.item_count - 1;
+        WishlistItem[customer_id: customer_id, product_id: product_id].added_at = 0;
     }
 }
 
@@ -650,13 +621,11 @@ transaction ApproveReturn(return_id: int, product_id: int, qty: int) {
         if r.status != 0 {
             return;
         }
-        r.status = 1;
-        ReturnRequest[return_id: return_id] = r;
+        ReturnRequest[return_id: return_id].status = 1;
     }
     hop {
         var inv: Row<Inventory> = Inventory[product_id: product_id];
-        inv.stock = inv.stock + qty;
-        Inventory[product_id: product_id] = inv;
+        Inventory[product_id: product_id].stock = inv.stock + qty;
     }
 }
 
@@ -665,14 +634,11 @@ transaction ApproveReturn(return_id: int, product_id: int, qty: int) {
 // Hop 2: customer partition — credit customer balance.
 transaction RefundOrder(pay_id: int, customer_id: int, amount: float) {
     hop {
-        var p: Row<Payment> = Payment[pay_id: pay_id];
-        p.status = 2;
-        Payment[pay_id: pay_id] = p;
+        Payment[pay_id: pay_id].status = 2;
     }
     hop {
         var c: Row<Customer> = Customer[customer_id: customer_id];
-        c.credit_balance = c.credit_balance + amount;
-        Customer[customer_id: customer_id] = c;
+        Customer[customer_id: customer_id].credit_balance = c.credit_balance + amount;
     }
 }
 
@@ -684,14 +650,12 @@ transaction UseStoreCredit(customer_id: int, amount: float, order_id: int) {
         if c.credit_balance < amount {
             return;
         }
-        c.credit_balance = c.credit_balance - amount;
-        Customer[customer_id: customer_id] = c;
+        Customer[customer_id: customer_id].credit_balance = c.credit_balance - amount;
     }
     hop {
         var o: Row<Order> = Order[order_id: order_id];
-        o.discount = o.discount + amount;
-        o.total = o.total - amount;
-        Order[order_id: order_id] = o;
+        Order[order_id: order_id].discount = o.discount + amount;
+        Order[order_id: order_id].total = o.total - amount;
     }
 }
 
@@ -712,18 +676,15 @@ transaction WriteSellerReview(review_id: int, seller_id: int, customer_id: int,
     }
     hop {
         var s: Row<Seller> = Seller[seller_id: seller_id];
-        s.rating_sum = s.rating_sum + rating;
-        s.review_count = s.review_count + 1;
-        Seller[seller_id: seller_id] = s;
+        Seller[seller_id: seller_id].rating_sum = s.rating_sum + rating;
+        Seller[seller_id: seller_id].review_count = s.review_count + 1;
     }
 }
 
 // 36. UpdateCustomerAddress — update customer shipping address.
 transaction UpdateCustomerAddress(customer_id: int, new_address: string) {
     hop {
-        var c: Row<Customer> = Customer[customer_id: customer_id];
-        c.address = new_address;
-        Customer[customer_id: customer_id] = c;
+        Customer[customer_id: customer_id].address = new_address;
     }
 }
 

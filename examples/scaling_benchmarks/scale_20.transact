@@ -168,9 +168,7 @@ transaction RegisterGuest(guest_id: int, name: string, email: string, phone: str
 // Commutative with other status updates on different rooms.
 transaction UpdateRoomStatus(room_id: int, new_status: int) {
     hop {
-        var r: Row<Room> = Room[room_id: room_id];
-        r.status = new_status;
-        Room[room_id: room_id] = r;
+        Room[room_id: room_id].status = new_status;
     }
 }
 
@@ -184,8 +182,7 @@ transaction MakeReservation(res_id: int, guest_id: int, room_id: int,
         if r.status != 0 {
             return;
         }
-        r.status = 1;
-        Room[room_id: room_id] = r;
+        Room[room_id: room_id].status = 1;
     }
     hop {
         Reservation[res_id: res_id] = {
@@ -204,14 +201,10 @@ transaction MakeReservation(res_id: int, guest_id: int, room_id: int,
 // Hop 2: room partition        — set status = 0 (available).
 transaction CancelReservation(res_id: int, room_id: int) {
     hop {
-        var r: Row<Reservation> = Reservation[res_id: res_id];
-        r.status = 0;
-        Reservation[res_id: res_id] = r;
+        Reservation[res_id: res_id].status = 0;
     }
     hop {
-        var rm: Row<Room> = Room[room_id: room_id];
-        rm.status = 0;
-        Room[room_id: room_id] = rm;
+        Room[room_id: room_id].status = 0;
     }
 }
 
@@ -224,8 +217,7 @@ transaction CheckIn(res_id: int, room_id: int) {
         if r.status != 1 {
             return;
         }
-        r.status = 2;
-        Reservation[res_id: res_id] = r;
+        Reservation[res_id: res_id].status = 2;
     }
     hop {
         var rm: Row<Room> = Room[room_id: room_id];
@@ -238,14 +230,10 @@ transaction CheckIn(res_id: int, room_id: int) {
 // Hop 2: reservation partition — set status=3 (completed).
 transaction CheckOut(room_id: int, res_id: int) {
     hop {
-        var rm: Row<Room> = Room[room_id: room_id];
-        rm.status = 2;
-        Room[room_id: room_id] = rm;
+        Room[room_id: room_id].status = 2;
     }
     hop {
-        var r: Row<Reservation> = Reservation[res_id: res_id];
-        r.status = 3;
-        Reservation[res_id: res_id] = r;
+        Reservation[res_id: res_id].status = 3;
     }
 }
 
@@ -271,9 +259,7 @@ transaction ProcessPayment(pay_id: int, res_id: int, amount: float, method: stri
 // 12. RefundPayment — mark a payment as refunded.
 transaction RefundPayment(pay_id: int) {
     hop {
-        var p: Row<Payment> = Payment[pay_id: pay_id];
-        p.status = 2;
-        Payment[pay_id: pay_id] = p;
+        Payment[pay_id: pay_id].status = 2;
     }
 }
 
@@ -293,9 +279,8 @@ transaction WriteReview(review_id: int, hotel_id: int, guest_id: int,
     }
     hop {
         var h: Row<Hotel> = Hotel[hotel_id: hotel_id];
-        h.rating_sum = h.rating_sum + rating;
-        h.review_count = h.review_count + 1;
-        Hotel[hotel_id: hotel_id] = h;
+        Hotel[hotel_id: hotel_id].rating_sum = h.rating_sum + rating;
+        Hotel[hotel_id: hotel_id].review_count = h.review_count + 1;
     }
 }
 
@@ -313,8 +298,7 @@ transaction AddLoyaltyPoints(guest_id: int, pts: int)
 {
     hop {
         var g: Row<Guest> = Guest[guest_id: guest_id];
-        g.loyalty_pts = g.loyalty_pts + pts;
-        Guest[guest_id: guest_id] = g;
+        Guest[guest_id: guest_id].loyalty_pts = g.loyalty_pts + pts;
     }
 }
 
@@ -327,8 +311,7 @@ transaction RedeemLoyaltyPoints(guest_id: int, pts: int)
         if g.loyalty_pts < pts {
             return;
         }
-        g.loyalty_pts = g.loyalty_pts - pts;
-        Guest[guest_id: guest_id] = g;
+        Guest[guest_id: guest_id].loyalty_pts = g.loyalty_pts - pts;
     }
 }
 
@@ -337,14 +320,10 @@ transaction RedeemLoyaltyPoints(guest_id: int, pts: int)
 // Hop 2: room partition  — mark room as cleaning (status=2).
 transaction AssignHousekeeping(staff_id: int, room_id: int) {
     hop {
-        var s: Row<Staff> = Staff[staff_id: staff_id];
-        s.assigned_room_id = room_id;
-        Staff[staff_id: staff_id] = s;
+        Staff[staff_id: staff_id].assigned_room_id = room_id;
     }
     hop {
-        var rm: Row<Room> = Room[room_id: room_id];
-        rm.status = 2;
-        Room[room_id: room_id] = rm;
+        Room[room_id: room_id].status = 2;
     }
 }
 
@@ -353,23 +332,17 @@ transaction AssignHousekeeping(staff_id: int, room_id: int) {
 // Hop 2: staff partition — clear assigned_room_id.
 transaction CompleteHousekeeping(room_id: int, staff_id: int) {
     hop {
-        var rm: Row<Room> = Room[room_id: room_id];
-        rm.status = 0;
-        Room[room_id: room_id] = rm;
+        Room[room_id: room_id].status = 0;
     }
     hop {
-        var s: Row<Staff> = Staff[staff_id: staff_id];
-        s.assigned_room_id = 0;
-        Staff[staff_id: staff_id] = s;
+        Staff[staff_id: staff_id].assigned_room_id = 0;
     }
 }
 
 // 19. SetFacilityStatus — open or close a hotel facility.
 transaction SetFacilityStatus(facility_id: int, available: int) {
     hop {
-        var f: Row<HotelFacility> = HotelFacility[facility_id: facility_id];
-        f.available = available;
-        HotelFacility[facility_id: facility_id] = f;
+        HotelFacility[facility_id: facility_id].available = available;
     }
 }
 

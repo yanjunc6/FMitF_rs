@@ -386,12 +386,10 @@ transaction OrderLabTest(lab_id: int, patient_id: int, doctor_id: int,
 // 16. UpdateBedStatus — housekeeping updates bed status.
 transaction UpdateBedStatus(bed_id: int, new_status: int) {
     hop {
-        var b: Row<Bed> = Bed[bed_id: bed_id];
-        b.status = new_status;
+        Bed[bed_id: bed_id].status = new_status;
         if new_status == 0 {
-            b.patient_id = 0;
+            Bed[bed_id: bed_id].patient_id = 0;
         }
-        Bed[bed_id: bed_id] = b;
     }
 }
 
@@ -401,8 +399,7 @@ transaction RestockMedication(med_id: int, qty: int)
 {
     hop {
         var m: Row<Medication> = Medication[med_id: med_id];
-        m.stock = m.stock + qty;
-        Medication[med_id: med_id] = m;
+        Medication[med_id: med_id].stock = m.stock + qty;
     }
 }
 
@@ -416,8 +413,7 @@ transaction AddBillItem(bill_id: int, item_seq: int, item_type: string,
             amount: amount
         };
         var b: Row<Bill> = Bill[bill_id: bill_id];
-        b.total = b.total + amount;
-        Bill[bill_id: bill_id] = b;
+        Bill[bill_id: bill_id].total = b.total + amount;
     }
 }
 
@@ -480,9 +476,7 @@ transaction BookAppointment(appt_id: int, patient_id: int, doctor_id: int,
 // Hop 2: doctor partition      — no state change needed, read-verify.
 transaction CompleteAppointment(appt_id: int, doctor_id: int) {
     hop {
-        var a: Row<Appointment> = Appointment[appt_id: appt_id];
-        a.status = 2;
-        Appointment[appt_id: appt_id] = a;
+        Appointment[appt_id: appt_id].status = 2;
     }
     hop {
         var d: Row<Doctor> = Doctor[doctor_id: doctor_id];
@@ -500,9 +494,8 @@ transaction AdmitPatient(adm_id: int, patient_id: int, doctor_id: int,
         if b.status != 0 {
             return;
         }
-        b.status = 1;
-        b.patient_id = patient_id;
-        Bed[bed_id: bed_id] = b;
+        Bed[bed_id: bed_id].status = 1;
+        Bed[bed_id: bed_id].patient_id = patient_id;
     }
     hop {
         Admission[adm_id: adm_id] = {
@@ -523,16 +516,12 @@ transaction AdmitPatient(adm_id: int, patient_id: int, doctor_id: int,
 // Hop 2: admission partition — set status=0, record discharge time.
 transaction DischargePatient(adm_id: int, bed_id: int, ts: int) {
     hop {
-        var b: Row<Bed> = Bed[bed_id: bed_id];
-        b.status = 2;
-        b.patient_id = 0;
-        Bed[bed_id: bed_id] = b;
+        Bed[bed_id: bed_id].status = 2;
+        Bed[bed_id: bed_id].patient_id = 0;
     }
     hop {
-        var a: Row<Admission> = Admission[adm_id: adm_id];
-        a.status = 0;
-        a.discharge_time = ts;
-        Admission[adm_id: adm_id] = a;
+        Admission[adm_id: adm_id].status = 0;
+        Admission[adm_id: adm_id].discharge_time = ts;
     }
 }
 
@@ -574,13 +563,10 @@ transaction FulfillPrescription(prid: int, med_id: int, qty: int) {
         if m.stock < qty {
             return;
         }
-        m.stock = m.stock - qty;
-        Medication[med_id: med_id] = m;
+        Medication[med_id: med_id].stock = m.stock - qty;
     }
     hop {
-        var p: Row<Prescription> = Prescription[prid: prid];
-        p.status = 1;
-        Prescription[prid: prid] = p;
+        Prescription[prid: prid].status = 1;
     }
 }
 
@@ -590,9 +576,7 @@ transaction FulfillPrescription(prid: int, med_id: int, qty: int) {
 transaction CompleteLabTest(result_id: int, lab_id: int, patient_id: int,
                              result_text: string, abnormal: int, ts: int) {
     hop {
-        var l: Row<LabOrder> = LabOrder[lab_id: lab_id];
-        l.status = 2;
-        LabOrder[lab_id: lab_id] = l;
+        LabOrder[lab_id: lab_id].status = 2;
     }
     hop {
         LabResult[result_id: result_id] = {
@@ -668,19 +652,16 @@ transaction InsuranceClaim(bill_id: int, ins_id: int, covered_amount: float) {
 // Hop 2: new-bed partition — occupy new bed.
 transaction TransferPatient(old_bed_id: int, new_bed_id: int, patient_id: int, adm_id: int) {
     hop {
-        var ob: Row<Bed> = Bed[bed_id: old_bed_id];
-        ob.status = 2;  // cleaning
-        ob.patient_id = 0;
-        Bed[bed_id: old_bed_id] = ob;
+        Bed[bed_id: old_bed_id].status = 2;  // cleaning
+        Bed[bed_id: old_bed_id].patient_id = 0;
     }
     hop {
         var nb: Row<Bed> = Bed[bed_id: new_bed_id];
         if nb.status != 0 {
             return;
         }
-        nb.status = 1;
-        nb.patient_id = patient_id;
-        Bed[bed_id: new_bed_id] = nb;
+        Bed[bed_id: new_bed_id].status = 1;
+        Bed[bed_id: new_bed_id].patient_id = patient_id;
     }
 }
 
@@ -689,8 +670,7 @@ transaction TransferPatient(old_bed_id: int, new_bed_id: int, patient_id: int, a
 transaction IncrementDeptOccupancy(dept_id: int) {
     hop {
         var d: Row<Department> = Department[dept_id: dept_id];
-        d.occupied = d.occupied + 1;
-        Department[dept_id: dept_id] = d;
+        Department[dept_id: dept_id].occupied = d.occupied + 1;
     }
 }
 
@@ -700,9 +680,8 @@ transaction DecrementDeptOccupancy(dept_id: int) {
     hop {
         var d: Row<Department> = Department[dept_id: dept_id];
         if d.occupied > 0 {
-            d.occupied = d.occupied - 1;
+            Department[dept_id: dept_id].occupied = d.occupied - 1;
         }
-        Department[dept_id: dept_id] = d;
     }
 }
 
@@ -713,8 +692,7 @@ transaction CancelLabOrder(lab_id: int) {
         if l.status != 0 {
             return;
         }
-        l.status = 3;   // cancelled
-        LabOrder[lab_id: lab_id] = l;
+        LabOrder[lab_id: lab_id].status = 3;   // cancelled
     }
 }
 
@@ -726,8 +704,7 @@ transaction CancelPrescription(prid: int) {
         if p.status != 0 {
             return;
         }
-        p.status = 2;
-        Prescription[prid: prid] = p;
+        Prescription[prid: prid].status = 2;
     }
 }
 
@@ -735,9 +712,7 @@ transaction CancelPrescription(prid: int) {
 // Hop 1: patient partition — update status field.
 transaction UpdatePatientStatus(patient_id: int, new_status: int) {
     hop {
-        var p: Row<Patient> = Patient[patient_id: patient_id];
-        p.status = new_status;
-        Patient[patient_id: patient_id] = p;
+        Patient[patient_id: patient_id].status = new_status;
     }
 }
 
@@ -747,8 +722,7 @@ transaction UpdatePatientStatus(patient_id: int, new_status: int) {
 transaction AssignNurse(nurse_id: int, adm_id: int) {
     hop {
         var n: Row<Nurse> = Nurse[nurse_id: nurse_id];
-        n.assigned_patients = n.assigned_patients + 1;
-        Nurse[nurse_id: nurse_id] = n;
+        Nurse[nurse_id: nurse_id].assigned_patients = n.assigned_patients + 1;
     }
     hop {
         var a: Row<Admission> = Admission[adm_id: adm_id];
@@ -761,23 +735,17 @@ transaction AssignNurse(nurse_id: int, adm_id: int) {
 // Hop 2: patient partition — update patient status.
 transaction ProcessTriage(triage_id: int, patient_id: int) {
     hop {
-        var t: Row<Triage> = Triage[triage_id: triage_id];
-        t.processed = 1;
-        Triage[triage_id: triage_id] = t;
+        Triage[triage_id: triage_id].processed = 1;
     }
     hop {
-        var p: Row<Patient> = Patient[patient_id: patient_id];
-        p.status = 1;
-        Patient[patient_id: patient_id] = p;
+        Patient[patient_id: patient_id].status = 1;
     }
 }
 
 // 39. SetDoctorAvailability — update doctor schedule availability.
 transaction SetDoctorAvailability(doctor_id: int, available: int) {
     hop {
-        var d: Row<Doctor> = Doctor[doctor_id: doctor_id];
-        d.available = available;
-        Doctor[doctor_id: doctor_id] = d;
+        Doctor[doctor_id: doctor_id].available = available;
     }
 }
 
@@ -789,8 +757,7 @@ transaction CollectLabSample(lab_id: int) {
         if l.status != 0 {
             return;
         }
-        l.status = 1;
-        LabOrder[lab_id: lab_id] = l;
+        LabOrder[lab_id: lab_id].status = 1;
     }
 }
 
@@ -803,18 +770,15 @@ transaction CollectLabSample(lab_id: int) {
 transaction FullAdmission(triage_id: int, adm_id: int, patient_id: int,
                            doctor_id: int, dept_id: int, bed_id: int, ts: int) {
     hop {
-        var tr: Row<Triage> = Triage[triage_id: triage_id];
-        tr.processed = 1;
-        Triage[triage_id: triage_id] = tr;
+        Triage[triage_id: triage_id].processed = 1;
     }
     hop {
         var b: Row<Bed> = Bed[bed_id: bed_id];
         if b.status != 0 {
             return;
         }
-        b.status = 1;
-        b.patient_id = patient_id;
-        Bed[bed_id: bed_id] = b;
+        Bed[bed_id: bed_id].status = 1;
+        Bed[bed_id: bed_id].patient_id = patient_id;
     }
     hop {
         Admission[adm_id: adm_id] = {
@@ -836,16 +800,12 @@ transaction FullAdmission(triage_id: int, adm_id: int, patient_id: int,
 // Hop 3: bill partition     — verify bill is paid.
 transaction CompleteDischarge(bed_id: int, adm_id: int, bill_id: int, ts: int) {
     hop {
-        var b: Row<Bed> = Bed[bed_id: bed_id];
-        b.status = 2;
-        b.patient_id = 0;
-        Bed[bed_id: bed_id] = b;
+        Bed[bed_id: bed_id].status = 2;
+        Bed[bed_id: bed_id].patient_id = 0;
     }
     hop {
-        var a: Row<Admission> = Admission[adm_id: adm_id];
-        a.status = 0;
-        a.discharge_time = ts;
-        Admission[adm_id: adm_id] = a;
+        Admission[adm_id: adm_id].status = 0;
+        Admission[adm_id: adm_id].discharge_time = ts;
     }
     hop {
         var bill: Row<Bill> = Bill[bill_id: bill_id];
@@ -860,13 +820,10 @@ transaction CompleteDischarge(bed_id: int, adm_id: int, bill_id: int, ts: int) {
 transaction LabOrderFulfillment(lab_id: int, result_id: int, patient_id: int,
                                  result_text: string, abnormal: int, ts: int) {
     hop {
-        var l: Row<LabOrder> = LabOrder[lab_id: lab_id];
-        l.status = 1;
-        LabOrder[lab_id: lab_id] = l;
+        LabOrder[lab_id: lab_id].status = 1;
     }
     hop {
-        l.status = 2;
-        LabOrder[lab_id: lab_id] = l;
+        LabOrder[lab_id: lab_id].status = 2;
     }
     hop {
         LabResult[result_id: result_id] = {
@@ -896,13 +853,10 @@ transaction PrescriptionDispense(patient_id: int, med_id: int, prid: int, qty: i
         if m.stock < qty {
             return;
         }
-        m.stock = m.stock - qty;
-        Medication[med_id: med_id] = m;
+        Medication[med_id: med_id].stock = m.stock - qty;
     }
     hop {
-        var pr: Row<Prescription> = Prescription[prid: prid];
-        pr.status = 1;
-        Prescription[prid: prid] = pr;
+        Prescription[prid: prid].status = 1;
     }
 }
 

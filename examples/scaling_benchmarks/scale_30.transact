@@ -227,18 +227,14 @@ transaction RegisterRider(rider_id: int, name: string, phone: string, email: str
 // 8. SetDriverAvailable — driver goes online. Single-hop status update.
 transaction SetDriverAvailable(driver_id: int) {
     hop {
-        var d: Row<Driver> = Driver[driver_id: driver_id];
-        d.status = 1;
-        Driver[driver_id: driver_id] = d;
+        Driver[driver_id: driver_id].status = 1;
     }
 }
 
 // 9. SetDriverOffline — driver goes offline.
 transaction SetDriverOffline(driver_id: int) {
     hop {
-        var d: Row<Driver> = Driver[driver_id: driver_id];
-        d.status = 0;
-        Driver[driver_id: driver_id] = d;
+        Driver[driver_id: driver_id].status = 0;
     }
 }
 
@@ -263,11 +259,9 @@ transaction RegisterVehicle(vehicle_id: int, driver_id: int, plate: string,
 transaction UpdateSurgeRate(zone_id: int, multiplier: float,
                              active_drivers: int, active_requests: int) {
     hop {
-        var z: Row<SurgeZone> = SurgeZone[zone_id: zone_id];
-        z.multiplier = multiplier;
-        z.active_drivers = active_drivers;
-        z.active_requests = active_requests;
-        SurgeZone[zone_id: zone_id] = z;
+        SurgeZone[zone_id: zone_id].multiplier = multiplier;
+        SurgeZone[zone_id: zone_id].active_drivers = active_drivers;
+        SurgeZone[zone_id: zone_id].active_requests = active_requests;
     }
 }
 
@@ -277,8 +271,7 @@ transaction CreditWallet(owner_id: int, amount: float)
 {
     hop {
         var w: Row<Wallet> = Wallet[owner_id: owner_id];
-        w.balance = w.balance + amount;
-        Wallet[owner_id: owner_id] = w;
+        Wallet[owner_id: owner_id].balance = w.balance + amount;
     }
 }
 
@@ -291,8 +284,7 @@ transaction DebitWallet(owner_id: int, amount: float)
         if w.balance < amount {
             return;
         }
-        w.balance = w.balance - amount;
-        Wallet[owner_id: owner_id] = w;
+        Wallet[owner_id: owner_id].balance = w.balance - amount;
     }
 }
 
@@ -307,8 +299,7 @@ transaction RequestTrip(trip_id: int, driver_id: int, rider_id: int,
         if d.status != 1 {
             return;
         }
-        d.status = 2;
-        Driver[driver_id: driver_id] = d;
+        Driver[driver_id: driver_id].status = 2;
     }
     hop {
         Trip[trip_id: trip_id] = {
@@ -329,18 +320,14 @@ transaction RequestTrip(trip_id: int, driver_id: int, rider_id: int,
 // Hop 2: rider partition  — set status=2 (on_trip).
 transaction StartTrip(trip_id: int, rider_id: int, ts: int) {
     hop {
-        var t: Row<Trip> = Trip[trip_id: trip_id];
-        t.status = 3;
-        Trip[trip_id: trip_id] = t;
+        Trip[trip_id: trip_id].status = 3;
         TripLog[trip_id: trip_id, event_seq: 1] = {
             event_type: "started",
             recorded_at: ts
         };
     }
     hop {
-        var r: Row<Rider> = Rider[rider_id: rider_id];
-        r.status = 2;
-        Rider[rider_id: rider_id] = r;
+        Rider[rider_id: rider_id].status = 2;
     }
 }
 
@@ -350,9 +337,7 @@ transaction StartTrip(trip_id: int, rider_id: int, ts: int) {
 // Hop 3: rider partition  — set status=1 (active), increment trip_count.
 transaction CompleteTrip(trip_id: int, driver_id: int, rider_id: int, ts: int) {
     hop {
-        var t: Row<Trip> = Trip[trip_id: trip_id];
-        t.status = 4;
-        Trip[trip_id: trip_id] = t;
+        Trip[trip_id: trip_id].status = 4;
         TripLog[trip_id: trip_id, event_seq: 2] = {
             event_type: "completed",
             recorded_at: ts
@@ -360,15 +345,13 @@ transaction CompleteTrip(trip_id: int, driver_id: int, rider_id: int, ts: int) {
     }
     hop {
         var d: Row<Driver> = Driver[driver_id: driver_id];
-        d.status = 1;
-        d.trip_count = d.trip_count + 1;
-        Driver[driver_id: driver_id] = d;
+        Driver[driver_id: driver_id].status = 1;
+        Driver[driver_id: driver_id].trip_count = d.trip_count + 1;
     }
     hop {
         var r: Row<Rider> = Rider[rider_id: rider_id];
-        r.status = 1;
-        r.trip_count = r.trip_count + 1;
-        Rider[rider_id: rider_id] = r;
+        Rider[rider_id: rider_id].status = 1;
+        Rider[rider_id: rider_id].trip_count = r.trip_count + 1;
     }
 }
 
@@ -381,13 +364,10 @@ transaction CancelTripByRider(trip_id: int, driver_id: int) {
         if t.status != 1 && t.status != 2 {
             return;
         }
-        t.status = 0;
-        Trip[trip_id: trip_id] = t;
+        Trip[trip_id: trip_id].status = 0;
     }
     hop {
-        var d: Row<Driver> = Driver[driver_id: driver_id];
-        d.status = 1;
-        Driver[driver_id: driver_id] = d;
+        Driver[driver_id: driver_id].status = 1;
     }
 }
 
@@ -401,13 +381,11 @@ transaction ProcessTripPayment(pay_id: int, trip_id: int, rider_id: int,
         if rw.balance < fare {
             return;
         }
-        rw.balance = rw.balance - fare;
-        Wallet[owner_id: rider_id] = rw;
+        Wallet[owner_id: rider_id].balance = rw.balance - fare;
     }
     hop {
         var dw: Row<Wallet> = Wallet[owner_id: driver_id];
-        dw.balance = dw.balance + fare;
-        Wallet[owner_id: driver_id] = dw;
+        Wallet[owner_id: driver_id].balance = dw.balance + fare;
         Payment[pay_id: pay_id] = {
             trip_id: trip_id,
             payer_id: rider_id,
@@ -437,8 +415,7 @@ transaction RateDriver(rating_id: int, trip_id: int, rider_id: int,
     }
     hop {
         var d: Row<Driver> = Driver[driver_id: driver_id];
-        d.rating_sum = d.rating_sum + score;
-        Driver[driver_id: driver_id] = d;
+        Driver[driver_id: driver_id].rating_sum = d.rating_sum + score;
     }
 }
 
@@ -459,8 +436,7 @@ transaction RateRider(rating_id: int, trip_id: int, driver_id: int,
     }
     hop {
         var r: Row<Rider> = Rider[rider_id: rider_id];
-        r.rating_sum = r.rating_sum + score;
-        Rider[rider_id: rider_id] = r;
+        Rider[rider_id: rider_id].rating_sum = r.rating_sum + score;
     }
 }
 
@@ -472,8 +448,7 @@ transaction ApplyPromoCode(promo_id: int) -> int {
         if p.used_count >= p.max_uses {
             return 0;
         }
-        p.used_count = p.used_count + 1;
-        PromoCode[promo_id: promo_id] = p;
+        PromoCode[promo_id: promo_id].used_count = p.used_count + 1;
         return p.discount_pct;
     }
 }
@@ -547,9 +522,8 @@ transaction ReserveWalletFunds(owner_id: int, amount: float)
         if w.balance < amount {
             return;
         }
-        w.balance = w.balance - amount;
-        w.reserved = w.reserved + amount;
-        Wallet[owner_id: owner_id] = w;
+        Wallet[owner_id: owner_id].balance = w.balance - amount;
+        Wallet[owner_id: owner_id].reserved = w.reserved + amount;
     }
 }
 
@@ -560,18 +534,15 @@ transaction ReleaseWalletReservation(owner_id: int, amount: float) {
         if w.reserved < amount {
             return;
         }
-        w.reserved = w.reserved - amount;
-        w.balance = w.balance + amount;
-        Wallet[owner_id: owner_id] = w;
+        Wallet[owner_id: owner_id].reserved = w.reserved - amount;
+        Wallet[owner_id: owner_id].balance = w.balance + amount;
     }
 }
 
 // 28. UpdateVehicleStatus — deactivate or reactivate a vehicle.
 transaction UpdateVehicleStatus(vehicle_id: int, active: int) {
     hop {
-        var v: Row<Vehicle> = Vehicle[vehicle_id: vehicle_id];
-        v.active = active;
-        Vehicle[vehicle_id: vehicle_id] = v;
+        Vehicle[vehicle_id: vehicle_id].active = active;
     }
 }
 

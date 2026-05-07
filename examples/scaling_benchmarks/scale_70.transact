@@ -318,27 +318,21 @@ transaction CreateSeat(flight_id: int, seat_no: string, seat_class: string) {
 // 14. UpdateFlightStatus
 transaction UpdateFlightStatus(flight_id: int, new_status: int) {
     hop {
-        var f: Row<Flight> = Flight[flight_id: flight_id];
-        f.status = new_status;
-        Flight[flight_id: flight_id] = f;
+        Flight[flight_id: flight_id].status = new_status;
     }
 }
 
 // 15. SetGateStatus
 transaction SetGateStatus(gate_id: int, new_status: int) {
     hop {
-        var g: Row<Gate> = Gate[gate_id: gate_id];
-        g.status = new_status;
-        Gate[gate_id: gate_id] = g;
+        Gate[gate_id: gate_id].status = new_status;
     }
 }
 
 // 16. UpdateAircraftStatus
 transaction UpdateAircraftStatus(aircraft_id: int, new_status: int) {
     hop {
-        var a: Row<Aircraft> = Aircraft[aircraft_id: aircraft_id];
-        a.status = new_status;
-        Aircraft[aircraft_id: aircraft_id] = a;
+        Aircraft[aircraft_id: aircraft_id].status = new_status;
     }
 }
 
@@ -348,9 +342,8 @@ transaction CreditMiles(passenger_id: int, miles: int)
 {
     hop {
         var ff: Row<FrequentFlyer> = FrequentFlyer[passenger_id: passenger_id];
-        ff.miles = ff.miles + miles;
-        ff.lifetime_miles = ff.lifetime_miles + miles;
-        FrequentFlyer[passenger_id: passenger_id] = ff;
+        FrequentFlyer[passenger_id: passenger_id].miles = ff.miles + miles;
+        FrequentFlyer[passenger_id: passenger_id].lifetime_miles = ff.lifetime_miles + miles;
     }
 }
 
@@ -363,26 +356,21 @@ transaction RedeemMiles(passenger_id: int, miles: int)
         if ff.miles < miles {
             return;
         }
-        ff.miles = ff.miles - miles;
-        FrequentFlyer[passenger_id: passenger_id] = ff;
+        FrequentFlyer[passenger_id: passenger_id].miles = ff.miles - miles;
     }
 }
 
 // 19. UpdateCrewStatus
 transaction UpdateCrewStatus(crew_id: int, new_status: int) {
     hop {
-        var c: Row<Crew> = Crew[crew_id: crew_id];
-        c.status = new_status;
-        Crew[crew_id: crew_id] = c;
+        Crew[crew_id: crew_id].status = new_status;
     }
 }
 
 // 20. UpdateBaggageStatus
 transaction UpdateBaggageStatus(bag_id: int, new_status: int) {
     hop {
-        var b: Row<Baggage> = Baggage[bag_id: bag_id];
-        b.status = new_status;
-        Baggage[bag_id: bag_id] = b;
+        Baggage[bag_id: bag_id].status = new_status;
     }
 }
 
@@ -415,18 +403,14 @@ transaction CreateRoute(route_id: int, origin_id: int, dest_id: int,
 // 23. UpgradeTier — upgrade frequent flyer tier based on lifetime miles.
 transaction UpgradeTier(passenger_id: int, new_tier: string) {
     hop {
-        var ff: Row<FrequentFlyer> = FrequentFlyer[passenger_id: passenger_id];
-        ff.tier = new_tier;
-        FrequentFlyer[passenger_id: passenger_id] = ff;
+        FrequentFlyer[passenger_id: passenger_id].tier = new_tier;
     }
 }
 
 // 24. ScanBoardingPass — mark boarding pass as scanned.
 transaction ScanBoardingPass(bp_id: int) {
     hop {
-        var bp: Row<BoardingPass> = BoardingPass[bp_id: bp_id];
-        bp.scanned = 1;
-        BoardingPass[bp_id: bp_id] = bp;
+        BoardingPass[bp_id: bp_id].scanned = 1;
     }
 }
 
@@ -434,8 +418,7 @@ transaction ScanBoardingPass(bp_id: int) {
 transaction IncrementFlightHours(crew_id: int, hours: int) {
     hop {
         var c: Row<Crew> = Crew[crew_id: crew_id];
-        c.flight_hours = c.flight_hours + hours;
-        Crew[crew_id: crew_id] = c;
+        Crew[crew_id: crew_id].flight_hours = c.flight_hours + hours;
     }
 }
 
@@ -451,12 +434,10 @@ transaction BookSeat(booking_id: int, passenger_id: int, flight_id: int,
         if s.status != 0 {
             return;
         }
-        s.status = 1;
-        s.passenger_id = passenger_id;
-        Seat[flight_id: flight_id, seat_no: seat_no] = s;
+        Seat[flight_id: flight_id, seat_no: seat_no].status = 1;
+        Seat[flight_id: flight_id, seat_no: seat_no].passenger_id = passenger_id;
         var f: Row<Flight> = Flight[flight_id: flight_id];
-        f.booked_seats = f.booked_seats + 1;
-        Flight[flight_id: flight_id] = f;
+        Flight[flight_id: flight_id].booked_seats = f.booked_seats + 1;
     }
     hop {
         Booking[booking_id: booking_id] = {
@@ -479,17 +460,13 @@ transaction CancelBooking(booking_id: int, flight_id: int, seat_no: string) {
         if b.status == 0 {
             return;
         }
-        b.status = 0;
-        Booking[booking_id: booking_id] = b;
+        Booking[booking_id: booking_id].status = 0;
     }
     hop {
-        var s: Row<Seat> = Seat[flight_id: flight_id, seat_no: seat_no];
-        s.status = 0;
-        s.passenger_id = 0;
-        Seat[flight_id: flight_id, seat_no: seat_no] = s;
+        Seat[flight_id: flight_id, seat_no: seat_no].status = 0;
+        Seat[flight_id: flight_id, seat_no: seat_no].passenger_id = 0;
         var f: Row<Flight> = Flight[flight_id: flight_id];
-        f.booked_seats = f.booked_seats - 1;
-        Flight[flight_id: flight_id] = f;
+        Flight[flight_id: flight_id].booked_seats = f.booked_seats - 1;
     }
 }
 
@@ -528,11 +505,8 @@ transaction CheckInPassenger(bp_id: int, ticket_id: int, passenger_id: int,
         if s.status != 1 {
             return;
         }
-        s.status = 2;
-        Seat[flight_id: flight_id, seat_no: seat_no] = s;
-        var b: Row<Booking> = Booking[booking_id: ticket_id]; // reuse booking_id
-        b.status = 2;
-        Booking[booking_id: ticket_id] = b;
+        Seat[flight_id: flight_id, seat_no: seat_no].status = 2;
+        Booking[booking_id: ticket_id].status = 2;
     }
     hop {
         BoardingPass[bp_id: bp_id] = {
@@ -580,13 +554,10 @@ transaction BoardPassenger(bp_id: int, booking_id: int) {
         if bp.scanned == 1 {
             return;
         }
-        bp.scanned = 1;
-        BoardingPass[bp_id: bp_id] = bp;
+        BoardingPass[bp_id: bp_id].scanned = 1;
     }
     hop {
-        var b: Row<Booking> = Booking[booking_id: booking_id];
-        b.status = 3;
-        Booking[booking_id: booking_id] = b;
+        Booking[booking_id: booking_id].status = 3;
     }
 }
 
@@ -600,8 +571,7 @@ transaction AssignCrewToFlight(assignment_id: int, crew_id: int, flight_id: int,
         if c.status != 1 {
             return;
         }
-        c.status = 2;
-        Crew[crew_id: crew_id] = c;
+        Crew[crew_id: crew_id].status = 2;
     }
     hop {
         CrewAssignment[assignment_id: assignment_id] = {
@@ -623,9 +593,8 @@ transaction ReleaseCrewFromFlight(assignment_id: int, crew_id: int, hours_flown:
     }
     hop {
         var c: Row<Crew> = Crew[crew_id: crew_id];
-        c.status = 1;
-        c.flight_hours = c.flight_hours + hours_flown;
-        Crew[crew_id: crew_id] = c;
+        Crew[crew_id: crew_id].status = 1;
+        Crew[crew_id: crew_id].flight_hours = c.flight_hours + hours_flown;
     }
 }
 
@@ -634,14 +603,10 @@ transaction ReleaseCrewFromFlight(assignment_id: int, crew_id: int, hours_flown:
 // Hop 2: flight partition — update gate_id.
 transaction AssignGateToFlight(flight_id: int, gate_id: int) {
     hop {
-        var g: Row<Gate> = Gate[gate_id: gate_id];
-        g.status = 2;
-        Gate[gate_id: gate_id] = g;
+        Gate[gate_id: gate_id].status = 2;
     }
     hop {
-        var f: Row<Flight> = Flight[flight_id: flight_id];
-        f.gate_id = gate_id;
-        Flight[flight_id: flight_id] = f;
+        Flight[flight_id: flight_id].gate_id = gate_id;
     }
 }
 
@@ -650,17 +615,11 @@ transaction AssignGateToFlight(flight_id: int, gate_id: int) {
 // Hop 2: new gate partition — assign new gate, update flight.
 transaction ChangeGate(flight_id: int, old_gate_id: int, new_gate_id: int) {
     hop {
-        var og: Row<Gate> = Gate[gate_id: old_gate_id];
-        og.status = 1;
-        Gate[gate_id: old_gate_id] = og;
+        Gate[gate_id: old_gate_id].status = 1;
     }
     hop {
-        var ng: Row<Gate> = Gate[gate_id: new_gate_id];
-        ng.status = 2;
-        Gate[gate_id: new_gate_id] = ng;
-        var f: Row<Flight> = Flight[flight_id: flight_id];
-        f.gate_id = new_gate_id;
-        Flight[flight_id: flight_id] = f;
+        Gate[gate_id: new_gate_id].status = 2;
+        Flight[flight_id: flight_id].gate_id = new_gate_id;
     }
 }
 
@@ -670,19 +629,16 @@ transaction ChangeGate(flight_id: int, old_gate_id: int, new_gate_id: int) {
 transaction UpgradeSeat(booking_id: int, flight_id: int,
                          old_seat: string, new_seat: string, passenger_id: int) {
     hop {
-        var os: Row<Seat> = Seat[flight_id: flight_id, seat_no: old_seat];
-        os.status = 0;
-        os.passenger_id = 0;
-        Seat[flight_id: flight_id, seat_no: old_seat] = os;
+        Seat[flight_id: flight_id, seat_no: old_seat].status = 0;
+        Seat[flight_id: flight_id, seat_no: old_seat].passenger_id = 0;
     }
     hop {
         var ns: Row<Seat> = Seat[flight_id: flight_id, seat_no: new_seat];
         if ns.status != 0 {
             return;
         }
-        ns.status = 1;
-        ns.passenger_id = passenger_id;
-        Seat[flight_id: flight_id, seat_no: new_seat] = ns;
+        Seat[flight_id: flight_id, seat_no: new_seat].status = 1;
+        Seat[flight_id: flight_id, seat_no: new_seat].passenger_id = passenger_id;
     }
 }
 
@@ -691,9 +647,7 @@ transaction UpgradeSeat(booking_id: int, flight_id: int,
 // Hop 2: gate partition   — update boarding status.
 transaction DelayFlight(flight_id: int, gate_id: int, new_departure: int) {
     hop {
-        var f: Row<Flight> = Flight[flight_id: flight_id];
-        f.departure_time = new_departure;
-        Flight[flight_id: flight_id] = f;
+        Flight[flight_id: flight_id].departure_time = new_departure;
     }
     hop {
         var g: Row<Gate> = Gate[gate_id: gate_id];
@@ -706,14 +660,10 @@ transaction DelayFlight(flight_id: int, gate_id: int, new_departure: int) {
 // Hop 2: aircraft partition — set status=1 (available).
 transaction CancelFlight(flight_id: int, aircraft_id: int) {
     hop {
-        var f: Row<Flight> = Flight[flight_id: flight_id];
-        f.status = 0;
-        Flight[flight_id: flight_id] = f;
+        Flight[flight_id: flight_id].status = 0;
     }
     hop {
-        var a: Row<Aircraft> = Aircraft[aircraft_id: aircraft_id];
-        a.status = 1;
-        Aircraft[aircraft_id: aircraft_id] = a;
+        Aircraft[aircraft_id: aircraft_id].status = 1;
     }
 }
 
@@ -722,14 +672,10 @@ transaction CancelFlight(flight_id: int, aircraft_id: int) {
 // Hop 2: aircraft partition — set status=2 (in service).
 transaction DepartFlight(flight_id: int, aircraft_id: int) {
     hop {
-        var f: Row<Flight> = Flight[flight_id: flight_id];
-        f.status = 3;
-        Flight[flight_id: flight_id] = f;
+        Flight[flight_id: flight_id].status = 3;
     }
     hop {
-        var a: Row<Aircraft> = Aircraft[aircraft_id: aircraft_id];
-        a.status = 2;
-        Aircraft[aircraft_id: aircraft_id] = a;
+        Aircraft[aircraft_id: aircraft_id].status = 2;
     }
 }
 
@@ -738,14 +684,10 @@ transaction DepartFlight(flight_id: int, aircraft_id: int) {
 // Hop 2: aircraft partition — set status=1 (available).
 transaction ArriveFlight(flight_id: int, aircraft_id: int) {
     hop {
-        var f: Row<Flight> = Flight[flight_id: flight_id];
-        f.status = 4;
-        Flight[flight_id: flight_id] = f;
+        Flight[flight_id: flight_id].status = 4;
     }
     hop {
-        var a: Row<Aircraft> = Aircraft[aircraft_id: aircraft_id];
-        a.status = 1;
-        Aircraft[aircraft_id: aircraft_id] = a;
+        Aircraft[aircraft_id: aircraft_id].status = 1;
     }
 }
 
@@ -754,14 +696,10 @@ transaction ArriveFlight(flight_id: int, aircraft_id: int) {
 // Hop 2: booking partition — set status=0.
 transaction VoidTicket(ticket_id: int, booking_id: int) {
     hop {
-        var t: Row<Ticket> = Ticket[ticket_id: ticket_id];
-        t.status = 0;
-        Ticket[ticket_id: ticket_id] = t;
+        Ticket[ticket_id: ticket_id].status = 0;
     }
     hop {
-        var b: Row<Booking> = Booking[booking_id: booking_id];
-        b.status = 0;
-        Booking[booking_id: booking_id] = b;
+        Booking[booking_id: booking_id].status = 0;
     }
 }
 
@@ -774,14 +712,12 @@ transaction UseTicket(ticket_id: int, passenger_id: int, miles: int) {
         if t.status != 1 {
             return;
         }
-        t.status = 2;
-        Ticket[ticket_id: ticket_id] = t;
+        Ticket[ticket_id: ticket_id].status = 2;
     }
     hop {
         var ff: Row<FrequentFlyer> = FrequentFlyer[passenger_id: passenger_id];
-        ff.miles = ff.miles + miles;
-        ff.lifetime_miles = ff.lifetime_miles + miles;
-        FrequentFlyer[passenger_id: passenger_id] = ff;
+        FrequentFlyer[passenger_id: passenger_id].miles = ff.miles + miles;
+        FrequentFlyer[passenger_id: passenger_id].lifetime_miles = ff.lifetime_miles + miles;
     }
 }
 
@@ -814,14 +750,10 @@ transaction CreateConnectionBooking(conn_id: int, passenger_id: int,
 // Hop 2: booking partition    — cancel second leg.
 transaction CancelConnectionBooking(conn_id: int, booking_id_2: int) {
     hop {
-        var c: Row<ConnectionBooking> = ConnectionBooking[conn_id: conn_id];
-        c.status = 0;
-        ConnectionBooking[conn_id: conn_id] = c;
+        ConnectionBooking[conn_id: conn_id].status = 0;
     }
     hop {
-        var b: Row<Booking> = Booking[booking_id: booking_id_2];
-        b.status = 0;
-        Booking[booking_id: booking_id_2] = b;
+        Booking[booking_id: booking_id_2].status = 0;
     }
 }
 
@@ -830,9 +762,7 @@ transaction CancelConnectionBooking(conn_id: int, booking_id_2: int) {
 // Hop 2: flight partition  — no state change, just verify flight active.
 transaction LoadBaggage(bag_id: int, flight_id: int) {
     hop {
-        var b: Row<Baggage> = Baggage[bag_id: bag_id];
-        b.status = 1;
-        Baggage[bag_id: bag_id] = b;
+        Baggage[bag_id: bag_id].status = 1;
     }
     hop {
         var f: Row<Flight> = Flight[flight_id: flight_id];
@@ -845,9 +775,7 @@ transaction LoadBaggage(bag_id: int, flight_id: int) {
 // Hop 2: flight partition  — verify status.
 transaction OffloadBaggage(bag_id: int, flight_id: int) {
     hop {
-        var b: Row<Baggage> = Baggage[bag_id: bag_id];
-        b.status = 2;
-        Baggage[bag_id: bag_id] = b;
+        Baggage[bag_id: bag_id].status = 2;
     }
     hop {
         var f: Row<Flight> = Flight[flight_id: flight_id];
@@ -861,18 +789,15 @@ transaction OffloadBaggage(bag_id: int, flight_id: int) {
 transaction TransferPassenger(old_booking_id: int, new_flight_id: int,
                                new_seat_no: string, passenger_id: int) {
     hop {
-        var ob: Row<Booking> = Booking[booking_id: old_booking_id];
-        ob.status = 0;
-        Booking[booking_id: old_booking_id] = ob;
+        Booking[booking_id: old_booking_id].status = 0;
     }
     hop {
         var ns: Row<Seat> = Seat[flight_id: new_flight_id, seat_no: new_seat_no];
         if ns.status != 0 {
             return;
         }
-        ns.status = 1;
-        ns.passenger_id = passenger_id;
-        Seat[flight_id: new_flight_id, seat_no: new_seat_no] = ns;
+        Seat[flight_id: new_flight_id, seat_no: new_seat_no].status = 1;
+        Seat[flight_id: new_flight_id, seat_no: new_seat_no].passenger_id = passenger_id;
     }
 }
 
@@ -881,17 +806,11 @@ transaction TransferPassenger(old_booking_id: int, new_flight_id: int,
 // Hop 2: flight partition       — assign new aircraft.
 transaction ChangeAircraftForFlight(flight_id: int, old_aircraft_id: int, new_aircraft_id: int) {
     hop {
-        var oa: Row<Aircraft> = Aircraft[aircraft_id: old_aircraft_id];
-        oa.status = 0;
-        Aircraft[aircraft_id: old_aircraft_id] = oa;
+        Aircraft[aircraft_id: old_aircraft_id].status = 0;
     }
     hop {
-        var f: Row<Flight> = Flight[flight_id: flight_id];
-        f.aircraft_id = new_aircraft_id;
-        Flight[flight_id: flight_id] = f;
-        var na: Row<Aircraft> = Aircraft[aircraft_id: new_aircraft_id];
-        na.status = 2;
-        Aircraft[aircraft_id: new_aircraft_id] = na;
+        Flight[flight_id: flight_id].aircraft_id = new_aircraft_id;
+        Aircraft[aircraft_id: new_aircraft_id].status = 2;
     }
 }
 
@@ -904,8 +823,7 @@ transaction ClaimBaggage(bag_id: int, booking_id: int) {
         if b.status != 1 {
             return;
         }
-        b.status = 3;
-        Baggage[bag_id: bag_id] = b;
+        Baggage[bag_id: bag_id].status = 3;
     }
     hop {
         var bk: Row<Booking> = Booking[booking_id: booking_id];
@@ -926,8 +844,7 @@ transaction IssueRefund(booking_id: int, passenger_id: int, refund_miles: int) {
     }
     hop {
         var ff: Row<FrequentFlyer> = FrequentFlyer[passenger_id: passenger_id];
-        ff.miles = ff.miles + refund_miles;
-        FrequentFlyer[passenger_id: passenger_id] = ff;
+        FrequentFlyer[passenger_id: passenger_id].miles = ff.miles + refund_miles;
     }
 }
 
@@ -936,14 +853,10 @@ transaction IssueRefund(booking_id: int, passenger_id: int, refund_miles: int) {
 // Hop 2: flight partition — set status=2 (boarding).
 transaction EnableBoardingGate(gate_id: int, flight_id: int) {
     hop {
-        var g: Row<Gate> = Gate[gate_id: gate_id];
-        g.status = 2;
-        Gate[gate_id: gate_id] = g;
+        Gate[gate_id: gate_id].status = 2;
     }
     hop {
-        var f: Row<Flight> = Flight[flight_id: flight_id];
-        f.status = 2;
-        Flight[flight_id: flight_id] = f;
+        Flight[flight_id: flight_id].status = 2;
     }
 }
 
@@ -952,9 +865,7 @@ transaction EnableBoardingGate(gate_id: int, flight_id: int) {
 // Hop 2: flight partition — prepare for departure.
 transaction CloseBoarding(gate_id: int, flight_id: int) {
     hop {
-        var g: Row<Gate> = Gate[gate_id: gate_id];
-        g.status = 0;
-        Gate[gate_id: gate_id] = g;
+        Gate[gate_id: gate_id].status = 0;
     }
     hop {
         var f: Row<Flight> = Flight[flight_id: flight_id];

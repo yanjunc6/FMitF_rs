@@ -287,9 +287,7 @@ transaction RegisterTrader(trader_id: int, name: string, email: string, ts: int)
 // 12. VerifyKYC — mark trader KYC verified.
 transaction VerifyKYC(trader_id: int) {
     hop {
-        var t: Row<Trader> = Trader[trader_id: trader_id];
-        t.kyc_status = 1;
-        Trader[trader_id: trader_id] = t;
+        Trader[trader_id: trader_id].kyc_status = 1;
     }
 }
 
@@ -299,8 +297,7 @@ transaction DepositFunds(trader_id: int, amount: float)
 {
     hop {
         var a: Row<TradingAccount> = TradingAccount[trader_id: trader_id];
-        a.cash_balance = a.cash_balance + amount;
-        TradingAccount[trader_id: trader_id] = a;
+        TradingAccount[trader_id: trader_id].cash_balance = a.cash_balance + amount;
     }
 }
 
@@ -313,8 +310,7 @@ transaction WithdrawFunds(trader_id: int, amount: float)
         if a.cash_balance < amount {
             return;
         }
-        a.cash_balance = a.cash_balance - amount;
-        TradingAccount[trader_id: trader_id] = a;
+        TradingAccount[trader_id: trader_id].cash_balance = a.cash_balance - amount;
     }
 }
 
@@ -324,15 +320,14 @@ transaction WithdrawFunds(trader_id: int, amount: float)
 transaction UpdateLastPrice(stock_id: int, price: float, volume_delta: int) {
     hop {
         var s: Row<Stock> = Stock[stock_id: stock_id];
-        s.last_price = price;
-        s.volume = s.volume + volume_delta;
+        Stock[stock_id: stock_id].last_price = price;
+        Stock[stock_id: stock_id].volume = s.volume + volume_delta;
         if price > s.high_price {
-            s.high_price = price;
+            Stock[stock_id: stock_id].high_price = price;
         }
         if price < s.low_price {
-            s.low_price = price;
+            Stock[stock_id: stock_id].low_price = price;
         }
-        Stock[stock_id: stock_id] = s;
     }
 }
 
@@ -345,8 +340,7 @@ transaction CancelOrder(order_id: int) {
                 return;
             }
         }
-        o.status = 0;
-        TradeOrder[order_id: order_id] = o;
+        TradeOrder[order_id: order_id].status = 0;
     }
 }
 
@@ -367,9 +361,7 @@ transaction SetPriceAlert(alert_id: int, trader_id: int, stock_id: int,
 // 18. TriggerPriceAlert — mark alert as triggered.
 transaction TriggerPriceAlert(alert_id: int) {
     hop {
-        var a: Row<PriceAlert> = PriceAlert[alert_id: alert_id];
-        a.triggered = 1;
-        PriceAlert[alert_id: alert_id] = a;
+        PriceAlert[alert_id: alert_id].triggered = 1;
     }
 }
 
@@ -390,20 +382,16 @@ transaction DeclareDividend(div_id: int, stock_id: int, amount_per_share: float,
 // 20. OpenMarketSession — open the trading session.
 transaction OpenMarketSession(session_id: int, date: int, open_time: int) {
     hop {
-        var m: Row<MarketSession> = MarketSession[session_id: session_id];
-        m.status = 1;
-        m.open_time = open_time;
-        MarketSession[session_id: session_id] = m;
+        MarketSession[session_id: session_id].status = 1;
+        MarketSession[session_id: session_id].open_time = open_time;
     }
 }
 
 // 21. CloseMarketSession — close the trading session.
 transaction CloseMarketSession(session_id: int, close_time: int) {
     hop {
-        var m: Row<MarketSession> = MarketSession[session_id: session_id];
-        m.status = 0;
-        m.close_time = close_time;
-        MarketSession[session_id: session_id] = m;
+        MarketSession[session_id: session_id].status = 0;
+        MarketSession[session_id: session_id].close_time = close_time;
     }
 }
 
@@ -414,8 +402,7 @@ transaction AddToWatchlist(trader_id: int, stock_id: int, ts: int) {
             added_at: ts
         };
         var wl: Row<Watchlist> = Watchlist[trader_id: trader_id];
-        wl.item_count = wl.item_count + 1;
-        Watchlist[trader_id: trader_id] = wl;
+        Watchlist[trader_id: trader_id].item_count = wl.item_count + 1;
     }
 }
 
@@ -423,20 +410,15 @@ transaction AddToWatchlist(trader_id: int, stock_id: int, ts: int) {
 transaction RemoveFromWatchlist(trader_id: int, stock_id: int) {
     hop {
         var wl: Row<Watchlist> = Watchlist[trader_id: trader_id];
-        wl.item_count = wl.item_count - 1;
-        Watchlist[trader_id: trader_id] = wl;
-        var wi: Row<WatchlistItem> = WatchlistItem[trader_id: trader_id, stock_id: stock_id];
-        wi.added_at = 0;
-        WatchlistItem[trader_id: trader_id, stock_id: stock_id] = wi;
+        Watchlist[trader_id: trader_id].item_count = wl.item_count - 1;
+        WatchlistItem[trader_id: trader_id, stock_id: stock_id].added_at = 0;
     }
 }
 
 // 24. UpdateMarginAccount — risk system updates margin usage.
 transaction UpdateMarginUsed(trader_id: int, new_used: float) {
     hop {
-        var m: Row<MarginAccount> = MarginAccount[trader_id: trader_id];
-        m.margin_used = new_used;
-        MarginAccount[trader_id: trader_id] = m;
+        MarginAccount[trader_id: trader_id].margin_used = new_used;
     }
 }
 
@@ -466,9 +448,8 @@ transaction PlaceBuyOrder(order_id: int, trader_id: int, stock_id: int,
         if a.cash_balance < total_cost {
             return;
         }
-        a.cash_balance = a.cash_balance - total_cost;
-        a.reserved_cash = a.reserved_cash + total_cost;
-        TradingAccount[trader_id: trader_id] = a;
+        TradingAccount[trader_id: trader_id].cash_balance = a.cash_balance - total_cost;
+        TradingAccount[trader_id: trader_id].reserved_cash = a.reserved_cash + total_cost;
     }
     hop {
         TradeOrder[order_id: order_id] = {
@@ -537,8 +518,7 @@ transaction FillBuyOrder(order_id: int, trade_id: int, trader_id: int, stock_id:
     }
     hop {
         var pos: Row<Position> = Position[trader_id: trader_id, stock_id: stock_id];
-        pos.shares = pos.shares + qty;
-        Position[trader_id: trader_id, stock_id: stock_id] = pos;
+        Position[trader_id: trader_id, stock_id: stock_id].shares = pos.shares + qty;
     }
 }
 
@@ -567,11 +547,9 @@ transaction FillSellOrder(order_id: int, trade_id: int, trader_id: int, stock_id
     }
     hop {
         var a: Row<TradingAccount> = TradingAccount[trader_id: trader_id];
-        a.cash_balance = a.cash_balance + (float(qty) * price);
-        TradingAccount[trader_id: trader_id] = a;
+        TradingAccount[trader_id: trader_id].cash_balance = a.cash_balance + (float(qty) * price);
         var pos: Row<Position> = Position[trader_id: trader_id, stock_id: stock_id];
-        pos.shares = pos.shares - qty;
-        Position[trader_id: trader_id, stock_id: stock_id] = pos;
+        Position[trader_id: trader_id, stock_id: stock_id].shares = pos.shares - qty;
     }
 }
 
@@ -584,14 +562,12 @@ transaction CancelBuyOrder(order_id: int, trader_id: int, reserved_amount: float
         if o.status != 1 {
             return;
         }
-        o.status = 0;
-        TradeOrder[order_id: order_id] = o;
+        TradeOrder[order_id: order_id].status = 0;
     }
     hop {
         var a: Row<TradingAccount> = TradingAccount[trader_id: trader_id];
-        a.reserved_cash = a.reserved_cash - reserved_amount;
-        a.cash_balance = a.cash_balance + reserved_amount;
-        TradingAccount[trader_id: trader_id] = a;
+        TradingAccount[trader_id: trader_id].reserved_cash = a.reserved_cash - reserved_amount;
+        TradingAccount[trader_id: trader_id].cash_balance = a.cash_balance + reserved_amount;
     }
 }
 
@@ -609,8 +585,7 @@ transaction PayDividend(pay_id: int, div_id: int, trader_id: int,
     }
     hop {
         var a: Row<TradingAccount> = TradingAccount[trader_id: trader_id];
-        a.cash_balance = a.cash_balance + amount;
-        TradingAccount[trader_id: trader_id] = a;
+        TradingAccount[trader_id: trader_id].cash_balance = a.cash_balance + amount;
         DividendPayment[pay_id: pay_id] = {
             div_id: div_id,
             trader_id: trader_id,
@@ -625,9 +600,7 @@ transaction PayDividend(pay_id: int, div_id: int, trader_id: int,
 // Hop 1: dividend partition — set status=1.
 transaction MarkDividendPaid(div_id: int) {
     hop {
-        var d: Row<Dividend> = Dividend[div_id: div_id];
-        d.status = 1;
-        Dividend[div_id: div_id] = d;
+        Dividend[div_id: div_id].status = 1;
     }
 }
 
@@ -643,8 +616,7 @@ transaction UpdatePosition(trader_id: int, stock_id: int) {
     hop {
         var pos: Row<Position> = Position[trader_id: trader_id, stock_id: stock_id];
         var pnl: float = float(pos.shares) * (pos.avg_cost - pos.avg_cost); // placeholder
-        pos.unrealized_pnl = pnl;
-        Position[trader_id: trader_id, stock_id: stock_id] = pos;
+        Position[trader_id: trader_id, stock_id: stock_id].unrealized_pnl = pnl;
     }
 }
 
@@ -673,9 +645,7 @@ transaction InitMarginAccount(trader_id: int, margin_limit: float, maintenance: 
 // Hop 2: regulatory log    — log the margin call event.
 transaction MarginCall(trader_id: int, log_id: int, new_limit: float, ts: int) {
     hop {
-        var m: Row<MarginAccount> = MarginAccount[trader_id: trader_id];
-        m.margin_limit = new_limit;
-        MarginAccount[trader_id: trader_id] = m;
+        MarginAccount[trader_id: trader_id].margin_limit = new_limit;
     }
     hop {
         RegulatoryLog[log_id: log_id] = {
@@ -720,8 +690,7 @@ transaction UpdateRealizedPnL(trader_id: int, stock_id: int, pnl: float) {
     }
     hop {
         var a: Row<TradingAccount> = TradingAccount[trader_id: trader_id];
-        a.realized_pnl = a.realized_pnl + pnl;
-        TradingAccount[trader_id: trader_id] = a;
+        TradingAccount[trader_id: trader_id].realized_pnl = a.realized_pnl + pnl;
     }
 }
 
@@ -730,9 +699,7 @@ transaction UpdateRealizedPnL(trader_id: int, stock_id: int, pnl: float) {
 // Hop 2: regulatory log    — log suspension event.
 transaction SuspendTrader(trader_id: int, log_id: int, ts: int) {
     hop {
-        var t: Row<Trader> = Trader[trader_id: trader_id];
-        t.kyc_status = 0;
-        Trader[trader_id: trader_id] = t;
+        Trader[trader_id: trader_id].kyc_status = 0;
     }
     hop {
         RegulatoryLog[log_id: log_id] = {
@@ -751,18 +718,16 @@ transaction PartialFillOrder(order_id: int, trader_id: int, stock_id: int,
                               fill_qty: int, side: int) {
     hop {
         var o: Row<TradeOrder> = TradeOrder[order_id: order_id];
-        o.filled_qty = o.filled_qty + fill_qty;
-        o.status = 2;
-        TradeOrder[order_id: order_id] = o;
+        TradeOrder[order_id: order_id].filled_qty = o.filled_qty + fill_qty;
+        TradeOrder[order_id: order_id].status = 2;
     }
     hop {
         var pos: Row<Position> = Position[trader_id: trader_id, stock_id: stock_id];
         if side == 0 {
-            pos.shares = pos.shares + fill_qty;
+            Position[trader_id: trader_id, stock_id: stock_id].shares = pos.shares + fill_qty;
         } else {
-            pos.shares = pos.shares - fill_qty;
+            Position[trader_id: trader_id, stock_id: stock_id].shares = pos.shares - fill_qty;
         }
-        Position[trader_id: trader_id, stock_id: stock_id] = pos;
     }
 }
 
@@ -770,12 +735,10 @@ transaction PartialFillOrder(order_id: int, trader_id: int, stock_id: int,
 // Commutative with UpdateLastPrice (different fields).
 transaction SetOpenPrice(stock_id: int, open_price: float) {
     hop {
-        var s: Row<Stock> = Stock[stock_id: stock_id];
-        s.open_price = open_price;
-        s.low_price = open_price;
-        s.high_price = open_price;
-        s.volume = 0;
-        Stock[stock_id: stock_id] = s;
+        Stock[stock_id: stock_id].open_price = open_price;
+        Stock[stock_id: stock_id].low_price = open_price;
+        Stock[stock_id: stock_id].high_price = open_price;
+        Stock[stock_id: stock_id].volume = 0;
     }
 }
 
@@ -815,15 +778,12 @@ transaction OpenPosition(trader_id: int, stock_id: int, shares: int, avg_cost: f
 // Hop 2: account partition  — update realized PnL.
 transaction ClosePosition(trader_id: int, stock_id: int, pnl: float) {
     hop {
-        var pos: Row<Position> = Position[trader_id: trader_id, stock_id: stock_id];
-        pos.shares = 0;
-        pos.unrealized_pnl = 0.0;
-        Position[trader_id: trader_id, stock_id: stock_id] = pos;
+        Position[trader_id: trader_id, stock_id: stock_id].shares = 0;
+        Position[trader_id: trader_id, stock_id: stock_id].unrealized_pnl = 0.0;
     }
     hop {
         var a: Row<TradingAccount> = TradingAccount[trader_id: trader_id];
-        a.realized_pnl = a.realized_pnl + pnl;
-        TradingAccount[trader_id: trader_id] = a;
+        TradingAccount[trader_id: trader_id].realized_pnl = a.realized_pnl + pnl;
     }
 }
 
@@ -833,15 +793,13 @@ transaction ClosePosition(trader_id: int, stock_id: int, pnl: float) {
 transaction RecordStockSplit(stock_id: int, trader_id: int, split_ratio: int) {
     hop {
         var s: Row<Stock> = Stock[stock_id: stock_id];
-        s.last_price = s.last_price / float(split_ratio);
-        s.open_price = s.open_price / float(split_ratio);
-        Stock[stock_id: stock_id] = s;
+        Stock[stock_id: stock_id].last_price = s.last_price / float(split_ratio);
+        Stock[stock_id: stock_id].open_price = s.open_price / float(split_ratio);
     }
     hop {
         var pos: Row<Position> = Position[trader_id: trader_id, stock_id: stock_id];
-        pos.shares = pos.shares * split_ratio;
-        pos.avg_cost = pos.avg_cost / float(split_ratio);
-        Position[trader_id: trader_id, stock_id: stock_id] = pos;
+        Position[trader_id: trader_id, stock_id: stock_id].shares = pos.shares * split_ratio;
+        Position[trader_id: trader_id, stock_id: stock_id].avg_cost = pos.avg_cost / float(split_ratio);
     }
 }
 
@@ -851,9 +809,8 @@ transaction RecordStockSplit(stock_id: int, trader_id: int, split_ratio: int) {
 transaction FreezeAccount(trader_id: int, log_id: int, ts: int) {
     hop {
         var a: Row<TradingAccount> = TradingAccount[trader_id: trader_id];
-        a.reserved_cash = a.cash_balance;
-        a.cash_balance = 0.0;
-        TradingAccount[trader_id: trader_id] = a;
+        TradingAccount[trader_id: trader_id].reserved_cash = a.cash_balance;
+        TradingAccount[trader_id: trader_id].cash_balance = 0.0;
     }
     hop {
         RegulatoryLog[log_id: log_id] = {
@@ -1027,9 +984,7 @@ transaction GetDividendPaymentsByTrader(trader_id: int) -> List<int> {
 // 56. SetStockSuspended — halt trading on a stock.
 transaction SetStockSuspended(stock_id: int) {
     hop {
-        var s: Row<Stock> = Stock[stock_id: stock_id];
-        s.volume = 0;
-        Stock[stock_id: stock_id] = s;
+        Stock[stock_id: stock_id].volume = 0;
     }
 }
 
@@ -1040,17 +995,14 @@ transaction AdjustCashForDividend(trader_id: int, amount: float)
 {
     hop {
         var a: Row<TradingAccount> = TradingAccount[trader_id: trader_id];
-        a.cash_balance = a.cash_balance + amount;
-        TradingAccount[trader_id: trader_id] = a;
+        TradingAccount[trader_id: trader_id].cash_balance = a.cash_balance + amount;
     }
 }
 
 // 58. UpdateSessionStocks — associate all stocks with a new market session.
 transaction UpdateStockSession(stock_id: int, session_id: int) {
     hop {
-        var s: Row<Stock> = Stock[stock_id: stock_id];
-        s.session_id = session_id;
-        Stock[stock_id: stock_id] = s;
+        Stock[stock_id: stock_id].session_id = session_id;
     }
 }
 
@@ -1059,15 +1011,12 @@ transaction UpdateStockSession(stock_id: int, session_id: int) {
 // Hop 2: account partition — release reserved cash.
 transaction RejectOrder(order_id: int, trader_id: int, refund_amount: float) {
     hop {
-        var o: Row<TradeOrder> = TradeOrder[order_id: order_id];
-        o.status = 0;
-        TradeOrder[order_id: order_id] = o;
+        TradeOrder[order_id: order_id].status = 0;
     }
     hop {
         var a: Row<TradingAccount> = TradingAccount[trader_id: trader_id];
-        a.reserved_cash = a.reserved_cash - refund_amount;
-        a.cash_balance = a.cash_balance + refund_amount;
-        TradingAccount[trader_id: trader_id] = a;
+        TradingAccount[trader_id: trader_id].reserved_cash = a.reserved_cash - refund_amount;
+        TradingAccount[trader_id: trader_id].cash_balance = a.cash_balance + refund_amount;
     }
 }
 

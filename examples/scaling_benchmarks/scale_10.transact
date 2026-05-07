@@ -89,8 +89,7 @@ transaction GetCustomer(cid: int) {
 transaction UpdateStock(pid: int, delta: int) {
     hop {
         var p: Row<Product> = Product[pid: pid];
-        p.stock = p.stock + delta;
-        Product[pid: pid] = p;
+        Product[pid: pid].stock = p.stock + delta;
     }
 }
 
@@ -103,8 +102,7 @@ transaction PlaceOrder(oid: int, cid: int, pid: int, qty: int, unit_price: float
         if p.stock < qty {
             return;
         }
-        p.stock = p.stock - qty;
-        Product[pid: pid] = p;
+        Product[pid: pid].stock = p.stock - qty;
     }
     hop {
         Order[oid: oid] = {
@@ -125,14 +123,11 @@ transaction PlaceOrder(oid: int, cid: int, pid: int, qty: int, unit_price: float
 // Hop 2: product partition — restore stock.
 transaction CancelOrder(oid: int, pid: int, qty: int) {
     hop {
-        var o: Row<Order> = Order[oid: oid];
-        o.status = 0;
-        Order[oid: oid] = o;
+        Order[oid: oid].status = 0;
     }
     hop {
         var p: Row<Product> = Product[pid: pid];
-        p.stock = p.stock + qty;
-        Product[pid: pid] = p;
+        Product[pid: pid].stock = p.stock + qty;
     }
 }
 
@@ -152,8 +147,7 @@ transaction EarnPoints(cid: int, pts: int)
 {
     hop {
         var l: Row<LoyaltyLedger> = LoyaltyLedger[cid: cid];
-        l.balance = l.balance + pts;
-        LoyaltyLedger[cid: cid] = l;
+        LoyaltyLedger[cid: cid].balance = l.balance + pts;
     }
 }
 
@@ -167,8 +161,7 @@ transaction RedeemPoints(cid: int, pts: int)
         if l.balance < pts {
             return;
         }
-        l.balance = l.balance - pts;
-        LoyaltyLedger[cid: cid] = l;
+        LoyaltyLedger[cid: cid].balance = l.balance - pts;
     }
 }
 

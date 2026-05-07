@@ -43,14 +43,12 @@ transaction Transfer(srcId: int, dstId: int, amount: float)
         if src.balance < amount {
             return;
         }
-        src.balance = src.balance - amount;
-        Account[id: srcId] = src;
+        Account[id: srcId].balance = src.balance - amount;
     }
 
     // Hop 2: destination partition — credit.
     hop {
         var dst: Row<Account> = Account[id: dstId];
-        dst.balance = dst.balance + amount;
-        Account[id: dstId] = dst;
+        Account[id: dstId].balance = dst.balance + amount;
     }
 }
