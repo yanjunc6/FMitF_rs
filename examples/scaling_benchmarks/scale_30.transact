@@ -1,0 +1,597 @@
+// ============================================================================
+// Scale-30: Ride-Sharing Platform (30 transactions)
+//
+// Domain: On-demand ride matching — drivers, riders, trips, payments, ratings.
+// Tables: Driver, Rider, Vehicle, Trip, TripLog, Wallet, Payment,
+//         Rating, PromoCode, SurgeZone (10)
+// Transactions: 30
+//
+// Partition strategy:
+//   Driver    — partitioned by driver_id
+//   Rider     — partitioned by rider_id
+//   Vehicle   — partitioned by vehicle_id
+//   Trip      — partitioned by trip_id
+//   TripLog   — co-located with Trip (trip_id)
+//   Wallet    — partitioned by owner_id (shared by drivers and riders)
+//   Payment   — partitioned by pay_id
+//   Rating    — partitioned by rating_id
+//   PromoCode — partitioned by promo_id
+//   SurgeZone — partitioned by zone_id
+//
+// Commutativity highlights:
+//   CreditWallet vs CreditWallet: both do balance += amt — commutative.
+//   UpdateSurgeRate: pure overwrite — commutative with read-only GetSurge.
+//   RequestTrip hop 1 (conditional driver availability) — non-commutative.
+//   ChargeRider / DebitWallet: conditional deduct — non-commutative.
+// ============================================================================
+
+partition f(x: int) -> int { return x; }
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+table Driver {
+    primary driver_id: int;
+    node f(driver_id);
+    name: string;
+    phone: string;
+    license: string;
+    status: int;        // 0=offline, 1=available, 2=on_trip
+    rating_sum: int;
+    trip_count: int;
+}
+
+table Rider {
+    primary rider_id: int;
+    node f(rider_id);
+    name: string;
+    phone: string;
+    email: string;
+    status: int;        // 0=inactive, 1=active, 2=on_trip
+    rating_sum: int;
+    trip_count: int;
+}
+
+table Vehicle {
+    primary vehicle_id: int;
+    node f(vehicle_id);
+    driver_id: int;
+    plate: string;
+    model: string;
+    year: int;
+    category: string;   // "economy", "comfort", "xl"
+    active: int;
+}
+
+table Trip {
+    primary trip_id: int;
+    node f(trip_id);
+    driver_id: int;
+    rider_id: int;
+    pickup_zone: int;
+    dropoff_zone: int;
+    fare: float;
+    surge_multiplier: float;
+    status: int;        // 0=cancelled, 1=requested, 2=accepted, 3=in_progress, 4=completed
+    created_at: int;
+}
+
+table TripLog {
+    primary trip_id: int;
+    primary event_seq: int;
+    node f(trip_id);    // co-located with Trip
+    event_type: string;
+    recorded_at: int;
+}
+
+table Wallet {
+    primary owner_id: int;
+    node f(owner_id);
+    balance: float;
+    reserved: float;    // amount held for in-progress trip
+    invariant balance >= 0.0;
+}
+
+table Payment {
+    primary pay_id: int;
+    node f(pay_id);
+    trip_id: int;
+    payer_id: int;
+    payee_id: int;
+    amount: float;
+    method: string;     // "wallet", "card", "cash"
+    status: int;
+    paid_at: int;
+}
+
+table Rating {
+    primary rating_id: int;
+    node f(rating_id);
+    trip_id: int;
+    rater_id: int;
+    ratee_id: int;
+    score: int;
+    comment: string;
+    created_at: int;
+}
+
+table PromoCode {
+    primary promo_id: int;
+    node f(promo_id);
+    code: string;
+    discount_pct: int;
+    max_uses: int;
+    used_count: int;
+    valid_until: int;
+}
+
+table SurgeZone {
+    primary zone_id: int;
+    node f(zone_id);
+    multiplier: float;
+    active_drivers: int;
+    active_requests: int;
+}
+
+// ============================================================================
+// Transactions (30)
+// ============================================================================
+
+// 1. GetDriver — read driver profile.
+transaction GetDriver(driver_id: int) {
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        to_unit(d);
+    }
+}
+
+// 2. GetRider — read rider profile.
+transaction GetRider(rider_id: int) {
+    hop {
+        var r: Row<Rider> = Rider[rider_id: rider_id];
+        to_unit(r);
+    }
+}
+
+// 3. GetTrip — read trip record.
+transaction GetTrip(trip_id: int) {
+    hop {
+        var t: Row<Trip> = Trip[trip_id: trip_id];
+        to_unit(t);
+    }
+}
+
+// 4. GetWalletBalance — read wallet balance.
+transaction GetWalletBalance(owner_id: int) {
+    hop {
+        var w: Row<Wallet> = Wallet[owner_id: owner_id];
+        var bal: float = w.balance;
+        to_unit(bal);
+    }
+}
+
+// 5. GetSurgeRate — read current surge multiplier for a zone.
+transaction GetSurgeRate(zone_id: int) {
+    hop {
+        var z: Row<SurgeZone> = SurgeZone[zone_id: zone_id];
+        var m: float = z.multiplier;
+        to_unit(m);
+    }
+}
+
+// 6. RegisterDriver — create driver and initialize wallet.
+// Hop 1: driver partition — insert driver record.
+// Hop 2: wallet partition — initialize driver wallet.
+transaction RegisterDriver(driver_id: int, name: string, phone: string, license: string) {
+    hop {
+        Driver[driver_id: driver_id] = {
+            name: name,
+            phone: phone,
+            license: license,
+            status: 0,
+            rating_sum: 0,
+            trip_count: 0
+        };
+    }
+    hop {
+        Wallet[owner_id: driver_id] = {
+            balance: 0.0,
+            reserved: 0.0
+        };
+    }
+}
+
+// 7. RegisterRider — create rider and initialize wallet.
+// Hop 1: rider partition  — insert rider record.
+// Hop 2: wallet partition — initialize rider wallet.
+transaction RegisterRider(rider_id: int, name: string, phone: string, email: string) {
+    hop {
+        Rider[rider_id: rider_id] = {
+            name: name,
+            phone: phone,
+            email: email,
+            status: 1,
+            rating_sum: 0,
+            trip_count: 0
+        };
+    }
+    hop {
+        Wallet[owner_id: rider_id] = {
+            balance: 0.0,
+            reserved: 0.0
+        };
+    }
+}
+
+// 8. SetDriverAvailable — driver goes online. Single-hop status update.
+transaction SetDriverAvailable(driver_id: int) {
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        d.status = 1;
+        Driver[driver_id: driver_id] = d;
+    }
+}
+
+// 9. SetDriverOffline — driver goes offline.
+transaction SetDriverOffline(driver_id: int) {
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        d.status = 0;
+        Driver[driver_id: driver_id] = d;
+    }
+}
+
+// 10. RegisterVehicle — add a vehicle to a driver.
+transaction RegisterVehicle(vehicle_id: int, driver_id: int, plate: string,
+                             model: string, year: int, category: string) {
+    hop {
+        Vehicle[vehicle_id: vehicle_id] = {
+            driver_id: driver_id,
+            plate: plate,
+            model: model,
+            year: year,
+            category: category,
+            active: 1
+        };
+    }
+}
+
+// 11. UpdateSurgeRate — dispatcher updates surge multiplier for a zone.
+// Commutative with GetSurge (read vs write); two concurrent updates on the
+// same zone are non-commutative (last write wins matters).
+transaction UpdateSurgeRate(zone_id: int, multiplier: float,
+                             active_drivers: int, active_requests: int) {
+    hop {
+        var z: Row<SurgeZone> = SurgeZone[zone_id: zone_id];
+        z.multiplier = multiplier;
+        z.active_drivers = active_drivers;
+        z.active_requests = active_requests;
+        SurgeZone[zone_id: zone_id] = z;
+    }
+}
+
+// 12. CreditWallet — deposit funds into a wallet. Commutative with itself.
+transaction CreditWallet(owner_id: int, amount: float)
+    assume amount > 0.0;
+{
+    hop {
+        var w: Row<Wallet> = Wallet[owner_id: owner_id];
+        w.balance = w.balance + amount;
+        Wallet[owner_id: owner_id] = w;
+    }
+}
+
+// 13. DebitWallet — withdraw funds if available. Non-commutative (conditional).
+transaction DebitWallet(owner_id: int, amount: float)
+    assume amount > 0.0;
+{
+    hop {
+        var w: Row<Wallet> = Wallet[owner_id: owner_id];
+        if w.balance < amount {
+            return;
+        }
+        w.balance = w.balance - amount;
+        Wallet[owner_id: owner_id] = w;
+    }
+}
+
+// 14. RequestTrip — rider requests a trip; assigns an available driver.
+// Hop 1: driver partition — verify available, set status=2 (on_trip).
+// Hop 2: trip partition   — create trip record.
+transaction RequestTrip(trip_id: int, driver_id: int, rider_id: int,
+                         pickup_zone: int, dropoff_zone: int, fare: float,
+                         surge: float, ts: int) {
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        if d.status != 1 {
+            return;
+        }
+        d.status = 2;
+        Driver[driver_id: driver_id] = d;
+    }
+    hop {
+        Trip[trip_id: trip_id] = {
+            driver_id: driver_id,
+            rider_id: rider_id,
+            pickup_zone: pickup_zone,
+            dropoff_zone: dropoff_zone,
+            fare: fare,
+            surge_multiplier: surge,
+            status: 2,
+            created_at: ts
+        };
+    }
+}
+
+// 15. StartTrip — driver starts the trip.
+// Hop 1: trip partition   — set status=3.
+// Hop 2: rider partition  — set status=2 (on_trip).
+transaction StartTrip(trip_id: int, rider_id: int, ts: int) {
+    hop {
+        var t: Row<Trip> = Trip[trip_id: trip_id];
+        t.status = 3;
+        Trip[trip_id: trip_id] = t;
+        TripLog[trip_id: trip_id, event_seq: 1] = {
+            event_type: "started",
+            recorded_at: ts
+        };
+    }
+    hop {
+        var r: Row<Rider> = Rider[rider_id: rider_id];
+        r.status = 2;
+        Rider[rider_id: rider_id] = r;
+    }
+}
+
+// 16. CompleteTrip — finish trip, update driver/rider stats, release status.
+// Hop 1: trip partition   — set status=4, log event.
+// Hop 2: driver partition — set status=1 (available), increment trip_count.
+// Hop 3: rider partition  — set status=1 (active), increment trip_count.
+transaction CompleteTrip(trip_id: int, driver_id: int, rider_id: int, ts: int) {
+    hop {
+        var t: Row<Trip> = Trip[trip_id: trip_id];
+        t.status = 4;
+        Trip[trip_id: trip_id] = t;
+        TripLog[trip_id: trip_id, event_seq: 2] = {
+            event_type: "completed",
+            recorded_at: ts
+        };
+    }
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        d.status = 1;
+        d.trip_count = d.trip_count + 1;
+        Driver[driver_id: driver_id] = d;
+    }
+    hop {
+        var r: Row<Rider> = Rider[rider_id: rider_id];
+        r.status = 1;
+        r.trip_count = r.trip_count + 1;
+        Rider[rider_id: rider_id] = r;
+    }
+}
+
+// 17. CancelTripByRider — rider cancels a requested trip.
+// Hop 1: trip partition   — set status=0.
+// Hop 2: driver partition — restore status=1.
+transaction CancelTripByRider(trip_id: int, driver_id: int) {
+    hop {
+        var t: Row<Trip> = Trip[trip_id: trip_id];
+        if t.status != 1 && t.status != 2 {
+            return;
+        }
+        t.status = 0;
+        Trip[trip_id: trip_id] = t;
+    }
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        d.status = 1;
+        Driver[driver_id: driver_id] = d;
+    }
+}
+
+// 18. ProcessTripPayment — debit rider wallet, credit driver wallet.
+// Hop 1: rider wallet  — deduct fare (conditional on balance).
+// Hop 2: driver wallet — credit net fare.
+transaction ProcessTripPayment(pay_id: int, trip_id: int, rider_id: int,
+                                driver_id: int, fare: float, ts: int) {
+    hop {
+        var rw: Row<Wallet> = Wallet[owner_id: rider_id];
+        if rw.balance < fare {
+            return;
+        }
+        rw.balance = rw.balance - fare;
+        Wallet[owner_id: rider_id] = rw;
+    }
+    hop {
+        var dw: Row<Wallet> = Wallet[owner_id: driver_id];
+        dw.balance = dw.balance + fare;
+        Wallet[owner_id: driver_id] = dw;
+        Payment[pay_id: pay_id] = {
+            trip_id: trip_id,
+            payer_id: rider_id,
+            payee_id: driver_id,
+            amount: fare,
+            method: "wallet",
+            status: 1,
+            paid_at: ts
+        };
+    }
+}
+
+// 19. RateDriver — rider rates driver after trip completion.
+// Hop 1: rating partition — insert rating record.
+// Hop 2: driver partition — update rating_sum (commutative increment).
+transaction RateDriver(rating_id: int, trip_id: int, rider_id: int,
+                        driver_id: int, score: int, comment: string, ts: int) {
+    hop {
+        Rating[rating_id: rating_id] = {
+            trip_id: trip_id,
+            rater_id: rider_id,
+            ratee_id: driver_id,
+            score: score,
+            comment: comment,
+            created_at: ts
+        };
+    }
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        d.rating_sum = d.rating_sum + score;
+        Driver[driver_id: driver_id] = d;
+    }
+}
+
+// 20. RateRider — driver rates rider after trip completion.
+// Hop 1: rating partition — insert rating record.
+// Hop 2: rider partition  — update rating_sum (commutative increment).
+transaction RateRider(rating_id: int, trip_id: int, driver_id: int,
+                       rider_id: int, score: int, comment: string, ts: int) {
+    hop {
+        Rating[rating_id: rating_id] = {
+            trip_id: trip_id,
+            rater_id: driver_id,
+            ratee_id: rider_id,
+            score: score,
+            comment: comment,
+            created_at: ts
+        };
+    }
+    hop {
+        var r: Row<Rider> = Rider[rider_id: rider_id];
+        r.rating_sum = r.rating_sum + score;
+        Rider[rider_id: rider_id] = r;
+    }
+}
+
+// 21. ApplyPromoCode — validate and apply promo, decrement uses.
+// Non-commutative: two concurrent uses on a code near max_uses may conflict.
+transaction ApplyPromoCode(promo_id: int) -> int {
+    hop {
+        var p: Row<PromoCode> = PromoCode[promo_id: promo_id];
+        if p.used_count >= p.max_uses {
+            return 0;
+        }
+        p.used_count = p.used_count + 1;
+        PromoCode[promo_id: promo_id] = p;
+        return p.discount_pct;
+    }
+}
+
+// 22. AddPromoCode — create a new promo code.
+transaction AddPromoCode(promo_id: int, code: string, discount_pct: int,
+                          max_uses: int, valid_until: int) {
+    hop {
+        PromoCode[promo_id: promo_id] = {
+            code: code,
+            discount_pct: discount_pct,
+            max_uses: max_uses,
+            used_count: 0,
+            valid_until: valid_until
+        };
+    }
+}
+
+// 23. GetTripHistory — global scan of trips for a rider.
+transaction GetTripHistory(rider_id: int) -> List<int> {
+    @global hop {
+        var result: List<int> = emptyList();
+        for (var it: Iterator<Trip> = scan(Trip, 0, __slice__); hasNext(it); it = next(it)) {
+            var tid = get_trip_id(it);
+            var t: Row<Trip> = Trip[trip_id: tid];
+            if t.rider_id == rider_id {
+                result = append(result, tid);
+            }
+        }
+        return result;
+    }
+}
+
+// 24. GetDriverEarnings — global scan to sum driver earnings from payments.
+transaction GetDriverEarnings(driver_id: int) -> float {
+    @global hop {
+        var total: float = 0.0;
+        for (var it: Iterator<Payment> = scan(Payment, 1, __slice__); hasNext(it); it = next(it)) {
+            var pid = get_pay_id(it);
+            var p: Row<Payment> = Payment[pay_id: pid];
+            if p.payee_id == driver_id && p.status == 1 {
+                total = total + p.amount;
+            }
+        }
+        return total;
+    }
+}
+
+// 25. GetAvailableDrivers — global scan for available drivers in a zone.
+transaction GetAvailableDrivers(pickup_zone: int) -> List<int> {
+    @global hop {
+        var result: List<int> = emptyList();
+        for (var it: Iterator<Driver> = scan(Driver, 2, __slice__); hasNext(it); it = next(it)) {
+            var did = get_driver_id(it);
+            var d: Row<Driver> = Driver[driver_id: did];
+            if d.status == 1 {
+                result = append(result, did);
+            }
+        }
+        return result;
+    }
+}
+
+// 26. ReserveWalletFunds — hold a fare amount before trip starts.
+// Non-commutative with DebitWallet on the same wallet.
+transaction ReserveWalletFunds(owner_id: int, amount: float)
+    assume amount > 0.0;
+{
+    hop {
+        var w: Row<Wallet> = Wallet[owner_id: owner_id];
+        if w.balance < amount {
+            return;
+        }
+        w.balance = w.balance - amount;
+        w.reserved = w.reserved + amount;
+        Wallet[owner_id: owner_id] = w;
+    }
+}
+
+// 27. ReleaseWalletReservation — release reserved funds back to balance.
+transaction ReleaseWalletReservation(owner_id: int, amount: float) {
+    hop {
+        var w: Row<Wallet> = Wallet[owner_id: owner_id];
+        if w.reserved < amount {
+            return;
+        }
+        w.reserved = w.reserved - amount;
+        w.balance = w.balance + amount;
+        Wallet[owner_id: owner_id] = w;
+    }
+}
+
+// 28. UpdateVehicleStatus — deactivate or reactivate a vehicle.
+transaction UpdateVehicleStatus(vehicle_id: int, active: int) {
+    hop {
+        var v: Row<Vehicle> = Vehicle[vehicle_id: vehicle_id];
+        v.active = active;
+        Vehicle[vehicle_id: vehicle_id] = v;
+    }
+}
+
+// 29. ReportIncident — log an incident event for a trip.
+// Hop 1: trip partition — verify trip is in valid state, log event.
+transaction ReportIncident(trip_id: int, event_seq: int, ts: int) {
+    hop {
+        var t: Row<Trip> = Trip[trip_id: trip_id];
+        to_unit(t);
+        TripLog[trip_id: trip_id, event_seq: event_seq] = {
+            event_type: "incident",
+            recorded_at: ts
+        };
+    }
+}
+
+// 30. GetRating — read a specific rating record.
+transaction GetRating(rating_id: int) {
+    hop {
+        var r: Row<Rating> = Rating[rating_id: rating_id];
+        to_unit(r);
+    }
+}

@@ -1,0 +1,1484 @@
+// Telecom Billing Platform — 90 transactions
+// Tables: Subscriber, Plan, Subscription, UsageRecord, Bill, BillItem,
+//         Payment, CallLog, DataSession, SMS, Device, PhoneNumber,
+//         PortRequest, Package, PackageAddon, Tower, ServiceTicket, Roaming
+// Breakdown: 10 read-only, 20 single-hop writes,
+//            45 two-hop writes, 15 global scans
+
+partition f(x: int) -> int { return x; }
+
+table Subscriber {
+    primary id: int;
+    node f(id);
+    first_name: string;
+    last_name: string;
+    email: string;
+    status: int;
+    credit_score: int;
+    created_at: int;
+    invariant credit_score >= 0;
+}
+
+table Plan {
+    primary id: int;
+    node f(id);
+    name: string;
+    monthly_fee: int;
+    data_limit_mb: int;
+    call_minutes: int;
+    sms_count: int;
+    is_active: bool;
+    subscriber_count: int;
+    invariant monthly_fee >= 0;
+    invariant subscriber_count >= 0;
+}
+
+table Subscription {
+    primary id: int;
+    node f(id);
+    subscriber_id: int;
+    plan_id: int;
+    status: int;
+    data_used_mb: int;
+    calls_used: int;
+    sms_used: int;
+    start_date: int;
+    end_date: int;
+    invariant data_used_mb >= 0;
+    invariant calls_used >= 0;
+    invariant sms_used >= 0;
+}
+
+table UsageRecord {
+    primary id: int;
+    node f(id);
+    subscription_id: int;
+    usage_type: int;
+    amount: int;
+    charge: int;
+    recorded_at: int;
+    invariant amount >= 0;
+    invariant charge >= 0;
+}
+
+table Bill {
+    primary id: int;
+    node f(id);
+    subscriber_id: int;
+    billing_period: int;
+    total_amount: int;
+    paid_amount: int;
+    status: int;
+    due_date: int;
+    created_at: int;
+    invariant total_amount >= 0;
+    invariant paid_amount >= 0;
+}
+
+table BillItem {
+    primary id: int;
+    node f(id);
+    bill_id: int;
+    item_type: int;
+    description: string;
+    amount: int;
+    invariant amount >= 0;
+}
+
+table Payment {
+    primary id: int;
+    node f(id);
+    subscriber_id: int;
+    bill_id: int;
+    amount: int;
+    method: int;
+    status: int;
+    processed_at: int;
+    invariant amount > 0;
+}
+
+table CallLog {
+    primary id: int;
+    node f(id);
+    subscription_id: int;
+    caller_number: string;
+    callee_number: string;
+    duration_sec: int;
+    call_type: int;
+    charge: int;
+    started_at: int;
+    invariant duration_sec >= 0;
+    invariant charge >= 0;
+}
+
+table DataSession {
+    primary id: int;
+    node f(id);
+    subscription_id: int;
+    data_mb: int;
+    tower_id: int;
+    charge: int;
+    started_at: int;
+    ended_at: int;
+    invariant data_mb >= 0;
+    invariant charge >= 0;
+}
+
+table SMS {
+    primary id: int;
+    node f(id);
+    subscription_id: int;
+    from_number: string;
+    to_number: string;
+    msg_type: int;
+    charge: int;
+    sent_at: int;
+    invariant charge >= 0;
+}
+
+table Device {
+    primary id: int;
+    node f(id);
+    subscriber_id: int;
+    imei: string;
+    model: string;
+    os_type: int;
+    is_primary: bool;
+    registered_at: int;
+}
+
+table PhoneNumber {
+    primary id: int;
+    node f(id);
+    subscriber_id: int;
+    number: string;
+    number_type: int;
+    is_primary: bool;
+    status: int;
+}
+
+table PortRequest {
+    primary id: int;
+    node f(id);
+    subscriber_id: int;
+    number_id: int;
+    source_carrier: string;
+    target_carrier: string;
+    status: int;
+    requested_at: int;
+}
+
+table Package {
+    primary id: int;
+    node f(id);
+    name: string;
+    package_type: int;
+    data_mb: int;
+    call_minutes: int;
+    sms_count: int;
+    price: int;
+    validity_days: int;
+    purchase_count: int;
+    invariant price >= 0;
+    invariant purchase_count >= 0;
+}
+
+table PackageAddon {
+    primary id: int;
+    node f(id);
+    subscription_id: int;
+    package_id: int;
+    data_remaining_mb: int;
+    calls_remaining: int;
+    sms_remaining: int;
+    expires_at: int;
+    invariant data_remaining_mb >= 0;
+    invariant calls_remaining >= 0;
+    invariant sms_remaining >= 0;
+}
+
+table Tower {
+    primary id: int;
+    node f(id);
+    location: string;
+    active_connections: int;
+    max_connections: int;
+    data_throughput_mbps: int;
+    status: int;
+    invariant active_connections >= 0;
+}
+
+table ServiceTicket {
+    primary id: int;
+    node f(id);
+    subscriber_id: int;
+    ticket_type: int;
+    description: string;
+    status: int;
+    priority: int;
+    created_at: int;
+    resolved_at: int;
+}
+
+table Roaming {
+    primary subscription_id: int;
+    node f(subscription_id);
+    country_code: string;
+    data_used_mb: int;
+    calls_used: int;
+    charge: int;
+    active: bool;
+    invariant data_used_mb >= 0;
+    invariant calls_used >= 0;
+    invariant charge >= 0;
+}
+
+// ── READ-ONLY (10) ─────────────────────────────────────────────────
+
+transaction GetSubscriber(subscriberId: int)
+{
+    hop {
+        var s: Row<Subscriber> = Subscriber[id: subscriberId];
+        to_unit(s.first_name);
+        to_unit(s.last_name);
+        to_unit(s.email);
+        to_unit(s.status);
+        to_unit(s.credit_score);
+    }
+}
+
+transaction GetSubscription(subscriptionId: int)
+{
+    hop {
+        var sub: Row<Subscription> = Subscription[id: subscriptionId];
+        to_unit(sub.plan_id);
+        to_unit(sub.status);
+        to_unit(sub.data_used_mb);
+        to_unit(sub.calls_used);
+        to_unit(sub.sms_used);
+    }
+}
+
+transaction GetBill(billId: int)
+{
+    hop {
+        var b: Row<Bill> = Bill[id: billId];
+        to_unit(b.total_amount);
+        to_unit(b.paid_amount);
+        to_unit(b.status);
+        to_unit(b.due_date);
+    }
+}
+
+transaction GetPlanDetails(planId: int)
+{
+    hop {
+        var p: Row<Plan> = Plan[id: planId];
+        to_unit(p.name);
+        to_unit(p.monthly_fee);
+        to_unit(p.data_limit_mb);
+        to_unit(p.call_minutes);
+        to_unit(p.sms_count);
+    }
+}
+
+transaction GetRoamingStatus(subscriptionId: int)
+{
+    hop {
+        var r: Row<Roaming> = Roaming[subscription_id: subscriptionId];
+        to_unit(r.country_code);
+        to_unit(r.data_used_mb);
+        to_unit(r.calls_used);
+        to_unit(r.charge);
+        to_unit(r.active);
+    }
+}
+
+transaction GetPackageAddon(subscriptionId: int, addonId: int)
+{
+    hop {
+        var pa: Row<PackageAddon> = PackageAddon[id: addonId];
+        to_unit(pa.package_id);
+        to_unit(pa.data_remaining_mb);
+        to_unit(pa.calls_remaining);
+        to_unit(pa.sms_remaining);
+        to_unit(pa.expires_at);
+    }
+}
+
+transaction GetTowerStatus(towerId: int)
+{
+    hop {
+        var t: Row<Tower> = Tower[id: towerId];
+        to_unit(t.location);
+        to_unit(t.active_connections);
+        to_unit(t.status);
+        to_unit(t.data_throughput_mbps);
+    }
+}
+
+transaction GetPortRequest(requestId: int, subscriberId: int)
+{
+    hop {
+        var pr: Row<PortRequest> = PortRequest[id: requestId];
+        to_unit(pr.number_id);
+        to_unit(pr.source_carrier);
+        to_unit(pr.target_carrier);
+        to_unit(pr.status);
+    }
+}
+
+transaction GetDevice(subscriberId: int, deviceId: int)
+{
+    hop {
+        var d: Row<Device> = Device[id: deviceId];
+        to_unit(d.imei);
+        to_unit(d.model);
+        to_unit(d.os_type);
+        to_unit(d.is_primary);
+    }
+}
+
+transaction GetServiceTicket(ticketId: int, subscriberId: int)
+{
+    hop {
+        var st: Row<ServiceTicket> = ServiceTicket[id: ticketId];
+        to_unit(st.ticket_type);
+        to_unit(st.status);
+        to_unit(st.priority);
+        to_unit(st.description);
+    }
+}
+
+// ── SINGLE-HOP WRITES (20) ─────────────────────────────────────────
+
+transaction RecordDataUsage(subscriptionId: int, dataMb: int)
+    assume dataMb > 0;
+{
+    hop {
+        var sub: Row<Subscription> = Subscription[id: subscriptionId];
+        sub.data_used_mb = sub.data_used_mb + dataMb;
+        Subscription[id: subscriptionId] = sub;
+    }
+}
+
+transaction RecordCallUsage(subscriptionId: int, minutes: int)
+    assume minutes > 0;
+{
+    hop {
+        var sub: Row<Subscription> = Subscription[id: subscriptionId];
+        sub.calls_used = sub.calls_used + minutes;
+        Subscription[id: subscriptionId] = sub;
+    }
+}
+
+transaction RecordSMSUsage(subscriptionId: int, count: int)
+    assume count > 0;
+{
+    hop {
+        var sub: Row<Subscription> = Subscription[id: subscriptionId];
+        sub.sms_used = sub.sms_used + count;
+        Subscription[id: subscriptionId] = sub;
+    }
+}
+
+transaction IncrementPlanSubscribers(planId: int)
+{
+    hop {
+        var p: Row<Plan> = Plan[id: planId];
+        p.subscriber_count = p.subscriber_count + 1;
+        Plan[id: planId] = p;
+    }
+}
+
+transaction DecrementPlanSubscribers(planId: int)
+{
+    hop {
+        var p: Row<Plan> = Plan[id: planId];
+        if p.subscriber_count > 0 {
+            p.subscriber_count = p.subscriber_count - 1;
+        }
+        Plan[id: planId] = p;
+    }
+}
+
+transaction SuspendSubscriber(subscriberId: int)
+{
+    hop {
+        var s: Row<Subscriber> = Subscriber[id: subscriberId];
+        if s.status != 1 { return; }
+        s.status = 2;
+        Subscriber[id: subscriberId] = s;
+    }
+}
+
+transaction ReactivateSubscriber(subscriberId: int)
+{
+    hop {
+        var s: Row<Subscriber> = Subscriber[id: subscriberId];
+        if s.status != 2 { return; }
+        s.status = 1;
+        Subscriber[id: subscriberId] = s;
+    }
+}
+
+transaction UpdateCreditScore(subscriberId: int, delta: int)
+{
+    hop {
+        var s: Row<Subscriber> = Subscriber[id: subscriberId];
+        var newScore: int = s.credit_score + delta;
+        if newScore < 0 { newScore = 0; }
+        s.credit_score = newScore;
+        Subscriber[id: subscriberId] = s;
+    }
+}
+
+transaction AddBillItem(billId: int, itemId: int, itemType: int, amount: int)
+    assume amount > 0;
+{
+    hop {
+        var b: Row<Bill> = Bill[id: billId];
+        b.total_amount = b.total_amount + amount;
+        Bill[id: billId] = b;
+    }
+}
+
+transaction MarkBillOverdue(billId: int)
+{
+    hop {
+        var b: Row<Bill> = Bill[id: billId];
+        if b.status != 0 { return; }
+        b.status = 3;
+        Bill[id: billId] = b;
+    }
+}
+
+transaction AddRoamingCharge(subscriptionId: int, charge: int)
+    assume charge > 0;
+{
+    hop {
+        var r: Row<Roaming> = Roaming[subscription_id: subscriptionId];
+        r.charge = r.charge + charge;
+        Roaming[subscription_id: subscriptionId] = r;
+    }
+}
+
+transaction AddRoamingDataUsage(subscriptionId: int, dataMb: int)
+    assume dataMb > 0;
+{
+    hop {
+        var r: Row<Roaming> = Roaming[subscription_id: subscriptionId];
+        r.data_used_mb = r.data_used_mb + dataMb;
+        Roaming[subscription_id: subscriptionId] = r;
+    }
+}
+
+transaction IncrementPackagePurchaseCount(packageId: int)
+{
+    hop {
+        var pkg: Row<Package> = Package[id: packageId];
+        pkg.purchase_count = pkg.purchase_count + 1;
+        Package[id: packageId] = pkg;
+    }
+}
+
+transaction ConsumeAddonData(subscriptionId: int, addonId: int, dataMb: int)
+    assume dataMb > 0;
+{
+    hop {
+        var pa: Row<PackageAddon> = PackageAddon[id: addonId];
+        if pa.data_remaining_mb < dataMb { return; }
+        pa.data_remaining_mb = pa.data_remaining_mb - dataMb;
+        PackageAddon[id: addonId] = pa;
+    }
+}
+
+transaction ConsumeAddonMinutes(subscriptionId: int, addonId: int, minutes: int)
+    assume minutes > 0;
+{
+    hop {
+        var pa: Row<PackageAddon> = PackageAddon[id: addonId];
+        if pa.calls_remaining < minutes { return; }
+        pa.calls_remaining = pa.calls_remaining - minutes;
+        PackageAddon[id: addonId] = pa;
+    }
+}
+
+transaction ConnectToTower(towerId: int)
+{
+    hop {
+        var t: Row<Tower> = Tower[id: towerId];
+        if t.active_connections >= t.max_connections { return; }
+        t.active_connections = t.active_connections + 1;
+        Tower[id: towerId] = t;
+    }
+}
+
+transaction DisconnectFromTower(towerId: int)
+{
+    hop {
+        var t: Row<Tower> = Tower[id: towerId];
+        if t.active_connections <= 0 { return; }
+        t.active_connections = t.active_connections - 1;
+        Tower[id: towerId] = t;
+    }
+}
+
+transaction UpdateTicketStatus(ticketId: int, subscriberId: int, newStatus: int)
+{
+    hop {
+        var st: Row<ServiceTicket> = ServiceTicket[id: ticketId];
+        st.status = newStatus;
+        ServiceTicket[id: ticketId] = st;
+    }
+}
+
+transaction LogCall(subscriptionId: int, callId: int, callee: string, durationSec: int, callType: int, charge: int, startedAt: int)
+    assume durationSec >= 0;
+    assume charge >= 0;
+{
+    hop {
+        var cl: Row<CallLog> = CallLog[id: callId];
+        cl.subscription_id = subscriptionId;
+        cl.callee_number = callee;
+        cl.duration_sec = durationSec;
+        cl.call_type = callType;
+        cl.charge = charge;
+        cl.started_at = startedAt;
+        CallLog[id: callId] = cl;
+    }
+}
+
+transaction LogSMS(subscriptionId: int, smsId: int, toNumber: string, msgType: int, charge: int, sentAt: int)
+    assume charge >= 0;
+{
+    hop {
+        var sms: Row<SMS> = SMS[id: smsId];
+        sms.subscription_id = subscriptionId;
+        sms.to_number = toNumber;
+        sms.msg_type = msgType;
+        sms.charge = charge;
+        sms.sent_at = sentAt;
+        SMS[id: smsId] = sms;
+    }
+}
+
+// ── TWO-HOP WRITES (45) ─────────────────────────────────────────────
+
+transaction ActivateSubscription(subscriberId: int, subscriptionId: int, planId: int)
+{
+    hop {
+        var s: Row<Subscriber> = Subscriber[id: subscriberId];
+        if s.status != 1 { return; }
+        to_unit(s.credit_score);
+    }
+    hop {
+        var sub: Row<Subscription> = Subscription[id: subscriptionId];
+        if sub.status != 0 { return; }
+        sub.status = 1;
+        sub.data_used_mb = 0;
+        sub.calls_used = 0;
+        sub.sms_used = 0;
+        Subscription[id: subscriptionId] = sub;
+        var p: Row<Plan> = Plan[id: planId];
+        p.subscriber_count = p.subscriber_count + 1;
+        Plan[id: planId] = p;
+    }
+}
+
+transaction CancelSubscription(subscriberId: int, subscriptionId: int, planId: int)
+{
+    hop {
+        var sub: Row<Subscription> = Subscription[id: subscriptionId];
+        if sub.status != 1 { return; }
+        sub.status = 3;
+        Subscription[id: subscriptionId] = sub;
+    }
+    hop {
+        var p: Row<Plan> = Plan[id: planId];
+        if p.subscriber_count > 0 {
+            p.subscriber_count = p.subscriber_count - 1;
+        }
+        Plan[id: planId] = p;
+    }
+}
+
+transaction PauseSubscription(subscriberId: int, subscriptionId: int)
+{
+    hop {
+        var sub: Row<Subscription> = Subscription[id: subscriptionId];
+        if sub.status != 1 { return; }
+        sub.status = 2;
+        Subscription[id: subscriptionId] = sub;
+    }
+    hop {
+        var s: Row<Subscriber> = Subscriber[id: subscriberId];
+        to_unit(s.status);
+    }
+}
+
+transaction ChangePlan(subscriberId: int, subscriptionId: int, oldPlanId: int, newPlanId: int)
+{
+    hop {
+        var oldPlan: Row<Plan> = Plan[id: oldPlanId];
+        if oldPlan.subscriber_count > 0 {
+            oldPlan.subscriber_count = oldPlan.subscriber_count - 1;
+        }
+        Plan[id: oldPlanId] = oldPlan;
+    }
+    hop {
+        var newPlan: Row<Plan> = Plan[id: newPlanId];
+        if !newPlan.is_active { return; }
+        newPlan.subscriber_count = newPlan.subscriber_count + 1;
+        Plan[id: newPlanId] = newPlan;
+        var sub: Row<Subscription> = Subscription[id: subscriptionId];
+        sub.plan_id = newPlanId;
+        sub.data_used_mb = 0;
+        sub.calls_used = 0;
+        sub.sms_used = 0;
+        Subscription[id: subscriptionId] = sub;
+    }
+}
+
+transaction MakePayment(subscriberId: int, billId: int, paymentId: int, amount: int)
+    assume amount > 0;
+{
+    hop {
+        var b: Row<Bill> = Bill[id: billId];
+        if b.subscriber_id != subscriberId { return; }
+        var remaining: int = b.total_amount - b.paid_amount;
+        if amount > remaining { return; }
+        b.paid_amount = b.paid_amount + amount;
+        if b.paid_amount >= b.total_amount {
+            b.status = 2;
+        } else {
+            b.status = 1;
+        }
+        Bill[id: billId] = b;
+    }
+    hop {
+        var pmt: Row<Payment> = Payment[id: paymentId];
+        pmt.subscriber_id = subscriberId;
+        pmt.bill_id = billId;
+        pmt.amount = amount;
+        pmt.status = 1;
+        Payment[id: paymentId] = pmt;
+    }
+}
+
+transaction RefundPayment(subscriberId: int, billId: int, paymentId: int, amount: int)
+    assume amount > 0;
+{
+    hop {
+        var pmt: Row<Payment> = Payment[id: paymentId];
+        if pmt.status != 1 { return; }
+        if pmt.amount < amount { return; }
+        pmt.status = 3;
+        Payment[id: paymentId] = pmt;
+    }
+    hop {
+        var b: Row<Bill> = Bill[id: billId];
+        if b.paid_amount < amount { return; }
+        b.paid_amount = b.paid_amount - amount;
+        if b.paid_amount < b.total_amount {
+            b.status = 1;
+        }
+        Bill[id: billId] = b;
+    }
+}
+
+transaction GenerateMonthlyBill(subscriberId: int, billId: int, period: int, amount: int, dueDate: int)
+    assume amount >= 0;
+{
+    hop {
+        var s: Row<Subscriber> = Subscriber[id: subscriberId];
+        if s.status == 0 { return; }
+        to_unit(s.credit_score);
+    }
+    hop {
+        var b: Row<Bill> = Bill[id: billId];
+        b.subscriber_id = subscriberId;
+        b.billing_period = period;
+        b.total_amount = amount;
+        b.paid_amount = 0;
+        b.status = 0;
+        b.due_date = dueDate;
+        Bill[id: billId] = b;
+    }
+}
+
+transaction ApplyLateFee(subscriberId: int, billId: int, feeAmount: int)
+    assume feeAmount > 0;
+{
+    hop {
+        var b: Row<Bill> = Bill[id: billId];
+        if b.status != 3 { return; }
+        b.total_amount = b.total_amount + feeAmount;
+        Bill[id: billId] = b;
+    }
+    hop {
+        var s: Row<Subscriber> = Subscriber[id: subscriberId];
+        var newScore: int = s.credit_score - 5;
+        if newScore < 0 { newScore = 0; }
+        s.credit_score = newScore;
+        Subscriber[id: subscriberId] = s;
+    }
+}
+
+transaction BuyDataPackage(subscriberId: int, subscriptionId: int, packageId: int, addonId: int, dataMb: int, price: int)
+    assume dataMb > 0;
+    assume price > 0;
+{
+    hop {
+        var pkg: Row<Package> = Package[id: packageId];
+        pkg.purchase_count = pkg.purchase_count + 1;
+        Package[id: packageId] = pkg;
+    }
+    hop {
+        var pa: Row<PackageAddon> = PackageAddon[id: addonId];
+        pa.subscription_id = subscriptionId;
+        pa.package_id = packageId;
+        pa.data_remaining_mb = pa.data_remaining_mb + dataMb;
+        PackageAddon[id: addonId] = pa;
+    }
+}
+
+transaction BuyCallMinutePackage(subscriberId: int, subscriptionId: int, packageId: int, addonId: int, minutes: int, price: int)
+    assume minutes > 0;
+    assume price > 0;
+{
+    hop {
+        var pkg: Row<Package> = Package[id: packageId];
+        pkg.purchase_count = pkg.purchase_count + 1;
+        Package[id: packageId] = pkg;
+    }
+    hop {
+        var pa: Row<PackageAddon> = PackageAddon[id: addonId];
+        pa.subscription_id = subscriptionId;
+        pa.package_id = packageId;
+        pa.calls_remaining = pa.calls_remaining + minutes;
+        PackageAddon[id: addonId] = pa;
+    }
+}
+
+transaction EnableRoaming(subscriptionId: int, subscriberId: int, countryCode: string)
+{
+    hop {
+        var sub: Row<Subscription> = Subscription[id: subscriptionId];
+        if sub.status != 1 { return; }
+        to_unit(sub.plan_id);
+    }
+    hop {
+        var r: Row<Roaming> = Roaming[subscription_id: subscriptionId];
+        r.subscription_id = subscriptionId;
+        r.country_code = countryCode;
+        r.data_used_mb = 0;
+        r.calls_used = 0;
+        r.charge = 0;
+        r.active = true;
+        Roaming[subscription_id: subscriptionId] = r;
+    }
+}
+
+transaction DisableRoaming(subscriptionId: int, subscriberId: int)
+{
+    hop {
+        var r: Row<Roaming> = Roaming[subscription_id: subscriptionId];
+        if !r.active { return; }
+        r.active = false;
+        Roaming[subscription_id: subscriptionId] = r;
+    }
+    hop {
+        var sub: Row<Subscription> = Subscription[id: subscriptionId];
+        to_unit(sub.data_used_mb);
+    }
+}
+
+transaction RecordDataSession(subscriptionId: int, sessionId: int, towerId: int, dataMb: int, charge: int, startedAt: int)
+    assume dataMb >= 0;
+    assume charge >= 0;
+{
+    hop {
+        var t: Row<Tower> = Tower[id: towerId];
+        if t.status == 0 { return; }
+        t.active_connections = t.active_connections + 1;
+        Tower[id: towerId] = t;
+    }
+    hop {
+        var sub: Row<Subscription> = Subscription[id: subscriptionId];
+        sub.data_used_mb = sub.data_used_mb + dataMb;
+        Subscription[id: subscriptionId] = sub;
+        var ds: Row<DataSession> = DataSession[id: sessionId];
+        ds.subscription_id = subscriptionId;
+        ds.data_mb = dataMb;
+        ds.tower_id = towerId;
+        ds.charge = charge;
+        ds.started_at = startedAt;
+        DataSession[id: sessionId] = ds;
+    }
+}
+
+transaction EndDataSession(subscriptionId: int, sessionId: int, towerId: int, endedAt: int)
+{
+    hop {
+        var ds: Row<DataSession> = DataSession[id: sessionId];
+        ds.ended_at = endedAt;
+        DataSession[id: sessionId] = ds;
+    }
+    hop {
+        var t: Row<Tower> = Tower[id: towerId];
+        if t.active_connections > 0 {
+            t.active_connections = t.active_connections - 1;
+        }
+        Tower[id: towerId] = t;
+    }
+}
+
+transaction RegisterDevice(subscriberId: int, deviceId: int, imei: string, model: string, osType: int, registeredAt: int)
+{
+    hop {
+        var s: Row<Subscriber> = Subscriber[id: subscriberId];
+        if s.status == 0 { return; }
+        to_unit(s.id);
+    }
+    hop {
+        var d: Row<Device> = Device[id: deviceId];
+        d.subscriber_id = subscriberId;
+        d.imei = imei;
+        d.model = model;
+        d.os_type = osType;
+        d.is_primary = false;
+        d.registered_at = registeredAt;
+        Device[id: deviceId] = d;
+    }
+}
+
+transaction DeregisterDevice(subscriberId: int, deviceId: int)
+{
+    hop {
+        var d: Row<Device> = Device[id: deviceId];
+        if d.subscriber_id != subscriberId { return; }
+        d.is_primary = false;
+        Device[id: deviceId] = d;
+    }
+    hop {
+        var s: Row<Subscriber> = Subscriber[id: subscriberId];
+        to_unit(s.status);
+    }
+}
+
+transaction SubmitPortRequest(subscriberId: int, requestId: int, numberId: int, sourceCarrier: string, targetCarrier: string, requestedAt: int)
+{
+    hop {
+        var pn: Row<PhoneNumber> = PhoneNumber[id: numberId];
+        if pn.status != 1 { return; }
+        pn.status = 0;
+        PhoneNumber[id: numberId] = pn;
+    }
+    hop {
+        var pr: Row<PortRequest> = PortRequest[id: requestId];
+        pr.subscriber_id = subscriberId;
+        pr.number_id = numberId;
+        pr.source_carrier = sourceCarrier;
+        pr.target_carrier = targetCarrier;
+        pr.status = 0;
+        pr.requested_at = requestedAt;
+        PortRequest[id: requestId] = pr;
+    }
+}
+
+transaction CompletePortRequest(subscriberId: int, requestId: int, numberId: int)
+{
+    hop {
+        var pr: Row<PortRequest> = PortRequest[id: requestId];
+        if pr.status != 1 { return; }
+        pr.status = 2;
+        PortRequest[id: requestId] = pr;
+    }
+    hop {
+        var pn: Row<PhoneNumber> = PhoneNumber[id: numberId];
+        pn.status = 2;
+        PhoneNumber[id: numberId] = pn;
+    }
+}
+
+transaction OpenServiceTicket(subscriberId: int, ticketId: int, ticketType: int, description: string, priority: int, createdAt: int)
+{
+    hop {
+        var s: Row<Subscriber> = Subscriber[id: subscriberId];
+        to_unit(s.status);
+    }
+    hop {
+        var st: Row<ServiceTicket> = ServiceTicket[id: ticketId];
+        st.subscriber_id = subscriberId;
+        st.ticket_type = ticketType;
+        st.description = description;
+        st.status = 0;
+        st.priority = priority;
+        st.created_at = createdAt;
+        ServiceTicket[id: ticketId] = st;
+    }
+}
+
+transaction ResolveServiceTicket(subscriberId: int, ticketId: int, resolvedAt: int)
+{
+    hop {
+        var st: Row<ServiceTicket> = ServiceTicket[id: ticketId];
+        if st.status != 1 { return; }
+        st.status = 2;
+        st.resolved_at = resolvedAt;
+        ServiceTicket[id: ticketId] = st;
+    }
+    hop {
+        var s: Row<Subscriber> = Subscriber[id: subscriberId];
+        s.credit_score = s.credit_score + 2;
+        Subscriber[id: subscriberId] = s;
+    }
+}
+
+transaction OverageDataCharge(subscriptionId: int, billId: int, extraMb: int, chargePerMb: int)
+    assume extraMb > 0;
+    assume chargePerMb > 0;
+{
+    hop {
+        var sub: Row<Subscription> = Subscription[id: subscriptionId];
+        to_unit(sub.data_used_mb);
+    }
+    hop {
+        var b: Row<Bill> = Bill[id: billId];
+        b.total_amount = b.total_amount + extraMb * chargePerMb;
+        Bill[id: billId] = b;
+    }
+}
+
+transaction OverageCallCharge(subscriptionId: int, billId: int, extraMin: int, chargePerMin: int)
+    assume extraMin > 0;
+    assume chargePerMin > 0;
+{
+    hop {
+        var sub: Row<Subscription> = Subscription[id: subscriptionId];
+        to_unit(sub.calls_used);
+    }
+    hop {
+        var b: Row<Bill> = Bill[id: billId];
+        b.total_amount = b.total_amount + extraMin * chargePerMin;
+        Bill[id: billId] = b;
+    }
+}
+
+transaction RoamingCallCharge(subscriptionId: int, billId: int, minutes: int, chargePerMin: int)
+    assume minutes > 0;
+    assume chargePerMin > 0;
+{
+    hop {
+        var r: Row<Roaming> = Roaming[subscription_id: subscriptionId];
+        if !r.active { return; }
+        r.calls_used = r.calls_used + minutes;
+        r.charge = r.charge + minutes * chargePerMin;
+        Roaming[subscription_id: subscriptionId] = r;
+    }
+    hop {
+        var b: Row<Bill> = Bill[id: billId];
+        b.total_amount = b.total_amount + minutes * chargePerMin;
+        Bill[id: billId] = b;
+    }
+}
+
+transaction RoamingDataCharge(subscriptionId: int, billId: int, dataMb: int, chargePerMb: int)
+    assume dataMb > 0;
+    assume chargePerMb > 0;
+{
+    hop {
+        var r: Row<Roaming> = Roaming[subscription_id: subscriptionId];
+        if !r.active { return; }
+        r.data_used_mb = r.data_used_mb + dataMb;
+        r.charge = r.charge + dataMb * chargePerMb;
+        Roaming[subscription_id: subscriptionId] = r;
+    }
+    hop {
+        var b: Row<Bill> = Bill[id: billId];
+        b.total_amount = b.total_amount + dataMb * chargePerMb;
+        Bill[id: billId] = b;
+    }
+}
+
+transaction InternationalCallCharge(subscriptionId: int, billId: int, durationSec: int, chargePerSec: int)
+    assume durationSec > 0;
+    assume chargePerSec > 0;
+{
+    hop {
+        var sub: Row<Subscription> = Subscription[id: subscriptionId];
+        sub.calls_used = sub.calls_used + durationSec / 60;
+        Subscription[id: subscriptionId] = sub;
+    }
+    hop {
+        var b: Row<Bill> = Bill[id: billId];
+        b.total_amount = b.total_amount + durationSec * chargePerSec;
+        Bill[id: billId] = b;
+    }
+}
+
+transaction ActivatePhoneNumber(subscriberId: int, numberId: int)
+{
+    hop {
+        var s: Row<Subscriber> = Subscriber[id: subscriberId];
+        if s.status != 1 { return; }
+        to_unit(s.id);
+    }
+    hop {
+        var pn: Row<PhoneNumber> = PhoneNumber[id: numberId];
+        if pn.status == 1 { return; }
+        pn.status = 1;
+        pn.subscriber_id = subscriberId;
+        PhoneNumber[id: numberId] = pn;
+    }
+}
+
+transaction DeactivatePhoneNumber(subscriberId: int, numberId: int)
+{
+    hop {
+        var pn: Row<PhoneNumber> = PhoneNumber[id: numberId];
+        if pn.status != 1 { return; }
+        pn.status = 0;
+        PhoneNumber[id: numberId] = pn;
+    }
+    hop {
+        var s: Row<Subscriber> = Subscriber[id: subscriberId];
+        to_unit(s.status);
+    }
+}
+
+transaction SetPrimaryDevice(subscriberId: int, deviceId: int)
+{
+    hop {
+        var d: Row<Device> = Device[id: deviceId];
+        if d.subscriber_id != subscriberId { return; }
+        d.is_primary = true;
+        Device[id: deviceId] = d;
+    }
+    hop {
+        var s: Row<Subscriber> = Subscriber[id: subscriberId];
+        to_unit(s.email);
+    }
+}
+
+transaction ApplyLoyaltyDiscount(subscriberId: int, billId: int, discountAmount: int)
+    assume discountAmount > 0;
+{
+    hop {
+        var s: Row<Subscriber> = Subscriber[id: subscriberId];
+        if s.credit_score < 700 { return; }
+        s.credit_score = s.credit_score + 10;
+        Subscriber[id: subscriberId] = s;
+    }
+    hop {
+        var b: Row<Bill> = Bill[id: billId];
+        if b.total_amount < discountAmount { return; }
+        b.total_amount = b.total_amount - discountAmount;
+        Bill[id: billId] = b;
+    }
+}
+
+transaction WaiveBillAmount(subscriberId: int, billId: int, waiveAmount: int)
+    assume waiveAmount > 0;
+{
+    hop {
+        var b: Row<Bill> = Bill[id: billId];
+        if b.total_amount < waiveAmount { return; }
+        b.total_amount = b.total_amount - waiveAmount;
+        Bill[id: billId] = b;
+    }
+    hop {
+        var s: Row<Subscriber> = Subscriber[id: subscriberId];
+        to_unit(s.status);
+    }
+}
+
+transaction ResetMonthlyUsage(subscriptionId: int)
+{
+    hop {
+        var sub: Row<Subscription> = Subscription[id: subscriptionId];
+        if sub.status != 1 { return; }
+        sub.data_used_mb = 0;
+        sub.calls_used = 0;
+        sub.sms_used = 0;
+        Subscription[id: subscriptionId] = sub;
+    }
+    hop {
+        var r: Row<Roaming> = Roaming[subscription_id: subscriptionId];
+        if r.active {
+            r.data_used_mb = 0;
+            r.calls_used = 0;
+        }
+        Roaming[subscription_id: subscriptionId] = r;
+    }
+}
+
+transaction ExpirePackageAddon(subscriptionId: int, addonId: int)
+{
+    hop {
+        var pa: Row<PackageAddon> = PackageAddon[id: addonId];
+        pa.data_remaining_mb = 0;
+        pa.calls_remaining = 0;
+        pa.sms_remaining = 0;
+        PackageAddon[id: addonId] = pa;
+    }
+    hop {
+        var sub: Row<Subscription> = Subscription[id: subscriptionId];
+        to_unit(sub.status);
+    }
+}
+
+transaction UpgradePlanFee(subscriberId: int, subscriptionId: int, billId: int, priceDiff: int)
+    assume priceDiff > 0;
+{
+    hop {
+        var sub: Row<Subscription> = Subscription[id: subscriptionId];
+        if sub.status != 1 { return; }
+        to_unit(sub.plan_id);
+    }
+    hop {
+        var b: Row<Bill> = Bill[id: billId];
+        b.total_amount = b.total_amount + priceDiff;
+        Bill[id: billId] = b;
+    }
+}
+
+transaction GrantFreeData(subscriberId: int, subscriptionId: int, addonId: int, freeMb: int)
+    assume freeMb > 0;
+{
+    hop {
+        var s: Row<Subscriber> = Subscriber[id: subscriberId];
+        if s.status != 1 { return; }
+        to_unit(s.id);
+    }
+    hop {
+        var pa: Row<PackageAddon> = PackageAddon[id: addonId];
+        pa.subscription_id = subscriptionId;
+        pa.data_remaining_mb = pa.data_remaining_mb + freeMb;
+        PackageAddon[id: addonId] = pa;
+    }
+}
+
+transaction TransferBalance(fromSubscriberId: int, toSubscriberId: int, fromBillId: int, toBillId: int, amount: int)
+    assume amount > 0;
+{
+    hop {
+        var fromBill: Row<Bill> = Bill[id: fromBillId];
+        if fromBill.paid_amount < amount { return; }
+        fromBill.paid_amount = fromBill.paid_amount - amount;
+        Bill[id: fromBillId] = fromBill;
+    }
+    hop {
+        var toBill: Row<Bill> = Bill[id: toBillId];
+        toBill.paid_amount = toBill.paid_amount + amount;
+        Bill[id: toBillId] = toBill;
+    }
+}
+
+transaction RecordInternationalSMS(subscriptionId: int, smsId: int, billId: int, charge: int)
+    assume charge > 0;
+{
+    hop {
+        var sub: Row<Subscription> = Subscription[id: subscriptionId];
+        sub.sms_used = sub.sms_used + 1;
+        Subscription[id: subscriptionId] = sub;
+    }
+    hop {
+        var b: Row<Bill> = Bill[id: billId];
+        b.total_amount = b.total_amount + charge;
+        Bill[id: billId] = b;
+    }
+}
+
+transaction RejectPortRequest(subscriberId: int, requestId: int, numberId: int)
+{
+    hop {
+        var pr: Row<PortRequest> = PortRequest[id: requestId];
+        if pr.status != 0 { return; }
+        pr.status = 3;
+        PortRequest[id: requestId] = pr;
+    }
+    hop {
+        var pn: Row<PhoneNumber> = PhoneNumber[id: numberId];
+        pn.status = 1;
+        PhoneNumber[id: numberId] = pn;
+    }
+}
+
+transaction ApprovePortRequest(subscriberId: int, requestId: int)
+{
+    hop {
+        var pr: Row<PortRequest> = PortRequest[id: requestId];
+        if pr.status != 0 { return; }
+        pr.status = 1;
+        PortRequest[id: requestId] = pr;
+    }
+    hop {
+        var s: Row<Subscriber> = Subscriber[id: subscriberId];
+        to_unit(s.status);
+    }
+}
+
+transaction RenewSubscription(subscriberId: int, subscriptionId: int, newEndDate: int)
+{
+    hop {
+        var s: Row<Subscriber> = Subscriber[id: subscriberId];
+        if s.status != 1 { return; }
+        to_unit(s.credit_score);
+    }
+    hop {
+        var sub: Row<Subscription> = Subscription[id: subscriptionId];
+        if sub.status == 3 { return; }
+        sub.end_date = newEndDate;
+        sub.data_used_mb = 0;
+        sub.calls_used = 0;
+        sub.sms_used = 0;
+        Subscription[id: subscriptionId] = sub;
+    }
+}
+
+transaction HandleTowerFailover(fromTowerId: int, toTowerId: int)
+{
+    hop {
+        var fromTower: Row<Tower> = Tower[id: fromTowerId];
+        fromTower.status = 0;
+        Tower[id: fromTowerId] = fromTower;
+    }
+    hop {
+        var toTower: Row<Tower> = Tower[id: toTowerId];
+        if toTower.status != 1 { return; }
+        toTower.active_connections = toTower.active_connections + 1;
+        Tower[id: toTowerId] = toTower;
+    }
+}
+
+// ── GLOBAL SCANS (15) ────────────────────────────────────────────────
+
+transaction ScanActiveSubscribers(n: int)
+{
+    @global hop {
+        for (var it: Iterator<Subscriber> = scan(Subscriber, n, __slice__); hasNext(it); it = next(it)) {
+            var sid = get_id(it);
+            var s: Row<Subscriber> = Subscriber[id: sid];
+            if s.status == 1 {
+                to_unit(s.email);
+                to_unit(s.credit_score);
+            }
+        }
+    }
+}
+
+transaction ScanSuspendedSubscribers(n: int)
+{
+    @global hop {
+        for (var it: Iterator<Subscriber> = scan(Subscriber, n, __slice__); hasNext(it); it = next(it)) {
+            var sid = get_id(it);
+            var s: Row<Subscriber> = Subscriber[id: sid];
+            if s.status == 2 {
+                to_unit(s.first_name);
+                to_unit(s.last_name);
+            }
+        }
+    }
+}
+
+transaction ScanOverdueBills(n: int)
+{
+    @global hop {
+        for (var it: Iterator<Bill> = scan(Bill, n, __slice__); hasNext(it); it = next(it)) {
+            var bid = get_id(it);
+            var b: Row<Bill> = Bill[id: bid];
+            if b.status == 3 {
+                to_unit(b.subscriber_id);
+                to_unit(b.total_amount);
+                to_unit(b.due_date);
+            }
+        }
+    }
+}
+
+transaction ScanActivePlans(n: int)
+{
+    @global hop {
+        for (var it: Iterator<Plan> = scan(Plan, n, __slice__); hasNext(it); it = next(it)) {
+            var pid = get_id(it);
+            var p: Row<Plan> = Plan[id: pid];
+            if p.is_active {
+                to_unit(p.name);
+                to_unit(p.monthly_fee);
+                to_unit(p.subscriber_count);
+            }
+        }
+    }
+}
+
+transaction ScanOnlineTowers(n: int)
+{
+    @global hop {
+        for (var it: Iterator<Tower> = scan(Tower, n, __slice__); hasNext(it); it = next(it)) {
+            var tid = get_id(it);
+            var t: Row<Tower> = Tower[id: tid];
+            if t.status == 1 {
+                to_unit(t.location);
+                to_unit(t.active_connections);
+                to_unit(t.data_throughput_mbps);
+            }
+        }
+    }
+}
+
+transaction ScanRoamingSubscriptions(n: int)
+{
+    @global hop {
+        for (var it: Iterator<Roaming> = scan(Roaming, n, __slice__); hasNext(it); it = next(it)) {
+            var sid = get_subscription_id(it);
+            var r: Row<Roaming> = Roaming[subscription_id: sid];
+            if r.active {
+                to_unit(r.country_code);
+                to_unit(r.charge);
+            }
+        }
+    }
+}
+
+transaction ScanOpenTickets(n: int)
+{
+    @global hop {
+        for (var it: Iterator<ServiceTicket> = scan(ServiceTicket, n, __slice__); hasNext(it); it = next(it)) {
+            var stid = get_id(it);
+            var st: Row<ServiceTicket> = ServiceTicket[id: stid];
+            if st.status == 0 {
+                to_unit(st.subscriber_id);
+                to_unit(st.priority);
+                to_unit(st.ticket_type);
+            }
+            if st.status == 1 {
+                to_unit(st.subscriber_id);
+                to_unit(st.priority);
+                to_unit(st.ticket_type);
+            }
+        }
+    }
+}
+
+transaction ScanPendingPortRequests(n: int)
+{
+    @global hop {
+        for (var it: Iterator<PortRequest> = scan(PortRequest, n, __slice__); hasNext(it); it = next(it)) {
+            var prid = get_id(it);
+            var pr: Row<PortRequest> = PortRequest[id: prid];
+            if pr.status == 0 {
+                to_unit(pr.subscriber_id);
+                to_unit(pr.source_carrier);
+                to_unit(pr.target_carrier);
+            }
+        }
+    }
+}
+
+transaction ScanPopularPackages(n: int)
+{
+    @global hop {
+        for (var it: Iterator<Package> = scan(Package, n, __slice__); hasNext(it); it = next(it)) {
+            var pkgid = get_id(it);
+            var pkg: Row<Package> = Package[id: pkgid];
+            to_unit(pkg.name);
+            to_unit(pkg.price);
+            to_unit(pkg.purchase_count);
+        }
+    }
+}
+
+transaction ScanHighUsageSubscriptions(n: int, dataMbThreshold: int)
+    assume dataMbThreshold > 0;
+{
+    @global hop {
+        for (var it: Iterator<Subscription> = scan(Subscription, n, __slice__); hasNext(it); it = next(it)) {
+            var subid = get_id(it);
+            var sub: Row<Subscription> = Subscription[id: subid];
+            if sub.data_used_mb >= dataMbThreshold {
+                to_unit(sub.subscriber_id);
+                to_unit(sub.data_used_mb);
+            }
+        }
+    }
+}
+
+transaction ScanUnpaidBills(n: int)
+{
+    @global hop {
+        for (var it: Iterator<Bill> = scan(Bill, n, __slice__); hasNext(it); it = next(it)) {
+            var bid = get_id(it);
+            var b: Row<Bill> = Bill[id: bid];
+            if b.status == 0 {
+                to_unit(b.subscriber_id);
+                to_unit(b.total_amount);
+                to_unit(b.paid_amount);
+            }
+            if b.status == 1 {
+                to_unit(b.subscriber_id);
+                to_unit(b.total_amount);
+                to_unit(b.paid_amount);
+            }
+        }
+    }
+}
+
+transaction ScanDegradedTowers(n: int)
+{
+    @global hop {
+        for (var it: Iterator<Tower> = scan(Tower, n, __slice__); hasNext(it); it = next(it)) {
+            var tid = get_id(it);
+            var t: Row<Tower> = Tower[id: tid];
+            if t.status == 2 {
+                to_unit(t.location);
+                to_unit(t.active_connections);
+            }
+        }
+    }
+}
+
+transaction ScanLowCreditSubscribers(n: int, threshold: int)
+    assume threshold >= 0;
+{
+    @global hop {
+        for (var it: Iterator<Subscriber> = scan(Subscriber, n, __slice__); hasNext(it); it = next(it)) {
+            var sid = get_id(it);
+            var s: Row<Subscriber> = Subscriber[id: sid];
+            if s.credit_score < threshold {
+                to_unit(s.email);
+                to_unit(s.credit_score);
+            }
+        }
+    }
+}
+
+transaction ScanAllDevices(n: int)
+{
+    @global hop {
+        for (var it: Iterator<Device> = scan(Device, n, __slice__); hasNext(it); it = next(it)) {
+            var did = get_id(it);
+            var d: Row<Device> = Device[id: did];
+            to_unit(d.subscriber_id);
+            to_unit(d.imei);
+            to_unit(d.model);
+            to_unit(d.is_primary);
+        }
+    }
+}
+
+transaction ScanActiveDataSessions(n: int)
+{
+    @global hop {
+        for (var it: Iterator<DataSession> = scan(DataSession, n, __slice__); hasNext(it); it = next(it)) {
+            var dsid = get_id(it);
+            var ds: Row<DataSession> = DataSession[id: dsid];
+            if ds.ended_at == 0 {
+                to_unit(ds.subscription_id);
+                to_unit(ds.tower_id);
+                to_unit(ds.data_mb);
+            }
+        }
+    }
+}
