@@ -1,0 +1,1022 @@
+// ============================================================================
+// Scale-50: Hospital Patient Management (50 transactions)
+//
+// Domain: Inpatient care — admissions, beds, labs, prescriptions, billing.
+// Tables: Patient, Doctor, Nurse, Department, Bed, Appointment,
+//         Admission, MedicalRecord, Prescription, PrescriptionItem,
+//         LabOrder, LabResult, Medication, Bill, BillItem,
+//         Insurance, VitalSign, Triage (18)
+// Transactions: 50
+//
+// Partition strategy:
+//   Patient/Triage/Insurance — partitioned by patient_id
+//   Doctor/Nurse             — partitioned by their own PK
+//   Department/Bed           — partitioned by dept_id / bed_id
+//   Appointment              — partitioned by appt_id
+//   Admission/MedicalRecord  — partitioned by adm_id / record_id
+//   Prescription/PrescriptionItem — partitioned by prid
+//   LabOrder/LabResult       — partitioned by lab_id / result_id
+//   Medication               — partitioned by med_id
+//   Bill/BillItem            — partitioned by bill_id
+//   VitalSign                — partitioned by vs_id
+//
+// Commutativity highlights:
+//   RecordVitalSign: two concurrent records for different patients — commutative.
+//   AddBillItem: bill_total += amount — commutative (pure increment).
+//   IncrementDeptOccupancy: dept.occupied += 1 — commutative.
+//   AdmitPatient hop 1 (conditional bed check): non-commutative.
+//   FulfillPrescription (conditional stock deduct): non-commutative.
+// ============================================================================
+
+partition f(x: int) -> int { return x; }
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+table Patient {
+    primary patient_id: int;
+    node f(patient_id);
+    name: string;
+    dob: int;
+    blood_type: string;
+    contact: string;
+    insurance_id: int;
+    status: int;        // 0=discharged, 1=outpatient, 2=admitted
+}
+
+table Doctor {
+    primary doctor_id: int;
+    node f(doctor_id);
+    name: string;
+    specialty: string;
+    dept_id: int;
+    license_no: string;
+    available: int;     // 0=unavailable, 1=available
+}
+
+table Nurse {
+    primary nurse_id: int;
+    node f(nurse_id);
+    name: string;
+    dept_id: int;
+    shift: int;         // 0=day, 1=evening, 2=night
+    assigned_patients: int;
+}
+
+table Department {
+    primary dept_id: int;
+    node f(dept_id);
+    name: string;
+    floor: int;
+    capacity: int;
+    occupied: int;
+    invariant occupied <= capacity;
+}
+
+table Bed {
+    primary bed_id: int;
+    node f(bed_id);
+    dept_id: int;
+    room_no: string;
+    status: int;        // 0=available, 1=occupied, 2=cleaning
+    patient_id: int;    // 0 = empty
+}
+
+table Appointment {
+    primary appt_id: int;
+    node f(appt_id);
+    patient_id: int;
+    doctor_id: int;
+    scheduled_at: int;
+    appt_type: string;
+    status: int;        // 0=cancelled, 1=scheduled, 2=completed
+}
+
+table Admission {
+    primary adm_id: int;
+    node f(adm_id);
+    patient_id: int;
+    doctor_id: int;
+    dept_id: int;
+    bed_id: int;
+    admit_time: int;
+    discharge_time: int;
+    status: int;        // 0=discharged, 1=admitted
+    diagnosis: string;
+}
+
+table MedicalRecord {
+    primary record_id: int;
+    node f(record_id);
+    patient_id: int;
+    doctor_id: int;
+    adm_id: int;
+    recorded_at: int;
+    notes: string;
+    diagnosis: string;
+}
+
+table Prescription {
+    primary prid: int;
+    node f(prid);
+    patient_id: int;
+    doctor_id: int;
+    created_at: int;
+    status: int;        // 0=pending, 1=dispensed, 2=cancelled
+}
+
+table PrescriptionItem {
+    primary prid: int;
+    primary med_id: int;
+    node f(prid);
+    dosage: string;
+    frequency: int;
+    duration_days: int;
+    qty: int;
+}
+
+table LabOrder {
+    primary lab_id: int;
+    node f(lab_id);
+    patient_id: int;
+    doctor_id: int;
+    test_type: string;
+    ordered_at: int;
+    status: int;        // 0=pending, 1=collected, 2=completed
+}
+
+table LabResult {
+    primary result_id: int;
+    node f(result_id);
+    lab_id: int;
+    patient_id: int;
+    completed_at: int;
+    result_text: string;
+    abnormal: int;
+}
+
+table Medication {
+    primary med_id: int;
+    node f(med_id);
+    name: string;
+    unit: string;
+    stock: int;
+    reorder_level: int;
+    invariant stock >= 0;
+}
+
+table Bill {
+    primary bill_id: int;
+    node f(bill_id);
+    patient_id: int;
+    adm_id: int;
+    total: float;
+    paid_amount: float;
+    status: int;        // 0=open, 1=partial, 2=paid
+}
+
+table BillItem {
+    primary bill_id: int;
+    primary item_seq: int;
+    node f(bill_id);
+    item_type: string;
+    description: string;
+    amount: float;
+}
+
+table Insurance {
+    primary ins_id: int;
+    node f(ins_id);
+    patient_id: int;
+    provider: string;
+    policy_no: string;
+    coverage_pct: int;
+    active: int;
+}
+
+table VitalSign {
+    primary vs_id: int;
+    node f(vs_id);
+    patient_id: int;
+    nurse_id: int;
+    recorded_at: int;
+    bp_systolic: int;
+    bp_diastolic: int;
+    temperature: float;
+    pulse: int;
+    spo2: int;
+}
+
+table Triage {
+    primary triage_id: int;
+    node f(triage_id);
+    patient_id: int;
+    severity: int;      // 1=immediate, 2=urgent, 3=less_urgent, 4=non_urgent
+    arrived_at: int;
+    notes: string;
+    processed: int;     // 0=waiting, 1=processed
+}
+
+// ============================================================================
+// Transactions (50)
+// ============================================================================
+
+// --- Read-only (10) ---
+
+// 1. GetPatient
+transaction GetPatient(patient_id: int) {
+    hop {
+        var p: Row<Patient> = Patient[patient_id: patient_id];
+        to_unit(p);
+    }
+}
+
+// 2. GetDoctor
+transaction GetDoctor(doctor_id: int) {
+    hop {
+        var d: Row<Doctor> = Doctor[doctor_id: doctor_id];
+        to_unit(d);
+    }
+}
+
+// 3. GetBed
+transaction GetBed(bed_id: int) {
+    hop {
+        var b: Row<Bed> = Bed[bed_id: bed_id];
+        to_unit(b);
+    }
+}
+
+// 4. GetAdmission
+transaction GetAdmission(adm_id: int) {
+    hop {
+        var a: Row<Admission> = Admission[adm_id: adm_id];
+        to_unit(a);
+    }
+}
+
+// 5. GetLabResult
+transaction GetLabResult(result_id: int) {
+    hop {
+        var r: Row<LabResult> = LabResult[result_id: result_id];
+        to_unit(r);
+    }
+}
+
+// 6. GetBill
+transaction GetBill(bill_id: int) {
+    hop {
+        var b: Row<Bill> = Bill[bill_id: bill_id];
+        to_unit(b);
+    }
+}
+
+// 7. GetMedication
+transaction GetMedication(med_id: int) {
+    hop {
+        var m: Row<Medication> = Medication[med_id: med_id];
+        to_unit(m);
+    }
+}
+
+// 8. GetVitalSigns
+transaction GetVitalSigns(vs_id: int) {
+    hop {
+        var v: Row<VitalSign> = VitalSign[vs_id: vs_id];
+        to_unit(v);
+    }
+}
+
+// 9. GetPrescription
+transaction GetPrescription(prid: int, med_id: int) {
+    hop {
+        var p: Row<Prescription> = Prescription[prid: prid];
+        to_unit(p);
+        var pi: Row<PrescriptionItem> = PrescriptionItem[prid: prid, med_id: med_id];
+        to_unit(pi);
+    }
+}
+
+// 10. GetLabOrder
+transaction GetLabOrder(lab_id: int) {
+    hop {
+        var l: Row<LabOrder> = LabOrder[lab_id: lab_id];
+        to_unit(l);
+    }
+}
+
+// --- Single-hop writes (10) ---
+
+// 11. RegisterPatient
+transaction RegisterPatient(patient_id: int, name: string, dob: int,
+                             blood_type: string, contact: string) {
+    hop {
+        Patient[patient_id: patient_id] = {
+            name: name,
+            dob: dob,
+            blood_type: blood_type,
+            contact: contact,
+            insurance_id: 0,
+            status: 1
+        };
+    }
+}
+
+// 12. RegisterDoctor
+transaction RegisterDoctor(doctor_id: int, name: string, specialty: string,
+                            dept_id: int, license_no: string) {
+    hop {
+        Doctor[doctor_id: doctor_id] = {
+            name: name,
+            specialty: specialty,
+            dept_id: dept_id,
+            license_no: license_no,
+            available: 1
+        };
+    }
+}
+
+// 13. TriagePatient — record arrival triage (pure insert, commutative by patient).
+transaction TriagePatient(triage_id: int, patient_id: int, severity: int,
+                           arrived_at: int, notes: string) {
+    hop {
+        Triage[triage_id: triage_id] = {
+            patient_id: patient_id,
+            severity: severity,
+            arrived_at: arrived_at,
+            notes: notes,
+            processed: 0
+        };
+    }
+}
+
+// 14. RecordVitalSign — nurse records patient vitals. Commutative across patients.
+transaction RecordVitalSign(vs_id: int, patient_id: int, nurse_id: int,
+                             ts: int, bp_s: int, bp_d: int,
+                             temp: float, pulse: int, spo2: int) {
+    hop {
+        VitalSign[vs_id: vs_id] = {
+            patient_id: patient_id,
+            nurse_id: nurse_id,
+            recorded_at: ts,
+            bp_systolic: bp_s,
+            bp_diastolic: bp_d,
+            temperature: temp,
+            pulse: pulse,
+            spo2: spo2
+        };
+    }
+}
+
+// 15. OrderLabTest — doctor orders a lab test.
+transaction OrderLabTest(lab_id: int, patient_id: int, doctor_id: int,
+                          test_type: string, ts: int) {
+    hop {
+        LabOrder[lab_id: lab_id] = {
+            patient_id: patient_id,
+            doctor_id: doctor_id,
+            test_type: test_type,
+            ordered_at: ts,
+            status: 0
+        };
+    }
+}
+
+// 16. UpdateBedStatus — housekeeping updates bed status.
+transaction UpdateBedStatus(bed_id: int, new_status: int) {
+    hop {
+        var b: Row<Bed> = Bed[bed_id: bed_id];
+        b.status = new_status;
+        if new_status == 0 {
+            b.patient_id = 0;
+        }
+        Bed[bed_id: bed_id] = b;
+    }
+}
+
+// 17. RestockMedication — pharmacy restocks a drug. Commutative (pure increment).
+transaction RestockMedication(med_id: int, qty: int)
+    assume qty > 0;
+{
+    hop {
+        var m: Row<Medication> = Medication[med_id: med_id];
+        m.stock = m.stock + qty;
+        Medication[med_id: med_id] = m;
+    }
+}
+
+// 18. AddBillItem — add a line item to a bill. Total increment is commutative.
+transaction AddBillItem(bill_id: int, item_seq: int, item_type: string,
+                         description: string, amount: float) {
+    hop {
+        BillItem[bill_id: bill_id, item_seq: item_seq] = {
+            item_type: item_type,
+            description: description,
+            amount: amount
+        };
+        var b: Row<Bill> = Bill[bill_id: bill_id];
+        b.total = b.total + amount;
+        Bill[bill_id: bill_id] = b;
+    }
+}
+
+// 19. UpdateInsurance — update patient insurance details.
+transaction UpdateInsurance(ins_id: int, patient_id: int, provider: string,
+                             policy_no: string, coverage_pct: int) {
+    hop {
+        Insurance[ins_id: ins_id] = {
+            patient_id: patient_id,
+            provider: provider,
+            policy_no: policy_no,
+            coverage_pct: coverage_pct,
+            active: 1
+        };
+    }
+}
+
+// 20. RecordDiagnosis — doctor records diagnosis in medical record.
+transaction RecordDiagnosis(record_id: int, patient_id: int, doctor_id: int,
+                             adm_id: int, notes: string, diagnosis: string, ts: int) {
+    hop {
+        MedicalRecord[record_id: record_id] = {
+            patient_id: patient_id,
+            doctor_id: doctor_id,
+            adm_id: adm_id,
+            recorded_at: ts,
+            notes: notes,
+            diagnosis: diagnosis
+        };
+    }
+}
+
+// --- Two-hop writes (20) ---
+
+// 21. BookAppointment — check doctor availability, create appointment.
+// Hop 1: doctor partition      — verify available.
+// Hop 2: appointment partition — insert appointment.
+transaction BookAppointment(appt_id: int, patient_id: int, doctor_id: int,
+                             scheduled_at: int, appt_type: string) {
+    hop {
+        var d: Row<Doctor> = Doctor[doctor_id: doctor_id];
+        if d.available != 1 {
+            return;
+        }
+        to_unit(d);
+    }
+    hop {
+        Appointment[appt_id: appt_id] = {
+            patient_id: patient_id,
+            doctor_id: doctor_id,
+            scheduled_at: scheduled_at,
+            appt_type: appt_type,
+            status: 1
+        };
+    }
+}
+
+// 22. CompleteAppointment — mark appointment completed.
+// Hop 1: appointment partition — set status=2.
+// Hop 2: doctor partition      — no state change needed, read-verify.
+transaction CompleteAppointment(appt_id: int, doctor_id: int) {
+    hop {
+        var a: Row<Appointment> = Appointment[appt_id: appt_id];
+        a.status = 2;
+        Appointment[appt_id: appt_id] = a;
+    }
+    hop {
+        var d: Row<Doctor> = Doctor[doctor_id: doctor_id];
+        to_unit(d);
+    }
+}
+
+// 23. AdmitPatient — allocate a bed, create admission record.
+// Hop 1: bed partition      — verify available, mark occupied.
+// Hop 2: admission partition — insert admission record.
+transaction AdmitPatient(adm_id: int, patient_id: int, doctor_id: int,
+                          dept_id: int, bed_id: int, ts: int) {
+    hop {
+        var b: Row<Bed> = Bed[bed_id: bed_id];
+        if b.status != 0 {
+            return;
+        }
+        b.status = 1;
+        b.patient_id = patient_id;
+        Bed[bed_id: bed_id] = b;
+    }
+    hop {
+        Admission[adm_id: adm_id] = {
+            patient_id: patient_id,
+            doctor_id: doctor_id,
+            dept_id: dept_id,
+            bed_id: bed_id,
+            admit_time: ts,
+            discharge_time: 0,
+            status: 1,
+            diagnosis: ""
+        };
+    }
+}
+
+// 24. DischargePatient — free bed, close admission.
+// Hop 1: bed partition      — set status=2 (cleaning).
+// Hop 2: admission partition — set status=0, record discharge time.
+transaction DischargePatient(adm_id: int, bed_id: int, ts: int) {
+    hop {
+        var b: Row<Bed> = Bed[bed_id: bed_id];
+        b.status = 2;
+        b.patient_id = 0;
+        Bed[bed_id: bed_id] = b;
+    }
+    hop {
+        var a: Row<Admission> = Admission[adm_id: adm_id];
+        a.status = 0;
+        a.discharge_time = ts;
+        Admission[adm_id: adm_id] = a;
+    }
+}
+
+// 25. WritePrescription — create prescription, check medication exists.
+// Hop 1: medication partition   — verify medication exists and has stock.
+// Hop 2: prescription partition — insert Prescription and PrescriptionItem.
+transaction WritePrescription(prid: int, patient_id: int, doctor_id: int,
+                               med_id: int, dosage: string, freq: int,
+                               duration: int, qty: int, ts: int) {
+    hop {
+        var m: Row<Medication> = Medication[med_id: med_id];
+        if m.stock < qty {
+            return;
+        }
+        to_unit(m);
+    }
+    hop {
+        Prescription[prid: prid] = {
+            patient_id: patient_id,
+            doctor_id: doctor_id,
+            created_at: ts,
+            status: 0
+        };
+        PrescriptionItem[prid: prid, med_id: med_id] = {
+            dosage: dosage,
+            frequency: freq,
+            duration_days: duration,
+            qty: qty
+        };
+    }
+}
+
+// 26. FulfillPrescription — dispense medication (deduct stock).
+// Hop 1: medication partition   — conditional deduct (non-commutative).
+// Hop 2: prescription partition — set status=1.
+transaction FulfillPrescription(prid: int, med_id: int, qty: int) {
+    hop {
+        var m: Row<Medication> = Medication[med_id: med_id];
+        if m.stock < qty {
+            return;
+        }
+        m.stock = m.stock - qty;
+        Medication[med_id: med_id] = m;
+    }
+    hop {
+        var p: Row<Prescription> = Prescription[prid: prid];
+        p.status = 1;
+        Prescription[prid: prid] = p;
+    }
+}
+
+// 27. CompleteLabTest — record lab result, update lab order status.
+// Hop 1: lab-order partition — set status=2.
+// Hop 2: result partition    — insert result record.
+transaction CompleteLabTest(result_id: int, lab_id: int, patient_id: int,
+                             result_text: string, abnormal: int, ts: int) {
+    hop {
+        var l: Row<LabOrder> = LabOrder[lab_id: lab_id];
+        l.status = 2;
+        LabOrder[lab_id: lab_id] = l;
+    }
+    hop {
+        LabResult[result_id: result_id] = {
+            lab_id: lab_id,
+            patient_id: patient_id,
+            completed_at: ts,
+            result_text: result_text,
+            abnormal: abnormal
+        };
+    }
+}
+
+// 28. OpenBill — create bill when patient is admitted.
+// Hop 1: admission partition — verify patient is admitted.
+// Hop 2: bill partition      — insert bill record.
+transaction OpenBill(bill_id: int, patient_id: int, adm_id: int) {
+    hop {
+        var a: Row<Admission> = Admission[adm_id: adm_id];
+        if a.status != 1 {
+            return;
+        }
+        to_unit(a);
+    }
+    hop {
+        Bill[bill_id: bill_id] = {
+            patient_id: patient_id,
+            adm_id: adm_id,
+            total: 0.0,
+            paid_amount: 0.0,
+            status: 0
+        };
+    }
+}
+
+// 29. PayBill — record a partial or full payment.
+// Hop 1: bill partition — add paid_amount, update status.
+transaction PayBill(bill_id: int, amount: float) {
+    hop {
+        var b: Row<Bill> = Bill[bill_id: bill_id];
+        b.paid_amount = b.paid_amount + amount;
+        if b.paid_amount >= b.total {
+            b.status = 2;
+        } else {
+            b.status = 1;
+        }
+        Bill[bill_id: bill_id] = b;
+    }
+}
+
+// 30. InsuranceClaim — apply insurance coverage to a bill.
+// Hop 1: insurance partition — read coverage percentage.
+// Hop 2: bill partition      — apply covered amount.
+transaction InsuranceClaim(bill_id: int, ins_id: int, covered_amount: float) {
+    hop {
+        var ins: Row<Insurance> = Insurance[ins_id: ins_id];
+        if ins.active != 1 {
+            return;
+        }
+        to_unit(ins);
+    }
+    hop {
+        var b: Row<Bill> = Bill[bill_id: bill_id];
+        b.paid_amount = b.paid_amount + covered_amount;
+        if b.paid_amount >= b.total {
+            b.status = 2;
+        }
+        Bill[bill_id: bill_id] = b;
+    }
+}
+
+// 31. TransferPatient — move patient from one bed to another.
+// Hop 1: old-bed partition — free old bed.
+// Hop 2: new-bed partition — occupy new bed.
+transaction TransferPatient(old_bed_id: int, new_bed_id: int, patient_id: int, adm_id: int) {
+    hop {
+        var ob: Row<Bed> = Bed[bed_id: old_bed_id];
+        ob.status = 2;  // cleaning
+        ob.patient_id = 0;
+        Bed[bed_id: old_bed_id] = ob;
+    }
+    hop {
+        var nb: Row<Bed> = Bed[bed_id: new_bed_id];
+        if nb.status != 0 {
+            return;
+        }
+        nb.status = 1;
+        nb.patient_id = patient_id;
+        Bed[bed_id: new_bed_id] = nb;
+    }
+}
+
+// 32. IncrementDeptOccupancy — update department occupancy count.
+// Commutative with other occupancy increments (pure increment).
+transaction IncrementDeptOccupancy(dept_id: int) {
+    hop {
+        var d: Row<Department> = Department[dept_id: dept_id];
+        d.occupied = d.occupied + 1;
+        Department[dept_id: dept_id] = d;
+    }
+}
+
+// 33. DecrementDeptOccupancy — department occupancy decreases on discharge.
+// Non-commutative with IncrementDeptOccupancy near capacity.
+transaction DecrementDeptOccupancy(dept_id: int) {
+    hop {
+        var d: Row<Department> = Department[dept_id: dept_id];
+        if d.occupied > 0 {
+            d.occupied = d.occupied - 1;
+        }
+        Department[dept_id: dept_id] = d;
+    }
+}
+
+// 34. CancelLabOrder — cancel a pending lab order.
+transaction CancelLabOrder(lab_id: int) {
+    hop {
+        var l: Row<LabOrder> = LabOrder[lab_id: lab_id];
+        if l.status != 0 {
+            return;
+        }
+        l.status = 3;   // cancelled
+        LabOrder[lab_id: lab_id] = l;
+    }
+}
+
+// 35. CancelPrescription — cancel an unfulfilled prescription.
+// Hop 1: prescription partition — verify pending, set cancelled.
+transaction CancelPrescription(prid: int) {
+    hop {
+        var p: Row<Prescription> = Prescription[prid: prid];
+        if p.status != 0 {
+            return;
+        }
+        p.status = 2;
+        Prescription[prid: prid] = p;
+    }
+}
+
+// 36. UpdatePatientStatus — update active/admitted status.
+// Hop 1: patient partition — update status field.
+transaction UpdatePatientStatus(patient_id: int, new_status: int) {
+    hop {
+        var p: Row<Patient> = Patient[patient_id: patient_id];
+        p.status = new_status;
+        Patient[patient_id: patient_id] = p;
+    }
+}
+
+// 37. AssignNurse — assign a nurse to a patient at admission.
+// Hop 1: nurse partition     — increment assigned_patients count.
+// Hop 2: admission partition — record nurse (via notes field update).
+transaction AssignNurse(nurse_id: int, adm_id: int) {
+    hop {
+        var n: Row<Nurse> = Nurse[nurse_id: nurse_id];
+        n.assigned_patients = n.assigned_patients + 1;
+        Nurse[nurse_id: nurse_id] = n;
+    }
+    hop {
+        var a: Row<Admission> = Admission[adm_id: adm_id];
+        to_unit(a);
+    }
+}
+
+// 38. ProcessTriage — mark triage as processed.
+// Hop 1: triage partition  — set processed=1.
+// Hop 2: patient partition — update patient status.
+transaction ProcessTriage(triage_id: int, patient_id: int) {
+    hop {
+        var t: Row<Triage> = Triage[triage_id: triage_id];
+        t.processed = 1;
+        Triage[triage_id: triage_id] = t;
+    }
+    hop {
+        var p: Row<Patient> = Patient[patient_id: patient_id];
+        p.status = 1;
+        Patient[patient_id: patient_id] = p;
+    }
+}
+
+// 39. SetDoctorAvailability — update doctor schedule availability.
+transaction SetDoctorAvailability(doctor_id: int, available: int) {
+    hop {
+        var d: Row<Doctor> = Doctor[doctor_id: doctor_id];
+        d.available = available;
+        Doctor[doctor_id: doctor_id] = d;
+    }
+}
+
+// 40. CollectLabSample — update lab order to sample-collected status.
+// Hop 1: lab-order partition — set status=1.
+transaction CollectLabSample(lab_id: int) {
+    hop {
+        var l: Row<LabOrder> = LabOrder[lab_id: lab_id];
+        if l.status != 0 {
+            return;
+        }
+        l.status = 1;
+        LabOrder[lab_id: lab_id] = l;
+    }
+}
+
+// --- Three-hop writes (5) ---
+
+// 41. FullAdmission — triage → bed allocation → admission record.
+// Hop 1: triage partition    — mark processed.
+// Hop 2: bed partition       — allocate bed.
+// Hop 3: admission partition — create admission.
+transaction FullAdmission(triage_id: int, adm_id: int, patient_id: int,
+                           doctor_id: int, dept_id: int, bed_id: int, ts: int) {
+    hop {
+        var tr: Row<Triage> = Triage[triage_id: triage_id];
+        tr.processed = 1;
+        Triage[triage_id: triage_id] = tr;
+    }
+    hop {
+        var b: Row<Bed> = Bed[bed_id: bed_id];
+        if b.status != 0 {
+            return;
+        }
+        b.status = 1;
+        b.patient_id = patient_id;
+        Bed[bed_id: bed_id] = b;
+    }
+    hop {
+        Admission[adm_id: adm_id] = {
+            patient_id: patient_id,
+            doctor_id: doctor_id,
+            dept_id: dept_id,
+            bed_id: bed_id,
+            admit_time: ts,
+            discharge_time: 0,
+            status: 1,
+            diagnosis: ""
+        };
+    }
+}
+
+// 42. CompleteDischarge — free bed, close admission, finalize bill.
+// Hop 1: bed partition      — set status=2 (cleaning).
+// Hop 2: admission partition — close admission.
+// Hop 3: bill partition     — verify bill is paid.
+transaction CompleteDischarge(bed_id: int, adm_id: int, bill_id: int, ts: int) {
+    hop {
+        var b: Row<Bed> = Bed[bed_id: bed_id];
+        b.status = 2;
+        b.patient_id = 0;
+        Bed[bed_id: bed_id] = b;
+    }
+    hop {
+        var a: Row<Admission> = Admission[adm_id: adm_id];
+        a.status = 0;
+        a.discharge_time = ts;
+        Admission[adm_id: adm_id] = a;
+    }
+    hop {
+        var bill: Row<Bill> = Bill[bill_id: bill_id];
+        to_unit(bill);
+    }
+}
+
+// 43. LabOrderFulfillment — collect sample, run test, record result.
+// Hop 1: lab-order partition — set status=collected.
+// Hop 2: lab-order partition — set status=completed (same node, sequential).
+// Hop 3: result partition    — insert result.
+transaction LabOrderFulfillment(lab_id: int, result_id: int, patient_id: int,
+                                 result_text: string, abnormal: int, ts: int) {
+    hop {
+        var l: Row<LabOrder> = LabOrder[lab_id: lab_id];
+        l.status = 1;
+        LabOrder[lab_id: lab_id] = l;
+    }
+    hop {
+        l.status = 2;
+        LabOrder[lab_id: lab_id] = l;
+    }
+    hop {
+        LabResult[result_id: result_id] = {
+            lab_id: lab_id,
+            patient_id: patient_id,
+            completed_at: ts,
+            result_text: result_text,
+            abnormal: abnormal
+        };
+    }
+}
+
+// 44. PrescriptionDispense — verify patient admitted, deduct stock, fulfill.
+// Hop 1: patient partition      — verify patient admitted.
+// Hop 2: medication partition   — deduct stock.
+// Hop 3: prescription partition — set fulfilled.
+transaction PrescriptionDispense(patient_id: int, med_id: int, prid: int, qty: int) {
+    hop {
+        var p: Row<Patient> = Patient[patient_id: patient_id];
+        if p.status != 2 {
+            return;
+        }
+        to_unit(p);
+    }
+    hop {
+        var m: Row<Medication> = Medication[med_id: med_id];
+        if m.stock < qty {
+            return;
+        }
+        m.stock = m.stock - qty;
+        Medication[med_id: med_id] = m;
+    }
+    hop {
+        var pr: Row<Prescription> = Prescription[prid: prid];
+        pr.status = 1;
+        Prescription[prid: prid] = pr;
+    }
+}
+
+// 45. BillingWithInsurance — open bill, apply insurance, add initial item.
+// Hop 1: admission partition — verify admitted.
+// Hop 2: insurance partition — read coverage.
+// Hop 3: bill partition      — create bill with initial covered amount.
+transaction BillingWithInsurance(bill_id: int, patient_id: int, adm_id: int,
+                                  ins_id: int, item_seq: int, item_type: string,
+                                  description: string, amount: float) {
+    hop {
+        var a: Row<Admission> = Admission[adm_id: adm_id];
+        if a.status != 1 {
+            return;
+        }
+        to_unit(a);
+    }
+    hop {
+        var ins: Row<Insurance> = Insurance[ins_id: ins_id];
+        to_unit(ins);
+    }
+    hop {
+        Bill[bill_id: bill_id] = {
+            patient_id: patient_id,
+            adm_id: adm_id,
+            total: amount,
+            paid_amount: 0.0,
+            status: 0
+        };
+        BillItem[bill_id: bill_id, item_seq: item_seq] = {
+            item_type: item_type,
+            description: description,
+            amount: amount
+        };
+    }
+}
+
+// --- Global scans (5) ---
+
+// 46. GetAvailableBeds — scan for available beds.
+transaction GetAvailableBeds(dept_id: int) -> List<int> {
+    @global hop {
+        var result: List<int> = emptyList();
+        for (var it: Iterator<Bed> = scan(Bed, 0, __slice__); hasNext(it); it = next(it)) {
+            var bid = get_bed_id(it);
+            var b: Row<Bed> = Bed[bed_id: bid];
+            if b.dept_id == dept_id {
+                if b.status == 0 {
+                    result = append(result, bid);
+                }
+            }
+        }
+        return result;
+    }
+}
+
+// 47. GetPendingLabOrders — scan for unprocessed lab orders.
+transaction GetPendingLabOrders() -> List<int> {
+    @global hop {
+        var result: List<int> = emptyList();
+        for (var it: Iterator<LabOrder> = scan(LabOrder, 1, __slice__); hasNext(it); it = next(it)) {
+            var lid = get_lab_id(it);
+            var l: Row<LabOrder> = LabOrder[lab_id: lid];
+            if l.status == 0 {
+                result = append(result, lid);
+            }
+        }
+        return result;
+    }
+}
+
+// 48. GetLowStockMedications — scan medication inventory below reorder level.
+transaction GetLowStockMedications() -> List<int> {
+    @global hop {
+        var result: List<int> = emptyList();
+        for (var it: Iterator<Medication> = scan(Medication, 2, __slice__); hasNext(it); it = next(it)) {
+            var mid = get_med_id(it);
+            var m: Row<Medication> = Medication[med_id: mid];
+            if m.stock < m.reorder_level {
+                result = append(result, mid);
+            }
+        }
+        return result;
+    }
+}
+
+// 49. GetPatientsByDepartment — scan admissions for a department.
+transaction GetPatientsByDepartment(dept_id: int) -> List<int> {
+    @global hop {
+        var result: List<int> = emptyList();
+        for (var it: Iterator<Admission> = scan(Admission, 3, __slice__); hasNext(it); it = next(it)) {
+            var aid = get_adm_id(it);
+            var a: Row<Admission> = Admission[adm_id: aid];
+            if a.dept_id == dept_id {
+                if a.status == 1 {
+                    result = append(result, a.patient_id);
+                }
+            }
+        }
+        return result;
+    }
+}
+
+// 50. GetUnpaidBills — scan for open or partial bills.
+transaction GetUnpaidBills() -> List<int> {
+    @global hop {
+        var result: List<int> = emptyList();
+        for (var it: Iterator<Bill> = scan(Bill, 4, __slice__); hasNext(it); it = next(it)) {
+            var bid = get_bill_id(it);
+            var b: Row<Bill> = Bill[bill_id: bid];
+            if b.status != 2 {
+                result = append(result, bid);
+            }
+        }
+        return result;
+    }
+}

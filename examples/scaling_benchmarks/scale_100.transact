@@ -1,0 +1,1646 @@
+// Enterprise CRM Platform — 100 transactions
+// Tables: Account, Contact, Lead, Opportunity, Product, Quote,
+//         QuoteItem, Order, OrderItem, Invoice, InvoiceItem,
+//         Payment, Contract, Task, Event, Note, Case, CaseComment,
+//         Campaign, CampaignMember, CRMUser, Team, Territory,
+//         EmailLog, CallLog, Forecast
+// Breakdown: 15 read-only, 25 single-hop writes,
+//            45 two-hop writes, 15 global scans
+
+partition f(x: int) -> int { return x; }
+
+table Account {
+    primary id: int;
+    node f(id);
+    name: string;
+    industry: int;
+    annual_revenue: int;
+    employee_count: int;
+    owner_id: int;
+    status: int;
+    created_at: int;
+    invariant annual_revenue >= 0;
+    invariant employee_count >= 0;
+}
+
+table Contact {
+    primary id: int;
+    node f(id);
+    account_id: int;
+    first_name: string;
+    last_name: string;
+    email: string;
+    phone: string;
+    title: string;
+    is_primary: bool;
+}
+
+table Lead {
+    primary id: int;
+    node f(id);
+    first_name: string;
+    last_name: string;
+    email: string;
+    company: string;
+    status: int;
+    score: int;
+    owner_id: int;
+    created_at: int;
+    invariant score >= 0;
+}
+
+table Opportunity {
+    primary id: int;
+    node f(id);
+    account_id: int;
+    name: string;
+    stage: int;
+    amount: int;
+    probability: int;
+    owner_id: int;
+    close_date: int;
+    created_at: int;
+    invariant amount >= 0;
+    invariant probability >= 0;
+}
+
+table Product {
+    primary id: int;
+    node f(id);
+    name: string;
+    category: int;
+    unit_price: int;
+    cost: int;
+    stock: int;
+    is_active: bool;
+    sold_count: int;
+    invariant unit_price >= 0;
+    invariant stock >= 0;
+    invariant sold_count >= 0;
+}
+
+table Quote {
+    primary id: int;
+    node f(id);
+    opportunity_id: int;
+    account_id: int;
+    status: int;
+    subtotal: int;
+    discount: int;
+    total: int;
+    valid_until: int;
+    created_at: int;
+    invariant subtotal >= 0;
+    invariant discount >= 0;
+    invariant total >= 0;
+}
+
+table QuoteItem {
+    primary id: int;
+    node f(id);
+    quote_id: int;
+    product_id: int;
+    quantity: int;
+    unit_price: int;
+    line_total: int;
+    invariant quantity > 0;
+    invariant unit_price >= 0;
+    invariant line_total >= 0;
+}
+
+table Order {
+    primary id: int;
+    node f(id);
+    account_id: int;
+    quote_id: int;
+    status: int;
+    total_amount: int;
+    owner_id: int;
+    created_at: int;
+    invariant total_amount >= 0;
+}
+
+table OrderItem {
+    primary id: int;
+    node f(id);
+    order_id: int;
+    product_id: int;
+    quantity: int;
+    unit_price: int;
+    line_total: int;
+    invariant quantity > 0;
+    invariant line_total >= 0;
+}
+
+table Invoice {
+    primary id: int;
+    node f(id);
+    account_id: int;
+    order_id: int;
+    status: int;
+    amount: int;
+    paid_amount: int;
+    due_date: int;
+    created_at: int;
+    invariant amount >= 0;
+    invariant paid_amount >= 0;
+}
+
+table InvoiceItem {
+    primary id: int;
+    node f(id);
+    invoice_id: int;
+    description: string;
+    quantity: int;
+    unit_price: int;
+    line_total: int;
+    invariant quantity > 0;
+    invariant line_total >= 0;
+}
+
+table Payment {
+    primary id: int;
+    node f(id);
+    account_id: int;
+    invoice_id: int;
+    amount: int;
+    method: int;
+    status: int;
+    processed_at: int;
+    invariant amount > 0;
+}
+
+table Contract {
+    primary id: int;
+    node f(id);
+    account_id: int;
+    opportunity_id: int;
+    status: int;
+    value: int;
+    start_date: int;
+    end_date: int;
+    auto_renew: bool;
+    invariant value >= 0;
+}
+
+table Task {
+    primary id: int;
+    node f(id);
+    owner_id: int;
+    related_id: int;
+    related_type: int;
+    subject: string;
+    status: int;
+    priority: int;
+    due_date: int;
+}
+
+table Event {
+    primary id: int;
+    node f(id);
+    owner_id: int;
+    account_id: int;
+    subject: string;
+    event_type: int;
+    start_at: int;
+    end_at: int;
+    attendee_count: int;
+    invariant attendee_count >= 0;
+}
+
+table Note {
+    primary id: int;
+    node f(id);
+    author_id: int;
+    related_id: int;
+    related_type: int;
+    content: string;
+    created_at: int;
+}
+
+table Case {
+    primary id: int;
+    node f(id);
+    account_id: int;
+    contact_id: int;
+    subject: string;
+    status: int;
+    priority: int;
+    case_type: int;
+    owner_id: int;
+    created_at: int;
+    resolved_at: int;
+}
+
+table CaseComment {
+    primary id: int;
+    node f(id);
+    case_id: int;
+    author_id: int;
+    content: string;
+    is_public: bool;
+    created_at: int;
+}
+
+table Campaign {
+    primary id: int;
+    node f(id);
+    name: string;
+    campaign_type: int;
+    status: int;
+    budget: int;
+    spent: int;
+    lead_count: int;
+    response_count: int;
+    start_date: int;
+    end_date: int;
+    invariant budget >= 0;
+    invariant spent >= 0;
+    invariant lead_count >= 0;
+    invariant response_count >= 0;
+}
+
+table CampaignMember {
+    primary id: int;
+    node f(id);
+    campaign_id: int;
+    contact_id: int;
+    lead_id: int;
+    status: int;
+    added_at: int;
+}
+
+table CRMUser {
+    primary id: int;
+    node f(id);
+    first_name: string;
+    last_name: string;
+    email: string;
+    role: int;
+    team_id: int;
+    territory_id: int;
+    quota: int;
+    achieved: int;
+    is_active: bool;
+    invariant quota >= 0;
+    invariant achieved >= 0;
+}
+
+table Team {
+    primary id: int;
+    node f(id);
+    name: string;
+    manager_id: int;
+    member_count: int;
+    total_quota: int;
+    total_achieved: int;
+    invariant member_count >= 0;
+    invariant total_quota >= 0;
+    invariant total_achieved >= 0;
+}
+
+table Territory {
+    primary id: int;
+    node f(id);
+    name: string;
+    region: int;
+    account_count: int;
+    opportunity_count: int;
+    invariant account_count >= 0;
+    invariant opportunity_count >= 0;
+}
+
+table EmailLog {
+    primary id: int;
+    node f(id);
+    sender_id: int;
+    recipient_id: int;
+    subject: string;
+    status: int;
+    sent_at: int;
+}
+
+table CallLog {
+    primary id: int;
+    node f(id);
+    caller_id: int;
+    account_id: int;
+    contact_id: int;
+    duration_sec: int;
+    outcome: int;
+    called_at: int;
+    invariant duration_sec >= 0;
+}
+
+table Forecast {
+    primary user_id: int;
+    node f(user_id);
+    period: int;
+    forecast_amount: int;
+    committed_amount: int;
+    best_case_amount: int;
+    closed_amount: int;
+    updated_at: int;
+    invariant forecast_amount >= 0;
+    invariant committed_amount >= 0;
+    invariant closed_amount >= 0;
+}
+
+// ── READ-ONLY (15) ───────────────────────────────────────────────
+
+transaction GetAccount(accountId: int)
+{
+    hop {
+        var a: Row<Account> = Account[id: accountId];
+        to_unit(a.name);
+        to_unit(a.industry);
+        to_unit(a.annual_revenue);
+        to_unit(a.employee_count);
+        to_unit(a.status);
+    }
+}
+
+transaction GetContact(contactId: int, accountId: int)
+{
+    hop {
+        var c: Row<Contact> = Contact[id: contactId];
+        to_unit(c.first_name);
+        to_unit(c.last_name);
+        to_unit(c.email);
+        to_unit(c.title);
+    }
+}
+
+transaction GetLead(leadId: int, ownerId: int)
+{
+    hop {
+        var l: Row<Lead> = Lead[id: leadId];
+        to_unit(l.first_name);
+        to_unit(l.last_name);
+        to_unit(l.company);
+        to_unit(l.status);
+        to_unit(l.score);
+    }
+}
+
+transaction GetOpportunity(oppId: int, accountId: int)
+{
+    hop {
+        var o: Row<Opportunity> = Opportunity[id: oppId];
+        to_unit(o.name);
+        to_unit(o.stage);
+        to_unit(o.amount);
+        to_unit(o.probability);
+        to_unit(o.close_date);
+    }
+}
+
+transaction GetQuote(quoteId: int, accountId: int)
+{
+    hop {
+        var q: Row<Quote> = Quote[id: quoteId];
+        to_unit(q.status);
+        to_unit(q.subtotal);
+        to_unit(q.discount);
+        to_unit(q.total);
+        to_unit(q.valid_until);
+    }
+}
+
+transaction GetOrder(orderId: int, accountId: int)
+{
+    hop {
+        var o: Row<Order> = Order[id: orderId];
+        to_unit(o.status);
+        to_unit(o.total_amount);
+        to_unit(o.owner_id);
+    }
+}
+
+transaction GetInvoice(invoiceId: int, accountId: int)
+{
+    hop {
+        var inv: Row<Invoice> = Invoice[id: invoiceId];
+        to_unit(inv.status);
+        to_unit(inv.amount);
+        to_unit(inv.paid_amount);
+        to_unit(inv.due_date);
+    }
+}
+
+transaction GetContract(contractId: int, accountId: int)
+{
+    hop {
+        var c: Row<Contract> = Contract[id: contractId];
+        to_unit(c.status);
+        to_unit(c.value);
+        to_unit(c.start_date);
+        to_unit(c.end_date);
+        to_unit(c.auto_renew);
+    }
+}
+
+transaction GetCase(caseId: int, accountId: int)
+{
+    hop {
+        var cs: Row<Case> = Case[id: caseId];
+        to_unit(cs.subject);
+        to_unit(cs.status);
+        to_unit(cs.priority);
+        to_unit(cs.case_type);
+    }
+}
+
+transaction GetForecast(userId: int, period: int)
+{
+    hop {
+        var f: Row<Forecast> = Forecast[user_id: userId];
+        to_unit(f.forecast_amount);
+        to_unit(f.committed_amount);
+        to_unit(f.best_case_amount);
+        to_unit(f.closed_amount);
+    }
+}
+
+transaction GetCampaign(campaignId: int)
+{
+    hop {
+        var c: Row<Campaign> = Campaign[id: campaignId];
+        to_unit(c.name);
+        to_unit(c.status);
+        to_unit(c.budget);
+        to_unit(c.spent);
+        to_unit(c.lead_count);
+        to_unit(c.response_count);
+    }
+}
+
+transaction GetProduct(productId: int)
+{
+    hop {
+        var p: Row<Product> = Product[id: productId];
+        to_unit(p.name);
+        to_unit(p.unit_price);
+        to_unit(p.stock);
+        to_unit(p.sold_count);
+    }
+}
+
+transaction GetCRMUser(userId: int)
+{
+    hop {
+        var u: Row<CRMUser> = CRMUser[id: userId];
+        to_unit(u.first_name);
+        to_unit(u.last_name);
+        to_unit(u.role);
+        to_unit(u.quota);
+        to_unit(u.achieved);
+    }
+}
+
+transaction GetTeam(teamId: int)
+{
+    hop {
+        var t: Row<Team> = Team[id: teamId];
+        to_unit(t.name);
+        to_unit(t.member_count);
+        to_unit(t.total_quota);
+        to_unit(t.total_achieved);
+    }
+}
+
+transaction GetTerritory(territoryId: int)
+{
+    hop {
+        var ter: Row<Territory> = Territory[id: territoryId];
+        to_unit(ter.name);
+        to_unit(ter.region);
+        to_unit(ter.account_count);
+        to_unit(ter.opportunity_count);
+    }
+}
+
+// ── SINGLE-HOP WRITES (25) ──────────────────────────────────────
+
+transaction UpdateLeadStatus(leadId: int, ownerId: int, newStatus: int)
+{
+    hop {
+        var l: Row<Lead> = Lead[id: leadId];
+        l.status = newStatus;
+        Lead[id: leadId] = l;
+    }
+}
+
+transaction IncrementLeadScore(leadId: int, ownerId: int, delta: int)
+    assume delta > 0;
+{
+    hop {
+        var l: Row<Lead> = Lead[id: leadId];
+        l.score = l.score + delta;
+        Lead[id: leadId] = l;
+    }
+}
+
+transaction AdvanceOpportunityStage(oppId: int, accountId: int, newStage: int)
+{
+    hop {
+        var o: Row<Opportunity> = Opportunity[id: oppId];
+        o.stage = newStage;
+        Opportunity[id: oppId] = o;
+    }
+}
+
+transaction UpdateOpportunityAmount(oppId: int, accountId: int, amount: int, probability: int)
+    assume amount >= 0;
+    assume probability >= 0;
+{
+    hop {
+        var o: Row<Opportunity> = Opportunity[id: oppId];
+        o.amount = amount;
+        o.probability = probability;
+        Opportunity[id: oppId] = o;
+    }
+}
+
+transaction CompleteTask(taskId: int, ownerId: int)
+{
+    hop {
+        var t: Row<Task> = Task[id: taskId];
+        if t.status == 2 { return; }
+        t.status = 2;
+        Task[id: taskId] = t;
+    }
+}
+
+transaction CancelTask(taskId: int, ownerId: int)
+{
+    hop {
+        var t: Row<Task> = Task[id: taskId];
+        if t.status == 2 { return; }
+        t.status = 3;
+        Task[id: taskId] = t;
+    }
+}
+
+transaction UpdateCaseStatus(caseId: int, accountId: int, newStatus: int)
+{
+    hop {
+        var cs: Row<Case> = Case[id: caseId];
+        cs.status = newStatus;
+        Case[id: caseId] = cs;
+    }
+}
+
+transaction RecordEmailOpen(emailId: int, senderId: int)
+{
+    hop {
+        var el: Row<EmailLog> = EmailLog[id: emailId];
+        if el.status != 0 { return; }
+        el.status = 1;
+        EmailLog[id: emailId] = el;
+    }
+}
+
+transaction RecordEmailClick(emailId: int, senderId: int)
+{
+    hop {
+        var el: Row<EmailLog> = EmailLog[id: emailId];
+        if el.status >= 2 { return; }
+        el.status = 2;
+        EmailLog[id: emailId] = el;
+    }
+}
+
+transaction IncrementCampaignLeadCount(campaignId: int)
+{
+    hop {
+        var c: Row<Campaign> = Campaign[id: campaignId];
+        c.lead_count = c.lead_count + 1;
+        Campaign[id: campaignId] = c;
+    }
+}
+
+transaction IncrementCampaignResponseCount(campaignId: int)
+{
+    hop {
+        var c: Row<Campaign> = Campaign[id: campaignId];
+        c.response_count = c.response_count + 1;
+        Campaign[id: campaignId] = c;
+    }
+}
+
+transaction AddCampaignSpend(campaignId: int, amount: int)
+    assume amount > 0;
+{
+    hop {
+        var c: Row<Campaign> = Campaign[id: campaignId];
+        c.spent = c.spent + amount;
+        Campaign[id: campaignId] = c;
+    }
+}
+
+transaction UpdateCampaignMemberStatus(campaignId: int, memberId: int, newStatus: int)
+{
+    hop {
+        var cm: Row<CampaignMember> = CampaignMember[id: memberId];
+        cm.status = newStatus;
+        CampaignMember[id: memberId] = cm;
+    }
+}
+
+transaction IncrementUserAchieved(userId: int, amount: int)
+    assume amount > 0;
+{
+    hop {
+        var u: Row<CRMUser> = CRMUser[id: userId];
+        u.achieved = u.achieved + amount;
+        CRMUser[id: userId] = u;
+    }
+}
+
+transaction AddTeamAchieved(teamId: int, amount: int)
+    assume amount > 0;
+{
+    hop {
+        var t: Row<Team> = Team[id: teamId];
+        t.total_achieved = t.total_achieved + amount;
+        Team[id: teamId] = t;
+    }
+}
+
+transaction IncrementTerritoryAccounts(territoryId: int)
+{
+    hop {
+        var ter: Row<Territory> = Territory[id: territoryId];
+        ter.account_count = ter.account_count + 1;
+        Territory[id: territoryId] = ter;
+    }
+}
+
+transaction IncrementTerritoryOpportunities(territoryId: int)
+{
+    hop {
+        var ter: Row<Territory> = Territory[id: territoryId];
+        ter.opportunity_count = ter.opportunity_count + 1;
+        Territory[id: territoryId] = ter;
+    }
+}
+
+transaction UpdateProductPrice(productId: int, newPrice: int)
+    assume newPrice >= 0;
+{
+    hop {
+        var p: Row<Product> = Product[id: productId];
+        p.unit_price = newPrice;
+        Product[id: productId] = p;
+    }
+}
+
+transaction RestockProduct(productId: int, quantity: int)
+    assume quantity > 0;
+{
+    hop {
+        var p: Row<Product> = Product[id: productId];
+        p.stock = p.stock + quantity;
+        Product[id: productId] = p;
+    }
+}
+
+transaction UpdateForecast(userId: int, period: int, forecastAmount: int, committedAmount: int, bestCase: int, updatedAt: int)
+    assume forecastAmount >= 0;
+    assume committedAmount >= 0;
+    assume bestCase >= 0;
+{
+    hop {
+        var f: Row<Forecast> = Forecast[user_id: userId];
+        f.forecast_amount = forecastAmount;
+        f.committed_amount = committedAmount;
+        f.best_case_amount = bestCase;
+        f.updated_at = updatedAt;
+        Forecast[user_id: userId] = f;
+    }
+}
+
+transaction RecordForecastClosed(userId: int, amount: int)
+    assume amount > 0;
+{
+    hop {
+        var f: Row<Forecast> = Forecast[user_id: userId];
+        f.closed_amount = f.closed_amount + amount;
+        Forecast[user_id: userId] = f;
+    }
+}
+
+transaction SetContractAutoRenew(contractId: int, accountId: int, autoRenew: bool)
+{
+    hop {
+        var c: Row<Contract> = Contract[id: contractId];
+        c.auto_renew = autoRenew;
+        Contract[id: contractId] = c;
+    }
+}
+
+transaction AddCaseComment(caseId: int, commentId: int, authorId: int, content: string, isPublic: bool, createdAt: int)
+{
+    hop {
+        var cc: Row<CaseComment> = CaseComment[id: commentId];
+        cc.case_id = caseId;
+        cc.author_id = authorId;
+        cc.content = content;
+        cc.is_public = isPublic;
+        cc.created_at = createdAt;
+        CaseComment[id: commentId] = cc;
+    }
+}
+
+transaction AddNote(noteId: int, authorId: int, relatedId: int, relatedType: int, content: string, createdAt: int)
+{
+    hop {
+        var n: Row<Note> = Note[id: noteId];
+        n.author_id = authorId;
+        n.related_id = relatedId;
+        n.related_type = relatedType;
+        n.content = content;
+        n.created_at = createdAt;
+        Note[id: noteId] = n;
+    }
+}
+
+transaction LogCallOutcome(callId: int, callerId: int, accountId: int, contactId: int, durationSec: int, outcome: int, calledAt: int)
+    assume durationSec >= 0;
+{
+    hop {
+        var cl: Row<CallLog> = CallLog[id: callId];
+        cl.caller_id = callerId;
+        cl.account_id = accountId;
+        cl.contact_id = contactId;
+        cl.duration_sec = durationSec;
+        cl.outcome = outcome;
+        cl.called_at = calledAt;
+        CallLog[id: callId] = cl;
+    }
+}
+
+// ── TWO-HOP WRITES (45) ─────────────────────────────────────────
+
+transaction ConvertLeadToContact(leadId: int, ownerId: int, accountId: int, contactId: int)
+{
+    hop {
+        var l: Row<Lead> = Lead[id: leadId];
+        if l.status == 3 { return; }
+        l.status = 3;
+        Lead[id: leadId] = l;
+    }
+    hop {
+        var c: Row<Contact> = Contact[id: contactId];
+        c.account_id = accountId;
+        c.first_name = "converted";
+        c.is_primary = false;
+        Contact[id: contactId] = c;
+    }
+}
+
+transaction CreateOpportunity(accountId: int, oppId: int, ownerId: int, amount: int, territoryId: int)
+    assume amount >= 0;
+{
+    hop {
+        var a: Row<Account> = Account[id: accountId];
+        if a.status == 2 { return; }
+        to_unit(a.owner_id);
+    }
+    hop {
+        var o: Row<Opportunity> = Opportunity[id: oppId];
+        o.account_id = accountId;
+        o.stage = 0;
+        o.amount = amount;
+        o.probability = 10;
+        o.owner_id = ownerId;
+        Opportunity[id: oppId] = o;
+        var ter: Row<Territory> = Territory[id: territoryId];
+        ter.opportunity_count = ter.opportunity_count + 1;
+        Territory[id: territoryId] = ter;
+    }
+}
+
+transaction CloseOpportunityWon(oppId: int, accountId: int, userId: int, teamId: int, amount: int)
+    assume amount >= 0;
+{
+    hop {
+        var o: Row<Opportunity> = Opportunity[id: oppId];
+        if o.stage == 4 { return; }
+        o.stage = 4;
+        o.probability = 100;
+        Opportunity[id: oppId] = o;
+    }
+    hop {
+        var u: Row<CRMUser> = CRMUser[id: userId];
+        u.achieved = u.achieved + amount;
+        CRMUser[id: userId] = u;
+        var t: Row<Team> = Team[id: teamId];
+        t.total_achieved = t.total_achieved + amount;
+        Team[id: teamId] = t;
+    }
+}
+
+transaction CloseOpportunityLost(oppId: int, accountId: int)
+{
+    hop {
+        var o: Row<Opportunity> = Opportunity[id: oppId];
+        if o.stage == 5 { return; }
+        o.stage = 5;
+        o.probability = 0;
+        Opportunity[id: oppId] = o;
+    }
+    hop {
+        var a: Row<Account> = Account[id: accountId];
+        to_unit(a.status);
+    }
+}
+
+transaction CreateQuote(oppId: int, accountId: int, quoteId: int, total: int, validUntil: int)
+    assume total >= 0;
+{
+    hop {
+        var o: Row<Opportunity> = Opportunity[id: oppId];
+        if o.stage < 2 { return; }
+        to_unit(o.amount);
+    }
+    hop {
+        var q: Row<Quote> = Quote[id: quoteId];
+        q.opportunity_id = oppId;
+        q.account_id = accountId;
+        q.status = 0;
+        q.total = total;
+        q.valid_until = validUntil;
+        Quote[id: quoteId] = q;
+    }
+}
+
+transaction AcceptQuote(quoteId: int, accountId: int, oppId: int)
+{
+    hop {
+        var q: Row<Quote> = Quote[id: quoteId];
+        if q.status != 1 { return; }
+        q.status = 2;
+        Quote[id: quoteId] = q;
+    }
+    hop {
+        var o: Row<Opportunity> = Opportunity[id: oppId];
+        o.stage = 3;
+        Opportunity[id: oppId] = o;
+    }
+}
+
+transaction RejectQuote(quoteId: int, accountId: int)
+{
+    hop {
+        var q: Row<Quote> = Quote[id: quoteId];
+        if q.status != 1 { return; }
+        q.status = 3;
+        Quote[id: quoteId] = q;
+    }
+    hop {
+        var a: Row<Account> = Account[id: accountId];
+        to_unit(a.status);
+    }
+}
+
+transaction SendQuote(quoteId: int, accountId: int, emailId: int, senderId: int, sentAt: int)
+{
+    hop {
+        var q: Row<Quote> = Quote[id: quoteId];
+        if q.status != 0 { return; }
+        q.status = 1;
+        Quote[id: quoteId] = q;
+    }
+    hop {
+        var el: Row<EmailLog> = EmailLog[id: emailId];
+        el.sender_id = senderId;
+        el.subject = "quote_sent";
+        el.status = 0;
+        el.sent_at = sentAt;
+        EmailLog[id: emailId] = el;
+    }
+}
+
+transaction PlaceOrder(accountId: int, orderId: int, quoteId: int, ownerId: int, totalAmount: int)
+    assume totalAmount >= 0;
+{
+    hop {
+        var q: Row<Quote> = Quote[id: quoteId];
+        if q.status != 2 { return; }
+        to_unit(q.total);
+    }
+    hop {
+        var o: Row<Order> = Order[id: orderId];
+        o.account_id = accountId;
+        o.quote_id = quoteId;
+        o.status = 0;
+        o.total_amount = totalAmount;
+        o.owner_id = ownerId;
+        Order[id: orderId] = o;
+    }
+}
+
+transaction ConfirmOrder(orderId: int, accountId: int, productId: int, qty: int)
+    assume qty > 0;
+{
+    hop {
+        var p: Row<Product> = Product[id: productId];
+        if p.stock < qty { return; }
+        p.stock = p.stock - qty;
+        p.sold_count = p.sold_count + qty;
+        Product[id: productId] = p;
+    }
+    hop {
+        var o: Row<Order> = Order[id: orderId];
+        if o.status != 0 { return; }
+        o.status = 1;
+        Order[id: orderId] = o;
+    }
+}
+
+transaction ShipOrder(orderId: int, accountId: int)
+{
+    hop {
+        var o: Row<Order> = Order[id: orderId];
+        if o.status != 2 { return; }
+        o.status = 3;
+        Order[id: orderId] = o;
+    }
+    hop {
+        var a: Row<Account> = Account[id: accountId];
+        to_unit(a.status);
+    }
+}
+
+transaction DeliverOrder(orderId: int, accountId: int)
+{
+    hop {
+        var o: Row<Order> = Order[id: orderId];
+        if o.status != 3 { return; }
+        o.status = 4;
+        Order[id: orderId] = o;
+    }
+    hop {
+        var a: Row<Account> = Account[id: accountId];
+        if a.status == 0 { a.status = 1; }
+        Account[id: accountId] = a;
+    }
+}
+
+transaction CancelOrder(orderId: int, accountId: int, productId: int, qty: int)
+    assume qty > 0;
+{
+    hop {
+        var o: Row<Order> = Order[id: orderId];
+        if o.status >= 3 { return; }
+        o.status = 5;
+        Order[id: orderId] = o;
+    }
+    hop {
+        var p: Row<Product> = Product[id: productId];
+        p.stock = p.stock + qty;
+        if p.sold_count >= qty {
+            p.sold_count = p.sold_count - qty;
+        }
+        Product[id: productId] = p;
+    }
+}
+
+transaction GenerateInvoice(orderId: int, accountId: int, invoiceId: int, amount: int, dueDate: int)
+    assume amount >= 0;
+{
+    hop {
+        var o: Row<Order> = Order[id: orderId];
+        if o.status != 4 { return; }
+        to_unit(o.total_amount);
+    }
+    hop {
+        var inv: Row<Invoice> = Invoice[id: invoiceId];
+        inv.account_id = accountId;
+        inv.order_id = orderId;
+        inv.status = 1;
+        inv.amount = amount;
+        inv.paid_amount = 0;
+        inv.due_date = dueDate;
+        Invoice[id: invoiceId] = inv;
+    }
+}
+
+transaction ApplyPayment(accountId: int, invoiceId: int, paymentId: int, amount: int, method: int, processedAt: int)
+    assume amount > 0;
+{
+    hop {
+        var inv: Row<Invoice> = Invoice[id: invoiceId];
+        if inv.account_id != accountId { return; }
+        var remaining: int = inv.amount - inv.paid_amount;
+        if amount > remaining { return; }
+        inv.paid_amount = inv.paid_amount + amount;
+        if inv.paid_amount >= inv.amount {
+            inv.status = 3;
+        } else {
+            inv.status = 2;
+        }
+        Invoice[id: invoiceId] = inv;
+    }
+    hop {
+        var pmt: Row<Payment> = Payment[id: paymentId];
+        pmt.account_id = accountId;
+        pmt.invoice_id = invoiceId;
+        pmt.amount = amount;
+        pmt.method = method;
+        pmt.status = 1;
+        pmt.processed_at = processedAt;
+        Payment[id: paymentId] = pmt;
+    }
+}
+
+transaction RefundPaymentCRM(accountId: int, invoiceId: int, paymentId: int, amount: int)
+    assume amount > 0;
+{
+    hop {
+        var pmt: Row<Payment> = Payment[id: paymentId];
+        if pmt.status != 1 { return; }
+        if pmt.amount < amount { return; }
+        pmt.status = 3;
+        Payment[id: paymentId] = pmt;
+    }
+    hop {
+        var inv: Row<Invoice> = Invoice[id: invoiceId];
+        if inv.paid_amount < amount { return; }
+        inv.paid_amount = inv.paid_amount - amount;
+        if inv.paid_amount < inv.amount {
+            inv.status = 2;
+        }
+        Invoice[id: invoiceId] = inv;
+    }
+}
+
+transaction MarkInvoiceOverdue(invoiceId: int, accountId: int)
+{
+    hop {
+        var inv: Row<Invoice> = Invoice[id: invoiceId];
+        if inv.status != 1 { return; }
+        inv.status = 4;
+        Invoice[id: invoiceId] = inv;
+    }
+    hop {
+        var a: Row<Account> = Account[id: accountId];
+        to_unit(a.status);
+    }
+}
+
+transaction VoidInvoice(invoiceId: int, accountId: int)
+{
+    hop {
+        var inv: Row<Invoice> = Invoice[id: invoiceId];
+        if inv.status == 3 { return; }
+        inv.status = 5;
+        Invoice[id: invoiceId] = inv;
+    }
+    hop {
+        var a: Row<Account> = Account[id: accountId];
+        to_unit(a.annual_revenue);
+    }
+}
+
+transaction SignContract(contractId: int, accountId: int, oppId: int)
+{
+    hop {
+        var c: Row<Contract> = Contract[id: contractId];
+        if c.status != 0 { return; }
+        c.status = 1;
+        Contract[id: contractId] = c;
+    }
+    hop {
+        var o: Row<Opportunity> = Opportunity[id: oppId];
+        if o.stage != 4 { return; }
+        to_unit(o.amount);
+    }
+}
+
+transaction TerminateContract(contractId: int, accountId: int)
+{
+    hop {
+        var c: Row<Contract> = Contract[id: contractId];
+        if c.status != 1 { return; }
+        c.status = 3;
+        Contract[id: contractId] = c;
+    }
+    hop {
+        var a: Row<Account> = Account[id: accountId];
+        to_unit(a.status);
+    }
+}
+
+transaction RenewContract(contractId: int, accountId: int, newEndDate: int)
+{
+    hop {
+        var c: Row<Contract> = Contract[id: contractId];
+        if c.status != 1 { return; }
+        if !c.auto_renew { return; }
+        c.end_date = newEndDate;
+        Contract[id: contractId] = c;
+    }
+    hop {
+        var a: Row<Account> = Account[id: accountId];
+        to_unit(a.annual_revenue);
+    }
+}
+
+transaction AssignAccountToTerritory(accountId: int, territoryId: int)
+{
+    hop {
+        var a: Row<Account> = Account[id: accountId];
+        to_unit(a.status);
+    }
+    hop {
+        var ter: Row<Territory> = Territory[id: territoryId];
+        ter.account_count = ter.account_count + 1;
+        Territory[id: territoryId] = ter;
+    }
+}
+
+transaction AssignUserToTeam(userId: int, teamId: int)
+{
+    hop {
+        var u: Row<CRMUser> = CRMUser[id: userId];
+        if !u.is_active { return; }
+        u.team_id = teamId;
+        CRMUser[id: userId] = u;
+    }
+    hop {
+        var t: Row<Team> = Team[id: teamId];
+        t.member_count = t.member_count + 1;
+        t.total_quota = t.total_quota + 1;
+        Team[id: teamId] = t;
+    }
+}
+
+transaction RemoveUserFromTeam(userId: int, teamId: int)
+{
+    hop {
+        var t: Row<Team> = Team[id: teamId];
+        if t.member_count <= 0 { return; }
+        t.member_count = t.member_count - 1;
+        Team[id: teamId] = t;
+    }
+    hop {
+        var u: Row<CRMUser> = CRMUser[id: userId];
+        to_unit(u.role);
+    }
+}
+
+transaction SetUserQuota(userId: int, teamId: int, quota: int)
+    assume quota >= 0;
+{
+    hop {
+        var u: Row<CRMUser> = CRMUser[id: userId];
+        var oldQuota: int = u.quota;
+        u.quota = quota;
+        CRMUser[id: userId] = u;
+        var t: Row<Team> = Team[id: teamId];
+        t.total_quota = t.total_quota - oldQuota + quota;
+        Team[id: teamId] = t;
+    }
+    hop {
+        var f: Row<Forecast> = Forecast[user_id: userId];
+        f.forecast_amount = quota;
+        Forecast[user_id: userId] = f;
+    }
+}
+
+transaction OpenCase(caseId: int, accountId: int, contactId: int, ownerId: int, subject: string, priority: int, caseType: int, createdAt: int)
+{
+    hop {
+        var a: Row<Account> = Account[id: accountId];
+        if a.status == 2 { return; }
+        to_unit(a.id);
+    }
+    hop {
+        var cs: Row<Case> = Case[id: caseId];
+        cs.account_id = accountId;
+        cs.contact_id = contactId;
+        cs.subject = subject;
+        cs.status = 0;
+        cs.priority = priority;
+        cs.case_type = caseType;
+        cs.owner_id = ownerId;
+        cs.created_at = createdAt;
+        Case[id: caseId] = cs;
+    }
+}
+
+transaction ResolveCase(caseId: int, accountId: int, resolvedAt: int)
+{
+    hop {
+        var cs: Row<Case> = Case[id: caseId];
+        if cs.status == 3 { return; }
+        cs.status = 3;
+        cs.resolved_at = resolvedAt;
+        Case[id: caseId] = cs;
+    }
+    hop {
+        var a: Row<Account> = Account[id: accountId];
+        to_unit(a.status);
+    }
+}
+
+transaction AssignCase(caseId: int, accountId: int, newOwnerId: int)
+{
+    hop {
+        var cs: Row<Case> = Case[id: caseId];
+        cs.owner_id = newOwnerId;
+        cs.status = 1;
+        Case[id: caseId] = cs;
+    }
+    hop {
+        var u: Row<CRMUser> = CRMUser[id: newOwnerId];
+        if !u.is_active { return; }
+        to_unit(u.role);
+    }
+}
+
+transaction LaunchCampaign(campaignId: int, emailId: int, senderId: int, sentAt: int)
+{
+    hop {
+        var c: Row<Campaign> = Campaign[id: campaignId];
+        if c.status != 0 { return; }
+        c.status = 1;
+        Campaign[id: campaignId] = c;
+    }
+    hop {
+        var el: Row<EmailLog> = EmailLog[id: emailId];
+        el.sender_id = senderId;
+        el.subject = "campaign_launch";
+        el.status = 0;
+        el.sent_at = sentAt;
+        EmailLog[id: emailId] = el;
+    }
+}
+
+transaction CompleteCampaign(campaignId: int)
+{
+    hop {
+        var c: Row<Campaign> = Campaign[id: campaignId];
+        if c.status != 1 { return; }
+        c.status = 2;
+        Campaign[id: campaignId] = c;
+    }
+    hop {
+        var c2: Row<Campaign> = Campaign[id: campaignId];
+        to_unit(c2.response_count);
+    }
+}
+
+transaction AddCampaignMember(campaignId: int, memberId: int, contactId: int, leadId: int, addedAt: int)
+{
+    hop {
+        var c: Row<Campaign> = Campaign[id: campaignId];
+        if c.status != 1 { return; }
+        c.lead_count = c.lead_count + 1;
+        Campaign[id: campaignId] = c;
+    }
+    hop {
+        var cm: Row<CampaignMember> = CampaignMember[id: memberId];
+        cm.campaign_id = campaignId;
+        cm.contact_id = contactId;
+        cm.lead_id = leadId;
+        cm.status = 0;
+        cm.added_at = addedAt;
+        CampaignMember[id: memberId] = cm;
+    }
+}
+
+transaction AddQuoteItem(quoteId: int, itemId: int, productId: int, qty: int, unitPrice: int)
+    assume qty > 0;
+    assume unitPrice >= 0;
+{
+    hop {
+        var q: Row<Quote> = Quote[id: quoteId];
+        if q.status != 0 { return; }
+        var lineTotal: int = qty * unitPrice;
+        q.subtotal = q.subtotal + lineTotal;
+        q.total = q.subtotal - q.discount;
+        Quote[id: quoteId] = q;
+    }
+    hop {
+        var qi: Row<QuoteItem> = QuoteItem[id: itemId];
+        qi.quote_id = quoteId;
+        qi.product_id = productId;
+        qi.quantity = qty;
+        qi.unit_price = unitPrice;
+        qi.line_total = qty * unitPrice;
+        QuoteItem[id: itemId] = qi;
+    }
+}
+
+transaction ApplyQuoteDiscount(quoteId: int, accountId: int, discountAmount: int)
+    assume discountAmount >= 0;
+{
+    hop {
+        var q: Row<Quote> = Quote[id: quoteId];
+        if q.status != 0 { return; }
+        if discountAmount > q.subtotal { return; }
+        q.discount = discountAmount;
+        q.total = q.subtotal - q.discount;
+        Quote[id: quoteId] = q;
+    }
+    hop {
+        var a: Row<Account> = Account[id: accountId];
+        to_unit(a.status);
+    }
+}
+
+transaction TransferOpportunity(oppId: int, accountId: int, fromUserId: int, toUserId: int)
+{
+    hop {
+        var o: Row<Opportunity> = Opportunity[id: oppId];
+        if o.owner_id != fromUserId { return; }
+        o.owner_id = toUserId;
+        Opportunity[id: oppId] = o;
+    }
+    hop {
+        var u: Row<CRMUser> = CRMUser[id: toUserId];
+        if !u.is_active { return; }
+        to_unit(u.quota);
+    }
+}
+
+transaction ReassignAccountOwner(accountId: int, newOwnerId: int, territoryId: int)
+{
+    hop {
+        var a: Row<Account> = Account[id: accountId];
+        a.owner_id = newOwnerId;
+        Account[id: accountId] = a;
+    }
+    hop {
+        var u: Row<CRMUser> = CRMUser[id: newOwnerId];
+        if !u.is_active { return; }
+        to_unit(u.territory_id);
+    }
+}
+
+// ── GLOBAL SCANS (15) ────────────────────────────────────────────
+
+transaction ScanAllAccounts(n: int)
+{
+    @global hop {
+        for (var it: Iterator<Account> = scan(Account, n, __slice__); hasNext(it); it = next(it)) {
+            var aid = get_id(it);
+            var a: Row<Account> = Account[id: aid];
+            to_unit(a.id);
+            to_unit(a.name);
+            to_unit(a.status);
+            to_unit(a.annual_revenue);
+        }
+    }
+}
+
+transaction ScanOpenOpportunities(n: int)
+{
+    @global hop {
+        for (var it: Iterator<Opportunity> = scan(Opportunity, n, __slice__); hasNext(it); it = next(it)) {
+            var oid = get_id(it);
+            var o: Row<Opportunity> = Opportunity[id: oid];
+            if o.stage < 4 {
+                to_unit(o.id);
+                to_unit(o.account_id);
+                to_unit(o.amount);
+                to_unit(o.stage);
+                to_unit(o.probability);
+            }
+        }
+    }
+}
+
+transaction ScanNewLeads(n: int)
+{
+    @global hop {
+        for (var it: Iterator<Lead> = scan(Lead, n, __slice__); hasNext(it); it = next(it)) {
+            var lid = get_id(it);
+            var l: Row<Lead> = Lead[id: lid];
+            if l.status == 0 {
+                to_unit(l.id);
+                to_unit(l.first_name);
+                to_unit(l.last_name);
+                to_unit(l.company);
+                to_unit(l.score);
+            }
+        }
+    }
+}
+
+transaction ScanOverdueInvoices(n: int)
+{
+    @global hop {
+        for (var it: Iterator<Invoice> = scan(Invoice, n, __slice__); hasNext(it); it = next(it)) {
+            var iid = get_id(it);
+            var inv: Row<Invoice> = Invoice[id: iid];
+            if inv.status == 4 {
+                to_unit(inv.id);
+                to_unit(inv.account_id);
+                to_unit(inv.amount);
+                to_unit(inv.paid_amount);
+                to_unit(inv.due_date);
+            }
+        }
+    }
+}
+
+transaction ScanActiveCampaigns(n: int)
+{
+    @global hop {
+        for (var it: Iterator<Campaign> = scan(Campaign, n, __slice__); hasNext(it); it = next(it)) {
+            var cid = get_id(it);
+            var c: Row<Campaign> = Campaign[id: cid];
+            if c.status == 1 {
+                to_unit(c.id);
+                to_unit(c.name);
+                to_unit(c.budget);
+                to_unit(c.spent);
+                to_unit(c.lead_count);
+            }
+        }
+    }
+}
+
+transaction ScanOpenCases(n: int)
+{
+    @global hop {
+        for (var it: Iterator<Case> = scan(Case, n, __slice__); hasNext(it); it = next(it)) {
+            var csid = get_id(it);
+            var cs: Row<Case> = Case[id: csid];
+            if cs.status == 0 {
+                to_unit(cs.id);
+                to_unit(cs.account_id);
+                to_unit(cs.priority);
+                to_unit(cs.owner_id);
+            }
+            if cs.status == 1 {
+                to_unit(cs.id);
+                to_unit(cs.account_id);
+                to_unit(cs.priority);
+                to_unit(cs.owner_id);
+            }
+        }
+    }
+}
+
+transaction ScanHighValueOpportunities(n: int, minAmount: int)
+    assume minAmount > 0;
+{
+    @global hop {
+        for (var it: Iterator<Opportunity> = scan(Opportunity, n, __slice__); hasNext(it); it = next(it)) {
+            var oid = get_id(it);
+            var o: Row<Opportunity> = Opportunity[id: oid];
+            if o.amount >= minAmount {
+                if o.stage < 4 {
+                    to_unit(o.id);
+                    to_unit(o.account_id);
+                    to_unit(o.amount);
+                    to_unit(o.stage);
+                }
+            }
+        }
+    }
+}
+
+transaction ScanAllProducts(n: int)
+{
+    @global hop {
+        for (var it: Iterator<Product> = scan(Product, n, __slice__); hasNext(it); it = next(it)) {
+            var pid = get_id(it);
+            var p: Row<Product> = Product[id: pid];
+            to_unit(p.id);
+            to_unit(p.name);
+            to_unit(p.unit_price);
+            to_unit(p.stock);
+            to_unit(p.sold_count);
+        }
+    }
+}
+
+transaction ScanLowStockProducts(n: int, threshold: int)
+    assume threshold >= 0;
+{
+    @global hop {
+        for (var it: Iterator<Product> = scan(Product, n, __slice__); hasNext(it); it = next(it)) {
+            var pid = get_id(it);
+            var p: Row<Product> = Product[id: pid];
+            if p.stock <= threshold {
+                if p.is_active {
+                    to_unit(p.id);
+                    to_unit(p.name);
+                    to_unit(p.stock);
+                }
+            }
+        }
+    }
+}
+
+transaction ScanPendingOrders(n: int)
+{
+    @global hop {
+        for (var it: Iterator<Order> = scan(Order, n, __slice__); hasNext(it); it = next(it)) {
+            var oid = get_id(it);
+            var o: Row<Order> = Order[id: oid];
+            if o.status == 0 {
+                to_unit(o.id);
+                to_unit(o.account_id);
+                to_unit(o.total_amount);
+                to_unit(o.status);
+            }
+            if o.status == 1 {
+                to_unit(o.id);
+                to_unit(o.account_id);
+                to_unit(o.total_amount);
+                to_unit(o.status);
+            }
+        }
+    }
+}
+
+transaction ScanAllContracts(n: int)
+{
+    @global hop {
+        for (var it: Iterator<Contract> = scan(Contract, n, __slice__); hasNext(it); it = next(it)) {
+            var cid = get_id(it);
+            var c: Row<Contract> = Contract[id: cid];
+            if c.status == 1 {
+                to_unit(c.id);
+                to_unit(c.account_id);
+                to_unit(c.value);
+                to_unit(c.end_date);
+                to_unit(c.auto_renew);
+            }
+        }
+    }
+}
+
+transaction ScanTeamPerformance(n: int)
+{
+    @global hop {
+        for (var it: Iterator<Team> = scan(Team, n, __slice__); hasNext(it); it = next(it)) {
+            var tid = get_id(it);
+            var t: Row<Team> = Team[id: tid];
+            to_unit(t.id);
+            to_unit(t.name);
+            to_unit(t.total_quota);
+            to_unit(t.total_achieved);
+        }
+    }
+}
+
+transaction ScanUserQuotas(n: int)
+{
+    @global hop {
+        for (var it: Iterator<CRMUser> = scan(CRMUser, n, __slice__); hasNext(it); it = next(it)) {
+            var uid = get_id(it);
+            var u: Row<CRMUser> = CRMUser[id: uid];
+            if u.is_active {
+                to_unit(u.id);
+                to_unit(u.quota);
+                to_unit(u.achieved);
+                to_unit(u.team_id);
+            }
+        }
+    }
+}
+
+transaction ScanDraftQuotes(n: int)
+{
+    @global hop {
+        for (var it: Iterator<Quote> = scan(Quote, n, __slice__); hasNext(it); it = next(it)) {
+            var qid = get_id(it);
+            var q: Row<Quote> = Quote[id: qid];
+            if q.status == 0 {
+                to_unit(q.id);
+                to_unit(q.account_id);
+                to_unit(q.total);
+                to_unit(q.valid_until);
+            }
+        }
+    }
+}
+
+transaction ScanHighLeadScores(n: int, minScore: int)
+    assume minScore > 0;
+{
+    @global hop {
+        for (var it: Iterator<Lead> = scan(Lead, n, __slice__); hasNext(it); it = next(it)) {
+            var lid = get_id(it);
+            var l: Row<Lead> = Lead[id: lid];
+            if l.score >= minScore {
+                if l.status < 3 {
+                    to_unit(l.id);
+                    to_unit(l.first_name);
+                    to_unit(l.last_name);
+                    to_unit(l.company);
+                    to_unit(l.score);
+                }
+            }
+        }
+    }
+}
