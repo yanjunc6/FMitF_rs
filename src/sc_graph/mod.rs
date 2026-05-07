@@ -9,9 +9,10 @@ pub use sc_graph_simplify::update_scgraph_for_commutative_errors;
 
 mod sc_graph_deadlock_elimination;
 pub use sc_graph_deadlock_elimination::{
-    collect_deadlock_elimination_stats, combine_for_deadlock_elimination, CombinedEdge,
-    CombinedPiece, CombinedSCGraph, CombinedVertex, CombinedVertexId, DeadlockEliminationStats,
+    combine_for_deadlock_elimination, CombinedEdge, CombinedPiece, CombinedSCGraph, CombinedVertex,
+    CombinedVertexId, DeadlockEliminationStats,
 };
+// Note: collect_deadlock_elimination_stats is now called collect_sc_graph_stats and is defined in mod.rs
 
 mod count_cycle;
 pub use count_cycle::{
@@ -231,4 +232,82 @@ pub fn calculate_conflicts(
     }
 
     conflicts
+}
+
+/// Comprehensive statistics for SC-graph analysis, including deadlock elimination and conflict metrics.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SCGraphStats {
+    /// Deadlock elimination statistics
+    pub deadlock_stats: DeadlockEliminationStats,
+    /// Total number of conflict relationships (edges in the conflict map)
+    pub total_conflicts: usize,
+    /// Average number of conflicts per hop that has conflicts
+    pub average_conflicts_per_hop: f64,
+}
+
+/// Collect comprehensive SC-graph statistics including deadlock elimination and conflict metrics.
+///
+/// This function combines:
+/// - Deadlock elimination statistics from the combined graph
+/// - Conflict counts from the calculate_conflicts function
+///
+/// Parameters:
+/// - scg: The SC-graph (before deadlock elimination)
+/// - combined: The combined SC-graph (after deadlock elimination)
+/// - program: The CFG program for conflict calculation
+/// - mode: The cycle counting mode
+///
+/// Returns the comprehensive statistics
+pub fn collect_sc_graph_stats(
+    scg: &SCGraph,
+    combined: &CombinedSCGraph,
+    program: &crate::cfg::Program,
+    mode: CycleCountMode,
+) -> SCGraphStats {
+    // Collect deadlock elimination stats
+    let mut merged_node_count = 0usize;
+    let mut merged_hop_count = 0usize;
+
+    for vertex in &combined.vertices {
+        let vertex_hop_count: usize = vertex.pieces.iter().map(|piece| piece.hop_ids.len()).sum();
+        if vertex_hop_count > 1 {
+            merged_node_count += 1;
+            merged_hop_count += vertex_hop_count;
+        }
+    }
+
+    let average_merged_node_size = if merged_node_count == 0 {
+        0.0
+    } else {
+        merged_hop_count as f64 / merged_node_count as f64
+    };
+
+    let deadlock_stats = DeadlockEliminationStats {
+        merged_node_count,
+        merged_hop_count,
+        average_merged_node_size,
+        sc_cycle_count: count_sc_cycles_before_merging(scg, mode),
+        merged_sc_cycle_count: count_sc_cycles_in_combined_graph(combined, mode),
+    };
+
+    // Calculate conflicts and count them
+    let conflicts = calculate_conflicts(scg, program);
+    let total_conflicts: usize = conflicts.values().map(|m| m.len()).sum();
+    let total_hops_in_program: usize = program
+        .all_functions
+        .iter()
+        .map(|&function_id| program.functions[function_id].hops.len())
+        .sum();
+
+    let average_conflicts_per_hop = if total_hops_in_program == 0 {
+        0.0
+    } else {
+        total_conflicts as f64 / total_hops_in_program as f64
+    };
+
+    SCGraphStats {
+        deadlock_stats,
+        total_conflicts,
+        average_conflicts_per_hop,
+    }
 }

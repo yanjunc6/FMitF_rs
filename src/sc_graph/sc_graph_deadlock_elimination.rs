@@ -83,38 +83,6 @@ pub struct CombinedEdge {
     pub edge_type: EdgeType,
 }
 
-/// Collect deadlock-elimination statistics for an SC-graph and its combined graph.
-pub fn collect_deadlock_elimination_stats(
-    scg: &SCGraph,
-    combined: &CombinedSCGraph,
-    mode: CycleCountMode,
-) -> DeadlockEliminationStats {
-    let mut merged_node_count = 0usize;
-    let mut merged_hop_count = 0usize;
-
-    for vertex in &combined.vertices {
-        let vertex_hop_count: usize = vertex.pieces.iter().map(|piece| piece.hop_ids.len()).sum();
-        if vertex_hop_count > 1 {
-            merged_node_count += 1;
-            merged_hop_count += vertex_hop_count;
-        }
-    }
-
-    let average_merged_node_size = if merged_node_count == 0 {
-        0.0
-    } else {
-        merged_hop_count as f64 / merged_node_count as f64
-    };
-
-    DeadlockEliminationStats {
-        merged_node_count,
-        merged_hop_count,
-        average_merged_node_size,
-        sc_cycle_count: count_sc_cycles_before_merging(scg, mode),
-        merged_sc_cycle_count: count_sc_cycles_in_combined_graph(combined, mode),
-    }
-}
-
 /// Main entry: eliminate deadlock-prone SC-cycles using the described steps:
 /// 1) Ensure S-edges are directed (already given by the SCGraphEdge).
 /// 2) Contract all nodes connected by C-edges (undirected) into single vertices.

@@ -92,11 +92,22 @@ pub struct BenchmarkSummary {
     pub verification_pre_average_merged_node_size: f64,
     pub verification_pre_sc_cycle_count: usize,
     pub verification_pre_merged_sc_cycle_count: usize,
+    pub verification_pre_total_conflicts: usize,
+    pub verification_pre_average_conflicts_per_hop: f64,
     pub verification_post_merged_node_count: usize,
     pub verification_post_merged_hop_count: usize,
     pub verification_post_average_merged_node_size: f64,
     pub verification_post_sc_cycle_count: usize,
     pub verification_post_merged_sc_cycle_count: usize,
+    pub verification_post_total_conflicts: usize,
+    pub verification_post_average_conflicts_per_hop: f64,
+    // Stage timing information (in milliseconds)
+    pub stage_frontend_ms: f64,
+    pub stage_cfg_generation_ms: f64,
+    pub stage_optimization_ms: f64,
+    pub stage_scgraph_ms: f64,
+    pub stage_verification_ms: f64,
+    pub stage_codegen_ms: f64,
 }
 
 /// Complete benchmark data for output to JSON
@@ -148,11 +159,21 @@ impl BenchmarkData {
                 verification_pre_average_merged_node_size: 0.0,
                 verification_pre_sc_cycle_count: 0,
                 verification_pre_merged_sc_cycle_count: 0,
+                verification_pre_total_conflicts: 0,
+                verification_pre_average_conflicts_per_hop: 0.0,
                 verification_post_merged_node_count: 0,
                 verification_post_merged_hop_count: 0,
                 verification_post_average_merged_node_size: 0.0,
                 verification_post_sc_cycle_count: 0,
                 verification_post_merged_sc_cycle_count: 0,
+                verification_post_total_conflicts: 0,
+                verification_post_average_conflicts_per_hop: 0.0,
+                stage_frontend_ms: 0.0,
+                stage_cfg_generation_ms: 0.0,
+                stage_optimization_ms: 0.0,
+                stage_scgraph_ms: 0.0,
+                stage_verification_ms: 0.0,
+                stage_codegen_ms: 0.0,
             },
             c_edge_verifications: Vec::new(),
             timestamp: chrono::Local::now().to_rfc3339(),
@@ -263,6 +284,41 @@ impl DataCollector {
             stats.average_merged_node_size;
         self.data.summary.verification_post_sc_cycle_count = stats.sc_cycle_count;
         self.data.summary.verification_post_merged_sc_cycle_count = stats.merged_sc_cycle_count;
+    }
+
+    /// Set comprehensive SC-graph stats collected before verification (includes conflicts).
+    pub fn set_pre_verification_scgraph_stats(&mut self, stats: crate::sc_graph::SCGraphStats) {
+        self.set_pre_verification_deadlock_stats(stats.deadlock_stats);
+        self.data.summary.verification_pre_total_conflicts = stats.total_conflicts;
+        self.data.summary.verification_pre_average_conflicts_per_hop =
+            stats.average_conflicts_per_hop;
+    }
+
+    /// Set comprehensive SC-graph stats collected after verification (includes conflicts).
+    pub fn set_post_verification_scgraph_stats(&mut self, stats: crate::sc_graph::SCGraphStats) {
+        self.set_post_verification_deadlock_stats(stats.deadlock_stats);
+        self.data.summary.verification_post_total_conflicts = stats.total_conflicts;
+        self.data
+            .summary
+            .verification_post_average_conflicts_per_hop = stats.average_conflicts_per_hop;
+    }
+
+    /// Set stage timing information (in milliseconds).
+    pub fn set_stage_timings(
+        &mut self,
+        frontend_ms: f64,
+        cfg_generation_ms: f64,
+        optimization_ms: f64,
+        scgraph_ms: f64,
+        verification_ms: f64,
+        codegen_ms: f64,
+    ) {
+        self.data.summary.stage_frontend_ms = frontend_ms;
+        self.data.summary.stage_cfg_generation_ms = cfg_generation_ms;
+        self.data.summary.stage_optimization_ms = optimization_ms;
+        self.data.summary.stage_scgraph_ms = scgraph_ms;
+        self.data.summary.stage_verification_ms = verification_ms;
+        self.data.summary.stage_codegen_ms = codegen_ms;
     }
 
     /// Add a C-edge verification result

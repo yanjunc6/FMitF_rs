@@ -1,14 +1,17 @@
 use colored::*;
 use std::time::{Duration, Instant};
 
+/// Tuple of (result, duration_ms) for stage execution
+pub type StageResult<T> = (T, f64);
+
 /// Execute a compilation stage with proper error handling and formatting.
-/// Returns Ok(T) on success, Err(E) on failure.
+/// Returns Ok((T, duration_ms)) on success, Err(E) on failure.
 pub fn execute_stage<F, T, E>(
     stage_name: &str,
     current: usize,
     total: usize,
     action: F,
-) -> Result<T, E>
+) -> Result<StageResult<T>, E>
 where
     F: FnOnce() -> Result<T, E>,
     E: std::fmt::Display,
@@ -23,6 +26,7 @@ where
     let start = Instant::now();
     let result = action();
     let duration = start.elapsed();
+    let duration_ms = duration.as_secs_f64() * 1000.0;
 
     match result {
         Ok(value) => {
@@ -32,7 +36,7 @@ where
                 "Done.".green(),
                 format_duration(duration).truecolor(128, 128, 128)
             );
-            Ok(value)
+            Ok((value, duration_ms))
         }
         Err(error) => {
             // Error: show the error details to stderr, then "Error" with duration

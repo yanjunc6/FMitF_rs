@@ -133,13 +133,17 @@ impl Compiler {
             + if options.enable_optimization { 1 } else { 0 };
         let mut current_stage = 0;
 
+        // Stage timings: fixed array with 6 positions for all possible stages
+        // 0=frontend, 1=cfg, 2=opt, 3=scgraph, 4=verification, 5=codegen
+        let mut stage_timings = [0.0; 6];
+
         // Stage 1: Frontend (Parsing)
         current_stage += 1;
         self.logger.line(format!(
             "[Stage {}/{}] Frontend - start",
             current_stage, total_stages
         ))?;
-        let program = execute_stage(
+        let (program, stage_time_ms) = execute_stage(
             "Frontend",
             current_stage,
             total_stages,
@@ -176,10 +180,11 @@ impl Compiler {
                 Ok(source_program)
             },
         )?;
+        stage_timings[0] = stage_time_ms;
 
         // Stage 2: CFG Generation
         current_stage += 1;
-        let cfg_program = execute_stage(
+        let (cfg_program, stage_time_ms) = execute_stage(
             "CFG Generation",
             current_stage,
             total_stages,
@@ -189,11 +194,12 @@ impl Compiler {
                 Ok(cfg_program)
             },
         )?;
+        stage_timings[1] = stage_time_ms;
 
         // Stage 3: Optimization (optional)
-        let optimized_or_cfg_program = if options.enable_optimization {
+        let (optimized_or_cfg_program, opt_stage_time) = if options.enable_optimization {
             current_stage += 1;
-            execute_stage(
+            let (prog, time) = execute_stage(
                 "Optimization",
                 current_stage,
                 total_stages,
@@ -204,10 +210,12 @@ impl Compiler {
                     self.write_cfg_pretty(&optimized_program, output_dir, "cfg_opt_pretty.txt")?;
                     Ok(optimized_program)
                 },
-            )?
+            )?;
+            (prog, time)
         } else {
-            cfg_program
+            (cfg_program, 0.0)
         };
+        stage_timings[2] = opt_stage_time;
 
         data_collector.set_program_stats(
             optimized_or_cfg_program.functions.len(),
@@ -216,7 +224,7 @@ impl Compiler {
 
         // Stage 4: SC-Graph
         current_stage += 1;
-        let (mut sc, mut combined) = execute_stage(
+        let ((mut sc, mut combined), stage_time_ms) = execute_stage(
             "SC-Graph",
             current_stage,
             total_stages,
@@ -231,6 +239,7 @@ impl Compiler {
                 Ok((sc, combined))
             },
         )?;
+        stage_timings[3] = stage_time_ms;
 
         let sc_c_edges = sc
             .edges
@@ -239,16 +248,21 @@ impl Compiler {
             .count();
 
         let original_sc = sc.clone();
-        let pre_deadlock_stats =
-            crate::sc_graph::collect_deadlock_elimination_stats(&sc, &combined, options.mode);
-        data_collector.set_pre_verification_deadlock_stats(pre_deadlock_stats);
+        let pre_scgraph_stats = crate::sc_graph::collect_sc_graph_stats(
+            &sc,
+            &combined,
+            &optimized_or_cfg_program,
+            options.mode,
+        );
+        data_collector.set_pre_verification_scgraph_stats(pre_scgraph_stats);
 
         // Stage 5: Verification (optional)
         if !options.enable_verification {
             data_collector.set_sc_stats(sc_c_edges, sc_c_edges);
+            stage_timings[4] = 0.0;
         } else {
             current_stage += 1;
-            let (simplified_sc, simplified_combined) = execute_stage(
+            let ((simplified_sc, simplified_combined), stage_time_ms) = execute_stage(
                 "Verification",
                 current_stage,
                 total_stages,
@@ -270,17 +284,22 @@ impl Compiler {
                     )
                 },
             )?;
+            stage_timings[4] = stage_time_ms;
 
             sc = simplified_sc;
             combined = simplified_combined;
-            let post_deadlock_stats =
-                crate::sc_graph::collect_deadlock_elimination_stats(&sc, &combined, options.mode);
-            data_collector.set_post_verification_deadlock_stats(post_deadlock_stats);
+            let post_scgraph_stats = crate::sc_graph::collect_sc_graph_stats(
+                &sc,
+                &combined,
+                &optimized_or_cfg_program,
+                options.mode,
+            );
+            data_collector.set_post_verification_scgraph_stats(post_scgraph_stats);
         }
 
         // Stage 6: Code Generation
         current_stage += 1;
-        let _ = execute_stage(
+        let (_, stage_time_ms) = execute_stage(
             "Codegen",
             current_stage,
             total_stages,
@@ -304,6 +323,17 @@ impl Compiler {
                 Ok(())
             },
         )?;
+        stage_timings[5] = stage_time_ms;
+
+        // Set all stage timings in data collector
+        data_collector.set_stage_timings(
+            stage_timings[0],
+            stage_timings[1],
+            stage_timings[2],
+            stage_timings[3],
+            stage_timings[4],
+            stage_timings[5],
+        );
 
         println!("{}", "Completed".green().bold());
         data::emit_summary(&data_collector, &mut self.logger);

@@ -655,10 +655,11 @@ fn run_boogie_program(
                 .arg("/quiet")
                 .arg("/errorTrace:0")
                 // Disable array extensionality to avoid quantifier instantiation blowup
-                // on complex nested MapStore VCs 
+                // on complex nested MapStore VCs
                 // This reduces the bottleneck from 30s timeout to ~1s (28x speedup) while
                 // preserving correct results for all VCs.
                 .arg("/proverOpt:O:smt.array.extensional=false")
+                // .arg("/proverOpt:O:smt.ematching=false")
                 .arg(format!("/loopUnroll:{}", loop_unroll))
                 .arg(format!("/timeLimit:{}", timeout_secs))
                 .arg(file_path.to_string_lossy().to_string())
