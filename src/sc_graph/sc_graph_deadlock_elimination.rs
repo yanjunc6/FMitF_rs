@@ -2,10 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
-use super::{
-    count_sc_cycles_before_merging, count_sc_cycles_in_combined_graph, CycleCountMode, EdgeType,
-    SCGraph, SCGraphNodeId,
-};
+use super::{EdgeType, SCGraph, SCGraphNodeId};
 use crate::cfg::{FunctionId, HopId};
 
 /// The final, combined SC-Graph after eliminating deadlock-prone SC-cycles.

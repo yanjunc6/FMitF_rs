@@ -294,7 +294,7 @@ pub fn collect_sc_graph_stats(
     let conflicts = calculate_conflicts(scg, program);
     let total_conflicts: usize = conflicts.values().map(|m| m.len()).sum();
     let total_hops_in_program: usize = program
-        .all_functions
+        .all_transactions
         .iter()
         .map(|&function_id| program.functions[function_id].hops.len())
         .sum();
