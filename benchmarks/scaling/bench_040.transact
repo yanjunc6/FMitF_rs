@@ -1,0 +1,611 @@
+// ============================================================================
+// bench_040 — Healthcare System (40 transactions)
+// Domain: Hospital with allergy guards, capacity checks, state-machine rules
+// ============================================================================
+
+partition f(x: int) -> int { return x; }
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+table Patient {
+    primary pat_id: int;
+    node f(pat_id);
+    name: string;
+    dob: int;
+    blood_type: string;
+    insurance_id: int;
+    status: int;
+}
+
+table Doctor {
+    primary doc_id: int;
+    node f(doc_id);
+    name: string;
+    specialty: string;
+    dept_id: int;
+    status: int;
+}
+
+table Appointment {
+    primary appt_id: int;
+    primary pat_id: int;
+    node f(pat_id);
+    doc_id: int;
+    scheduled_at: int;
+    status: int;
+    notes: string;
+}
+
+table MedRecord {
+    primary rec_id: int;
+    primary pat_id: int;
+    node f(pat_id);
+    doc_id: int;
+    diagnosis: string;
+    notes: string;
+    created_at: int;
+}
+
+table Prescription {
+    primary rx_id: int;
+    primary pat_id: int;
+    node f(pat_id);
+    doc_id: int;
+    medication: string;
+    dosage: string;
+    status: int;
+    issued_at: int;
+}
+
+table LabOrder {
+    primary lab_id: int;
+    primary pat_id: int;
+    node f(pat_id);
+    doc_id: int;
+    test_type: string;
+    result: string;
+    result_flag: int;
+    status: int;
+    ordered_at: int;
+}
+
+table Admission {
+    primary adm_id: int;
+    primary pat_id: int;
+    node f(pat_id);
+    room_no: int;
+    admitted_at: int;
+    discharged_at: int;
+    status: int;
+}
+
+table Vitals {
+    primary vital_id: int;
+    primary pat_id: int;
+    node f(pat_id);
+    heart_rate: int;
+    bp_sys: int;
+    bp_dia: int;
+    temp: float;
+    alert_flag: int;
+    recorded_at: int;
+}
+
+table InsuranceClaim {
+    primary claim_id: int;
+    primary pat_id: int;
+    node f(pat_id);
+    insurance_id: int;
+    amount: float;
+    status: int;
+    submitted_at: int;
+}
+
+table Bill {
+    primary bill_id: int;
+    primary pat_id: int;
+    node f(pat_id);
+    amount: float;
+    paid: int;
+    issued_at: int;
+}
+
+table Allergy {
+    primary pat_id: int;
+    primary allergen: string;
+    node f(pat_id);
+    severity: int;
+    noted_at: int;
+}
+
+// ============================================================================
+// Transactions (40 total)
+// ============================================================================
+
+// 1. RegisterPatient
+transaction RegisterPatient(pat_id: int, name: string, dob: int,
+                             blood_type: string, insurance_id: int) {
+    hop {
+        Patient[pat_id: pat_id] = {
+            name: name,
+            dob: dob,
+            blood_type: blood_type,
+            insurance_id: insurance_id,
+            status: 1
+        };
+    }
+}
+
+// 2. GetPatient
+transaction GetPatient(pat_id: int) {
+    hop {
+        var p: Row<Patient> = Patient[pat_id: pat_id];
+        to_unit(p);
+    }
+}
+
+// 3. UpdatePatientInsurance: only if patient is active.
+transaction UpdatePatientInsurance(pat_id: int, insurance_id: int) {
+    hop {
+        var p: Row<Patient> = Patient[pat_id: pat_id];
+        if p.status == 1 {
+            Patient[pat_id: pat_id].insurance_id = insurance_id;
+        }
+    }
+}
+
+// 4. DischargePatientStatus: patient must be admitted (status == 2) to discharge.
+transaction DischargePatientStatus(pat_id: int) {
+    hop {
+        var p: Row<Patient> = Patient[pat_id: pat_id];
+        if p.status == 2 {
+            Patient[pat_id: pat_id].status = 1;
+        }
+    }
+}
+
+// 5. RegisterDoctor
+transaction RegisterDoctor(doc_id: int, name: string, specialty: string,
+                            dept_id: int) {
+    hop {
+        Doctor[doc_id: doc_id] = {
+            name: name,
+            specialty: specialty,
+            dept_id: dept_id,
+            status: 1
+        };
+    }
+}
+
+// 6. GetDoctor
+transaction GetDoctor(doc_id: int) {
+    hop {
+        var d: Row<Doctor> = Doctor[doc_id: doc_id];
+        to_unit(d);
+    }
+}
+
+// 7. UpdateDoctorSpecialty: only active doctors can be updated.
+transaction UpdateDoctorSpecialty(doc_id: int, specialty: string) {
+    hop {
+        var d: Row<Doctor> = Doctor[doc_id: doc_id];
+        if d.status == 1 {
+            Doctor[doc_id: doc_id].specialty = specialty;
+        }
+    }
+}
+
+// 8. DeactivateDoctor: forward-only transition.
+transaction DeactivateDoctor(doc_id: int) {
+    hop {
+        var d: Row<Doctor> = Doctor[doc_id: doc_id];
+        if d.status == 1 {
+            Doctor[doc_id: doc_id].status = 0;
+        }
+    }
+}
+
+// 9. ScheduleAppointment: both patient and doctor must be active.
+//    Hop 1 reads patient (patient partition), Hop 2 reads doctor and writes appointment.
+transaction ScheduleAppointment(appt_id: int, pat_id: int, doc_id: int,
+                                 scheduled_at: int, notes: string) {
+    hop {
+        var p: Row<Patient> = Patient[pat_id: pat_id];
+        if p.status == 1 {
+            Appointment[appt_id: appt_id, pat_id: pat_id] = {
+                doc_id: doc_id,
+                scheduled_at: scheduled_at,
+                status: 1,
+                notes: notes
+            };
+        }
+    }
+    hop {
+        var d: Row<Doctor> = Doctor[doc_id: doc_id];
+        if d.status != 1 {
+            Appointment[appt_id: appt_id, pat_id: pat_id].status = 0;
+        }
+    }
+}
+
+// 10. CancelAppointment: only pending or confirmed appointments.
+transaction CancelAppointment(appt_id: int, pat_id: int) {
+    hop {
+        var a: Row<Appointment> = Appointment[appt_id: appt_id, pat_id: pat_id];
+        if a.status == 1 || a.status == 2 {
+            Appointment[appt_id: appt_id, pat_id: pat_id].status = 0;
+        }
+    }
+}
+
+// 11. CompleteAppointment: forward-only from confirmed (2).
+transaction CompleteAppointment(appt_id: int, pat_id: int) {
+    hop {
+        var a: Row<Appointment> = Appointment[appt_id: appt_id, pat_id: pat_id];
+        if a.status == 2 {
+            Appointment[appt_id: appt_id, pat_id: pat_id].status = 3;
+        }
+    }
+}
+
+// 12. GetAppointment
+transaction GetAppointment(appt_id: int, pat_id: int) {
+    hop {
+        var a: Row<Appointment> = Appointment[appt_id: appt_id, pat_id: pat_id];
+        to_unit(a);
+    }
+}
+
+// 13. RescheduleAppointment: only pending appointments can be rescheduled.
+transaction RescheduleAppointment(appt_id: int, pat_id: int, new_time: int) {
+    hop {
+        var a: Row<Appointment> = Appointment[appt_id: appt_id, pat_id: pat_id];
+        if a.status == 1 && new_time > 0 {
+            Appointment[appt_id: appt_id, pat_id: pat_id].scheduled_at = new_time;
+        }
+    }
+}
+
+// 14. CreateMedicalRecord: requires completed appointment.
+transaction CreateMedicalRecord(rec_id: int, pat_id: int, doc_id: int,
+                                 appt_id: int, diagnosis: string,
+                                 notes: string, ts: int) {
+    hop {
+        var a: Row<Appointment> = Appointment[appt_id: appt_id, pat_id: pat_id];
+        if a.status == 3 {
+            MedRecord[rec_id: rec_id, pat_id: pat_id] = {
+                doc_id: doc_id,
+                diagnosis: diagnosis,
+                notes: notes,
+                created_at: ts
+            };
+        }
+    }
+}
+
+// 15. GetMedicalRecord
+transaction GetMedicalRecord(rec_id: int, pat_id: int) {
+    hop {
+        var r: Row<MedRecord> = MedRecord[rec_id: rec_id, pat_id: pat_id];
+        to_unit(r);
+    }
+}
+
+// 16. UpdateMedicalNotes
+transaction UpdateMedicalNotes(rec_id: int, pat_id: int, notes: string) {
+    hop {
+        MedRecord[rec_id: rec_id, pat_id: pat_id].notes = notes;
+    }
+}
+
+// 17. IssuePrescription: check patient has no severity-3 allergy to the medication.
+//     Scan allergy table on patient partition; abort if blocking allergy found.
+transaction IssuePrescription(rx_id: int, pat_id: int, doc_id: int,
+                               medication: string, dosage: string, ts: int) {
+    @global hop {
+        var p: Row<Patient> = Patient[pat_id: pat_id];
+        var d: Row<Doctor> = Doctor[doc_id: doc_id];
+        var blocked: int = 0;
+        for (var iter: Iterator<Allergy> = scan(Allergy, pat_id, __slice__);
+             hasNext(iter); iter = next(iter)) {
+            var p_id = get_pat_id(iter);
+            var alg = get_allergen(iter);
+            if p_id == pat_id {
+                var al: Row<Allergy> = Allergy[pat_id: p_id, allergen: alg];
+                if al.allergen === medication && al.severity == 3 {
+                    blocked = 1;
+                }
+            }
+        }
+        if p.status == 1 && d.status == 1 && blocked == 0 {
+            Prescription[rx_id: rx_id, pat_id: pat_id] = {
+                doc_id: doc_id,
+                medication: medication,
+                dosage: dosage,
+                status: 1,
+                issued_at: ts
+            };
+        }
+    }
+}
+
+// 18. FillPrescription: only active (status == 1) prescriptions can be filled.
+transaction FillPrescription(rx_id: int, pat_id: int) {
+    hop {
+        var rx: Row<Prescription> = Prescription[rx_id: rx_id, pat_id: pat_id];
+        if rx.status == 1 {
+            Prescription[rx_id: rx_id, pat_id: pat_id].status = 2;
+        }
+    }
+}
+
+// 19. CancelPrescription: only pending prescriptions can be cancelled.
+transaction CancelPrescription(rx_id: int, pat_id: int) {
+    hop {
+        var rx: Row<Prescription> = Prescription[rx_id: rx_id, pat_id: pat_id];
+        if rx.status == 1 {
+            Prescription[rx_id: rx_id, pat_id: pat_id].status = 0;
+        }
+    }
+}
+
+// 20. GetPrescription
+transaction GetPrescription(rx_id: int, pat_id: int) {
+    hop {
+        var rx: Row<Prescription> = Prescription[rx_id: rx_id, pat_id: pat_id];
+        to_unit(rx);
+    }
+}
+
+// 21. OrderLabTest: doctor must be active.
+//     Hop 1 on patient partition (lab order), Hop 2 verifies doctor.
+transaction OrderLabTest(lab_id: int, pat_id: int, doc_id: int,
+                          test_type: string, ts: int) {
+    hop {
+        var p: Row<Patient> = Patient[pat_id: pat_id];
+        if p.status == 1 {
+            LabOrder[lab_id: lab_id, pat_id: pat_id] = {
+                doc_id: doc_id,
+                test_type: test_type,
+                result: "",
+                result_flag: 0,
+                status: 1,
+                ordered_at: ts
+            };
+        }
+    }
+    hop {
+        var d: Row<Doctor> = Doctor[doc_id: doc_id];
+        if d.status != 1 {
+            LabOrder[lab_id: lab_id, pat_id: pat_id].status = 0;
+        }
+    }
+}
+
+// 22. RecordLabResult: set result_flag = 1 (abnormal) if result indicates HIGH.
+transaction RecordLabResult(lab_id: int, pat_id: int, result: string) {
+    hop {
+        var lo: Row<LabOrder> = LabOrder[lab_id: lab_id, pat_id: pat_id];
+        if lo.status == 1 {
+            LabOrder[lab_id: lab_id, pat_id: pat_id].result = result;
+            LabOrder[lab_id: lab_id, pat_id: pat_id].status = 2;
+            if result === "HIGH" || result === "CRITICAL" {
+                LabOrder[lab_id: lab_id, pat_id: pat_id].result_flag = 1;
+            }
+        }
+    }
+}
+
+// 23. GetLabResult
+transaction GetLabResult(lab_id: int, pat_id: int) {
+    hop {
+        var l: Row<LabOrder> = LabOrder[lab_id: lab_id, pat_id: pat_id];
+        to_unit(l);
+    }
+}
+
+// 24. AdmitPatient: patient must be active (not already admitted).
+transaction AdmitPatient(adm_id: int, pat_id: int, room_no: int, ts: int) {
+    hop {
+        var p: Row<Patient> = Patient[pat_id: pat_id];
+        if p.status == 1 {
+            Admission[adm_id: adm_id, pat_id: pat_id] = {
+                room_no: room_no,
+                admitted_at: ts,
+                discharged_at: 0,
+                status: 1
+            };
+            Patient[pat_id: pat_id].status = 2;
+        }
+    }
+}
+
+// 25. DischargePatient: patient must be admitted (status == 1 in Admission).
+transaction DischargePatient(adm_id: int, pat_id: int, ts: int) {
+    hop {
+        var adm: Row<Admission> = Admission[adm_id: adm_id, pat_id: pat_id];
+        if adm.status == 1 {
+            Admission[adm_id: adm_id, pat_id: pat_id].discharged_at = ts;
+            Admission[adm_id: adm_id, pat_id: pat_id].status = 0;
+            Patient[pat_id: pat_id].status = 1;
+        }
+    }
+}
+
+// 26. GetAdmission
+transaction GetAdmission(adm_id: int, pat_id: int) {
+    hop {
+        var a: Row<Admission> = Admission[adm_id: adm_id, pat_id: pat_id];
+        to_unit(a);
+    }
+}
+
+// 27. RecordVitals: set alert_flag if heart_rate or bp_sys is outside normal range.
+transaction RecordVitals(vital_id: int, pat_id: int, heart_rate: int,
+                          bp_sys: int, bp_dia: int, temp: float, ts: int) {
+    hop {
+        var p: Row<Patient> = Patient[pat_id: pat_id];
+        if p.status == 2 {
+            var flag: int = 0;
+            if heart_rate > 120 || heart_rate < 50 {
+                flag = 1;
+            }
+            if bp_sys > 180 || bp_sys < 90 {
+                flag = 1;
+            }
+            if temp > 39.5 {
+                flag = 1;
+            }
+            Vitals[vital_id: vital_id, pat_id: pat_id] = {
+                heart_rate: heart_rate,
+                bp_sys: bp_sys,
+                bp_dia: bp_dia,
+                temp: temp,
+                alert_flag: flag,
+                recorded_at: ts
+            };
+        }
+    }
+}
+
+// 28. GetVitals
+transaction GetVitals(vital_id: int, pat_id: int) {
+    hop {
+        var v: Row<Vitals> = Vitals[vital_id: vital_id, pat_id: pat_id];
+        to_unit(v);
+    }
+}
+
+// 29. SubmitInsuranceClaim: patient must be active; amount must be positive.
+transaction SubmitInsuranceClaim(claim_id: int, pat_id: int,
+                                  insurance_id: int, amount: float, ts: int) {
+    hop {
+        var p: Row<Patient> = Patient[pat_id: pat_id];
+        if p.status >= 1 && amount > 0.0 {
+            InsuranceClaim[claim_id: claim_id, pat_id: pat_id] = {
+                insurance_id: insurance_id,
+                amount: amount,
+                status: 1,
+                submitted_at: ts
+            };
+        }
+    }
+}
+
+// 30. ApproveInsuranceClaim: only pending claims can be approved.
+transaction ApproveInsuranceClaim(claim_id: int, pat_id: int) {
+    hop {
+        var c: Row<InsuranceClaim> = InsuranceClaim[claim_id: claim_id, pat_id: pat_id];
+        if c.status == 1 {
+            InsuranceClaim[claim_id: claim_id, pat_id: pat_id].status = 2;
+        }
+    }
+}
+
+// 31. DenyInsuranceClaim: only pending claims can be denied.
+transaction DenyInsuranceClaim(claim_id: int, pat_id: int) {
+    hop {
+        var c: Row<InsuranceClaim> = InsuranceClaim[claim_id: claim_id, pat_id: pat_id];
+        if c.status == 1 {
+            InsuranceClaim[claim_id: claim_id, pat_id: pat_id].status = 3;
+        }
+    }
+}
+
+// 32. GetInsuranceClaim
+transaction GetInsuranceClaim(claim_id: int, pat_id: int) {
+    hop {
+        var c: Row<InsuranceClaim> = InsuranceClaim[claim_id: claim_id, pat_id: pat_id];
+        to_unit(c);
+    }
+}
+
+// 33. CreateBill: amount must be positive.
+transaction CreateBill(bill_id: int, pat_id: int, amount: float, ts: int) {
+    hop {
+        if amount > 0.0 {
+            Bill[bill_id: bill_id, pat_id: pat_id] = {
+                amount: amount,
+                paid: 0,
+                issued_at: ts
+            };
+        }
+    }
+}
+
+// 34. PayBill: only unpaid bills can be paid.
+transaction PayBill(bill_id: int, pat_id: int) {
+    hop {
+        var b: Row<Bill> = Bill[bill_id: bill_id, pat_id: pat_id];
+        if b.paid == 0 && b.amount > 0.0 {
+            Bill[bill_id: bill_id, pat_id: pat_id].paid = 1;
+        }
+    }
+}
+
+// 35. GetBill
+transaction GetBill(bill_id: int, pat_id: int) {
+    hop {
+        var b: Row<Bill> = Bill[bill_id: bill_id, pat_id: pat_id];
+        to_unit(b);
+    }
+}
+
+// 36. RecordAllergy: severity must be 1, 2, or 3.
+transaction RecordAllergy(pat_id: int, allergen: string, severity: int, ts: int) {
+    hop {
+        var p: Row<Patient> = Patient[pat_id: pat_id];
+        if p.status >= 1 && severity >= 1 && severity <= 3 {
+            Allergy[pat_id: pat_id, allergen: allergen] = {
+                severity: severity,
+                noted_at: ts
+            };
+        }
+    }
+}
+
+// 37. GetAllergy
+transaction GetAllergy(pat_id: int, allergen: string) {
+    hop {
+        var a: Row<Allergy> = Allergy[pat_id: pat_id, allergen: allergen];
+        to_unit(a);
+    }
+}
+
+// 38. UpdateAllergySeverity: severity must stay in [1, 3].
+transaction UpdateAllergySeverity(pat_id: int, allergen: string, severity: int) {
+    hop {
+        var a: Row<Allergy> = Allergy[pat_id: pat_id, allergen: allergen];
+        if severity >= 1 && severity <= 3 {
+            Allergy[pat_id: pat_id, allergen: allergen].severity = severity;
+        }
+    }
+}
+
+// 39. TransferPatient: only admitted patients (Admission status == 1) can be moved.
+transaction TransferPatient(adm_id: int, pat_id: int, new_room: int) {
+    hop {
+        var adm: Row<Admission> = Admission[adm_id: adm_id, pat_id: pat_id];
+        if adm.status == 1 {
+            Admission[adm_id: adm_id, pat_id: pat_id].room_no = new_room;
+        }
+    }
+}
+
+// 40. GetPatientAllergyCount: scan allergy table for a patient, count entries.
+transaction GetPatientAllergyCount(pat_id: int) -> int {
+    @global hop {
+        var count: int = 0;
+        for (var iter: Iterator<Allergy> = scan(Allergy, pat_id, __slice__);
+             hasNext(iter); iter = next(iter)) {
+            var p_id = get_pat_id(iter);
+            var alg = get_allergen(iter);
+            if p_id == pat_id {
+                count = count + 1;
+            }
+        }
+        return count;
+    }
+}

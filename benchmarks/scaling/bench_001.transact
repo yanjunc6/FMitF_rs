@@ -1,0 +1,37 @@
+// ============================================================================
+// bench_001 — Key-Value Store (1 transaction)
+// Domain: Distributed KV store with optimistic concurrency control
+// ============================================================================
+
+partition f(x: int) -> int { return x; }
+
+table KVStore {
+    primary key: int;
+    node f(key);
+    value: string;
+    version: int;
+    updated_at: int;
+    is_deleted: int;
+}
+
+// Put: compare-and-swap write — only applies if stored version is older.
+// If the key was previously soft-deleted, resurrect it unconditionally.
+transaction Put(key: int, value: string, new_version: int, ts: int) {
+    hop {
+        var cur: Row<KVStore> = KVStore[key: key];
+        if cur.is_deleted == 1 {
+            KVStore[key: key] = {
+                value: value,
+                version: new_version,
+                updated_at: ts,
+                is_deleted: 0
+            };
+        } else {
+            if cur.version < new_version {
+                KVStore[key: key].value = value;
+                KVStore[key: key].version = new_version;
+                KVStore[key: key].updated_at = ts;
+            }
+        }
+    }
+}

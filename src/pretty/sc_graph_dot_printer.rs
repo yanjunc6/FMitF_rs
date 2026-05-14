@@ -359,7 +359,8 @@ impl SCGraph {
                             };
                             let penwidth = ",penwidth=2.0";
 
-                            let label =
+                            // Append maximum primary-key count information when available
+                            let mut label =
                                 if info.result == crate::cli::data::VerificationResult::Timeout {
                                     "C (timeout)".to_string()
                                 } else if duration_us < 1000 {
@@ -367,6 +368,9 @@ impl SCGraph {
                                 } else {
                                     format!("C ({:.1}ms)", duration_ms)
                                 };
+                            if info.max_primary_key_count > 0 {
+                                label = format!("{}  PKs:{}", label, info.max_primary_key_count);
+                            }
 
                             writeln!(
                                 w,

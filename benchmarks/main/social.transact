@@ -1,0 +1,169 @@
+// Partition function declaration
+partition f(x: int) -> int {
+    return x;
+}
+
+// ===========================================
+// Table Declarations
+// ===========================================
+
+table Graph {
+    primary UID1: int;
+    primary UID2: int;
+    node f(UID1);
+    Counter: int;
+}
+
+table Status {
+    primary SID: UUID;
+    primary UID: int;
+    node f(UID);
+    Status: string;
+}
+
+table Wall {
+    primary WID: UUID;
+    primary UID: int;
+    node f(UID);
+    Message: string;
+}
+
+table Activity {
+    primary AID: UUID;
+    primary UID: int;
+    node f(UID);
+    Type: int;
+    Log: string;
+    Time: int;
+}
+
+table User {
+    primary UID: int;
+    node f(UID);
+}
+
+// ===========================================
+// Transaction Functions
+// ===========================================
+
+transaction beFriend(uid1: int, uid2: int, time: int) {
+    hop {
+        var aid1: UUID = genUUID(1, __slice__);
+        var aid2: UUID = genUUID(2, __slice__);
+        Graph[UID1: uid1, UID2: uid2].Counter = 1;
+    }
+    
+    hop {
+        Graph[UID1: uid2, UID2: uid1].Counter = 1;
+    }
+    
+    hop {
+        Activity[AID: aid1, UID: uid1] = {
+            Type: 1,
+            Log: str(uid1) + " befriend with " + str(uid2),
+            Time: time
+        };
+    }
+    
+    hop {
+        Activity[AID: aid2, UID: uid2] = {
+            Type: 1,
+            Log: str(uid2) + " befriend with " + str(uid1),
+            Time: time
+        };
+    }
+}
+
+transaction unFriend(uid1: int, uid2: int, time: int) {
+    hop {
+        var aid1: UUID = genUUID(3, __slice__);
+        var aid2: UUID = genUUID(4, __slice__);
+        Graph[UID1: uid1, UID2: uid2].Counter = 0;
+    }
+    
+    hop {
+        Graph[UID1: uid2, UID2: uid1].Counter = 0;
+    }
+    
+    hop {
+        Activity[AID: aid1, UID: uid1] = {
+            Type: 2,
+            Log: str(uid1) + " unfriend with " + str(uid2),
+            Time: time
+        };
+    }
+    
+    hop {
+        Activity[AID: aid2, UID: uid2] = {
+            Type: 2,
+            Log: str(uid2) + " unfriend with " + str(uid1),
+            Time: time
+        };
+    }
+}
+
+// Using map/filter/reduce pattern for table scanning
+transaction readFriends(uid: int) -> List<int> {
+    @global hop {
+        var uids: List<int> = emptyList();
+        for (var graph_iter: Iterator<Graph> = scan(Graph, 0, __slice__); hasNext(graph_iter); graph_iter = next(graph_iter)) {
+            var graph_uid1 = get_UID1(graph_iter);
+            var graph_uid2 = get_UID2(graph_iter);
+            var g_counter = Graph[UID1: graph_uid1, UID2: graph_uid2].Counter;
+            if graph_uid1 == uid && g_counter > 0 {
+                uids = append(uids, graph_uid2);
+            }
+        }
+        return uids;
+    }
+}
+
+transaction readActivities(uid: int) -> List<string> {
+    @global hop {
+        var logs: List<string> = emptyList();
+        for (var activity_iter: Iterator<Activity> = scan(Activity, 1, __slice__); hasNext(activity_iter); activity_iter = next(activity_iter)) {
+            var activity_aid = get_AID(activity_iter);
+            var activity_uid = get_UID(activity_iter);
+            if activity_uid == uid {
+                logs = append(logs, Activity[AID: activity_aid, UID: activity_uid].Log);
+            }
+        }
+        return logs;
+    }
+}
+
+transaction postStatus(uid: int, status: string, time: int) {   
+    hop {
+        var sid: UUID = genUUID(5, __slice__);
+        var aid: UUID = genUUID(6, __slice__);
+        Status[SID: sid, UID: uid] = {
+            Status: status
+        };
+    }
+    
+    hop {
+        Activity[AID: aid, UID: uid] = {
+            Type: 3,
+            Log: str(uid) + " posted status: " + status,
+            Time: time
+        };
+    }
+}
+
+transaction postWall(uid: int, message: string, time: int) {
+    hop {
+        var wid: UUID = genUUID(7, __slice__);
+        var aid: UUID = genUUID(8, __slice__);
+        Wall[WID: wid, UID: uid] = {
+            Message: message
+        };
+    }
+    
+    hop {
+        Activity[AID: aid, UID: uid] = {
+            Type: 4,
+            Log: str(uid) + " posted wall message: " + message,
+            Time: time
+        };
+    }
+}

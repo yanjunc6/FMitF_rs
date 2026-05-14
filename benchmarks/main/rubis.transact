@@ -1,0 +1,323 @@
+// ===========================================
+// Partition function declarations
+// ===========================================
+partition f(x: UUID) -> int {
+    return UUID_to_int(x);
+}
+
+partition g(x: string, y: int) -> int {
+    return (y + hashStr(x)) % __shards__;
+}
+
+// ===========================================
+// Table Declarations
+// ===========================================
+
+table Users {
+    primary Id: UUID;
+    node f(Id);
+
+    Firstname: string;
+    Lastname: string;
+    Nickname: string;
+    Password: string;
+    Email: string;
+    Rating: int;
+    Balance: float;
+    Creation_date: int;
+    Region: int;
+}
+
+table Usernames {
+    primary Nickname: string;
+    node g(Nickname, 0); // TODO: why 2 params here?
+
+    Id: UUID;
+    Password: string;
+    Counter: int;
+}
+
+table Items {
+    primary Id: UUID;
+    node f(Id);
+
+    Name: string;
+    Description: string;
+    Initial_price: float;
+    Quantity: int;
+    Reserve_price: float;
+    Buy_now: float;
+    Nb_of_bids: int;
+    Max_bid: float;
+    Start_date: int;
+    End_date: int;
+    Seller: UUID;
+    Region: int;
+    Category: int;
+}
+
+table Bids {
+    primary Id: UUID;
+    node f(Id);
+
+    User_id: UUID;
+    Item_id: UUID;
+    Qty: int;
+    Bid: float;
+    Max_bid: float;
+    Date: int;
+}
+
+table Comments {
+    primary Id: UUID;
+    node f(Id);
+
+    From_user_id: UUID;
+    To_user_id: UUID;
+    Item_id: UUID;
+    Rating: int;
+    Comment: string;
+    Date: int;
+}
+
+table Buy_now {
+    primary Id: UUID;
+    primary Item_id: UUID;
+    node f(Id);
+
+    Counter: int;
+}
+
+// ===========================================
+// Transaction and Function Definitions
+// ===========================================
+
+transaction userAuth(nickname: string, password: string) -> bool {
+    hop {
+        var pwd: string = Usernames[Nickname: nickname].Password;
+        var is_match: bool = (pwd === password);
+        return is_match;
+    }
+}
+
+transaction registerUser(uid: UUID, nickname: string, password: string, firstname: string, lastname: string, email: string)
+    assume uid === genUUID(1, __slice__);
+{
+    hop {
+        if (Usernames[Nickname: nickname].Counter > 0) {
+            return;
+        }
+        Usernames[Nickname: nickname].Counter = Usernames[Nickname: nickname].Counter + 1;
+        Usernames[Nickname: nickname].Password = password;
+        Usernames[Nickname: nickname].Id = uid;
+    }
+
+    hop {
+        Users[Id: uid] = {
+            Nickname: nickname,
+            Password: password,
+            Firstname: firstname,
+            Lastname: lastname,
+            Email: email
+        };
+    }
+}
+
+transaction viewUser(uid: UUID) -> string {
+    hop {
+        var info: string = Users[Id: uid].Nickname + Users[Id: uid].Firstname + Users[Id: uid].Lastname + str(Users[Id: uid].Rating);
+        return info;
+    }
+}
+
+transaction makeComment(id: UUID, from_uid: UUID, to_uid: UUID, iid: UUID, comment: string, rating: int)
+    assume id === genUUID(2, __slice__);
+{
+    hop {
+        Users[Id: to_uid].Rating = Users[Id: to_uid].Rating + rating;
+    }
+
+    hop {
+        Comments[Id: id] = {
+            From_user_id: from_uid,
+            To_user_id: to_uid,
+            Item_id: iid,
+            Comment: comment,
+            Rating: rating
+        };
+    }
+}
+
+transaction getCommentsByToUID(to_id: UUID) -> List<string> {
+    @global hop {
+        var commentList: List<string> = emptyList();
+        for (var comments_iter: Iterator<Comments> = scan(Comments, 0, __slice__); hasNext(comments_iter); comments_iter = next(comments_iter)) {
+            var comment_id = get_Id(comments_iter);
+            var c_to_user_id = Comments[Id: comment_id].To_user_id;
+            if c_to_user_id === to_id {
+                commentList = append(commentList, Comments[Id: comment_id].Comment);
+            }
+        }
+        return commentList;
+    }
+}
+
+transaction getCommentsByIID(iid: UUID) -> List<string> {
+    @global hop {
+        var commentList: List<string> = emptyList();
+        for (var comments_iter: Iterator<Comments> = scan(Comments, 1, __slice__); hasNext(comments_iter); comments_iter = next(comments_iter)) {
+            var comment_id = get_Id(comments_iter);
+            var c_item_id = Comments[Id: comment_id].Item_id;
+            if c_item_id === iid {
+                commentList = append(commentList, Comments[Id: comment_id].Comment);
+            }
+        }
+        return commentList;
+    }
+}
+
+transaction getItemsByRegion(region_id: int) -> List<Row<Items>> {
+    @global hop {
+        var itemList: List<Row<Items>> = emptyList();
+        for (var items_iter: Iterator<Items> = scan(Items, 2, __slice__); hasNext(items_iter); items_iter = next(items_iter)) {
+            var item_id = get_Id(items_iter);
+            var i_region = Items[Id: item_id].Region;
+            if i_region == region_id {
+                itemList = append(itemList, Items[Id: item_id]);
+            }
+        }
+        return itemList;
+    }
+}
+
+transaction getItemsByCategory(category_id: int) -> List<Row<Items>> {
+    @global hop {
+        var itemList: List<Row<Items>> = emptyList();
+        for (var items_iter: Iterator<Items> = scan(Items, 3, __slice__); hasNext(items_iter); items_iter = next(items_iter)) {
+            var item_id = get_Id(items_iter);
+            var i_category = Items[Id: item_id].Category;
+            if i_category == category_id {
+                itemList = append(itemList, Items[Id: item_id]);
+            }
+        }
+        return itemList;
+    }
+}
+
+transaction registerItem(iid: UUID, name: string, description: string, initial_price: float, quantity: int, reserve_price: float, buy_now: float, date: int, seller: UUID, region: int, category: int) 
+    assume iid === genUUID(3, __slice__);
+{
+    hop {
+        Items[Id: iid] = {
+            Name: name,
+            Description: description,
+            Initial_price: initial_price,
+            Quantity: quantity,
+            Reserve_price: reserve_price,
+            Buy_now: buy_now,
+            Nb_of_bids: 0,
+            Max_bid: 0.0,
+            Start_date: date,
+            Seller: seller,
+            Region: region,
+            Category: category
+        };
+    }
+}
+
+transaction putBid(bid_id: UUID, iid: UUID, max_bid_val: float, uid: UUID, quantity: int, bid_val: float, date: int) 
+    assume bid_id === genUUID(4, __slice__);
+{
+    hop {
+        var cur_max: float = Items[Id: iid].Max_bid;
+        if max_bid_val > cur_max {
+            Items[Id: iid].Max_bid = max_bid_val;
+            Items[Id: iid].Nb_of_bids = Items[Id: iid].Nb_of_bids + 1;
+        } else {
+            return;
+        }
+    }
+
+    hop {
+        Bids[Id: bid_id] = {
+            User_id: uid,
+            Item_id: iid,
+            Qty: quantity,
+            Bid: bid_val,
+            Max_bid: max_bid_val,
+            Date: date
+        };
+    }
+}
+
+transaction getBidsByItem(iid: UUID) -> List<Row<Bids>> {
+//    @global hop {
+//        var bidList: List<Row<Bids>> =
+//        Bids
+//        .scan()
+//        .filter(
+//            (b: Row<Bids>) -> bool { return b.item_id === iid; }
+//        )
+//        .map(
+//            (b: Row<Bids>) -> Row<Bids> { return b; }
+//        );
+//        return bidList;
+//    }
+
+    @global hop {
+        var bidList: List<Row<Bids>> = emptyList();
+        for (var bids_iter: Iterator<Bids> = scan(Bids, 4, __slice__); hasNext(bids_iter); bids_iter = next(bids_iter)) {
+            var bid = get_Id(bids_iter);
+            var b_item_id = Bids[Id: bid].Item_id;
+            if b_item_id === iid {
+                bidList = append(bidList, Bids[Id: bid]);
+            }
+        }
+        return bidList;
+    }
+}
+
+transaction getBidsByUser(uid: UUID) -> List<Row<Bids>> {
+    @global hop {
+        var bidList: List<Row<Bids>> = emptyList();
+        for (var bids_iter: Iterator<Bids> = scan(Bids, 5, __slice__); hasNext(bids_iter); bids_iter = next(bids_iter)) {
+            var bid_id = get_Id(bids_iter);
+            var b_user_id = Bids[Id: bid_id].User_id;
+            if b_user_id === uid {
+                bidList = append(bidList, Bids[Id: bid_id]);
+            }
+        }
+        return bidList;
+    }
+}
+
+transaction buyNow(bnid: UUID, iid: UUID, quantity: int, date: int) 
+    assume bnid === genUUID(5, __slice__);
+{
+    hop {
+        var cur_qty: int = Items[Id: iid].Quantity;
+        if quantity > cur_qty {
+            return;
+        }
+
+        cur_qty = cur_qty - quantity;
+        Items[Id: iid].Quantity = cur_qty;
+        if cur_qty == 0 {
+            Items[Id: iid].End_date = date;
+        }
+    }
+
+    hop {
+        Buy_now[Id: bnid, Item_id: iid].Counter = Buy_now[Id: bnid, Item_id: iid].Counter + 1;
+    }
+}
+
+transaction cancelBuy(bnid: UUID, iid: UUID, quantity: int)
+{
+    hop {
+        Buy_now[Id: bnid, Item_id: iid].Counter = Buy_now[Id: bnid, Item_id: iid].Counter - 1;
+    }
+    hop {
+        Items[Id: iid].Quantity = Items[Id: iid].Quantity + quantity;
+    }
+}

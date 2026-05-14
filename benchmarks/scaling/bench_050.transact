@@ -1,0 +1,751 @@
+// ============================================================================
+// bench_050 — Ride-Sharing Platform (50 transactions)
+// Domain: Driver/rider state machine, fare computation, rating guards
+// ============================================================================
+
+partition f(x: int) -> int { return x; }
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+table Driver {
+    primary driver_id: int;
+    node f(driver_id);
+    name: string;
+    email: string;
+    phone: string;
+    rating: float;
+    rating_count: int;
+    status: int;
+    verified: int;
+    earnings: float;
+}
+
+table Rider {
+    primary rider_id: int;
+    node f(rider_id);
+    name: string;
+    email: string;
+    phone: string;
+    rating: float;
+    rating_count: int;
+    status: int;
+    balance: float;
+}
+
+table Vehicle {
+    primary vehicle_id: int;
+    primary driver_id: int;
+    node f(driver_id);
+    make: string;
+    model: string;
+    year: int;
+    plate: string;
+    status: int;
+}
+
+table Trip {
+    primary trip_id: int;
+    primary rider_id: int;
+    node f(rider_id);
+    driver_id: int;
+    pickup: string;
+    dropoff: string;
+    fare: float;
+    status: int;
+    started_at: int;
+    ended_at: int;
+}
+
+table DriverLocation {
+    primary driver_id: int;
+    node f(driver_id);
+    lat: float;
+    lon: float;
+    updated_at: int;
+}
+
+table DriverRating {
+    primary trip_id: int;
+    primary driver_id: int;
+    node f(driver_id);
+    score: int;
+    comment: string;
+    ts: int;
+}
+
+table RiderRating {
+    primary trip_id: int;
+    primary rider_id: int;
+    node f(rider_id);
+    score: int;
+    comment: string;
+    ts: int;
+}
+
+table Payment {
+    primary pay_id: int;
+    primary rider_id: int;
+    node f(rider_id);
+    trip_id: int;
+    amount: float;
+    method: string;
+    status: int;
+    ts: int;
+}
+
+table PaymentMethod {
+    primary method_id: int;
+    primary rider_id: int;
+    node f(rider_id);
+    card_last4: string;
+    card_type: string;
+    is_default: int;
+    is_active: int;
+}
+
+table PromoCode {
+    primary promo_id: int;
+    node f(promo_id);
+    code: string;
+    discount: float;
+    uses_left: int;
+    expires_at: int;
+    is_active: int;
+}
+
+table Issue {
+    primary issue_id: int;
+    primary reporter_id: int;
+    node f(reporter_id);
+    trip_id: int;
+    issue_type: int;
+    description: string;
+    status: int;
+    ts: int;
+}
+
+// ============================================================================
+// Transactions (50 total)
+// ============================================================================
+
+// 1. RegisterDriver
+transaction RegisterDriver(driver_id: int, name: string, email: string,
+                            phone: string) {
+    hop {
+        Driver[driver_id: driver_id] = {
+            name: name,
+            email: email,
+            phone: phone,
+            rating: 5.0,
+            rating_count: 0,
+            status: 0,
+            verified: 0,
+            earnings: 0.0
+        };
+    }
+}
+
+// 2. GetDriver
+transaction GetDriver(driver_id: int) {
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        to_unit(d);
+    }
+}
+
+// 3. UpdateDriverPhone: only active or offline drivers.
+transaction UpdateDriverPhone(driver_id: int, phone: string) {
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        if d.status != 3 {
+            Driver[driver_id: driver_id].phone = phone;
+        }
+    }
+}
+
+// 4. VerifyDriver: set verified and activate.
+transaction VerifyDriver(driver_id: int) {
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        if d.verified == 0 {
+            Driver[driver_id: driver_id].verified = 1;
+            Driver[driver_id: driver_id].status = 1;
+        }
+    }
+}
+
+// 5. SuspendDriver: only verified drivers can be suspended.
+transaction SuspendDriver(driver_id: int) {
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        if d.verified == 1 && d.status != 2 {
+            Driver[driver_id: driver_id].status = 2;
+        }
+    }
+}
+
+// 6. SetDriverAvailable: driver must be verified and not on a trip.
+transaction SetDriverAvailable(driver_id: int) {
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        if d.verified == 1 && d.status != 3 {
+            Driver[driver_id: driver_id].status = 1;
+        }
+    }
+}
+
+// 7. SetDriverOffline: cannot go offline while on a trip (status == 3).
+transaction SetDriverOffline(driver_id: int) {
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        if d.status != 3 {
+            Driver[driver_id: driver_id].status = 0;
+        }
+    }
+}
+
+// 8. RegisterRider
+transaction RegisterRider(rider_id: int, name: string, email: string,
+                           phone: string) {
+    hop {
+        Rider[rider_id: rider_id] = {
+            name: name,
+            email: email,
+            phone: phone,
+            rating: 5.0,
+            rating_count: 0,
+            status: 1,
+            balance: 0.0
+        };
+    }
+}
+
+// 9. GetRider
+transaction GetRider(rider_id: int) {
+    hop {
+        var r: Row<Rider> = Rider[rider_id: rider_id];
+        to_unit(r);
+    }
+}
+
+// 10. UpdateRiderPhone: only active riders.
+transaction UpdateRiderPhone(rider_id: int, phone: string) {
+    hop {
+        var r: Row<Rider> = Rider[rider_id: rider_id];
+        if r.status == 1 {
+            Rider[rider_id: rider_id].phone = phone;
+        }
+    }
+}
+
+// 11. SuspendRider: only active riders.
+transaction SuspendRider(rider_id: int) {
+    hop {
+        var r: Row<Rider> = Rider[rider_id: rider_id];
+        if r.status == 1 {
+            Rider[rider_id: rider_id].status = 0;
+        }
+    }
+}
+
+// 12. AddVehicle: only active drivers can add vehicles.
+transaction AddVehicle(vehicle_id: int, driver_id: int, make: string,
+                        model: string, year: int, plate: string) {
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        if d.verified == 1 && year > 2000 {
+            Vehicle[vehicle_id: vehicle_id, driver_id: driver_id] = {
+                make: make,
+                model: model,
+                year: year,
+                plate: plate,
+                status: 1
+            };
+        }
+    }
+}
+
+// 13. GetVehicle
+transaction GetVehicle(vehicle_id: int, driver_id: int) {
+    hop {
+        var v: Row<Vehicle> = Vehicle[vehicle_id: vehicle_id, driver_id: driver_id];
+        to_unit(v);
+    }
+}
+
+// 14. DeactivateVehicle: cannot deactivate if driver is on a trip.
+transaction DeactivateVehicle(vehicle_id: int, driver_id: int) {
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        if d.status != 3 {
+            Vehicle[vehicle_id: vehicle_id, driver_id: driver_id].status = 0;
+        }
+    }
+}
+
+// 15. UpdateDriverLocation
+transaction UpdateDriverLocation(driver_id: int, lat: float, lon: float, ts: int) {
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        if d.status == 1 || d.status == 3 {
+            DriverLocation[driver_id: driver_id].lat = lat;
+            DriverLocation[driver_id: driver_id].lon = lon;
+            DriverLocation[driver_id: driver_id].updated_at = ts;
+        }
+    }
+}
+
+// 16. GetDriverLocation
+transaction GetDriverLocation(driver_id: int) {
+    hop {
+        var loc: Row<DriverLocation> = DriverLocation[driver_id: driver_id];
+        to_unit(loc);
+    }
+}
+
+// 17. RequestRide: rider must be active and have a positive balance.
+transaction RequestRide(trip_id: int, rider_id: int, pickup: string,
+                         dropoff: string, fare: float, ts: int) {
+    hop {
+        var r: Row<Rider> = Rider[rider_id: rider_id];
+        if r.status == 1 && fare > 0.0 {
+            Trip[trip_id: trip_id, rider_id: rider_id] = {
+                driver_id: 0,
+                pickup: pickup,
+                dropoff: dropoff,
+                fare: fare,
+                status: 1,
+                started_at: 0,
+                ended_at: 0
+            };
+        }
+    }
+}
+
+// 18. AcceptRide: driver must be available (status == 1) with rating >= 3.0.
+//     Hop 1 on rider partition (update trip), Hop 2 on driver partition.
+transaction AcceptRide(trip_id: int, rider_id: int, driver_id: int) {
+    hop {
+        var t: Row<Trip> = Trip[trip_id: trip_id, rider_id: rider_id];
+        if t.status == 1 {
+            Trip[trip_id: trip_id, rider_id: rider_id].driver_id = driver_id;
+            Trip[trip_id: trip_id, rider_id: rider_id].status = 2;
+        }
+    }
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        if d.status == 1 && d.rating >= 3.0 {
+            Driver[driver_id: driver_id].status = 3;
+        } else {
+            Trip[trip_id: trip_id, rider_id: rider_id].status = 1;
+        }
+    }
+}
+
+// 19. CancelRide: only trips in REQUESTED (1) or ACCEPTED (2) state.
+transaction CancelRide(trip_id: int, rider_id: int, driver_id: int) {
+    hop {
+        var t: Row<Trip> = Trip[trip_id: trip_id, rider_id: rider_id];
+        if t.status == 1 || t.status == 2 {
+            Trip[trip_id: trip_id, rider_id: rider_id].status = 0;
+        }
+    }
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        if d.status == 3 {
+            Driver[driver_id: driver_id].status = 1;
+        }
+    }
+}
+
+// 20. StartRide: trip must be ACCEPTED (status == 2).
+transaction StartRide(trip_id: int, rider_id: int, ts: int) {
+    hop {
+        var t: Row<Trip> = Trip[trip_id: trip_id, rider_id: rider_id];
+        if t.status == 2 {
+            Trip[trip_id: trip_id, rider_id: rider_id].status = 3;
+            Trip[trip_id: trip_id, rider_id: rider_id].started_at = ts;
+        }
+    }
+}
+
+// 21. EndRide: compute earnings (80% of fare). Apply surge if fare > 20.
+//     Trip must be IN_PROGRESS (status == 3).
+transaction EndRide(trip_id: int, rider_id: int, driver_id: int, ts: int) {
+    hop {
+        var t: Row<Trip> = Trip[trip_id: trip_id, rider_id: rider_id];
+        if t.status == 3 {
+            Trip[trip_id: trip_id, rider_id: rider_id].status = 4;
+            Trip[trip_id: trip_id, rider_id: rider_id].ended_at = ts;
+        }
+    }
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        var t2: Row<Trip> = Trip[trip_id: trip_id, rider_id: rider_id];
+        var driver_cut: float = t2.fare * 0.8;
+        if t2.fare > 20.0 {
+            driver_cut = t2.fare * 0.85;
+        }
+        var new_earnings: float = d.earnings + driver_cut;
+        Driver[driver_id: driver_id].earnings = new_earnings;
+        Driver[driver_id: driver_id].status = 1;
+    }
+}
+
+// 22. GetTrip
+transaction GetTrip(trip_id: int, rider_id: int) {
+    hop {
+        var t: Row<Trip> = Trip[trip_id: trip_id, rider_id: rider_id];
+        to_unit(t);
+    }
+}
+
+// 23. RateDriver: trip must be COMPLETED (status == 4); score [1,5].
+//     Recomputes driver avg rating.
+transaction RateDriver(trip_id: int, driver_id: int, rider_id: int,
+                        score: int, comment: string, ts: int) {
+    hop {
+        var t: Row<Trip> = Trip[trip_id: trip_id, rider_id: rider_id];
+        if t.status == 4 && score >= 1 && score <= 5 {
+            RiderRating[trip_id: trip_id, rider_id: rider_id] = {
+                score: score,
+                comment: comment,
+                ts: ts
+            };
+        }
+    }
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        if score >= 1 && score <= 5 {
+            var new_count: int = d.rating_count + 1;
+            var new_rating: float = (d.rating * float(d.rating_count) + float(score)) / float(new_count);
+            Driver[driver_id: driver_id].rating = new_rating;
+            Driver[driver_id: driver_id].rating_count = new_count;
+        }
+    }
+}
+
+// 24. RateRider: trip must be COMPLETED; score [1,5]. Updates rider avg.
+transaction RateRider(trip_id: int, rider_id: int, driver_id: int,
+                       score: int, comment: string, ts: int) {
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        if d.status != 2 && score >= 1 && score <= 5 {
+            DriverRating[trip_id: trip_id, driver_id: driver_id] = {
+                score: score,
+                comment: comment,
+                ts: ts
+            };
+        }
+    }
+    hop {
+        var r: Row<Rider> = Rider[rider_id: rider_id];
+        if score >= 1 && score <= 5 {
+            var new_count: int = r.rating_count + 1;
+            var new_rating: float = (r.rating * float(r.rating_count) + float(score)) / float(new_count);
+            Rider[rider_id: rider_id].rating = new_rating;
+            Rider[rider_id: rider_id].rating_count = new_count;
+        }
+    }
+}
+
+// 25. GetDriverRating
+transaction GetDriverRating(trip_id: int, driver_id: int) {
+    hop {
+        var r: Row<DriverRating> = DriverRating[trip_id: trip_id, driver_id: driver_id];
+        to_unit(r);
+    }
+}
+
+// 26. GetRiderRating
+transaction GetRiderRating(trip_id: int, rider_id: int) {
+    hop {
+        var r: Row<RiderRating> = RiderRating[trip_id: trip_id, rider_id: rider_id];
+        to_unit(r);
+    }
+}
+
+// 27. ProcessPayment: rider must have sufficient balance.
+transaction ProcessPayment(pay_id: int, rider_id: int, trip_id: int,
+                            method: string, ts: int) {
+    hop {
+        var t: Row<Trip> = Trip[trip_id: trip_id, rider_id: rider_id];
+        var r: Row<Rider> = Rider[rider_id: rider_id];
+        if t.status == 4 {
+            Payment[pay_id: pay_id, rider_id: rider_id] = {
+                trip_id: trip_id,
+                amount: t.fare,
+                method: method,
+                status: 1,
+                ts: ts
+            };
+            if r.balance >= t.fare {
+                var new_bal: float = r.balance - t.fare;
+                Rider[rider_id: rider_id].balance = new_bal;
+            }
+        }
+    }
+}
+
+// 28. RefundPayment: only successful payments can be refunded.
+transaction RefundPayment(pay_id: int, rider_id: int) {
+    hop {
+        var p: Row<Payment> = Payment[pay_id: pay_id, rider_id: rider_id];
+        if p.status == 1 {
+            Payment[pay_id: pay_id, rider_id: rider_id].status = 2;
+            var r: Row<Rider> = Rider[rider_id: rider_id];
+            var new_bal: float = r.balance + p.amount;
+            Rider[rider_id: rider_id].balance = new_bal;
+        }
+    }
+}
+
+// 29. GetPayment
+transaction GetPayment(pay_id: int, rider_id: int) {
+    hop {
+        var p: Row<Payment> = Payment[pay_id: pay_id, rider_id: rider_id];
+        to_unit(p);
+    }
+}
+
+// 30. AddPaymentMethod
+transaction AddPaymentMethod(method_id: int, rider_id: int,
+                              card_last4: string, card_type: string) {
+    hop {
+        var r: Row<Rider> = Rider[rider_id: rider_id];
+        if r.status == 1 {
+            PaymentMethod[method_id: method_id, rider_id: rider_id] = {
+                card_last4: card_last4,
+                card_type: card_type,
+                is_default: 0,
+                is_active: 1
+            };
+        }
+    }
+}
+
+// 31. SetDefaultPaymentMethod: only active methods can become default.
+transaction SetDefaultPaymentMethod(method_id: int, rider_id: int) {
+    hop {
+        var m: Row<PaymentMethod> = PaymentMethod[method_id: method_id, rider_id: rider_id];
+        if m.is_active == 1 {
+            PaymentMethod[method_id: method_id, rider_id: rider_id].is_default = 1;
+        }
+    }
+}
+
+// 32. DeactivatePaymentMethod: cannot deactivate default method.
+transaction DeactivatePaymentMethod(method_id: int, rider_id: int) {
+    hop {
+        var m: Row<PaymentMethod> = PaymentMethod[method_id: method_id, rider_id: rider_id];
+        if m.is_default == 0 {
+            PaymentMethod[method_id: method_id, rider_id: rider_id].is_active = 0;
+        }
+    }
+}
+
+// 33. GetPaymentMethod
+transaction GetPaymentMethod(method_id: int, rider_id: int) {
+    hop {
+        var m: Row<PaymentMethod> = PaymentMethod[method_id: method_id, rider_id: rider_id];
+        to_unit(m);
+    }
+}
+
+// 34. CreatePromoCode: discount must be in (0, 1] and uses > 0.
+transaction CreatePromoCode(promo_id: int, code: string, discount: float,
+                             uses: int, expires_at: int) {
+    hop {
+        if discount > 0.0 && discount <= 1.0 && uses > 0 {
+            PromoCode[promo_id: promo_id] = {
+                code: code,
+                discount: discount,
+                uses_left: uses,
+                expires_at: expires_at,
+                is_active: 1
+            };
+        }
+    }
+}
+
+// 35. RedeemPromoCode: must have uses left and be active and not expired.
+transaction RedeemPromoCode(promo_id: int, current_ts: int) {
+    hop {
+        var p: Row<PromoCode> = PromoCode[promo_id: promo_id];
+        if p.is_active == 1 && p.uses_left > 0 && p.expires_at > current_ts {
+            var new_uses: int = p.uses_left - 1;
+            PromoCode[promo_id: promo_id].uses_left = new_uses;
+            if new_uses == 0 {
+                PromoCode[promo_id: promo_id].is_active = 0;
+            }
+        }
+    }
+}
+
+// 36. DeactivatePromoCode
+transaction DeactivatePromoCode(promo_id: int) {
+    hop {
+        var p: Row<PromoCode> = PromoCode[promo_id: promo_id];
+        if p.is_active == 1 {
+            PromoCode[promo_id: promo_id].is_active = 0;
+        }
+    }
+}
+
+// 37. GetPromoCode
+transaction GetPromoCode(promo_id: int) {
+    hop {
+        var p: Row<PromoCode> = PromoCode[promo_id: promo_id];
+        to_unit(p);
+    }
+}
+
+// 38. ReportIssue: trip must be completed or cancelled; description non-empty.
+transaction ReportIssue(issue_id: int, reporter_id: int, trip_id: int,
+                         issue_type: int, description: string, ts: int) {
+    hop {
+        var t: Row<Trip> = Trip[trip_id: trip_id, rider_id: reporter_id];
+        if t.status == 4 || t.status == 0 {
+            Issue[issue_id: issue_id, reporter_id: reporter_id] = {
+                trip_id: trip_id,
+                issue_type: issue_type,
+                description: description,
+                status: 1,
+                ts: ts
+            };
+        }
+    }
+}
+
+// 39. ResolveIssue: only open issues.
+transaction ResolveIssue(issue_id: int, reporter_id: int) {
+    hop {
+        var i: Row<Issue> = Issue[issue_id: issue_id, reporter_id: reporter_id];
+        if i.status == 1 {
+            Issue[issue_id: issue_id, reporter_id: reporter_id].status = 2;
+        }
+    }
+}
+
+// 40. GetIssue
+transaction GetIssue(issue_id: int, reporter_id: int) {
+    hop {
+        var i: Row<Issue> = Issue[issue_id: issue_id, reporter_id: reporter_id];
+        to_unit(i);
+    }
+}
+
+// 41. TopUpRiderBalance: amount must be positive.
+transaction TopUpRiderBalance(rider_id: int, amount: float) {
+    hop {
+        var r: Row<Rider> = Rider[rider_id: rider_id];
+        if r.status == 1 && amount > 0.0 {
+            var new_bal: float = r.balance + amount;
+            Rider[rider_id: rider_id].balance = new_bal;
+        }
+    }
+}
+
+// 42. GetDriverEarnings
+transaction GetDriverEarnings(driver_id: int) {
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        var earnings: float = d.earnings;
+        to_unit(earnings);
+    }
+}
+
+// 43. UpdateVehiclePlate: cannot update while driver is on a trip.
+transaction UpdateVehiclePlate(vehicle_id: int, driver_id: int, plate: string) {
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        if d.status != 3 {
+            Vehicle[vehicle_id: vehicle_id, driver_id: driver_id].plate = plate;
+        }
+    }
+}
+
+// 44. UpdateTripFare: only REQUESTED trips (status == 1).
+transaction UpdateTripFare(trip_id: int, rider_id: int, fare: float) {
+    hop {
+        var t: Row<Trip> = Trip[trip_id: trip_id, rider_id: rider_id];
+        if t.status == 1 && fare > 0.0 {
+            Trip[trip_id: trip_id, rider_id: rider_id].fare = fare;
+        }
+    }
+}
+
+// 45. GetDriverVehicle: both on driver partition — single hop.
+transaction GetDriverVehicle(vehicle_id: int, driver_id: int) {
+    hop {
+        var v: Row<Vehicle> = Vehicle[vehicle_id: vehicle_id, driver_id: driver_id];
+        to_unit(v);
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        to_unit(d);
+    }
+}
+
+// 46. MarkPaymentFailed: only pending payments.
+transaction MarkPaymentFailed(pay_id: int, rider_id: int) {
+    hop {
+        var p: Row<Payment> = Payment[pay_id: pay_id, rider_id: rider_id];
+        if p.status == 1 {
+            Payment[pay_id: pay_id, rider_id: rider_id].status = 3;
+        }
+    }
+}
+
+// 47. ActivateDriver: re-activate from suspended; must be verified.
+transaction ActivateDriver(driver_id: int) {
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        if d.verified == 1 && d.status == 2 {
+            Driver[driver_id: driver_id].status = 1;
+        }
+    }
+}
+
+// 48. ActivateRider
+transaction ActivateRider(rider_id: int) {
+    hop {
+        var r: Row<Rider> = Rider[rider_id: rider_id];
+        if r.status == 0 {
+            Rider[rider_id: rider_id].status = 1;
+        }
+    }
+}
+
+// 49. GetTripAndDriver: cross-partition read.
+//     Hop 1 on rider partition (trip), Hop 2 on driver partition.
+transaction GetTripAndDriver(trip_id: int, rider_id: int, driver_id: int) {
+    hop {
+        var t: Row<Trip> = Trip[trip_id: trip_id, rider_id: rider_id];
+        to_unit(t);
+    }
+    hop {
+        var d: Row<Driver> = Driver[driver_id: driver_id];
+        to_unit(d);
+    }
+}
+
+// 50. ScanDriverTrips: scan all trips for a rider and count by status.
+//     Returns total earnings for completed trips.
+transaction ScanRiderTrips(rider_id: int) -> float {
+    @global hop {
+        var total_spent: float = 0.0;
+        for (var iter: Iterator<Trip> = scan(Trip, rider_id, __slice__);
+             hasNext(iter); iter = next(iter)) {
+            var r_id = get_rider_id(iter);
+            var t_id = get_trip_id(iter);
+            if r_id == rider_id {
+                var t: Row<Trip> = Trip[trip_id: t_id, rider_id: r_id];
+                if t.status == 4 {
+                    total_spent = total_spent + t.fare;
+                }
+            }
+        }
+        return total_spent;
+    }
+}

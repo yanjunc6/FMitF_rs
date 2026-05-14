@@ -1,0 +1,227 @@
+// ============================================================================
+// bench_010 — Banking System (10 transactions)
+// Domain: Retail banking with balance checks, overdraft fees, interest
+// ============================================================================
+
+partition f(x: int) -> int { return x; }
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+table Account {
+    primary acct_id: int;
+    node f(acct_id);
+    owner_name: string;
+    email: string;
+    phone: string;
+    status: int;
+    created_at: int;
+}
+
+table Savings {
+    primary acct_id: int;
+    node f(acct_id);
+    balance: float;
+    interest_rate: float;
+}
+
+table Checking {
+    primary acct_id: int;
+    node f(acct_id);
+    balance: float;
+    overdraft_limit: float;
+}
+
+table TxLog {
+    primary log_id: int;
+    primary acct_id: int;
+    node f(acct_id);
+    amount: float;
+    tx_type: int;
+    ts: int;
+}
+
+// ============================================================================
+// Transactions (10 total)
+// ============================================================================
+
+// 1. OpenAccount: create account with zero balances.
+transaction OpenAccount(acct_id: int, name: string, email: string,
+                        phone: string, interest_rate: float,
+                        overdraft_limit: float, ts: int) {
+    hop {
+        Account[acct_id: acct_id] = {
+            owner_name: name,
+            email: email,
+            phone: phone,
+            status: 1,
+            created_at: ts
+        };
+        Savings[acct_id: acct_id] = {
+            balance: 0.0,
+            interest_rate: interest_rate
+        };
+        Checking[acct_id: acct_id] = {
+            balance: 0.0,
+            overdraft_limit: overdraft_limit
+        };
+    }
+}
+
+// 2. CloseAccount: only allowed when both account balances are zero.
+transaction CloseAccount(acct_id: int) {
+    hop {
+        var s: Row<Savings> = Savings[acct_id: acct_id];
+        var c: Row<Checking> = Checking[acct_id: acct_id];
+        if s.balance == 0.0 && c.balance == 0.0 {
+            Account[acct_id: acct_id].status = 0;
+        }
+    }
+}
+
+// 3. GetBalance: read savings and checking, compute combined total.
+//    Also scans TxLog to count recent activity on this account's partition.
+transaction GetBalance(acct_id: int) {
+    @global hop {
+        var s: Row<Savings> = Savings[acct_id: acct_id];
+        var c: Row<Checking> = Checking[acct_id: acct_id];
+        var total: float = s.balance + c.balance;
+        var tx_count: int = 0;
+        for (var iter: Iterator<TxLog> = scan(TxLog, acct_id, __slice__);
+             hasNext(iter); iter = next(iter)) {
+            var lg = get_log_id(iter);
+            var ac = get_acct_id(iter);
+            if ac == acct_id {
+                tx_count = tx_count + 1;
+            }
+        }
+        to_unit(total);
+        to_unit(tx_count);
+    }
+}
+
+// 4. Deposit: verify account is active and amount is positive, then credit checking.
+transaction Deposit(acct_id: int, amount: float, log_id: int, ts: int) {
+    hop {
+        var a: Row<Account> = Account[acct_id: acct_id];
+        var c: Row<Checking> = Checking[acct_id: acct_id];
+        if a.status == 1 && amount > 0.0 {
+            var new_bal: float = c.balance + amount;
+            Checking[acct_id: acct_id].balance = new_bal;
+            TxLog[log_id: log_id, acct_id: acct_id] = {
+                amount: amount,
+                tx_type: 1,
+                ts: ts
+            };
+        }
+    }
+}
+
+// 5. Withdraw: check available funds (balance + overdraft_limit).
+//    Apply a $2.50 overdraft fee when the account goes negative.
+transaction Withdraw(acct_id: int, amount: float, log_id: int, ts: int) {
+    hop {
+        var a: Row<Account> = Account[acct_id: acct_id];
+        var c: Row<Checking> = Checking[acct_id: acct_id];
+        if a.status == 1 && amount > 0.0 {
+            var avail: float = c.balance + c.overdraft_limit;
+            if avail >= amount {
+                var new_bal: float = c.balance - amount;
+                if new_bal < 0.0 {
+                    new_bal = new_bal - 2.5;
+                }
+                Checking[acct_id: acct_id].balance = new_bal;
+                TxLog[log_id: log_id, acct_id: acct_id] = {
+                    amount: amount,
+                    tx_type: 2,
+                    ts: ts
+                };
+            }
+        }
+    }
+}
+
+// 6. Transfer: debit sender (hop 1), credit receiver (hop 2).
+//    Hop 1 validates the sender has sufficient funds before writing.
+//    amount flows as a continuation variable to hop 2.
+transaction Transfer(src_id: int, dst_id: int, amount: float,
+                     src_log_id: int, dst_log_id: int, ts: int) {
+    hop {
+        var a: Row<Account> = Account[acct_id: src_id];
+        var c: Row<Checking> = Checking[acct_id: src_id];
+        if a.status == 1 {
+            var avail: float = c.balance + c.overdraft_limit;
+            if avail >= amount {
+                var new_bal: float = c.balance - amount;
+                if new_bal < 0.0 {
+                    new_bal = new_bal - 2.5;
+                }
+                Checking[acct_id: src_id].balance = new_bal;
+                TxLog[log_id: src_log_id, acct_id: src_id] = {
+                    amount: amount,
+                    tx_type: 3,
+                    ts: ts
+                };
+            }
+        }
+    }
+    hop {
+        var dst_c: Row<Checking> = Checking[acct_id: dst_id];
+        var new_dst_bal: float = dst_c.balance + amount;
+        Checking[acct_id: dst_id].balance = new_dst_bal;
+        TxLog[log_id: dst_log_id, acct_id: dst_id] = {
+            amount: amount,
+            tx_type: 3,
+            ts: ts
+        };
+    }
+}
+
+// 7. GetAccountInfo: read account metadata.
+transaction GetAccountInfo(acct_id: int) {
+    hop {
+        var a: Row<Account> = Account[acct_id: acct_id];
+        to_unit(a);
+    }
+}
+
+// 8. UpdateContactInfo: only update if account is not closed.
+transaction UpdateContactInfo(acct_id: int, email: string, phone: string) {
+    hop {
+        var a: Row<Account> = Account[acct_id: acct_id];
+        if a.status != 0 {
+            Account[acct_id: acct_id].email = email;
+            Account[acct_id: acct_id].phone = phone;
+        }
+    }
+}
+
+// 9. FreezeAccount: freeze only if currently active.
+transaction FreezeAccount(acct_id: int) {
+    hop {
+        var a: Row<Account> = Account[acct_id: acct_id];
+        if a.status == 1 {
+            Account[acct_id: acct_id].status = 2;
+        }
+    }
+}
+
+// 10. ApplyInterest: credit savings with interest only when balance > 0.
+//     New balance = balance * (1 + interest_rate).
+transaction ApplyInterest(acct_id: int, log_id: int, ts: int) {
+    hop {
+        var a: Row<Account> = Account[acct_id: acct_id];
+        var s: Row<Savings> = Savings[acct_id: acct_id];
+        if a.status == 1 && s.balance > 0.0 {
+            var interest: float = s.balance * s.interest_rate;
+            var new_bal: float = s.balance + interest;
+            Savings[acct_id: acct_id].balance = new_bal;
+            TxLog[log_id: log_id, acct_id: acct_id] = {
+                amount: interest,
+                tx_type: 4,
+                ts: ts
+            };
+        }
+    }
+}

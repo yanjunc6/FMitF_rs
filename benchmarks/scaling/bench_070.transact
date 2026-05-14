@@ -1,0 +1,971 @@
+// ============================================================================
+// bench_070 — Stock Trading Platform (70 transactions)
+// Domain: Equity trading with traders, portfolios, orders, dividends
+// ============================================================================
+
+partition f(x: int) -> int { return x; }
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+table Trader {
+    primary trader_id: int;
+    node f(trader_id);
+    name: string;
+    email: string;
+    cash_balance: float;
+    margin_balance: float;
+    status: int;
+    trading_limit: float;
+}
+
+table Portfolio {
+    primary port_id: int;
+    primary trader_id: int;
+    node f(trader_id);
+    name: string;
+    total_value: float;
+    created_at: int;
+}
+
+table Holding {
+    primary port_id: int;
+    primary stock_id: int;
+    node f(port_id);
+    qty: int;
+    avg_cost: float;
+    last_updated: int;
+}
+
+table Stock {
+    primary stock_id: int;
+    node f(stock_id);
+    ticker: string;
+    name: string;
+    current_price: float;
+    market_status: int;
+    index_id: int;
+}
+
+table PriceHistory {
+    primary stock_id: int;
+    primary ts: int;
+    node f(stock_id);
+    price: float;
+}
+
+table TradeOrder {
+    primary order_id: int;
+    primary trader_id: int;
+    node f(trader_id);
+    stock_id: int;
+    port_id: int;
+    order_type: int;
+    side: int;
+    qty: int;
+    limit_price: float;
+    status: int;
+    placed_at: int;
+}
+
+table Trade {
+    primary trade_id: int;
+    primary trader_id: int;
+    node f(trader_id);
+    order_id: int;
+    stock_id: int;
+    qty: int;
+    price: float;
+    side: int;
+    executed_at: int;
+}
+
+table Watchlist {
+    primary trader_id: int;
+    primary stock_id: int;
+    node f(trader_id);
+    alert_price: float;
+    is_active: int;
+    added_at: int;
+}
+
+table Dividend {
+    primary div_id: int;
+    primary stock_id: int;
+    node f(stock_id);
+    amount_per_share: float;
+    record_date: int;
+    pay_date: int;
+    paid: int;
+}
+
+table Commission {
+    primary comm_id: int;
+    primary trader_id: int;
+    node f(trader_id);
+    trade_id: int;
+    amount: float;
+    ts: int;
+}
+
+table StockIndex {
+    primary index_id: int;
+    node f(index_id);
+    name: string;
+    value: float;
+    last_updated: int;
+}
+
+// ============================================================================
+// Transactions (70 total)
+// ============================================================================
+
+// 1. RegisterTrader: trading_limit must be positive.
+transaction RegisterTrader(trader_id: int, name: string, email: string,
+                            trading_limit: float) {
+    hop {
+        if trading_limit > 0.0 {
+            Trader[trader_id: trader_id] = {
+                name: name,
+                email: email,
+                cash_balance: 0.0,
+                margin_balance: 0.0,
+                status: 1,
+                trading_limit: trading_limit
+            };
+        }
+    }
+}
+
+// 2. GetTrader
+transaction GetTrader(trader_id: int) {
+    hop {
+        var t: Row<Trader> = Trader[trader_id: trader_id];
+        to_unit(t);
+    }
+}
+
+// 3. UpdateTraderEmail: only update active traders.
+transaction UpdateTraderEmail(trader_id: int, email: string) {
+    hop {
+        var t: Row<Trader> = Trader[trader_id: trader_id];
+        if t.status == 1 {
+            Trader[trader_id: trader_id].email = email;
+        }
+    }
+}
+
+// 4. SuspendTrader: only if currently active.
+transaction SuspendTrader(trader_id: int) {
+    hop {
+        var t: Row<Trader> = Trader[trader_id: trader_id];
+        if t.status == 1 {
+            Trader[trader_id: trader_id].status = 0;
+        }
+    }
+}
+
+// 5. ActivateTrader: only if currently suspended.
+transaction ActivateTrader(trader_id: int) {
+    hop {
+        var t: Row<Trader> = Trader[trader_id: trader_id];
+        if t.status == 0 {
+            Trader[trader_id: trader_id].status = 1;
+        }
+    }
+}
+
+// 6. SetTradingLimit: active traders only; limit must be positive.
+transaction SetTradingLimit(trader_id: int, trading_limit: float) {
+    hop {
+        var t: Row<Trader> = Trader[trader_id: trader_id];
+        if t.status == 1 && trading_limit > 0.0 {
+            Trader[trader_id: trader_id].trading_limit = trading_limit;
+        }
+    }
+}
+
+// 7. DepositFunds: active traders only; compute new balance from deposit amount.
+transaction DepositFunds(trader_id: int, amount: float) {
+    hop {
+        var t: Row<Trader> = Trader[trader_id: trader_id];
+        if t.status == 1 && amount > 0.0 {
+            var new_bal: float = t.cash_balance + amount;
+            Trader[trader_id: trader_id].cash_balance = new_bal;
+        }
+    }
+}
+
+// 8. WithdrawFunds: check trader active and has sufficient balance before deducting.
+transaction WithdrawFunds(trader_id: int, amount: float) {
+    hop {
+        var t: Row<Trader> = Trader[trader_id: trader_id];
+        if t.status == 1 && amount > 0.0 && t.cash_balance >= amount {
+            var new_bal: float = t.cash_balance - amount;
+            Trader[trader_id: trader_id].cash_balance = new_bal;
+        }
+    }
+}
+
+// 9. GetAccountBalance
+transaction GetAccountBalance(trader_id: int) {
+    hop {
+        var t: Row<Trader> = Trader[trader_id: trader_id];
+        var bal: float = t.cash_balance;
+        to_unit(bal);
+    }
+}
+
+// 10. CreatePortfolio: trader must be active to create new portfolio.
+transaction CreatePortfolio(port_id: int, trader_id: int, name: string, ts: int) {
+    hop {
+        var t: Row<Trader> = Trader[trader_id: trader_id];
+        if t.status == 1 {
+            Portfolio[port_id: port_id, trader_id: trader_id] = {
+                name: name,
+                total_value: 0.0,
+                created_at: ts
+            };
+        }
+    }
+}
+
+// 11. GetPortfolio
+transaction GetPortfolio(port_id: int, trader_id: int) {
+    hop {
+        var p: Row<Portfolio> = Portfolio[port_id: port_id, trader_id: trader_id];
+        to_unit(p);
+    }
+}
+
+// 12. UpdatePortfolioName
+transaction UpdatePortfolioName(port_id: int, trader_id: int, name: string) {
+    hop {
+        Portfolio[port_id: port_id, trader_id: trader_id].name = name;
+    }
+}
+
+// 13. UpdatePortfolioValue: only update with non-negative value.
+transaction UpdatePortfolioValue(port_id: int, trader_id: int, total_value: float) {
+    hop {
+        var p: Row<Portfolio> = Portfolio[port_id: port_id, trader_id: trader_id];
+        if total_value >= 0.0 {
+            Portfolio[port_id: port_id, trader_id: trader_id].total_value = total_value;
+        }
+    }
+}
+
+// 14. AddStock: initial price must be positive.
+transaction AddStock(stock_id: int, ticker: string, name: string,
+                     price: float, index_id: int) {
+    hop {
+        if price > 0.0 {
+            Stock[stock_id: stock_id] = {
+                ticker: ticker,
+                name: name,
+                current_price: price,
+                market_status: 1,
+                index_id: index_id
+            };
+        }
+    }
+}
+
+// 15. GetStock
+transaction GetStock(stock_id: int) {
+    hop {
+        var s: Row<Stock> = Stock[stock_id: stock_id];
+        to_unit(s);
+    }
+}
+
+// 16. UpdateStockPrice: only update trading stocks with positive price; record history.
+transaction UpdateStockPrice(stock_id: int, price: float, ts: int) {
+    hop {
+        var s: Row<Stock> = Stock[stock_id: stock_id];
+        if s.market_status == 1 && price > 0.0 {
+            Stock[stock_id: stock_id].current_price = price;
+            PriceHistory[stock_id: stock_id, ts: ts] = {
+                price: price
+            };
+        }
+    }
+}
+
+// 17. SetMarketStatus: only allow valid states (0 = halted, 1 = active).
+transaction SetMarketStatus(stock_id: int, market_status: int) {
+    hop {
+        var s: Row<Stock> = Stock[stock_id: stock_id];
+        if market_status == 0 || market_status == 1 {
+            Stock[stock_id: stock_id].market_status = market_status;
+        }
+    }
+}
+
+// 18. GetPriceHistory
+transaction GetPriceHistory(stock_id: int, ts: int) {
+    hop {
+        var ph: Row<PriceHistory> = PriceHistory[stock_id: stock_id, ts: ts];
+        to_unit(ph);
+    }
+}
+
+// 19. UpdateHolding: qty must be non-negative; avg_cost must be positive.
+transaction UpdateHolding(port_id: int, stock_id: int, qty: int,
+                           avg_cost: float, ts: int) {
+    hop {
+        var h: Row<Holding> = Holding[port_id: port_id, stock_id: stock_id];
+        if qty >= 0 && avg_cost > 0.0 {
+            Holding[port_id: port_id, stock_id: stock_id].qty = qty;
+            Holding[port_id: port_id, stock_id: stock_id].avg_cost = avg_cost;
+            Holding[port_id: port_id, stock_id: stock_id].last_updated = ts;
+        }
+    }
+}
+
+// 20. GetHolding
+transaction GetHolding(port_id: int, stock_id: int) {
+    hop {
+        var h: Row<Holding> = Holding[port_id: port_id, stock_id: stock_id];
+        to_unit(h);
+    }
+}
+
+// 21. ClearHolding: zero out position; only makes sense if currently non-zero.
+transaction ClearHolding(port_id: int, stock_id: int, ts: int) {
+    hop {
+        var h: Row<Holding> = Holding[port_id: port_id, stock_id: stock_id];
+        if h.qty > 0 {
+            Holding[port_id: port_id, stock_id: stock_id].qty = 0;
+            Holding[port_id: port_id, stock_id: stock_id].last_updated = ts;
+        }
+    }
+}
+
+// 22. PlaceMarketOrder: cross-partition check — trader must be active and
+//     market must be open; qty must be positive.
+transaction PlaceMarketOrder(order_id: int, trader_id: int, stock_id: int,
+                              port_id: int, side: int, qty: int, ts: int) {
+    hop {
+        var t: Row<Trader> = Trader[trader_id: trader_id];
+        var s: Row<Stock> = Stock[stock_id: stock_id];
+        if t.status == 1 && s.market_status == 1 && qty > 0 {
+            TradeOrder[order_id: order_id, trader_id: trader_id] = {
+                stock_id: stock_id,
+                port_id: port_id,
+                order_type: 1,
+                side: side,
+                qty: qty,
+                limit_price: 0.0,
+                status: 1,
+                placed_at: ts
+            };
+        }
+    }
+}
+
+// 23. PlaceLimitOrder: trader active, market open, limit_price positive.
+//     For buy orders, trader must have cash >= qty * limit_price.
+transaction PlaceLimitOrder(order_id: int, trader_id: int, stock_id: int,
+                             port_id: int, side: int, qty: int,
+                             limit_price: float, ts: int) {
+    hop {
+        var t: Row<Trader> = Trader[trader_id: trader_id];
+        var s: Row<Stock> = Stock[stock_id: stock_id];
+        if t.status == 1 && s.market_status == 1 && qty > 0 && limit_price > 0.0 {
+            if side == 2 {
+                TradeOrder[order_id: order_id, trader_id: trader_id] = {
+                    stock_id: stock_id,
+                    port_id: port_id,
+                    order_type: 2,
+                    side: side,
+                    qty: qty,
+                    limit_price: limit_price,
+                    status: 1,
+                    placed_at: ts
+                };
+            } else {
+                var cost_estimate: float = float(qty) * limit_price;
+                if t.cash_balance >= cost_estimate {
+                    TradeOrder[order_id: order_id, trader_id: trader_id] = {
+                        stock_id: stock_id,
+                        port_id: port_id,
+                        order_type: 2,
+                        side: side,
+                        qty: qty,
+                        limit_price: limit_price,
+                        status: 1,
+                        placed_at: ts
+                    };
+                }
+            }
+        }
+    }
+}
+
+// 24. CancelOrder: only cancel pending orders.
+transaction CancelOrder(order_id: int, trader_id: int) {
+    hop {
+        var o: Row<TradeOrder> = TradeOrder[order_id: order_id, trader_id: trader_id];
+        if o.status == 1 {
+            TradeOrder[order_id: order_id, trader_id: trader_id].status = 0;
+        }
+    }
+}
+
+// 25. GetOrder
+transaction GetOrder(order_id: int, trader_id: int) {
+    hop {
+        var o: Row<TradeOrder> = TradeOrder[order_id: order_id, trader_id: trader_id];
+        to_unit(o);
+    }
+}
+
+// 26. ExecuteTrade: order must be pending; compute trade value and commission (0.5%, min $5).
+//     Buy orders deduct cost + commission; sell orders add proceeds minus commission.
+transaction ExecuteTrade(trade_id: int, order_id: int, trader_id: int,
+                          stock_id: int, qty: int, price: float, side: int,
+                          comm_id: int, ts: int) {
+    hop {
+        var t: Row<Trader> = Trader[trader_id: trader_id];
+        var ord: Row<TradeOrder> = TradeOrder[order_id: order_id, trader_id: trader_id];
+        if ord.status == 1 {
+            var trade_value: float = float(qty) * price;
+            var comm_amount: float = trade_value * 0.005;
+            if comm_amount < 5.0 {
+                comm_amount = 5.0;
+            }
+            if side == 1 {
+                var total_cost: float = trade_value + comm_amount;
+                if t.cash_balance >= total_cost {
+                    var new_cash: float = t.cash_balance - total_cost;
+                    Trader[trader_id: trader_id].cash_balance = new_cash;
+                    Trade[trade_id: trade_id, trader_id: trader_id] = {
+                        order_id: order_id,
+                        stock_id: stock_id,
+                        qty: qty,
+                        price: price,
+                        side: side,
+                        executed_at: ts
+                    };
+                    TradeOrder[order_id: order_id, trader_id: trader_id].status = 2;
+                    Commission[comm_id: comm_id, trader_id: trader_id] = {
+                        trade_id: trade_id,
+                        amount: comm_amount,
+                        ts: ts
+                    };
+                }
+            } else {
+                var proceeds: float = trade_value - comm_amount;
+                var new_cash: float = t.cash_balance + proceeds;
+                Trader[trader_id: trader_id].cash_balance = new_cash;
+                Trade[trade_id: trade_id, trader_id: trader_id] = {
+                    order_id: order_id,
+                    stock_id: stock_id,
+                    qty: qty,
+                    price: price,
+                    side: side,
+                    executed_at: ts
+                };
+                TradeOrder[order_id: order_id, trader_id: trader_id].status = 2;
+                Commission[comm_id: comm_id, trader_id: trader_id] = {
+                    trade_id: trade_id,
+                    amount: comm_amount,
+                    ts: ts
+                };
+            }
+        }
+    }
+}
+
+// 27. GetTrade
+transaction GetTrade(trade_id: int, trader_id: int) {
+    hop {
+        var t: Row<Trade> = Trade[trade_id: trade_id, trader_id: trader_id];
+        to_unit(t);
+    }
+}
+
+// 28. AddToWatchlist: trader must be active; alert_price must be positive.
+transaction AddToWatchlist(trader_id: int, stock_id: int,
+                            alert_price: float, ts: int) {
+    hop {
+        var t: Row<Trader> = Trader[trader_id: trader_id];
+        if t.status == 1 && alert_price > 0.0 {
+            Watchlist[trader_id: trader_id, stock_id: stock_id] = {
+                alert_price: alert_price,
+                is_active: 1,
+                added_at: ts
+            };
+        }
+    }
+}
+
+// 29. RemoveFromWatchlist: only deactivate an active watchlist entry.
+transaction RemoveFromWatchlist(trader_id: int, stock_id: int) {
+    hop {
+        var w: Row<Watchlist> = Watchlist[trader_id: trader_id, stock_id: stock_id];
+        if w.is_active == 1 {
+            Watchlist[trader_id: trader_id, stock_id: stock_id].is_active = 0;
+        }
+    }
+}
+
+// 30. GetWatchlistEntry
+transaction GetWatchlistEntry(trader_id: int, stock_id: int) {
+    hop {
+        var w: Row<Watchlist> = Watchlist[trader_id: trader_id, stock_id: stock_id];
+        to_unit(w);
+    }
+}
+
+// 31. SetAlertPrice: only update active watchlist entries with positive price.
+transaction SetAlertPrice(trader_id: int, stock_id: int, alert_price: float) {
+    hop {
+        var w: Row<Watchlist> = Watchlist[trader_id: trader_id, stock_id: stock_id];
+        if w.is_active == 1 && alert_price > 0.0 {
+            Watchlist[trader_id: trader_id, stock_id: stock_id].alert_price = alert_price;
+        }
+    }
+}
+
+// 32. CreateDividend: amount per share must be positive.
+transaction CreateDividend(div_id: int, stock_id: int,
+                            amount_per_share: float,
+                            record_date: int, pay_date: int) {
+    hop {
+        if amount_per_share > 0.0 {
+            Dividend[div_id: div_id, stock_id: stock_id] = {
+                amount_per_share: amount_per_share,
+                record_date: record_date,
+                pay_date: pay_date,
+                paid: 0
+            };
+        }
+    }
+}
+
+// 33. GetDividend
+transaction GetDividend(div_id: int, stock_id: int) {
+    hop {
+        var d: Row<Dividend> = Dividend[div_id: div_id, stock_id: stock_id];
+        to_unit(d);
+    }
+}
+
+// 34. MarkDividendPaid: only pay unpaid dividends.
+//     Hop 1 marks dividend paid on stock partition.
+//     Hop 2 computes payout = shares_owned * amount_per_share and credits cash.
+transaction MarkDividendPaid(div_id: int, stock_id: int,
+                              trader_id: int, shares_owned: int,
+                              amount_per_share: float) {
+    hop {
+        var d: Row<Dividend> = Dividend[div_id: div_id, stock_id: stock_id];
+        if d.paid == 0 {
+            Dividend[div_id: div_id, stock_id: stock_id].paid = 1;
+        }
+    }
+    hop {
+        var t: Row<Trader> = Trader[trader_id: trader_id];
+        if shares_owned > 0 {
+            var payout: float = float(shares_owned) * amount_per_share;
+            var new_cash: float = t.cash_balance + payout;
+            Trader[trader_id: trader_id].cash_balance = new_cash;
+        }
+    }
+}
+
+// 35. GetCommission
+transaction GetCommission(comm_id: int, trader_id: int) {
+    hop {
+        var c: Row<Commission> = Commission[comm_id: comm_id, trader_id: trader_id];
+        to_unit(c);
+    }
+}
+
+// 36. CreateIndex: initial index value must be positive.
+transaction CreateIndex(index_id: int, name: string, value: float, ts: int) {
+    hop {
+        if value > 0.0 {
+            StockIndex[index_id: index_id] = {
+                name: name,
+                value: value,
+                last_updated: ts
+            };
+        }
+    }
+}
+
+// 37. GetIndex
+transaction GetIndex(index_id: int) {
+    hop {
+        var idx: Row<StockIndex> = StockIndex[index_id: index_id];
+        to_unit(idx);
+    }
+}
+
+// 38. UpdateIndexValue: only allow positive index values.
+transaction UpdateIndexValue(index_id: int, value: float, ts: int) {
+    hop {
+        var idx: Row<StockIndex> = StockIndex[index_id: index_id];
+        if value > 0.0 {
+            StockIndex[index_id: index_id].value = value;
+            StockIndex[index_id: index_id].last_updated = ts;
+        }
+    }
+}
+
+// 39. AssignStockToIndex: only reassign trading stocks.
+transaction AssignStockToIndex(stock_id: int, index_id: int) {
+    hop {
+        var s: Row<Stock> = Stock[stock_id: stock_id];
+        if s.market_status == 1 {
+            Stock[stock_id: stock_id].index_id = index_id;
+        }
+    }
+}
+
+// 40. GetStockAndIndex: cross-partition read.
+transaction GetStockAndIndex(stock_id: int, index_id: int) {
+    hop {
+        var s: Row<Stock> = Stock[stock_id: stock_id];
+        to_unit(s);
+    }
+    hop {
+        var idx: Row<StockIndex> = StockIndex[index_id: index_id];
+        to_unit(idx);
+    }
+}
+
+// 41. UpdateMarginBalance: trader must be active; balance must be non-negative.
+transaction UpdateMarginBalance(trader_id: int, margin_balance: float) {
+    hop {
+        var t: Row<Trader> = Trader[trader_id: trader_id];
+        if t.status == 1 && margin_balance >= 0.0 {
+            Trader[trader_id: trader_id].margin_balance = margin_balance;
+        }
+    }
+}
+
+// 42. GetOrderAndTrade: both on trader partition — single hop.
+transaction GetOrderAndTrade(order_id: int, trade_id: int, trader_id: int) {
+    hop {
+        var o: Row<TradeOrder> = TradeOrder[order_id: order_id, trader_id: trader_id];
+        to_unit(o);
+        var t: Row<Trade> = Trade[trade_id: trade_id, trader_id: trader_id];
+        to_unit(t);
+    }
+}
+
+// 43. PartialFillOrder: reduce qty; remaining must be positive and less than current.
+transaction PartialFillOrder(order_id: int, trader_id: int, remaining_qty: int) {
+    hop {
+        var o: Row<TradeOrder> = TradeOrder[order_id: order_id, trader_id: trader_id];
+        if o.status == 1 && remaining_qty > 0 && remaining_qty < o.qty {
+            TradeOrder[order_id: order_id, trader_id: trader_id].qty = remaining_qty;
+        }
+    }
+}
+
+// 44. UpdateDividendPayDate: only update unpaid dividends.
+transaction UpdateDividendPayDate(div_id: int, stock_id: int, pay_date: int) {
+    hop {
+        var d: Row<Dividend> = Dividend[div_id: div_id, stock_id: stock_id];
+        if d.paid == 0 {
+            Dividend[div_id: div_id, stock_id: stock_id].pay_date = pay_date;
+        }
+    }
+}
+
+// 45. GetPortfolioAndTrader: both on trader_id partition — single hop.
+transaction GetPortfolioAndTrader(port_id: int, trader_id: int) {
+    hop {
+        var p: Row<Portfolio> = Portfolio[port_id: port_id, trader_id: trader_id];
+        to_unit(p);
+        var t: Row<Trader> = Trader[trader_id: trader_id];
+        to_unit(t);
+    }
+}
+
+// 46. UpdateDividendAmount: only update unpaid dividends with positive amount.
+transaction UpdateDividendAmount(div_id: int, stock_id: int,
+                                  amount_per_share: float) {
+    hop {
+        var d: Row<Dividend> = Dividend[div_id: div_id, stock_id: stock_id];
+        if d.paid == 0 && amount_per_share > 0.0 {
+            Dividend[div_id: div_id, stock_id: stock_id].amount_per_share = amount_per_share;
+        }
+    }
+}
+
+// 47. UpdateStockName: only update trading stocks.
+transaction UpdateStockName(stock_id: int, name: string) {
+    hop {
+        var s: Row<Stock> = Stock[stock_id: stock_id];
+        if s.market_status == 1 {
+            Stock[stock_id: stock_id].name = name;
+        }
+    }
+}
+
+// 48. UpdateStockTicker: only update trading stocks.
+transaction UpdateStockTicker(stock_id: int, ticker: string) {
+    hop {
+        var s: Row<Stock> = Stock[stock_id: stock_id];
+        if s.market_status == 1 {
+            Stock[stock_id: stock_id].ticker = ticker;
+        }
+    }
+}
+
+// 49. GetHoldingAndPortfolio: both on port_id partition — single hop.
+transaction GetHoldingAndPortfolio(port_id: int, stock_id: int, trader_id: int) {
+    hop {
+        var h: Row<Holding> = Holding[port_id: port_id, stock_id: stock_id];
+        to_unit(h);
+        var p: Row<Portfolio> = Portfolio[port_id: port_id, trader_id: trader_id];
+        to_unit(p);
+    }
+}
+
+// 50. RecordCommission: commission amount must be positive.
+transaction RecordCommission(comm_id: int, trader_id: int,
+                              trade_id: int, amount: float, ts: int) {
+    hop {
+        if amount > 0.0 {
+            Commission[comm_id: comm_id, trader_id: trader_id] = {
+                trade_id: trade_id,
+                amount: amount,
+                ts: ts
+            };
+        }
+    }
+}
+
+// 51. DeactivateWatchlistEntry: only if currently active.
+transaction DeactivateWatchlistEntry(trader_id: int, stock_id: int) {
+    hop {
+        var w: Row<Watchlist> = Watchlist[trader_id: trader_id, stock_id: stock_id];
+        if w.is_active == 1 {
+            Watchlist[trader_id: trader_id, stock_id: stock_id].is_active = 0;
+        }
+    }
+}
+
+// 52. ActivateWatchlistEntry: only if currently inactive.
+transaction ActivateWatchlistEntry(trader_id: int, stock_id: int) {
+    hop {
+        var w: Row<Watchlist> = Watchlist[trader_id: trader_id, stock_id: stock_id];
+        if w.is_active == 0 {
+            Watchlist[trader_id: trader_id, stock_id: stock_id].is_active = 1;
+        }
+    }
+}
+
+// 53. GetTraderAndPortfolio: both on trader_id partition — single hop.
+transaction GetTraderAndPortfolio(trader_id: int, port_id: int) {
+    hop {
+        var t: Row<Trader> = Trader[trader_id: trader_id];
+        to_unit(t);
+        var p: Row<Portfolio> = Portfolio[port_id: port_id, trader_id: trader_id];
+        to_unit(p);
+    }
+}
+
+// 54. UpdateIndexName
+transaction UpdateIndexName(index_id: int, name: string) {
+    hop {
+        StockIndex[index_id: index_id].name = name;
+    }
+}
+
+// 55. ReactivateStock: only if currently halted.
+transaction ReactivateStock(stock_id: int) {
+    hop {
+        var s: Row<Stock> = Stock[stock_id: stock_id];
+        if s.market_status == 0 {
+            Stock[stock_id: stock_id].market_status = 1;
+        }
+    }
+}
+
+// 56. HaltStock: only if currently active (status == 1).
+transaction HaltStock(stock_id: int) {
+    hop {
+        var s: Row<Stock> = Stock[stock_id: stock_id];
+        if s.market_status == 1 {
+            Stock[stock_id: stock_id].market_status = 0;
+        }
+    }
+}
+
+// 57. UpdateHoldingQty: qty must be non-negative.
+transaction UpdateHoldingQty(port_id: int, stock_id: int, qty: int, ts: int) {
+    hop {
+        var h: Row<Holding> = Holding[port_id: port_id, stock_id: stock_id];
+        if qty >= 0 {
+            Holding[port_id: port_id, stock_id: stock_id].qty = qty;
+            Holding[port_id: port_id, stock_id: stock_id].last_updated = ts;
+        }
+    }
+}
+
+// 58. UpdateAvgCost: avg cost must be positive.
+transaction UpdateAvgCost(port_id: int, stock_id: int, avg_cost: float, ts: int) {
+    hop {
+        var h: Row<Holding> = Holding[port_id: port_id, stock_id: stock_id];
+        if avg_cost > 0.0 {
+            Holding[port_id: port_id, stock_id: stock_id].avg_cost = avg_cost;
+            Holding[port_id: port_id, stock_id: stock_id].last_updated = ts;
+        }
+    }
+}
+
+// 59. GetTradeAndStock: cross-partition read.
+transaction GetTradeAndStock(trade_id: int, trader_id: int, stock_id: int) {
+    hop {
+        var t: Row<Trade> = Trade[trade_id: trade_id, trader_id: trader_id];
+        to_unit(t);
+    }
+    hop {
+        var s: Row<Stock> = Stock[stock_id: stock_id];
+        to_unit(s);
+    }
+}
+
+// 60. MarkOrderExpired: only expire pending (status == 1) orders.
+transaction MarkOrderExpired(order_id: int, trader_id: int) {
+    hop {
+        var o: Row<TradeOrder> = TradeOrder[order_id: order_id, trader_id: trader_id];
+        if o.status == 1 {
+            TradeOrder[order_id: order_id, trader_id: trader_id].status = 3;
+        }
+    }
+}
+
+// 61. UpdatePriceHistoryEntry: only update with positive price.
+transaction UpdatePriceHistoryEntry(stock_id: int, ts: int, price: float) {
+    hop {
+        var ph: Row<PriceHistory> = PriceHistory[stock_id: stock_id, ts: ts];
+        if price > 0.0 {
+            PriceHistory[stock_id: stock_id, ts: ts].price = price;
+        }
+    }
+}
+
+// 62. ScanOpenOrders: scan all TradeOrders for this trader; count pending (status == 1) orders.
+//     Partition-local scan on trader_id.
+transaction ScanOpenOrders(trader_id: int) -> int {
+    @global hop {
+        var open_count: int = 0;
+        for (var iter: Iterator<TradeOrder> = scan(TradeOrder, trader_id, __slice__);
+             hasNext(iter); iter = next(iter)) {
+            var t_id = get_trader_id(iter);
+            var o_id = get_order_id(iter);
+            if t_id == trader_id {
+                var o: Row<TradeOrder> = TradeOrder[order_id: o_id, trader_id: t_id];
+                if o.status == 1 {
+                    open_count = open_count + 1;
+                }
+            }
+        }
+        return open_count;
+    }
+}
+
+// 63. GetTradePrice
+transaction GetTradePrice(trade_id: int, trader_id: int) {
+    hop {
+        var t: Row<Trade> = Trade[trade_id: trade_id, trader_id: trader_id];
+        var price: float = t.price;
+        to_unit(price);
+    }
+}
+
+// 64. GetStockCurrentPrice
+transaction GetStockCurrentPrice(stock_id: int) {
+    hop {
+        var s: Row<Stock> = Stock[stock_id: stock_id];
+        var price: float = s.current_price;
+        to_unit(price);
+    }
+}
+
+// 65. AddPriceHistoryEntry: price must be positive.
+transaction AddPriceHistoryEntry(stock_id: int, ts: int, price: float) {
+    hop {
+        if price > 0.0 {
+            PriceHistory[stock_id: stock_id, ts: ts] = {
+                price: price
+            };
+        }
+    }
+}
+
+// 66. GetTraderCash
+transaction GetTraderCash(trader_id: int) {
+    hop {
+        var t: Row<Trader> = Trader[trader_id: trader_id];
+        var cash: float = t.cash_balance;
+        to_unit(cash);
+    }
+}
+
+// 67. MarkDividendUnpaid: only reset dividends that are currently marked paid.
+transaction MarkDividendUnpaid(div_id: int, stock_id: int) {
+    hop {
+        var d: Row<Dividend> = Dividend[div_id: div_id, stock_id: stock_id];
+        if d.paid == 1 {
+            Dividend[div_id: div_id, stock_id: stock_id].paid = 0;
+        }
+    }
+}
+
+// 68. GetWatchlistAlertPrice
+transaction GetWatchlistAlertPrice(trader_id: int, stock_id: int) {
+    hop {
+        var w: Row<Watchlist> = Watchlist[trader_id: trader_id, stock_id: stock_id];
+        var ap: float = w.alert_price;
+        to_unit(ap);
+    }
+}
+
+// 69. ScanPortfolioHoldings: scan all Holding rows in a portfolio; count non-zero positions.
+//     Partition-local scan on port_id.
+transaction ScanPortfolioHoldings(port_id: int, trader_id: int) -> int {
+    @global hop {
+        var position_count: int = 0;
+        for (var iter: Iterator<Holding> = scan(Holding, port_id, __slice__);
+             hasNext(iter); iter = next(iter)) {
+            var p_id = get_port_id(iter);
+            var s_id = get_stock_id(iter);
+            if p_id == port_id {
+                var h: Row<Holding> = Holding[port_id: p_id, stock_id: s_id];
+                if h.qty > 0 {
+                    position_count = position_count + 1;
+                }
+            }
+        }
+        return position_count;
+    }
+}
+
+// 70. TransferBetweenPortfolios: move holdings from src to dst portfolio.
+//     Source must have sufficient qty; compute new qtys for both portfolios.
+transaction TransferBetweenPortfolios(src_port_id: int, dst_port_id: int,
+                                       stock_id: int, qty_to_move: int,
+                                       trader_id: int, ts: int) {
+    hop {
+        var src: Row<Holding> = Holding[port_id: src_port_id, stock_id: stock_id];
+        if src.qty >= qty_to_move && qty_to_move > 0 {
+            var new_src_qty: int = src.qty - qty_to_move;
+            var dst: Row<Holding> = Holding[port_id: dst_port_id, stock_id: stock_id];
+            var new_dst_qty: int = dst.qty + qty_to_move;
+            Holding[port_id: src_port_id, stock_id: stock_id].qty = new_src_qty;
+            Holding[port_id: src_port_id, stock_id: stock_id].last_updated = ts;
+            Holding[port_id: dst_port_id, stock_id: stock_id].qty = new_dst_qty;
+            Holding[port_id: dst_port_id, stock_id: stock_id].last_updated = ts;
+        }
+    }
+}

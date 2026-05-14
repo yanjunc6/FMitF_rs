@@ -1,0 +1,1152 @@
+// ============================================================================
+// bench_090 — Airline Reservation System (90 transactions)
+// Domain: Passengers, flights, bookings, boarding, baggage, upgrades
+// ============================================================================
+
+partition f(x: int) -> int { return x; }
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+table Passenger {
+    primary passenger_id: int;
+    node f(passenger_id);
+    name: string;
+    email: string;
+    phone: string;
+    is_active: int;
+}
+
+table LoyaltyAccount {
+    primary account_id: int;
+    node f(account_id);
+    passenger_id: int;
+    points: int;
+    tier: int;
+    is_active: int;
+}
+
+table Aircraft {
+    primary aircraft_id: int;
+    node f(aircraft_id);
+    model: string;
+    capacity: int;
+    is_active: int;
+    in_maintenance: int;
+}
+
+table Flight {
+    primary flight_id: int;
+    node f(flight_id);
+    aircraft_id: int;
+    departure_time: int;
+    arrival_time: int;
+    status: int;
+    available_seats: int;
+    gate: int;
+}
+
+table Seat {
+    primary flight_id: int;
+    primary seat_num: int;
+    node f(flight_id);
+    class: int;
+    is_available: int;
+    meal_pref: int;
+}
+
+table Booking {
+    primary booking_id: int;
+    primary passenger_id: int;
+    node f(passenger_id);
+    flight_id: int;
+    seat_num: int;
+    fare: int;
+    status: int;
+    is_checked_in: int;
+}
+
+table Payment {
+    primary payment_id: int;
+    primary booking_id: int;
+    node f(booking_id);
+    amount: int;
+    status: int;
+    refund_amount: int;
+}
+
+table BoardingPass {
+    primary bp_id: int;
+    primary booking_id: int;
+    node f(booking_id);
+    gate: int;
+    seat_num: int;
+    status: int;
+}
+
+table Baggage {
+    primary baggage_id: int;
+    primary booking_id: int;
+    node f(booking_id);
+    weight: int;
+    status: int;
+    tag: int;
+}
+
+table Upgrade {
+    primary upgrade_id: int;
+    primary booking_id: int;
+    node f(booking_id);
+    from_class: int;
+    to_class: int;
+    status: int;
+    fare_diff: int;
+}
+
+// ============================================================================
+// Transactions (90 total)
+// ============================================================================
+
+// 1. RegisterPassenger
+transaction RegisterPassenger(passenger_id: int, name: string, email: string, phone: string) {
+    hop {
+        Passenger[passenger_id: passenger_id] = {
+            name: name,
+            email: email,
+            phone: phone,
+            is_active: 1
+        };
+    }
+}
+
+// 2. GetPassenger
+transaction GetPassenger(passenger_id: int) {
+    hop {
+        var p: Row<Passenger> = Passenger[passenger_id: passenger_id];
+        to_unit(p);
+    }
+}
+
+// 3. UpdatePassengerContact: only update active accounts.
+transaction UpdatePassengerContact(passenger_id: int, email: string, phone: string) {
+    hop {
+        var p: Row<Passenger> = Passenger[passenger_id: passenger_id];
+        if p.is_active == 1 {
+            Passenger[passenger_id: passenger_id].email = email;
+            Passenger[passenger_id: passenger_id].phone = phone;
+        }
+    }
+}
+
+// 4. DeactivatePassenger
+transaction DeactivatePassenger(passenger_id: int) {
+    hop {
+        var p: Row<Passenger> = Passenger[passenger_id: passenger_id];
+        if p.is_active == 1 {
+            Passenger[passenger_id: passenger_id].is_active = 0;
+        }
+    }
+}
+
+// 5. ActivatePassenger
+transaction ActivatePassenger(passenger_id: int) {
+    hop {
+        var p: Row<Passenger> = Passenger[passenger_id: passenger_id];
+        if p.is_active == 0 {
+            Passenger[passenger_id: passenger_id].is_active = 1;
+        }
+    }
+}
+
+// 6. CreateLoyaltyAccount
+transaction CreateLoyaltyAccount(account_id: int, passenger_id: int) {
+    hop {
+        LoyaltyAccount[account_id: account_id] = {
+            passenger_id: passenger_id,
+            points: 0,
+            tier: 1,
+            is_active: 1
+        };
+    }
+}
+
+// 7. GetLoyaltyBalance
+transaction GetLoyaltyBalance(account_id: int) {
+    hop {
+        var la: Row<LoyaltyAccount> = LoyaltyAccount[account_id: account_id];
+        to_unit(la);
+    }
+}
+
+// 8. AddLoyaltyPoints: add miles earned per flight segment; guard account active.
+transaction AddLoyaltyPoints(account_id: int, miles: int) {
+    hop {
+        var la: Row<LoyaltyAccount> = LoyaltyAccount[account_id: account_id];
+        if la.is_active == 1 {
+            if miles > 0 {
+                var new_points: int = la.points + miles;
+                LoyaltyAccount[account_id: account_id].points = new_points;
+            }
+        }
+    }
+}
+
+// 9. RedeemLoyaltyPoints: deduct points only if sufficient balance exists.
+transaction RedeemLoyaltyPoints(account_id: int, points_to_redeem: int) {
+    hop {
+        var la: Row<LoyaltyAccount> = LoyaltyAccount[account_id: account_id];
+        if la.is_active == 1 {
+            if la.points >= points_to_redeem {
+                var new_points: int = la.points - points_to_redeem;
+                LoyaltyAccount[account_id: account_id].points = new_points;
+            }
+        }
+    }
+}
+
+// 10. UpgradeLoyaltyTier: promote tier; forward-only state machine prevents downgrade.
+transaction UpgradeLoyaltyTier(account_id: int, new_tier: int) {
+    hop {
+        var la: Row<LoyaltyAccount> = LoyaltyAccount[account_id: account_id];
+        if la.is_active == 1 {
+            if new_tier > la.tier {
+                LoyaltyAccount[account_id: account_id].tier = new_tier;
+            }
+        }
+    }
+}
+
+// 11. RegisterAircraft
+transaction RegisterAircraft(aircraft_id: int, model: string, capacity: int) {
+    hop {
+        Aircraft[aircraft_id: aircraft_id] = {
+            model: model,
+            capacity: capacity,
+            is_active: 1,
+            in_maintenance: 0
+        };
+    }
+}
+
+// 12. GetAircraft
+transaction GetAircraft(aircraft_id: int) {
+    hop {
+        var a: Row<Aircraft> = Aircraft[aircraft_id: aircraft_id];
+        to_unit(a);
+    }
+}
+
+// 13. SetAircraftMaintenance: only active, non-maintenance aircraft can enter maintenance.
+transaction SetAircraftMaintenance(aircraft_id: int) {
+    hop {
+        var a: Row<Aircraft> = Aircraft[aircraft_id: aircraft_id];
+        if a.is_active == 1 {
+            if a.in_maintenance == 0 {
+                Aircraft[aircraft_id: aircraft_id].in_maintenance = 1;
+            }
+        }
+    }
+}
+
+// 14. RetireAircraft: prevent retiring aircraft currently in maintenance.
+transaction RetireAircraft(aircraft_id: int) {
+    hop {
+        var a: Row<Aircraft> = Aircraft[aircraft_id: aircraft_id];
+        if a.in_maintenance == 0 {
+            if a.is_active == 1 {
+                Aircraft[aircraft_id: aircraft_id].is_active = 0;
+            }
+        }
+    }
+}
+
+// 15. ActivateAircraft: clear maintenance flag and restore active status.
+transaction ActivateAircraft(aircraft_id: int) {
+    hop {
+        var a: Row<Aircraft> = Aircraft[aircraft_id: aircraft_id];
+        if a.is_active == 0 {
+            Aircraft[aircraft_id: aircraft_id].is_active = 1;
+            Aircraft[aircraft_id: aircraft_id].in_maintenance = 0;
+        }
+    }
+}
+
+// 16. ScheduleFlight
+transaction ScheduleFlight(flight_id: int, aircraft_id: int, departure_time: int,
+                            arrival_time: int, capacity: int, gate: int) {
+    hop {
+        Flight[flight_id: flight_id] = {
+            aircraft_id: aircraft_id,
+            departure_time: departure_time,
+            arrival_time: arrival_time,
+            status: 0,
+            available_seats: capacity,
+            gate: gate
+        };
+    }
+}
+
+// 17. GetFlight
+transaction GetFlight(flight_id: int) {
+    hop {
+        var fl: Row<Flight> = Flight[flight_id: flight_id];
+        to_unit(fl);
+    }
+}
+
+// 18. OpenCheckIn: flight must be in scheduled state.
+transaction OpenCheckIn(flight_id: int) {
+    hop {
+        var fl: Row<Flight> = Flight[flight_id: flight_id];
+        if fl.status == 0 {
+            Flight[flight_id: flight_id].status = 1;
+        }
+    }
+}
+
+// 19. StartBoarding: check-in must be open.
+transaction StartBoarding(flight_id: int) {
+    hop {
+        var fl: Row<Flight> = Flight[flight_id: flight_id];
+        if fl.status == 1 {
+            Flight[flight_id: flight_id].status = 2;
+        }
+    }
+}
+
+// 20. DepartFlight: boarding must be active.
+transaction DepartFlight(flight_id: int) {
+    hop {
+        var fl: Row<Flight> = Flight[flight_id: flight_id];
+        if fl.status == 2 {
+            Flight[flight_id: flight_id].status = 3;
+        }
+    }
+}
+
+// 21. LandFlight: must be in-flight.
+transaction LandFlight(flight_id: int) {
+    hop {
+        var fl: Row<Flight> = Flight[flight_id: flight_id];
+        if fl.status == 3 {
+            Flight[flight_id: flight_id].status = 4;
+        }
+    }
+}
+
+// 22. CancelFlight: only cancel before departure.
+transaction CancelFlight(flight_id: int) {
+    hop {
+        var fl: Row<Flight> = Flight[flight_id: flight_id];
+        if fl.status < 3 {
+            Flight[flight_id: flight_id].status = 5;
+        }
+    }
+}
+
+// 23. DelayFlight: shift departure to a later time only before departure.
+transaction DelayFlight(flight_id: int, new_departure: int) {
+    hop {
+        var fl: Row<Flight> = Flight[flight_id: flight_id];
+        if fl.status < 3 {
+            if new_departure > fl.departure_time {
+                Flight[flight_id: flight_id].departure_time = new_departure;
+            }
+        }
+    }
+}
+
+// 24. InitSeat: create seat record for a flight.
+transaction InitSeat(flight_id: int, seat_num: int, class: int) {
+    hop {
+        Seat[flight_id: flight_id, seat_num: seat_num] = {
+            class: class,
+            is_available: 1,
+            meal_pref: 0
+        };
+    }
+}
+
+// 25. GetSeat
+transaction GetSeat(flight_id: int, seat_num: int) {
+    hop {
+        var s: Row<Seat> = Seat[flight_id: flight_id, seat_num: seat_num];
+        to_unit(s);
+    }
+}
+
+// 26. ReserveSeat: only reserve available seats; decrement flight available count.
+transaction ReserveSeat(flight_id: int, seat_num: int) {
+    hop {
+        var s: Row<Seat> = Seat[flight_id: flight_id, seat_num: seat_num];
+        if s.is_available == 1 {
+            Seat[flight_id: flight_id, seat_num: seat_num].is_available = 0;
+            var fl: Row<Flight> = Flight[flight_id: flight_id];
+            var new_avail: int = fl.available_seats - 1;
+            if new_avail >= 0 {
+                Flight[flight_id: flight_id].available_seats = new_avail;
+            }
+        }
+    }
+}
+
+// 27. ReleaseSeat: release a reserved seat; restore flight available count.
+transaction ReleaseSeat(flight_id: int, seat_num: int) {
+    hop {
+        var s: Row<Seat> = Seat[flight_id: flight_id, seat_num: seat_num];
+        if s.is_available == 0 {
+            Seat[flight_id: flight_id, seat_num: seat_num].is_available = 1;
+            var fl: Row<Flight> = Flight[flight_id: flight_id];
+            var new_avail: int = fl.available_seats + 1;
+            Flight[flight_id: flight_id].available_seats = new_avail;
+        }
+    }
+}
+
+// 28. UpgradeSeatToFirstClass: upgrade a reserved economy seat to first class.
+transaction UpgradeSeatToFirstClass(flight_id: int, seat_num: int) {
+    hop {
+        var s: Row<Seat> = Seat[flight_id: flight_id, seat_num: seat_num];
+        if s.is_available == 0 {
+            if s.class == 3 {
+                Seat[flight_id: flight_id, seat_num: seat_num].class = 1;
+            }
+        }
+    }
+}
+
+// 29. SetMealPreference: update meal preference for a reserved seat.
+transaction SetMealPreference(flight_id: int, seat_num: int, meal_pref: int) {
+    hop {
+        var s: Row<Seat> = Seat[flight_id: flight_id, seat_num: seat_num];
+        if s.is_available == 0 {
+            Seat[flight_id: flight_id, seat_num: seat_num].meal_pref = meal_pref;
+        }
+    }
+}
+
+// 30. ScanAvailableSeats: count available seats on a flight.
+transaction ScanAvailableSeats(flight_id: int) -> int {
+    @global hop {
+        var avail_count: int = 0;
+        for (var iter: Iterator<Seat> = scan(Seat, flight_id, __slice__);
+             hasNext(iter); iter = next(iter)) {
+            var f_id = get_flight_id(iter);
+            var s_num = get_seat_num(iter);
+            if f_id == flight_id {
+                var s: Row<Seat> = Seat[flight_id: f_id, seat_num: s_num];
+                if s.is_available == 1 {
+                    avail_count = avail_count + 1;
+                }
+            }
+        }
+        return avail_count;
+    }
+}
+
+// 31. CreateBooking: hop 1 reserves seat on flight partition; hop 2 creates booking record.
+transaction CreateBooking(booking_id: int, passenger_id: int, flight_id: int,
+                           seat_num: int, fare: int) {
+    hop {
+        var s: Row<Seat> = Seat[flight_id: flight_id, seat_num: seat_num];
+        if s.is_available == 1 {
+            Seat[flight_id: flight_id, seat_num: seat_num].is_available = 0;
+            var fl: Row<Flight> = Flight[flight_id: flight_id];
+            var new_avail: int = fl.available_seats - 1;
+            if new_avail >= 0 {
+                Flight[flight_id: flight_id].available_seats = new_avail;
+            }
+        }
+    }
+    hop {
+        var p: Row<Passenger> = Passenger[passenger_id: passenger_id];
+        if p.is_active == 1 {
+            Booking[booking_id: booking_id, passenger_id: passenger_id] = {
+                flight_id: flight_id,
+                seat_num: seat_num,
+                fare: fare,
+                status: 0,
+                is_checked_in: 0
+            };
+        }
+    }
+}
+
+// 32. GetBooking
+transaction GetBooking(booking_id: int, passenger_id: int) {
+    hop {
+        var b: Row<Booking> = Booking[booking_id: booking_id, passenger_id: passenger_id];
+        to_unit(b);
+    }
+}
+
+// 33. ConfirmBooking: confirm only pending bookings.
+transaction ConfirmBooking(booking_id: int, passenger_id: int) {
+    hop {
+        var b: Row<Booking> = Booking[booking_id: booking_id, passenger_id: passenger_id];
+        if b.status == 0 {
+            Booking[booking_id: booking_id, passenger_id: passenger_id].status = 1;
+        }
+    }
+}
+
+// 34. CancelBooking: hop 1 cancels booking record; hop 2 releases seat back to pool.
+transaction CancelBooking(booking_id: int, passenger_id: int, flight_id: int, seat_num: int) {
+    hop {
+        var b: Row<Booking> = Booking[booking_id: booking_id, passenger_id: passenger_id];
+        if b.status < 3 {
+            Booking[booking_id: booking_id, passenger_id: passenger_id].status = 3;
+        }
+    }
+    hop {
+        var s: Row<Seat> = Seat[flight_id: flight_id, seat_num: seat_num];
+        if s.is_available == 0 {
+            Seat[flight_id: flight_id, seat_num: seat_num].is_available = 1;
+            var fl: Row<Flight> = Flight[flight_id: flight_id];
+            var new_avail: int = fl.available_seats + 1;
+            Flight[flight_id: flight_id].available_seats = new_avail;
+        }
+    }
+}
+
+// 35. CheckInBooking: check in confirmed bookings not already checked in.
+transaction CheckInBooking(booking_id: int, passenger_id: int) {
+    hop {
+        var b: Row<Booking> = Booking[booking_id: booking_id, passenger_id: passenger_id];
+        if b.status == 1 {
+            if b.is_checked_in == 0 {
+                Booking[booking_id: booking_id, passenger_id: passenger_id].is_checked_in = 1;
+                Booking[booking_id: booking_id, passenger_id: passenger_id].status = 2;
+            }
+        }
+    }
+}
+
+// 36. GetBookingStatus
+transaction GetBookingStatus(booking_id: int, passenger_id: int) {
+    hop {
+        var b: Row<Booking> = Booking[booking_id: booking_id, passenger_id: passenger_id];
+        to_unit(b);
+    }
+}
+
+// 37. UpdateBookingFare: update fare only for unconfirmed pending bookings.
+transaction UpdateBookingFare(booking_id: int, passenger_id: int, new_fare: int) {
+    hop {
+        var b: Row<Booking> = Booking[booking_id: booking_id, passenger_id: passenger_id];
+        if b.status == 0 {
+            if new_fare > 0 {
+                Booking[booking_id: booking_id, passenger_id: passenger_id].fare = new_fare;
+            }
+        }
+    }
+}
+
+// 38. GetBookingAndFlight: cross-partition read of booking and flight state.
+transaction GetBookingAndFlight(booking_id: int, passenger_id: int, flight_id: int) {
+    hop {
+        var b: Row<Booking> = Booking[booking_id: booking_id, passenger_id: passenger_id];
+        var fl: Row<Flight> = Flight[flight_id: flight_id];
+        to_unit(b);
+        to_unit(fl);
+    }
+}
+
+// 39. MarkBookingNoShow: no-show if confirmed but not checked in before departure.
+transaction MarkBookingNoShow(booking_id: int, passenger_id: int) {
+    hop {
+        var b: Row<Booking> = Booking[booking_id: booking_id, passenger_id: passenger_id];
+        if b.status == 1 {
+            if b.is_checked_in == 0 {
+                Booking[booking_id: booking_id, passenger_id: passenger_id].status = 4;
+            }
+        }
+    }
+}
+
+// 40. ApplyEarlyBirdDiscount: apply 10% discount to pending bookings.
+transaction ApplyEarlyBirdDiscount(booking_id: int, passenger_id: int) {
+    hop {
+        var b: Row<Booking> = Booking[booking_id: booking_id, passenger_id: passenger_id];
+        if b.status == 0 {
+            var discount: int = b.fare / 10;
+            var new_fare: int = b.fare - discount;
+            Booking[booking_id: booking_id, passenger_id: passenger_id].fare = new_fare;
+        }
+    }
+}
+
+// 41. CompleteBooking: mark booking complete after flight lands.
+transaction CompleteBooking(booking_id: int, passenger_id: int) {
+    hop {
+        var b: Row<Booking> = Booking[booking_id: booking_id, passenger_id: passenger_id];
+        if b.status == 2 {
+            Booking[booking_id: booking_id, passenger_id: passenger_id].status = 5;
+        }
+    }
+}
+
+// 42. GetPassengerAndBooking: cross-partition read.
+transaction GetPassengerAndBooking(passenger_id: int, booking_id: int) {
+    hop {
+        var p: Row<Passenger> = Passenger[passenger_id: passenger_id];
+        var b: Row<Booking> = Booking[booking_id: booking_id, passenger_id: passenger_id];
+        to_unit(p);
+        to_unit(b);
+    }
+}
+
+// 43. ProcessPayment: create payment record; guard amount positive.
+transaction ProcessPayment(payment_id: int, booking_id: int, amount: int) {
+    hop {
+        if amount > 0 {
+            Payment[payment_id: payment_id, booking_id: booking_id] = {
+                amount: amount,
+                status: 0,
+                refund_amount: 0
+            };
+        }
+    }
+}
+
+// 44. GetPayment
+transaction GetPayment(payment_id: int, booking_id: int) {
+    hop {
+        var pay: Row<Payment> = Payment[payment_id: payment_id, booking_id: booking_id];
+        to_unit(pay);
+    }
+}
+
+// 45. RefundPayment: issue 80% refund for successful payments.
+transaction RefundPayment(payment_id: int, booking_id: int) {
+    hop {
+        var pay: Row<Payment> = Payment[payment_id: payment_id, booking_id: booking_id];
+        if pay.status == 1 {
+            var refund: int = pay.amount * 8 / 10;
+            Payment[payment_id: payment_id, booking_id: booking_id].refund_amount = refund;
+            Payment[payment_id: payment_id, booking_id: booking_id].status = 2;
+        }
+    }
+}
+
+// 46. MarkPaymentFailed: only fail pending payments.
+transaction MarkPaymentFailed(payment_id: int, booking_id: int) {
+    hop {
+        var pay: Row<Payment> = Payment[payment_id: payment_id, booking_id: booking_id];
+        if pay.status == 0 {
+            Payment[payment_id: payment_id, booking_id: booking_id].status = 3;
+        }
+    }
+}
+
+// 47. ProcessPartialRefund: partial refund must not exceed original amount.
+transaction ProcessPartialRefund(payment_id: int, booking_id: int, refund_amt: int) {
+    hop {
+        var pay: Row<Payment> = Payment[payment_id: payment_id, booking_id: booking_id];
+        if pay.status == 1 {
+            if refund_amt > 0 {
+                var total_refund: int = pay.refund_amount + refund_amt;
+                if total_refund <= pay.amount {
+                    Payment[payment_id: payment_id, booking_id: booking_id].refund_amount = total_refund;
+                }
+            }
+        }
+    }
+}
+
+// 48. GetPaymentAndBooking: cross-partition read.
+transaction GetPaymentAndBooking(payment_id: int, booking_id: int, passenger_id: int) {
+    hop {
+        var pay: Row<Payment> = Payment[payment_id: payment_id, booking_id: booking_id];
+        var b: Row<Booking> = Booking[booking_id: booking_id, passenger_id: passenger_id];
+        to_unit(pay);
+        to_unit(b);
+    }
+}
+
+// 49. MarkPaymentSuccessful: confirm pending payment.
+transaction MarkPaymentSuccessful(payment_id: int, booking_id: int) {
+    hop {
+        var pay: Row<Payment> = Payment[payment_id: payment_id, booking_id: booking_id];
+        if pay.status == 0 {
+            Payment[payment_id: payment_id, booking_id: booking_id].status = 1;
+        }
+    }
+}
+
+// 50. IssueBoardingPass: guard booking checked in and payment successful.
+transaction IssueBoardingPass(bp_id: int, booking_id: int, passenger_id: int,
+                               payment_id: int, gate: int, seat_num: int) {
+    hop {
+        var b: Row<Booking> = Booking[booking_id: booking_id, passenger_id: passenger_id];
+        var pay: Row<Payment> = Payment[payment_id: payment_id, booking_id: booking_id];
+        if b.is_checked_in == 1 {
+            if pay.status == 1 {
+                BoardingPass[bp_id: bp_id, booking_id: booking_id] = {
+                    gate: gate,
+                    seat_num: seat_num,
+                    status: 1
+                };
+            }
+        }
+    }
+}
+
+// 51. GetBoardingPass
+transaction GetBoardingPass(bp_id: int, booking_id: int) {
+    hop {
+        var bp: Row<BoardingPass> = BoardingPass[bp_id: bp_id, booking_id: booking_id];
+        to_unit(bp);
+    }
+}
+
+// 52. RevokeBoardingPass: revoke only active boarding passes.
+transaction RevokeBoardingPass(bp_id: int, booking_id: int) {
+    hop {
+        var bp: Row<BoardingPass> = BoardingPass[bp_id: bp_id, booking_id: booking_id];
+        if bp.status == 1 {
+            BoardingPass[bp_id: bp_id, booking_id: booking_id].status = 0;
+        }
+    }
+}
+
+// 53. MarkBoarded: scan passenger as physically boarded; pass must be active.
+transaction MarkBoarded(bp_id: int, booking_id: int) {
+    hop {
+        var bp: Row<BoardingPass> = BoardingPass[bp_id: bp_id, booking_id: booking_id];
+        if bp.status == 1 {
+            BoardingPass[bp_id: bp_id, booking_id: booking_id].status = 2;
+        }
+    }
+}
+
+// 54. UpdateBoardingGate: reassign gate before passenger boards.
+transaction UpdateBoardingGate(bp_id: int, booking_id: int, new_gate: int) {
+    hop {
+        var bp: Row<BoardingPass> = BoardingPass[bp_id: bp_id, booking_id: booking_id];
+        if bp.status == 1 {
+            BoardingPass[bp_id: bp_id, booking_id: booking_id].gate = new_gate;
+        }
+    }
+}
+
+// 55. GetBoardingPassStatus
+transaction GetBoardingPassStatus(bp_id: int, booking_id: int) {
+    hop {
+        var bp: Row<BoardingPass> = BoardingPass[bp_id: bp_id, booking_id: booking_id];
+        to_unit(bp);
+    }
+}
+
+// 56. CheckInBaggage: weight must be within airline allowed limit (1–32 kg).
+transaction CheckInBaggage(baggage_id: int, booking_id: int, weight: int, tag: int) {
+    hop {
+        if weight > 0 {
+            if weight <= 32 {
+                Baggage[baggage_id: baggage_id, booking_id: booking_id] = {
+                    weight: weight,
+                    status: 1,
+                    tag: tag
+                };
+            }
+        }
+    }
+}
+
+// 57. GetBaggage
+transaction GetBaggage(baggage_id: int, booking_id: int) {
+    hop {
+        var bag: Row<Baggage> = Baggage[baggage_id: baggage_id, booking_id: booking_id];
+        to_unit(bag);
+    }
+}
+
+// 58. MarkBaggageLoaded: only checked-in baggage can be loaded on aircraft.
+transaction MarkBaggageLoaded(baggage_id: int, booking_id: int) {
+    hop {
+        var bag: Row<Baggage> = Baggage[baggage_id: baggage_id, booking_id: booking_id];
+        if bag.status == 1 {
+            Baggage[baggage_id: baggage_id, booking_id: booking_id].status = 2;
+        }
+    }
+}
+
+// 59. MarkBaggageDelivered: loaded baggage is delivered at destination carousel.
+transaction MarkBaggageDelivered(baggage_id: int, booking_id: int) {
+    hop {
+        var bag: Row<Baggage> = Baggage[baggage_id: baggage_id, booking_id: booking_id];
+        if bag.status == 2 {
+            Baggage[baggage_id: baggage_id, booking_id: booking_id].status = 3;
+        }
+    }
+}
+
+// 60. ReportBaggageLost: report lost only for bags not yet delivered.
+transaction ReportBaggageLost(baggage_id: int, booking_id: int) {
+    hop {
+        var bag: Row<Baggage> = Baggage[baggage_id: baggage_id, booking_id: booking_id];
+        if bag.status <= 2 {
+            Baggage[baggage_id: baggage_id, booking_id: booking_id].status = 4;
+        }
+    }
+}
+
+// 61. UpdateBaggageTag: update tracking tag for checked-in baggage only.
+transaction UpdateBaggageTag(baggage_id: int, booking_id: int, new_tag: int) {
+    hop {
+        var bag: Row<Baggage> = Baggage[baggage_id: baggage_id, booking_id: booking_id];
+        if bag.status == 1 {
+            Baggage[baggage_id: baggage_id, booking_id: booking_id].tag = new_tag;
+        }
+    }
+}
+
+// 62. GetBaggageAndBooking: cross-partition read of baggage and booking.
+transaction GetBaggageAndBooking(baggage_id: int, booking_id: int, passenger_id: int) {
+    hop {
+        var bag: Row<Baggage> = Baggage[baggage_id: baggage_id, booking_id: booking_id];
+        var b: Row<Booking> = Booking[booking_id: booking_id, passenger_id: passenger_id];
+        to_unit(bag);
+        to_unit(b);
+    }
+}
+
+// 63. RequestUpgrade: request upgrade for a confirmed booking; to_class must be higher.
+transaction RequestUpgrade(upgrade_id: int, booking_id: int, passenger_id: int,
+                            from_class: int, to_class: int, fare_diff: int) {
+    hop {
+        var b: Row<Booking> = Booking[booking_id: booking_id, passenger_id: passenger_id];
+        if b.status == 1 {
+            if to_class < from_class {
+                Upgrade[upgrade_id: upgrade_id, booking_id: booking_id] = {
+                    from_class: from_class,
+                    to_class: to_class,
+                    status: 0,
+                    fare_diff: fare_diff
+                };
+            }
+        }
+    }
+}
+
+// 64. ApproveUpgrade: hop 1 approves upgrade; hop 2 adds fare_diff to booking.
+transaction ApproveUpgrade(upgrade_id: int, booking_id: int, passenger_id: int) {
+    hop {
+        var upg: Row<Upgrade> = Upgrade[upgrade_id: upgrade_id, booking_id: booking_id];
+        if upg.status == 0 {
+            Upgrade[upgrade_id: upgrade_id, booking_id: booking_id].status = 1;
+        }
+    }
+    hop {
+        var b: Row<Booking> = Booking[booking_id: booking_id, passenger_id: passenger_id];
+        if upg.status == 1 {
+            var new_fare: int = b.fare + upg.fare_diff;
+            Booking[booking_id: booking_id, passenger_id: passenger_id].fare = new_fare;
+        }
+    }
+}
+
+// 65. RejectUpgrade: reject a pending upgrade request.
+transaction RejectUpgrade(upgrade_id: int, booking_id: int) {
+    hop {
+        var upg: Row<Upgrade> = Upgrade[upgrade_id: upgrade_id, booking_id: booking_id];
+        if upg.status == 0 {
+            Upgrade[upgrade_id: upgrade_id, booking_id: booking_id].status = 2;
+        }
+    }
+}
+
+// 66. GetUpgrade
+transaction GetUpgrade(upgrade_id: int, booking_id: int) {
+    hop {
+        var upg: Row<Upgrade> = Upgrade[upgrade_id: upgrade_id, booking_id: booking_id];
+        to_unit(upg);
+    }
+}
+
+// 67. CancelUpgrade: cancel a pending upgrade before approval.
+transaction CancelUpgrade(upgrade_id: int, booking_id: int) {
+    hop {
+        var upg: Row<Upgrade> = Upgrade[upgrade_id: upgrade_id, booking_id: booking_id];
+        if upg.status == 0 {
+            Upgrade[upgrade_id: upgrade_id, booking_id: booking_id].status = 3;
+        }
+    }
+}
+
+// 68. GetFlightAndSeat: cross-partition read of flight and a specific seat.
+transaction GetFlightAndSeat(flight_id: int, seat_num: int) {
+    hop {
+        var fl: Row<Flight> = Flight[flight_id: flight_id];
+        var s: Row<Seat> = Seat[flight_id: flight_id, seat_num: seat_num];
+        to_unit(fl);
+        to_unit(s);
+    }
+}
+
+// 69. ScanFlightOccupancy: count occupied (reserved) seats on a flight.
+transaction ScanFlightOccupancy(flight_id: int) -> int {
+    @global hop {
+        var occupied_count: int = 0;
+        for (var iter: Iterator<Seat> = scan(Seat, flight_id, __slice__);
+             hasNext(iter); iter = next(iter)) {
+            var f_id = get_flight_id(iter);
+            var s_num = get_seat_num(iter);
+            if f_id == flight_id {
+                var s: Row<Seat> = Seat[flight_id: f_id, seat_num: s_num];
+                if s.is_available == 0 {
+                    occupied_count = occupied_count + 1;
+                }
+            }
+        }
+        return occupied_count;
+    }
+}
+
+// 70. GetLoyaltyAndPassenger: cross-partition read.
+transaction GetLoyaltyAndPassenger(account_id: int, passenger_id: int) {
+    hop {
+        var la: Row<LoyaltyAccount> = LoyaltyAccount[account_id: account_id];
+        var p: Row<Passenger> = Passenger[passenger_id: passenger_id];
+        to_unit(la);
+        to_unit(p);
+    }
+}
+
+// 71. TransferLoyaltyPoints: hop 1 deducts from source; hop 2 credits to destination.
+transaction TransferLoyaltyPoints(src_account: int, dst_account: int, points: int) {
+    hop {
+        var src: Row<LoyaltyAccount> = LoyaltyAccount[account_id: src_account];
+        if src.is_active == 1 {
+            if src.points >= points {
+                var new_src: int = src.points - points;
+                LoyaltyAccount[account_id: src_account].points = new_src;
+            }
+        }
+    }
+    hop {
+        var dst: Row<LoyaltyAccount> = LoyaltyAccount[account_id: dst_account];
+        if dst.is_active == 1 {
+            var new_dst: int = dst.points + points;
+            LoyaltyAccount[account_id: dst_account].points = new_dst;
+        }
+    }
+}
+
+// 72. UpdateFlightArrivalTime: only update before departure; new arrival must be after departure.
+transaction UpdateFlightArrivalTime(flight_id: int, new_arrival: int) {
+    hop {
+        var fl: Row<Flight> = Flight[flight_id: flight_id];
+        if fl.status < 3 {
+            if new_arrival > fl.departure_time {
+                Flight[flight_id: flight_id].arrival_time = new_arrival;
+            }
+        }
+    }
+}
+
+// 73. SetFlightGate: update gate assignment before boarding starts.
+transaction SetFlightGate(flight_id: int, new_gate: int) {
+    hop {
+        var fl: Row<Flight> = Flight[flight_id: flight_id];
+        if fl.status < 2 {
+            Flight[flight_id: flight_id].gate = new_gate;
+        }
+    }
+}
+
+// 74. UpdatePassengerName: update name for active passengers only.
+transaction UpdatePassengerName(passenger_id: int, new_name: string) {
+    hop {
+        var p: Row<Passenger> = Passenger[passenger_id: passenger_id];
+        if p.is_active == 1 {
+            Passenger[passenger_id: passenger_id].name = new_name;
+        }
+    }
+}
+
+// 75. GetBoardingPassAndBooking: cross-partition read.
+transaction GetBoardingPassAndBooking(bp_id: int, booking_id: int, passenger_id: int) {
+    hop {
+        var bp: Row<BoardingPass> = BoardingPass[bp_id: bp_id, booking_id: booking_id];
+        var b: Row<Booking> = Booking[booking_id: booking_id, passenger_id: passenger_id];
+        to_unit(bp);
+        to_unit(b);
+    }
+}
+
+// 76. GetUpgradeAndBooking: cross-partition read.
+transaction GetUpgradeAndBooking(upgrade_id: int, booking_id: int, passenger_id: int) {
+    hop {
+        var upg: Row<Upgrade> = Upgrade[upgrade_id: upgrade_id, booking_id: booking_id];
+        var b: Row<Booking> = Booking[booking_id: booking_id, passenger_id: passenger_id];
+        to_unit(upg);
+        to_unit(b);
+    }
+}
+
+// 77. ScanPassengerBookingCost: sum all non-cancelled fares for a passenger.
+transaction ScanPassengerBookingCost(passenger_id: int) -> int {
+    @global hop {
+        var total_fare: int = 0;
+        for (var iter: Iterator<Booking> = scan(Booking, passenger_id, __slice__);
+             hasNext(iter); iter = next(iter)) {
+            var b_id = get_booking_id(iter);
+            var p_id = get_passenger_id(iter);
+            if p_id == passenger_id {
+                var b: Row<Booking> = Booking[booking_id: b_id, passenger_id: p_id];
+                if b.status != 3 {
+                    total_fare = total_fare + b.fare;
+                }
+            }
+        }
+        return total_fare;
+    }
+}
+
+// 78. SetSeatClass: reclassify available seat (e.g., block for first-class use).
+transaction SetSeatClass(flight_id: int, seat_num: int, new_class: int) {
+    hop {
+        var s: Row<Seat> = Seat[flight_id: flight_id, seat_num: seat_num];
+        if s.is_available == 1 {
+            Seat[flight_id: flight_id, seat_num: seat_num].class = new_class;
+        }
+    }
+}
+
+// 79. GetFlightStatus
+transaction GetFlightStatus(flight_id: int) {
+    hop {
+        var fl: Row<Flight> = Flight[flight_id: flight_id];
+        to_unit(fl);
+    }
+}
+
+// 80. UpdateLoyaltyAccountStatus: toggle account active/inactive.
+transaction UpdateLoyaltyAccountStatus(account_id: int, new_status: int) {
+    hop {
+        var la: Row<LoyaltyAccount> = LoyaltyAccount[account_id: account_id];
+        if new_status != la.is_active {
+            LoyaltyAccount[account_id: account_id].is_active = new_status;
+        }
+    }
+}
+
+// 81. GetBaggageWeight
+transaction GetBaggageWeight(baggage_id: int, booking_id: int) {
+    hop {
+        var bag: Row<Baggage> = Baggage[baggage_id: baggage_id, booking_id: booking_id];
+        to_unit(bag);
+    }
+}
+
+// 82. UpdateAircraftModel: update model string for active aircraft not in maintenance.
+transaction UpdateAircraftModel(aircraft_id: int, new_model: string) {
+    hop {
+        var a: Row<Aircraft> = Aircraft[aircraft_id: aircraft_id];
+        if a.is_active == 1 {
+            if a.in_maintenance == 0 {
+                Aircraft[aircraft_id: aircraft_id].model = new_model;
+            }
+        }
+    }
+}
+
+// 83. GetAircraftAndFlight: 2-hop cross-partition read.
+transaction GetAircraftAndFlight(aircraft_id: int, flight_id: int) {
+    hop {
+        var a: Row<Aircraft> = Aircraft[aircraft_id: aircraft_id];
+        to_unit(a);
+    }
+    hop {
+        var fl: Row<Flight> = Flight[flight_id: flight_id];
+        to_unit(fl);
+    }
+}
+
+// 84. RescheduleBooking: reassign flight/seat for pending (unconfirmed) bookings.
+transaction RescheduleBooking(booking_id: int, passenger_id: int,
+                               new_flight_id: int, new_seat_num: int, new_fare: int) {
+    hop {
+        var b: Row<Booking> = Booking[booking_id: booking_id, passenger_id: passenger_id];
+        if b.status == 0 {
+            if new_fare > 0 {
+                Booking[booking_id: booking_id, passenger_id: passenger_id].flight_id = new_flight_id;
+                Booking[booking_id: booking_id, passenger_id: passenger_id].seat_num = new_seat_num;
+                Booking[booking_id: booking_id, passenger_id: passenger_id].fare = new_fare;
+            }
+        }
+    }
+}
+
+// 85. GetBookingFare
+transaction GetBookingFare(booking_id: int, passenger_id: int) {
+    hop {
+        var b: Row<Booking> = Booking[booking_id: booking_id, passenger_id: passenger_id];
+        to_unit(b);
+    }
+}
+
+// 86. GetPassengerLoyaltyTier: cross-partition read of loyalty tier and passenger.
+transaction GetPassengerLoyaltyTier(account_id: int, passenger_id: int) {
+    hop {
+        var la: Row<LoyaltyAccount> = LoyaltyAccount[account_id: account_id];
+        var p: Row<Passenger> = Passenger[passenger_id: passenger_id];
+        to_unit(la);
+        to_unit(p);
+    }
+}
+
+// 87. ApplyOverweightFee: surcharge booking fare if bag weight exceeds 23 kg.
+transaction ApplyOverweightFee(baggage_id: int, booking_id: int, passenger_id: int, fee: int) {
+    hop {
+        var bag: Row<Baggage> = Baggage[baggage_id: baggage_id, booking_id: booking_id];
+        if bag.weight > 23 {
+            var b: Row<Booking> = Booking[booking_id: booking_id, passenger_id: passenger_id];
+            if b.status < 3 {
+                var new_fare: int = b.fare + fee;
+                Booking[booking_id: booking_id, passenger_id: passenger_id].fare = new_fare;
+            }
+        }
+    }
+}
+
+// 88. GetPaymentStatus
+transaction GetPaymentStatus(payment_id: int, booking_id: int) {
+    hop {
+        var pay: Row<Payment> = Payment[payment_id: payment_id, booking_id: booking_id];
+        to_unit(pay);
+    }
+}
+
+// 89. UpdateFlightDepartureTime: reschedule departure only while still in scheduled state.
+transaction UpdateFlightDepartureTime(flight_id: int, new_departure: int) {
+    hop {
+        var fl: Row<Flight> = Flight[flight_id: flight_id];
+        if fl.status == 0 {
+            if new_departure > 0 {
+                Flight[flight_id: flight_id].departure_time = new_departure;
+            }
+        }
+    }
+}
+
+// 90. ScanPassengerBaggageCount: count all non-lost bags for a booking.
+transaction ScanPassengerBaggageCount(booking_id: int) -> int {
+    @global hop {
+        var bag_count: int = 0;
+        for (var iter: Iterator<Baggage> = scan(Baggage, booking_id, __slice__);
+             hasNext(iter); iter = next(iter)) {
+            var b_id = get_baggage_id(iter);
+            var bk_id = get_booking_id(iter);
+            if bk_id == booking_id {
+                var bag: Row<Baggage> = Baggage[baggage_id: b_id, booking_id: bk_id];
+                if bag.status != 4 {
+                    bag_count = bag_count + 1;
+                }
+            }
+        }
+        return bag_count;
+    }
+}

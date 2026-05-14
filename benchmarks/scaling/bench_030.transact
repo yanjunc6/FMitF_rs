@@ -1,0 +1,478 @@
+// ============================================================================
+// bench_030 — Hotel Booking System (30 transactions)
+// Domain: Hospitality management with availability checks and loyalty rules
+// ============================================================================
+
+partition f(x: int) -> int { return x; }
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+table Guest {
+    primary guest_id: int;
+    node f(guest_id);
+    name: string;
+    email: string;
+    phone: string;
+    loyalty_pts: int;
+    status: int;
+}
+
+table Hotel {
+    primary hotel_id: int;
+    node f(hotel_id);
+    name: string;
+    city: string;
+    stars: int;
+    is_active: int;
+}
+
+table Room {
+    primary hotel_id: int;
+    primary room_no: int;
+    node f(hotel_id);
+    room_type: string;
+    rate: float;
+    status: int;
+    floor: int;
+}
+
+table Reservation {
+    primary res_id: int;
+    primary guest_id: int;
+    node f(guest_id);
+    hotel_id: int;
+    room_no: int;
+    check_in: int;
+    check_out: int;
+    status: int;
+    total: float;
+    discount: float;
+    created_at: int;
+}
+
+table Payment {
+    primary pay_id: int;
+    primary guest_id: int;
+    node f(guest_id);
+    res_id: int;
+    amount: float;
+    method: string;
+    status: int;
+    ts: int;
+}
+
+table Feedback {
+    primary feedback_id: int;
+    primary guest_id: int;
+    node f(guest_id);
+    hotel_id: int;
+    rating: int;
+    comment: string;
+    ts: int;
+}
+
+table ServiceRequest {
+    primary req_id: int;
+    primary hotel_id: int;
+    node f(hotel_id);
+    room_no: int;
+    req_type: string;
+    status: int;
+    ts: int;
+}
+
+table Invoice {
+    primary inv_id: int;
+    primary guest_id: int;
+    node f(guest_id);
+    res_id: int;
+    amount: float;
+    issued_at: int;
+    paid: int;
+}
+
+// ============================================================================
+// Transactions (30 total)
+// ============================================================================
+
+// 1. RegisterGuest
+transaction RegisterGuest(guest_id: int, name: string, email: string,
+                           phone: string) {
+    hop {
+        Guest[guest_id: guest_id] = {
+            name: name,
+            email: email,
+            phone: phone,
+            loyalty_pts: 0,
+            status: 1
+        };
+    }
+}
+
+// 2. UpdateGuestEmail: only update if account is active.
+transaction UpdateGuestEmail(guest_id: int, email: string) {
+    hop {
+        var g: Row<Guest> = Guest[guest_id: guest_id];
+        if g.status == 1 {
+            Guest[guest_id: guest_id].email = email;
+        }
+    }
+}
+
+// 3. GetGuest
+transaction GetGuest(guest_id: int) {
+    hop {
+        var g: Row<Guest> = Guest[guest_id: guest_id];
+        to_unit(g);
+    }
+}
+
+// 4. DeactivateGuest: only if guest is currently active.
+transaction DeactivateGuest(guest_id: int) {
+    hop {
+        var g: Row<Guest> = Guest[guest_id: guest_id];
+        if g.status == 1 {
+            Guest[guest_id: guest_id].status = 0;
+        }
+    }
+}
+
+// 5. AddHotel
+transaction AddHotel(hotel_id: int, name: string, city: string, stars: int) {
+    hop {
+        if stars >= 1 && stars <= 5 {
+            Hotel[hotel_id: hotel_id] = {
+                name: name,
+                city: city,
+                stars: stars,
+                is_active: 1
+            };
+        }
+    }
+}
+
+// 6. GetHotel
+transaction GetHotel(hotel_id: int) {
+    hop {
+        var h: Row<Hotel> = Hotel[hotel_id: hotel_id];
+        to_unit(h);
+    }
+}
+
+// 7. UpdateHotelStars: star rating must stay within [1, 5].
+transaction UpdateHotelStars(hotel_id: int, stars: int) {
+    hop {
+        var h: Row<Hotel> = Hotel[hotel_id: hotel_id];
+        if h.is_active == 1 && stars >= 1 && stars <= 5 {
+            Hotel[hotel_id: hotel_id].stars = stars;
+        }
+    }
+}
+
+// 8. DeactivateHotel
+transaction DeactivateHotel(hotel_id: int) {
+    hop {
+        var h: Row<Hotel> = Hotel[hotel_id: hotel_id];
+        if h.is_active == 1 {
+            Hotel[hotel_id: hotel_id].is_active = 0;
+        }
+    }
+}
+
+// 9. AddRoom
+transaction AddRoom(hotel_id: int, room_no: int, room_type: string,
+                    rate: float, floor: int) {
+    hop {
+        var h: Row<Hotel> = Hotel[hotel_id: hotel_id];
+        if h.is_active == 1 && rate > 0.0 {
+            Room[hotel_id: hotel_id, room_no: room_no] = {
+                room_type: room_type,
+                rate: rate,
+                status: 1,
+                floor: floor
+            };
+        }
+    }
+}
+
+// 10. GetRoom
+transaction GetRoom(hotel_id: int, room_no: int) {
+    hop {
+        var r: Row<Room> = Room[hotel_id: hotel_id, room_no: room_no];
+        to_unit(r);
+    }
+}
+
+// 11. UpdateRoomRate: new rate must be positive.
+transaction UpdateRoomRate(hotel_id: int, room_no: int, rate: float) {
+    hop {
+        var r: Row<Room> = Room[hotel_id: hotel_id, room_no: room_no];
+        if rate > 0.0 && r.status != 2 {
+            Room[hotel_id: hotel_id, room_no: room_no].rate = rate;
+        }
+    }
+}
+
+// 12. SetRoomMaintenance: only if currently available.
+transaction SetRoomMaintenance(hotel_id: int, room_no: int) {
+    hop {
+        var r: Row<Room> = Room[hotel_id: hotel_id, room_no: room_no];
+        if r.status == 1 {
+            Room[hotel_id: hotel_id, room_no: room_no].status = 2;
+        }
+    }
+}
+
+// 13. SetRoomAvailable
+transaction SetRoomAvailable(hotel_id: int, room_no: int) {
+    hop {
+        var r: Row<Room> = Room[hotel_id: hotel_id, room_no: room_no];
+        if r.status == 2 {
+            Room[hotel_id: hotel_id, room_no: room_no].status = 1;
+        }
+    }
+}
+
+// 14. MakeReservation: room must be available (status == 1).
+//     Apply a 15% loyalty discount if guest has >= 500 points.
+//     Hop 1 on guest partition (reservation record), Hop 2 marks room occupied.
+transaction MakeReservation(res_id: int, guest_id: int, hotel_id: int,
+                             room_no: int, check_in: int, check_out: int,
+                             nights: int, ts: int) {
+    hop {
+        var g: Row<Guest> = Guest[guest_id: guest_id];
+        if g.status == 1 {
+            // Compute total from stub rate stored in reservation (rate flows from hop 2).
+            var discount: float = 0.0;
+            if g.loyalty_pts >= 500 {
+                discount = 0.15;
+            }
+            Reservation[res_id: res_id, guest_id: guest_id] = {
+                hotel_id: hotel_id,
+                room_no: room_no,
+                check_in: check_in,
+                check_out: check_out,
+                status: 1,
+                total: 0.0,
+                discount: discount,
+                created_at: ts
+            };
+        }
+    }
+    hop {
+        var r: Row<Room> = Room[hotel_id: hotel_id, room_no: room_no];
+        if r.status == 1 {
+            var base: float = r.rate * float(nights);
+            var res: Row<Reservation> = Reservation[res_id: res_id, guest_id: guest_id];
+            var final_total: float = base - base * res.discount;
+            Reservation[res_id: res_id, guest_id: guest_id].total = final_total;
+            Room[hotel_id: hotel_id, room_no: room_no].status = 3;
+        }
+    }
+}
+
+// 15. CancelReservation: only cancel a confirmed (1) or checked-in (2) reservation.
+transaction CancelReservation(res_id: int, guest_id: int, hotel_id: int,
+                               room_no: int) {
+    hop {
+        var res: Row<Reservation> = Reservation[res_id: res_id, guest_id: guest_id];
+        if res.status == 1 || res.status == 2 {
+            Reservation[res_id: res_id, guest_id: guest_id].status = 0;
+        }
+    }
+    hop {
+        var r: Row<Room> = Room[hotel_id: hotel_id, room_no: room_no];
+        if r.status == 3 {
+            Room[hotel_id: hotel_id, room_no: room_no].status = 1;
+        }
+    }
+}
+
+// 16. CheckIn: reservation must be confirmed (status == 1).
+transaction CheckIn(res_id: int, guest_id: int) {
+    hop {
+        var res: Row<Reservation> = Reservation[res_id: res_id, guest_id: guest_id];
+        if res.status == 1 {
+            Reservation[res_id: res_id, guest_id: guest_id].status = 2;
+        }
+    }
+}
+
+// 17. CheckOut: only allowed if guest is currently checked in (status == 2).
+//     Frees the room and awards loyalty points proportional to total spend.
+transaction CheckOut(res_id: int, guest_id: int, hotel_id: int, room_no: int) {
+    hop {
+        var res: Row<Reservation> = Reservation[res_id: res_id, guest_id: guest_id];
+        if res.status == 2 {
+            Reservation[res_id: res_id, guest_id: guest_id].status = 3;
+            var g: Row<Guest> = Guest[guest_id: guest_id];
+            var pts_earned: int = 10;
+            if res.total > 200.0 {
+                pts_earned = 25;
+            }
+            var new_pts: int = g.loyalty_pts + pts_earned;
+            Guest[guest_id: guest_id].loyalty_pts = new_pts;
+        }
+    }
+    hop {
+        Room[hotel_id: hotel_id, room_no: room_no].status = 1;
+    }
+}
+
+// 18. GetReservation
+transaction GetReservation(res_id: int, guest_id: int) {
+    hop {
+        var r: Row<Reservation> = Reservation[res_id: res_id, guest_id: guest_id];
+        to_unit(r);
+    }
+}
+
+// 19. ModifyCheckoutDate: only extend (not shorten) a confirmed reservation.
+transaction ModifyCheckoutDate(res_id: int, guest_id: int, new_checkout: int,
+                                new_total: float) {
+    hop {
+        var res: Row<Reservation> = Reservation[res_id: res_id, guest_id: guest_id];
+        if res.status == 1 && new_checkout > res.check_out {
+            Reservation[res_id: res_id, guest_id: guest_id].check_out = new_checkout;
+            Reservation[res_id: res_id, guest_id: guest_id].total = new_total;
+        }
+    }
+}
+
+// 20. ProcessPayment: guard on reservation being confirmed or checked in.
+transaction ProcessPayment(pay_id: int, guest_id: int, res_id: int,
+                            amount: float, method: string, ts: int) {
+    hop {
+        var res: Row<Reservation> = Reservation[res_id: res_id, guest_id: guest_id];
+        if res.status >= 1 && amount > 0.0 {
+            Payment[pay_id: pay_id, guest_id: guest_id] = {
+                res_id: res_id,
+                amount: amount,
+                method: method,
+                status: 1,
+                ts: ts
+            };
+        }
+    }
+}
+
+// 21. RefundPayment: only refund successful payments.
+transaction RefundPayment(pay_id: int, guest_id: int) {
+    hop {
+        var p: Row<Payment> = Payment[pay_id: pay_id, guest_id: guest_id];
+        if p.status == 1 {
+            Payment[pay_id: pay_id, guest_id: guest_id].status = 2;
+        }
+    }
+}
+
+// 22. GetPayment
+transaction GetPayment(pay_id: int, guest_id: int) {
+    hop {
+        var p: Row<Payment> = Payment[pay_id: pay_id, guest_id: guest_id];
+        to_unit(p);
+    }
+}
+
+// 23. AddLoyaltyPoints: add points; validate delta is positive.
+transaction AddLoyaltyPoints(guest_id: int, pts_delta: int) {
+    hop {
+        var g: Row<Guest> = Guest[guest_id: guest_id];
+        if g.status == 1 && pts_delta > 0 {
+            var new_pts: int = g.loyalty_pts + pts_delta;
+            Guest[guest_id: guest_id].loyalty_pts = new_pts;
+        }
+    }
+}
+
+// 24. GetLoyaltyBalance
+transaction GetLoyaltyBalance(guest_id: int) {
+    hop {
+        var g: Row<Guest> = Guest[guest_id: guest_id];
+        var pts: int = g.loyalty_pts;
+        to_unit(pts);
+    }
+}
+
+// 25. RedeemLoyaltyPoints: guest must have enough points to redeem.
+transaction RedeemLoyaltyPoints(guest_id: int, pts_to_redeem: int) {
+    hop {
+        var g: Row<Guest> = Guest[guest_id: guest_id];
+        if g.status == 1 && g.loyalty_pts >= pts_to_redeem && pts_to_redeem > 0 {
+            var remaining: int = g.loyalty_pts - pts_to_redeem;
+            Guest[guest_id: guest_id].loyalty_pts = remaining;
+        }
+    }
+}
+
+// 26. PostFeedback: rating must be in [1, 5] and reservation must be completed.
+transaction PostFeedback(feedback_id: int, guest_id: int, hotel_id: int,
+                          res_id: int, rating: int, comment: string, ts: int) {
+    hop {
+        var res: Row<Reservation> = Reservation[res_id: res_id, guest_id: guest_id];
+        if res.status == 3 && rating >= 1 && rating <= 5 {
+            Feedback[feedback_id: feedback_id, guest_id: guest_id] = {
+                hotel_id: hotel_id,
+                rating: rating,
+                comment: comment,
+                ts: ts
+            };
+        }
+    }
+}
+
+// 27. GetFeedback
+transaction GetFeedback(feedback_id: int, guest_id: int) {
+    hop {
+        var fb: Row<Feedback> = Feedback[feedback_id: feedback_id, guest_id: guest_id];
+        to_unit(fb);
+    }
+}
+
+// 28. RequestService: only allow requests when guest is checked in (room status == 3).
+transaction RequestService(req_id: int, hotel_id: int, room_no: int,
+                            req_type: string, ts: int) {
+    hop {
+        var r: Row<Room> = Room[hotel_id: hotel_id, room_no: room_no];
+        if r.status == 3 {
+            ServiceRequest[req_id: req_id, hotel_id: hotel_id] = {
+                room_no: room_no,
+                req_type: req_type,
+                status: 1,
+                ts: ts
+            };
+        }
+    }
+}
+
+// 29. CompleteServiceRequest
+transaction CompleteServiceRequest(req_id: int, hotel_id: int) {
+    hop {
+        var sr: Row<ServiceRequest> = ServiceRequest[req_id: req_id, hotel_id: hotel_id];
+        if sr.status == 1 {
+            ServiceRequest[req_id: req_id, hotel_id: hotel_id].status = 2;
+        }
+    }
+}
+
+// 30. ScanHotelRooms: scan all rooms in a hotel and count available ones.
+//     Partition-local scan on hotel_id partition.
+transaction ScanHotelRooms(hotel_id: int) -> int {
+    @global hop {
+        var available: int = 0;
+        for (var iter: Iterator<Room> = scan(Room, hotel_id, __slice__);
+             hasNext(iter); iter = next(iter)) {
+            var h_id = get_hotel_id(iter);
+            var r_no = get_room_no(iter);
+            if h_id == hotel_id {
+                var r: Row<Room> = Room[hotel_id: h_id, room_no: r_no];
+                if r.status == 1 {
+                    available = available + 1;
+                }
+            }
+        }
+        return available;
+    }
+}

@@ -1,0 +1,342 @@
+// ============================================================================
+// bench_020 — E-Commerce Platform (20 transactions)
+// Domain: Online retail with stock checks, status guards, discount logic
+// ============================================================================
+
+partition f(x: int) -> int { return x; }
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+table Customer {
+    primary cust_id: int;
+    node f(cust_id);
+    name: string;
+    email: string;
+    address: string;
+    status: int;
+    created_at: int;
+}
+
+table Product {
+    primary prod_id: int;
+    node f(prod_id);
+    title: string;
+    price: float;
+    stock_qty: int;
+    category: string;
+    is_active: int;
+}
+
+table Cart {
+    primary cust_id: int;
+    primary prod_id: int;
+    node f(cust_id);
+    qty: int;
+    unit_price: float;
+    added_at: int;
+}
+
+table Order {
+    primary order_id: int;
+    primary cust_id: int;
+    node f(cust_id);
+    total: float;
+    discount: float;
+    status: int;
+    created_at: int;
+    shipping_addr: string;
+}
+
+table OrderItem {
+    primary order_id: int;
+    primary prod_id: int;
+    node f(order_id);
+    qty: int;
+    unit_price: float;
+}
+
+table Payment {
+    primary pay_id: int;
+    primary cust_id: int;
+    node f(cust_id);
+    order_id: int;
+    amount: float;
+    method: string;
+    status: int;
+    ts: int;
+}
+
+table Review {
+    primary cust_id: int;
+    primary prod_id: int;
+    node f(prod_id);
+    rating: int;
+    body: string;
+    ts: int;
+}
+
+// ============================================================================
+// Transactions (20 total)
+// ============================================================================
+
+// 1. RegisterCustomer
+transaction RegisterCustomer(cust_id: int, name: string, email: string,
+                              address: string, ts: int) {
+    hop {
+        Customer[cust_id: cust_id] = {
+            name: name,
+            email: email,
+            address: address,
+            status: 1,
+            created_at: ts
+        };
+    }
+}
+
+// 2. UpdateCustomerAddress: only update if account is active.
+transaction UpdateCustomerAddress(cust_id: int, address: string) {
+    hop {
+        var c: Row<Customer> = Customer[cust_id: cust_id];
+        if c.status == 1 {
+            Customer[cust_id: cust_id].address = address;
+        }
+    }
+}
+
+// 3. GetCustomerInfo
+transaction GetCustomerInfo(cust_id: int) {
+    hop {
+        var c: Row<Customer> = Customer[cust_id: cust_id];
+        to_unit(c);
+    }
+}
+
+// 4. DeactivateCustomer
+transaction DeactivateCustomer(cust_id: int) {
+    hop {
+        var c: Row<Customer> = Customer[cust_id: cust_id];
+        if c.status != 0 {
+            Customer[cust_id: cust_id].status = 0;
+        }
+    }
+}
+
+// 5. AddProduct
+transaction AddProduct(prod_id: int, title: string, price: float,
+                        qty: int, category: string) {
+    hop {
+        if price > 0.0 && qty >= 0 {
+            Product[prod_id: prod_id] = {
+                title: title,
+                price: price,
+                stock_qty: qty,
+                category: category,
+                is_active: 1
+            };
+        }
+    }
+}
+
+// 6. UpdateProductPrice: price must be positive to take effect.
+transaction UpdateProductPrice(prod_id: int, price: float) {
+    hop {
+        var p: Row<Product> = Product[prod_id: prod_id];
+        if p.is_active == 1 && price > 0.0 {
+            Product[prod_id: prod_id].price = price;
+        }
+    }
+}
+
+// 7. RestockProduct: add incoming units; fail if product is deactivated.
+transaction RestockProduct(prod_id: int, incoming_qty: int) {
+    hop {
+        var p: Row<Product> = Product[prod_id: prod_id];
+        if p.is_active == 1 && incoming_qty > 0 {
+            var new_qty: int = p.stock_qty + incoming_qty;
+            Product[prod_id: prod_id].stock_qty = new_qty;
+        }
+    }
+}
+
+// 8. GetProduct
+transaction GetProduct(prod_id: int) {
+    hop {
+        var p: Row<Product> = Product[prod_id: prod_id];
+        to_unit(p);
+    }
+}
+
+// 9. AddToCart: check product is active and has stock before adding.
+transaction AddToCart(cust_id: int, prod_id: int, qty: int, ts: int) {
+    hop {
+        var c: Row<Customer> = Customer[cust_id: cust_id];
+        if c.status != 1 {
+            to_unit(c);
+        }
+    }
+    hop {
+        var p: Row<Product> = Product[prod_id: prod_id];
+        if p.is_active == 1 && p.stock_qty >= qty && qty > 0 {
+            Cart[cust_id: cust_id, prod_id: prod_id] = {
+                qty: qty,
+                unit_price: p.price,
+                added_at: ts
+            };
+        }
+    }
+}
+
+// 10. RemoveFromCart: zero out qty.
+transaction RemoveFromCart(cust_id: int, prod_id: int) {
+    hop {
+        Cart[cust_id: cust_id, prod_id: prod_id].qty = 0;
+    }
+}
+
+// 11. GetCart: read one cart entry.
+transaction GetCart(cust_id: int, prod_id: int) {
+    hop {
+        var entry: Row<Cart> = Cart[cust_id: cust_id, prod_id: prod_id];
+        to_unit(entry);
+    }
+}
+
+// 12. PlaceOrder: check customer active and product in stock.
+//     Apply a 10% discount if total > 100.
+//     Hop 1 on customer partition (order record), Hop 2 on product partition (stock deduct).
+transaction PlaceOrder(order_id: int, cust_id: int, prod_id: int,
+                        qty: int, shipping_addr: string, ts: int) {
+    hop {
+        var c: Row<Customer> = Customer[cust_id: cust_id];
+        if c.status == 1 {
+            var cart_entry: Row<Cart> = Cart[cust_id: cust_id, prod_id: prod_id];
+            var subtotal: float = cart_entry.unit_price * float(qty);
+            var discount: float = 0.0;
+            if subtotal > 100.0 {
+                discount = subtotal * 0.1;
+            }
+            var total: float = subtotal - discount;
+            Order[order_id: order_id, cust_id: cust_id] = {
+                total: total,
+                discount: discount,
+                status: 1,
+                created_at: ts,
+                shipping_addr: shipping_addr
+            };
+        }
+    }
+    hop {
+        var p: Row<Product> = Product[prod_id: prod_id];
+        if p.is_active == 1 && p.stock_qty >= qty {
+            var new_stock: int = p.stock_qty - qty;
+            Product[prod_id: prod_id].stock_qty = new_stock;
+            OrderItem[order_id: order_id, prod_id: prod_id] = {
+                qty: qty,
+                unit_price: p.price
+            };
+        }
+    }
+}
+
+// 13. CancelOrder: only cancel if status is pending (1) or confirmed (2).
+transaction CancelOrder(order_id: int, cust_id: int) {
+    hop {
+        var o: Row<Order> = Order[order_id: order_id, cust_id: cust_id];
+        if o.status == 1 || o.status == 2 {
+            Order[order_id: order_id, cust_id: cust_id].status = 0;
+        }
+    }
+}
+
+// 14. GetOrder
+transaction GetOrder(order_id: int, cust_id: int) {
+    hop {
+        var o: Row<Order> = Order[order_id: order_id, cust_id: cust_id];
+        to_unit(o);
+    }
+}
+
+// 15. UpdateOrderStatus: forward-only state machine (status can only increase).
+transaction UpdateOrderStatus(order_id: int, cust_id: int, new_status: int) {
+    hop {
+        var o: Row<Order> = Order[order_id: order_id, cust_id: cust_id];
+        if new_status > o.status {
+            Order[order_id: order_id, cust_id: cust_id].status = new_status;
+        }
+    }
+}
+
+// 16. ProcessPayment: check order exists and is not already paid.
+transaction ProcessPayment(pay_id: int, cust_id: int, order_id: int,
+                            amount: float, method: string, ts: int) {
+    hop {
+        var o: Row<Order> = Order[order_id: order_id, cust_id: cust_id];
+        if o.status >= 1 && amount > 0.0 {
+            Payment[pay_id: pay_id, cust_id: cust_id] = {
+                order_id: order_id,
+                amount: amount,
+                method: method,
+                status: 1,
+                ts: ts
+            };
+            Order[order_id: order_id, cust_id: cust_id].status = 3;
+        }
+    }
+}
+
+// 17. RefundPayment: only refund if payment was successful (status == 1).
+transaction RefundPayment(pay_id: int, cust_id: int) {
+    hop {
+        var p: Row<Payment> = Payment[pay_id: pay_id, cust_id: cust_id];
+        if p.status == 1 {
+            Payment[pay_id: pay_id, cust_id: cust_id].status = 2;
+        }
+    }
+}
+
+// 18. GetPayment
+transaction GetPayment(pay_id: int, cust_id: int) {
+    hop {
+        var p: Row<Payment> = Payment[pay_id: pay_id, cust_id: cust_id];
+        to_unit(p);
+    }
+}
+
+// 19. AddProductReview: rating must be in [1, 5]; product must be active.
+//     Stored on product partition.
+transaction AddProductReview(cust_id: int, prod_id: int, rating: int,
+                              body: string, ts: int) {
+    hop {
+        var p: Row<Product> = Product[prod_id: prod_id];
+        if p.is_active == 1 && rating >= 1 && rating <= 5 {
+            Review[cust_id: cust_id, prod_id: prod_id] = {
+                rating: rating,
+                body: body,
+                ts: ts
+            };
+        }
+    }
+}
+
+// 20. ScanCartTotal: scan all cart entries for a customer and sum up the total.
+//     Uses a partition-local for loop over Cart on the customer's partition.
+transaction ScanCartTotal(cust_id: int) -> float {
+    @global hop {
+        var total: float = 0.0;
+        for (var iter: Iterator<Cart> = scan(Cart, cust_id, __slice__);
+             hasNext(iter); iter = next(iter)) {
+            var c_id = get_cust_id(iter);
+            var p_id = get_prod_id(iter);
+            if c_id == cust_id {
+                var entry: Row<Cart> = Cart[cust_id: c_id, prod_id: p_id];
+                if entry.qty > 0 {
+                    var line: float = entry.unit_price * float(entry.qty);
+                    total = total + line;
+                }
+            }
+        }
+        return total;
+    }
+}

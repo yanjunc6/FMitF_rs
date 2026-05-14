@@ -1,0 +1,1292 @@
+// ============================================================================
+// bench_100 — University Management System (100 transactions)
+// Domain: Students, professors, courses, enrollments, submissions, transcripts
+// ============================================================================
+
+partition f(x: int) -> int { return x; }
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+table Student {
+    primary student_id: int;
+    node f(student_id);
+    dept_id: int;
+    name: string;
+    email: string;
+    advisor_id: int;
+    gpa: int;
+    credits: int;
+    status: int;
+    is_active: int;
+    balance: int;
+}
+
+table Professor {
+    primary professor_id: int;
+    node f(professor_id);
+    dept_id: int;
+    name: string;
+    office: string;
+    is_active: int;
+    on_leave: int;
+}
+
+table Department {
+    primary dept_id: int;
+    node f(dept_id);
+    name: string;
+    head_prof_id: int;
+    budget: int;
+    faculty_count: int;
+}
+
+table Course {
+    primary course_id: int;
+    primary dept_id: int;
+    node f(dept_id);
+    title: string;
+    credits: int;
+    max_capacity: int;
+    status: int;
+}
+
+table Section {
+    primary section_id: int;
+    primary course_id: int;
+    node f(course_id);
+    professor_id: int;
+    semester: int;
+    enrolled_count: int;
+    capacity: int;
+    status: int;
+}
+
+table Enrollment {
+    primary enrollment_id: int;
+    primary student_id: int;
+    node f(student_id);
+    section_id: int;
+    status: int;
+    grade: int;
+    attendance: int;
+}
+
+table Assignment {
+    primary assignment_id: int;
+    primary section_id: int;
+    node f(section_id);
+    title: string;
+    max_points: int;
+    due_date: int;
+    status: int;
+}
+
+table Submission {
+    primary submission_id: int;
+    primary student_id: int;
+    node f(student_id);
+    assignment_id: int;
+    score: int;
+    status: int;
+    is_late: int;
+}
+
+table Transcript {
+    primary transcript_id: int;
+    node f(transcript_id);
+    student_id: int;
+    gpa: int;
+    total_credits: int;
+    semester_count: int;
+    standing: int;
+}
+
+table Scholarship {
+    primary scholarship_id: int;
+    primary student_id: int;
+    node f(student_id);
+    amount: int;
+    status: int;
+    award_date: int;
+}
+
+// ============================================================================
+// Transactions (100 total)
+// ============================================================================
+
+// 1. RegisterStudent
+transaction RegisterStudent(student_id: int, dept_id: int, name: string,
+                             email: string, initial_balance: int) {
+    hop {
+        Student[student_id: student_id] = {
+            dept_id: dept_id,
+            name: name,
+            email: email,
+            advisor_id: 0,
+            gpa: 0,
+            credits: 0,
+            status: 0,
+            is_active: 1,
+            balance: initial_balance
+        };
+    }
+}
+
+// 2. GetStudent
+transaction GetStudent(student_id: int) {
+    hop {
+        var s: Row<Student> = Student[student_id: student_id];
+        to_unit(s);
+    }
+}
+
+// 3. UpdateStudentEmail: only update active students.
+transaction UpdateStudentEmail(student_id: int, new_email: string) {
+    hop {
+        var s: Row<Student> = Student[student_id: student_id];
+        if s.is_active == 1 {
+            Student[student_id: student_id].email = new_email;
+        }
+    }
+}
+
+// 4. GraduateStudent: require active enrollment status and minimum GPA (2.0 = 200).
+transaction GraduateStudent(student_id: int) {
+    hop {
+        var s: Row<Student> = Student[student_id: student_id];
+        if s.is_active == 1 {
+            if s.status == 0 {
+                if s.gpa >= 200 {
+                    Student[student_id: student_id].status = 1;
+                }
+            }
+        }
+    }
+}
+
+// 5. SuspendStudent: suspend only active enrolled students.
+transaction SuspendStudent(student_id: int) {
+    hop {
+        var s: Row<Student> = Student[student_id: student_id];
+        if s.is_active == 1 {
+            if s.status == 0 {
+                Student[student_id: student_id].status = 2;
+            }
+        }
+    }
+}
+
+// 6. HireProfessor
+transaction HireProfessor(professor_id: int, dept_id: int, name: string, office: string) {
+    hop {
+        Professor[professor_id: professor_id] = {
+            dept_id: dept_id,
+            name: name,
+            office: office,
+            is_active: 1,
+            on_leave: 0
+        };
+    }
+}
+
+// 7. GetProfessor
+transaction GetProfessor(professor_id: int) {
+    hop {
+        var pr: Row<Professor> = Professor[professor_id: professor_id];
+        to_unit(pr);
+    }
+}
+
+// 8. UpdateProfessorOffice: only update active professors.
+transaction UpdateProfessorOffice(professor_id: int, new_office: string) {
+    hop {
+        var pr: Row<Professor> = Professor[professor_id: professor_id];
+        if pr.is_active == 1 {
+            Professor[professor_id: professor_id].office = new_office;
+        }
+    }
+}
+
+// 9. TerminateProfessor: only terminate active professors not on leave.
+transaction TerminateProfessor(professor_id: int) {
+    hop {
+        var pr: Row<Professor> = Professor[professor_id: professor_id];
+        if pr.is_active == 1 {
+            if pr.on_leave == 0 {
+                Professor[professor_id: professor_id].is_active = 0;
+            }
+        }
+    }
+}
+
+// 10. SetProfessorOnLeave: place active working professor on leave.
+transaction SetProfessorOnLeave(professor_id: int) {
+    hop {
+        var pr: Row<Professor> = Professor[professor_id: professor_id];
+        if pr.is_active == 1 {
+            if pr.on_leave == 0 {
+                Professor[professor_id: professor_id].on_leave = 1;
+            }
+        }
+    }
+}
+
+// 11. CreateDepartment
+transaction CreateDepartment(dept_id: int, name: string, head_prof_id: int, budget: int) {
+    hop {
+        Department[dept_id: dept_id] = {
+            name: name,
+            head_prof_id: head_prof_id,
+            budget: budget,
+            faculty_count: 0
+        };
+    }
+}
+
+// 12. GetDepartment
+transaction GetDepartment(dept_id: int) {
+    hop {
+        var d: Row<Department> = Department[dept_id: dept_id];
+        to_unit(d);
+    }
+}
+
+// 13. SetDepartmentBudget: only set positive budget values.
+transaction SetDepartmentBudget(dept_id: int, new_budget: int) {
+    hop {
+        var d: Row<Department> = Department[dept_id: dept_id];
+        if new_budget > 0 {
+            Department[dept_id: dept_id].budget = new_budget;
+        }
+    }
+}
+
+// 14. UpdateDepartmentHead: cross-read professor to verify active before assigning.
+transaction UpdateDepartmentHead(dept_id: int, new_head_id: int, professor_id: int) {
+    hop {
+        var pr: Row<Professor> = Professor[professor_id: professor_id];
+        var d: Row<Department> = Department[dept_id: dept_id];
+        if pr.is_active == 1 {
+            if pr.on_leave == 0 {
+                Department[dept_id: dept_id].head_prof_id = new_head_id;
+            }
+        }
+    }
+}
+
+// 15. IncrementDepartmentFaculty: compute new faculty count from current value.
+transaction IncrementDepartmentFaculty(dept_id: int) {
+    hop {
+        var d: Row<Department> = Department[dept_id: dept_id];
+        var new_count: int = d.faculty_count + 1;
+        Department[dept_id: dept_id].faculty_count = new_count;
+    }
+}
+
+// 16. CreateCourse
+transaction CreateCourse(course_id: int, dept_id: int, title: string,
+                          credits: int, max_capacity: int) {
+    hop {
+        Course[course_id: course_id, dept_id: dept_id] = {
+            title: title,
+            credits: credits,
+            max_capacity: max_capacity,
+            status: 0
+        };
+    }
+}
+
+// 17. GetCourse
+transaction GetCourse(course_id: int, dept_id: int) {
+    hop {
+        var c: Row<Course> = Course[course_id: course_id, dept_id: dept_id];
+        to_unit(c);
+    }
+}
+
+// 18. UpdateCourseCredits: update credits for active courses; credits must be positive.
+transaction UpdateCourseCredits(course_id: int, dept_id: int, new_credits: int) {
+    hop {
+        var c: Row<Course> = Course[course_id: course_id, dept_id: dept_id];
+        if c.status == 1 {
+            if new_credits > 0 {
+                Course[course_id: course_id, dept_id: dept_id].credits = new_credits;
+            }
+        }
+    }
+}
+
+// 19. DeprecateCourse: only deprecate active courses.
+transaction DeprecateCourse(course_id: int, dept_id: int) {
+    hop {
+        var c: Row<Course> = Course[course_id: course_id, dept_id: dept_id];
+        if c.status == 1 {
+            Course[course_id: course_id, dept_id: dept_id].status = 2;
+        }
+    }
+}
+
+// 20. ActivateCourse: activate only pending (new) courses.
+transaction ActivateCourse(course_id: int, dept_id: int) {
+    hop {
+        var c: Row<Course> = Course[course_id: course_id, dept_id: dept_id];
+        if c.status == 0 {
+            Course[course_id: course_id, dept_id: dept_id].status = 1;
+        }
+    }
+}
+
+// 21. UpdateCourseMaxCapacity: resize capacity for non-deprecated courses.
+transaction UpdateCourseMaxCapacity(course_id: int, dept_id: int, new_cap: int) {
+    hop {
+        var c: Row<Course> = Course[course_id: course_id, dept_id: dept_id];
+        if c.status < 2 {
+            if new_cap > 0 {
+                Course[course_id: course_id, dept_id: dept_id].max_capacity = new_cap;
+            }
+        }
+    }
+}
+
+// 22. GetCourseAndDepartment: cross-partition read.
+transaction GetCourseAndDepartment(course_id: int, dept_id: int) {
+    hop {
+        var c: Row<Course> = Course[course_id: course_id, dept_id: dept_id];
+        var d: Row<Department> = Department[dept_id: dept_id];
+        to_unit(c);
+        to_unit(d);
+    }
+}
+
+// 23. SetCourseStatus: forward-only status transition.
+transaction SetCourseStatus(course_id: int, dept_id: int, new_status: int) {
+    hop {
+        var c: Row<Course> = Course[course_id: course_id, dept_id: dept_id];
+        if new_status > c.status {
+            Course[course_id: course_id, dept_id: dept_id].status = new_status;
+        }
+    }
+}
+
+// 24. CreateSection
+transaction CreateSection(section_id: int, course_id: int, professor_id: int,
+                           semester: int, capacity: int) {
+    hop {
+        Section[section_id: section_id, course_id: course_id] = {
+            professor_id: professor_id,
+            semester: semester,
+            enrolled_count: 0,
+            capacity: capacity,
+            status: 0
+        };
+    }
+}
+
+// 25. GetSection
+transaction GetSection(section_id: int, course_id: int) {
+    hop {
+        var sec: Row<Section> = Section[section_id: section_id, course_id: course_id];
+        to_unit(sec);
+    }
+}
+
+// 26. OpenEnrollment: planned section enters enrollment-open state.
+transaction OpenEnrollment(section_id: int, course_id: int) {
+    hop {
+        var sec: Row<Section> = Section[section_id: section_id, course_id: course_id];
+        if sec.status == 0 {
+            Section[section_id: section_id, course_id: course_id].status = 1;
+        }
+    }
+}
+
+// 27. CloseEnrollment: close enrollment; section moves to pre-start state.
+transaction CloseEnrollment(section_id: int, course_id: int) {
+    hop {
+        var sec: Row<Section> = Section[section_id: section_id, course_id: course_id];
+        if sec.status == 1 {
+            Section[section_id: section_id, course_id: course_id].status = 2;
+        }
+    }
+}
+
+// 28. StartSection: begin instruction for enrollment-closed section.
+transaction StartSection(section_id: int, course_id: int) {
+    hop {
+        var sec: Row<Section> = Section[section_id: section_id, course_id: course_id];
+        if sec.status == 2 {
+            Section[section_id: section_id, course_id: course_id].status = 3;
+        }
+    }
+}
+
+// 29. CompleteSection: mark section complete after all instruction is done.
+transaction CompleteSection(section_id: int, course_id: int) {
+    hop {
+        var sec: Row<Section> = Section[section_id: section_id, course_id: course_id];
+        if sec.status == 3 {
+            Section[section_id: section_id, course_id: course_id].status = 4;
+        }
+    }
+}
+
+// 30. CancelSection: cancel before instruction begins.
+transaction CancelSection(section_id: int, course_id: int) {
+    hop {
+        var sec: Row<Section> = Section[section_id: section_id, course_id: course_id];
+        if sec.status < 3 {
+            Section[section_id: section_id, course_id: course_id].status = 5;
+        }
+    }
+}
+
+// 31. UpdateSectionInstructor: reassign instructor before section starts.
+transaction UpdateSectionInstructor(section_id: int, course_id: int,
+                                     new_professor_id: int, professor_id: int) {
+    hop {
+        var pr: Row<Professor> = Professor[professor_id: professor_id];
+        var sec: Row<Section> = Section[section_id: section_id, course_id: course_id];
+        if sec.status < 3 {
+            if pr.is_active == 1 {
+                Section[section_id: section_id, course_id: course_id].professor_id = new_professor_id;
+            }
+        }
+    }
+}
+
+// 32. ScanOpenSections: count sections with open enrollment for a course.
+transaction ScanOpenSections(course_id: int) -> int {
+    @global hop {
+        var open_count: int = 0;
+        for (var iter: Iterator<Section> = scan(Section, course_id, __slice__);
+             hasNext(iter); iter = next(iter)) {
+            var s_id = get_section_id(iter);
+            var c_id = get_course_id(iter);
+            if c_id == course_id {
+                var sec: Row<Section> = Section[section_id: s_id, course_id: c_id];
+                if sec.status == 1 {
+                    open_count = open_count + 1;
+                }
+            }
+        }
+        return open_count;
+    }
+}
+
+// 33. EnrollStudent: hop 1 increments section enrolled count; hop 2 creates enrollment record.
+transaction EnrollStudent(enrollment_id: int, student_id: int, section_id: int, course_id: int) {
+    hop {
+        var sec: Row<Section> = Section[section_id: section_id, course_id: course_id];
+        if sec.status == 1 {
+            var new_count: int = sec.enrolled_count + 1;
+            if new_count <= sec.capacity {
+                Section[section_id: section_id, course_id: course_id].enrolled_count = new_count;
+            }
+        }
+    }
+    hop {
+        var s: Row<Student> = Student[student_id: student_id];
+        if s.is_active == 1 {
+            if s.status == 0 {
+                Enrollment[enrollment_id: enrollment_id, student_id: student_id] = {
+                    section_id: section_id,
+                    status: 0,
+                    grade: -1,
+                    attendance: 0
+                };
+            }
+        }
+    }
+}
+
+// 34. GetEnrollment
+transaction GetEnrollment(enrollment_id: int, student_id: int) {
+    hop {
+        var e: Row<Enrollment> = Enrollment[enrollment_id: enrollment_id, student_id: student_id];
+        to_unit(e);
+    }
+}
+
+// 35. WithdrawStudent: hop 1 marks enrollment withdrawn; hop 2 restores section capacity.
+transaction WithdrawStudent(enrollment_id: int, student_id: int, section_id: int, course_id: int) {
+    hop {
+        var e: Row<Enrollment> = Enrollment[enrollment_id: enrollment_id, student_id: student_id];
+        if e.status == 1 {
+            Enrollment[enrollment_id: enrollment_id, student_id: student_id].status = 2;
+        }
+    }
+    hop {
+        var sec: Row<Section> = Section[section_id: section_id, course_id: course_id];
+        if sec.enrolled_count > 0 {
+            var new_count: int = sec.enrolled_count - 1;
+            Section[section_id: section_id, course_id: course_id].enrolled_count = new_count;
+        }
+    }
+}
+
+// 36. GetEnrollmentStatus
+transaction GetEnrollmentStatus(enrollment_id: int, student_id: int) {
+    hop {
+        var e: Row<Enrollment> = Enrollment[enrollment_id: enrollment_id, student_id: student_id];
+        to_unit(e);
+    }
+}
+
+// 37. MarkAttendance: increment attendance by delta for confirmed enrollments.
+transaction MarkAttendance(enrollment_id: int, student_id: int, delta: int) {
+    hop {
+        var e: Row<Enrollment> = Enrollment[enrollment_id: enrollment_id, student_id: student_id];
+        if e.status == 1 {
+            if delta > 0 {
+                var new_attendance: int = e.attendance + delta;
+                Enrollment[enrollment_id: enrollment_id, student_id: student_id].attendance = new_attendance;
+            }
+        }
+    }
+}
+
+// 38. ConfirmEnrollment: confirm a pending enrollment.
+transaction ConfirmEnrollment(enrollment_id: int, student_id: int) {
+    hop {
+        var e: Row<Enrollment> = Enrollment[enrollment_id: enrollment_id, student_id: student_id];
+        if e.status == 0 {
+            Enrollment[enrollment_id: enrollment_id, student_id: student_id].status = 1;
+        }
+    }
+}
+
+// 39. SetEnrollmentGrade: assign final grade (0–100) to confirmed enrollments.
+transaction SetEnrollmentGrade(enrollment_id: int, student_id: int, grade: int) {
+    hop {
+        var e: Row<Enrollment> = Enrollment[enrollment_id: enrollment_id, student_id: student_id];
+        if e.status == 1 {
+            if grade >= 0 {
+                if grade <= 100 {
+                    Enrollment[enrollment_id: enrollment_id, student_id: student_id].grade = grade;
+                }
+            }
+        }
+    }
+}
+
+// 40. CompleteEnrollment: mark enrollment complete after section finishes.
+transaction CompleteEnrollment(enrollment_id: int, student_id: int) {
+    hop {
+        var e: Row<Enrollment> = Enrollment[enrollment_id: enrollment_id, student_id: student_id];
+        if e.status == 1 {
+            Enrollment[enrollment_id: enrollment_id, student_id: student_id].status = 3;
+        }
+    }
+}
+
+// 41. GetStudentAndEnrollment: cross-partition read.
+transaction GetStudentAndEnrollment(student_id: int, enrollment_id: int) {
+    hop {
+        var s: Row<Student> = Student[student_id: student_id];
+        var e: Row<Enrollment> = Enrollment[enrollment_id: enrollment_id, student_id: student_id];
+        to_unit(s);
+        to_unit(e);
+    }
+}
+
+// 42. ScanStudentEnrollments: count active (non-withdrawn) enrollments for a student.
+transaction ScanStudentEnrollments(student_id: int) -> int {
+    @global hop {
+        var active_count: int = 0;
+        for (var iter: Iterator<Enrollment> = scan(Enrollment, student_id, __slice__);
+             hasNext(iter); iter = next(iter)) {
+            var e_id = get_enrollment_id(iter);
+            var s_id = get_student_id(iter);
+            if s_id == student_id {
+                var e: Row<Enrollment> = Enrollment[enrollment_id: e_id, student_id: s_id];
+                if e.status != 2 {
+                    active_count = active_count + 1;
+                }
+            }
+        }
+        return active_count;
+    }
+}
+
+// 43. CreateAssignment
+transaction CreateAssignment(assignment_id: int, section_id: int, title: string,
+                              max_points: int, due_date: int) {
+    hop {
+        Assignment[assignment_id: assignment_id, section_id: section_id] = {
+            title: title,
+            max_points: max_points,
+            due_date: due_date,
+            status: 0
+        };
+    }
+}
+
+// 44. GetAssignment
+transaction GetAssignment(assignment_id: int, section_id: int) {
+    hop {
+        var asgn: Row<Assignment> = Assignment[assignment_id: assignment_id, section_id: section_id];
+        to_unit(asgn);
+    }
+}
+
+// 45. PublishAssignment: publish a draft assignment to students.
+transaction PublishAssignment(assignment_id: int, section_id: int) {
+    hop {
+        var asgn: Row<Assignment> = Assignment[assignment_id: assignment_id, section_id: section_id];
+        if asgn.status == 0 {
+            Assignment[assignment_id: assignment_id, section_id: section_id].status = 1;
+        }
+    }
+}
+
+// 46. CloseAssignment: close published assignment for final grading.
+transaction CloseAssignment(assignment_id: int, section_id: int) {
+    hop {
+        var asgn: Row<Assignment> = Assignment[assignment_id: assignment_id, section_id: section_id];
+        if asgn.status == 1 {
+            Assignment[assignment_id: assignment_id, section_id: section_id].status = 2;
+        }
+    }
+}
+
+// 47. UpdateAssignmentPoints: update max points for draft assignments only.
+transaction UpdateAssignmentPoints(assignment_id: int, section_id: int, new_max: int) {
+    hop {
+        var asgn: Row<Assignment> = Assignment[assignment_id: assignment_id, section_id: section_id];
+        if asgn.status == 0 {
+            if new_max > 0 {
+                Assignment[assignment_id: assignment_id, section_id: section_id].max_points = new_max;
+            }
+        }
+    }
+}
+
+// 48. ExtendAssignmentDue: extend due date for open published assignments.
+transaction ExtendAssignmentDue(assignment_id: int, section_id: int, new_due: int) {
+    hop {
+        var asgn: Row<Assignment> = Assignment[assignment_id: assignment_id, section_id: section_id];
+        if asgn.status == 1 {
+            if new_due > asgn.due_date {
+                Assignment[assignment_id: assignment_id, section_id: section_id].due_date = new_due;
+            }
+        }
+    }
+}
+
+// 49. DeprecateAssignment: archive a closed assignment.
+transaction DeprecateAssignment(assignment_id: int, section_id: int) {
+    hop {
+        var asgn: Row<Assignment> = Assignment[assignment_id: assignment_id, section_id: section_id];
+        if asgn.status == 2 {
+            Assignment[assignment_id: assignment_id, section_id: section_id].status = 3;
+        }
+    }
+}
+
+// 50. GetAssignmentAndSection: cross-partition read.
+transaction GetAssignmentAndSection(assignment_id: int, section_id: int, course_id: int) {
+    hop {
+        var asgn: Row<Assignment> = Assignment[assignment_id: assignment_id, section_id: section_id];
+        var sec: Row<Section> = Section[section_id: section_id, course_id: course_id];
+        to_unit(asgn);
+        to_unit(sec);
+    }
+}
+
+// 51. SubmitAssignment: create submission for a published assignment.
+transaction SubmitAssignment(submission_id: int, student_id: int,
+                              assignment_id: int, section_id: int) {
+    hop {
+        var asgn: Row<Assignment> = Assignment[assignment_id: assignment_id, section_id: section_id];
+        if asgn.status == 1 {
+            Submission[submission_id: submission_id, student_id: student_id] = {
+                assignment_id: assignment_id,
+                score: 0,
+                status: 0,
+                is_late: 0
+            };
+        }
+    }
+}
+
+// 52. GetSubmission
+transaction GetSubmission(submission_id: int, student_id: int) {
+    hop {
+        var sub: Row<Submission> = Submission[submission_id: submission_id, student_id: student_id];
+        to_unit(sub);
+    }
+}
+
+// 53. GradeSubmission: assign score to closed assignment submissions; guard 0 <= score <= max.
+transaction GradeSubmission(submission_id: int, student_id: int,
+                             assignment_id: int, section_id: int, score: int) {
+    hop {
+        var asgn: Row<Assignment> = Assignment[assignment_id: assignment_id, section_id: section_id];
+        var sub: Row<Submission> = Submission[submission_id: submission_id, student_id: student_id];
+        if asgn.status == 2 {
+            if sub.status == 0 {
+                if score >= 0 {
+                    if score <= asgn.max_points {
+                        Submission[submission_id: submission_id, student_id: student_id].score = score;
+                        Submission[submission_id: submission_id, student_id: student_id].status = 1;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// 54. UpdateSubmissionScore: regrade a scored submission; new score must be valid.
+transaction UpdateSubmissionScore(submission_id: int, student_id: int,
+                                   assignment_id: int, section_id: int, new_score: int) {
+    hop {
+        var asgn: Row<Assignment> = Assignment[assignment_id: assignment_id, section_id: section_id];
+        var sub: Row<Submission> = Submission[submission_id: submission_id, student_id: student_id];
+        if sub.status == 1 {
+            if new_score >= 0 {
+                if new_score <= asgn.max_points {
+                    Submission[submission_id: submission_id, student_id: student_id].score = new_score;
+                }
+            }
+        }
+    }
+}
+
+// 55. LateSubmit: accept late submission for published assignment; mark as late.
+transaction LateSubmit(submission_id: int, student_id: int,
+                        assignment_id: int, section_id: int) {
+    hop {
+        var asgn: Row<Assignment> = Assignment[assignment_id: assignment_id, section_id: section_id];
+        if asgn.status == 1 {
+            Submission[submission_id: submission_id, student_id: student_id] = {
+                assignment_id: assignment_id,
+                score: 0,
+                status: 0,
+                is_late: 1
+            };
+        }
+    }
+}
+
+// 56. GetSubmissionAndAssignment: cross-partition read.
+transaction GetSubmissionAndAssignment(submission_id: int, student_id: int,
+                                        assignment_id: int, section_id: int) {
+    hop {
+        var sub: Row<Submission> = Submission[submission_id: submission_id, student_id: student_id];
+        var asgn: Row<Assignment> = Assignment[assignment_id: assignment_id, section_id: section_id];
+        to_unit(sub);
+        to_unit(asgn);
+    }
+}
+
+// 57. MarkSubmissionReviewed: instructor marks graded submission as reviewed.
+transaction MarkSubmissionReviewed(submission_id: int, student_id: int) {
+    hop {
+        var sub: Row<Submission> = Submission[submission_id: submission_id, student_id: student_id];
+        if sub.status == 1 {
+            Submission[submission_id: submission_id, student_id: student_id].status = 2;
+        }
+    }
+}
+
+// 58. FinalizeSubmission: finalize a reviewed submission; grade is immutable after.
+transaction FinalizeSubmission(submission_id: int, student_id: int) {
+    hop {
+        var sub: Row<Submission> = Submission[submission_id: submission_id, student_id: student_id];
+        if sub.status == 2 {
+            Submission[submission_id: submission_id, student_id: student_id].status = 3;
+        }
+    }
+}
+
+// 59. ReturnForRevision: send a graded submission back for correction before finalization.
+transaction ReturnForRevision(submission_id: int, student_id: int) {
+    hop {
+        var sub: Row<Submission> = Submission[submission_id: submission_id, student_id: student_id];
+        if sub.status == 1 {
+            Submission[submission_id: submission_id, student_id: student_id].status = 0;
+        }
+    }
+}
+
+// 60. ScanStudentSubmissions: count graded submissions for a student.
+transaction ScanStudentSubmissions(student_id: int) -> int {
+    @global hop {
+        var graded_count: int = 0;
+        for (var iter: Iterator<Submission> = scan(Submission, student_id, __slice__);
+             hasNext(iter); iter = next(iter)) {
+            var sub_id = get_submission_id(iter);
+            var s_id = get_student_id(iter);
+            if s_id == student_id {
+                var sub: Row<Submission> = Submission[submission_id: sub_id, student_id: s_id];
+                if sub.status >= 1 {
+                    graded_count = graded_count + 1;
+                }
+            }
+        }
+        return graded_count;
+    }
+}
+
+// 61. InitTranscript
+transaction InitTranscript(transcript_id: int, student_id: int) {
+    hop {
+        Transcript[transcript_id: transcript_id] = {
+            student_id: student_id,
+            gpa: 0,
+            total_credits: 0,
+            semester_count: 0,
+            standing: 0
+        };
+    }
+}
+
+// 62. GetTranscript
+transaction GetTranscript(transcript_id: int) {
+    hop {
+        var t: Row<Transcript> = Transcript[transcript_id: transcript_id];
+        to_unit(t);
+    }
+}
+
+// 63. UpdateTranscriptGPA: set GPA value; guard non-negative.
+transaction UpdateTranscriptGPA(transcript_id: int, new_gpa: int) {
+    hop {
+        var t: Row<Transcript> = Transcript[transcript_id: transcript_id];
+        if new_gpa >= 0 {
+            Transcript[transcript_id: transcript_id].gpa = new_gpa;
+        }
+    }
+}
+
+// 64. AddCompletedCredits: add earned credits; guard positive increment.
+transaction AddCompletedCredits(transcript_id: int, credits_to_add: int) {
+    hop {
+        var t: Row<Transcript> = Transcript[transcript_id: transcript_id];
+        if credits_to_add > 0 {
+            var new_credits: int = t.total_credits + credits_to_add;
+            Transcript[transcript_id: transcript_id].total_credits = new_credits;
+        }
+    }
+}
+
+// 65. SetTranscriptStanding: administrative override of standing value.
+transaction SetTranscriptStanding(transcript_id: int, new_standing: int) {
+    hop {
+        var t: Row<Transcript> = Transcript[transcript_id: transcript_id];
+        if new_standing >= 0 {
+            Transcript[transcript_id: transcript_id].standing = new_standing;
+        }
+    }
+}
+
+// 66. GetTranscriptAndStudent: cross-partition read.
+transaction GetTranscriptAndStudent(transcript_id: int, student_id: int) {
+    hop {
+        var t: Row<Transcript> = Transcript[transcript_id: transcript_id];
+        var s: Row<Student> = Student[student_id: student_id];
+        to_unit(t);
+        to_unit(s);
+    }
+}
+
+// 67. IncrementSemesterCount: read current count, compute and write incremented value.
+transaction IncrementSemesterCount(transcript_id: int) {
+    hop {
+        var t: Row<Transcript> = Transcript[transcript_id: transcript_id];
+        var new_sem: int = t.semester_count + 1;
+        Transcript[transcript_id: transcript_id].semester_count = new_sem;
+    }
+}
+
+// 68. EscalateTranscriptStanding: standing can only increase (good→probation→dismissed).
+transaction EscalateTranscriptStanding(transcript_id: int, new_standing: int) {
+    hop {
+        var t: Row<Transcript> = Transcript[transcript_id: transcript_id];
+        if new_standing > t.standing {
+            Transcript[transcript_id: transcript_id].standing = new_standing;
+        }
+    }
+}
+
+// 69. GetTranscriptSummary
+transaction GetTranscriptSummary(transcript_id: int) {
+    hop {
+        var t: Row<Transcript> = Transcript[transcript_id: transcript_id];
+        to_unit(t);
+    }
+}
+
+// 70. RecalculateGPA: compute new GPA from total grade points and graded credits.
+transaction RecalculateGPA(transcript_id: int, total_grade_points: int, total_graded_credits: int) {
+    hop {
+        var t: Row<Transcript> = Transcript[transcript_id: transcript_id];
+        if total_graded_credits > 0 {
+            var new_gpa: int = (total_grade_points * 100) / total_graded_credits;
+            Transcript[transcript_id: transcript_id].gpa = new_gpa;
+        }
+    }
+}
+
+// 71. AwardScholarship: only award to active students.
+transaction AwardScholarship(scholarship_id: int, student_id: int, amount: int, award_date: int) {
+    hop {
+        var s: Row<Student> = Student[student_id: student_id];
+        if s.is_active == 1 {
+            if amount > 0 {
+                Scholarship[scholarship_id: scholarship_id, student_id: student_id] = {
+                    amount: amount,
+                    status: 0,
+                    award_date: award_date
+                };
+            }
+        }
+    }
+}
+
+// 72. GetScholarship
+transaction GetScholarship(scholarship_id: int, student_id: int) {
+    hop {
+        var sch: Row<Scholarship> = Scholarship[scholarship_id: scholarship_id, student_id: student_id];
+        to_unit(sch);
+    }
+}
+
+// 73. WithdrawScholarship: revoke an active scholarship.
+transaction WithdrawScholarship(scholarship_id: int, student_id: int) {
+    hop {
+        var sch: Row<Scholarship> = Scholarship[scholarship_id: scholarship_id, student_id: student_id];
+        if sch.status == 0 {
+            Scholarship[scholarship_id: scholarship_id, student_id: student_id].status = 1;
+        }
+    }
+}
+
+// 74. CompleteScholarship: mark active scholarship as fully disbursed.
+transaction CompleteScholarship(scholarship_id: int, student_id: int) {
+    hop {
+        var sch: Row<Scholarship> = Scholarship[scholarship_id: scholarship_id, student_id: student_id];
+        if sch.status == 0 {
+            Scholarship[scholarship_id: scholarship_id, student_id: student_id].status = 2;
+        }
+    }
+}
+
+// 75. GetScholarshipAndStudent: cross-partition read.
+transaction GetScholarshipAndStudent(scholarship_id: int, student_id: int) {
+    hop {
+        var sch: Row<Scholarship> = Scholarship[scholarship_id: scholarship_id, student_id: student_id];
+        var s: Row<Student> = Student[student_id: student_id];
+        to_unit(sch);
+        to_unit(s);
+    }
+}
+
+// 76. ScanStudentScholarships: sum total active scholarship funding for a student.
+transaction ScanStudentScholarships(student_id: int) -> int {
+    @global hop {
+        var total_funding: int = 0;
+        for (var iter: Iterator<Scholarship> = scan(Scholarship, student_id, __slice__);
+             hasNext(iter); iter = next(iter)) {
+            var sch_id = get_scholarship_id(iter);
+            var s_id = get_student_id(iter);
+            if s_id == student_id {
+                var sch: Row<Scholarship> = Scholarship[scholarship_id: sch_id, student_id: s_id];
+                if sch.status == 0 {
+                    total_funding = total_funding + sch.amount;
+                }
+            }
+        }
+        return total_funding;
+    }
+}
+
+// 77. ProcessTuitionPayment: deduct from student balance if sufficient funds.
+transaction ProcessTuitionPayment(student_id: int, amount: int) {
+    hop {
+        var s: Row<Student> = Student[student_id: student_id];
+        if s.is_active == 1 {
+            if s.balance >= amount {
+                var new_balance: int = s.balance - amount;
+                Student[student_id: student_id].balance = new_balance;
+            }
+        }
+    }
+}
+
+// 78. GetStudentBalance
+transaction GetStudentBalance(student_id: int) {
+    hop {
+        var s: Row<Student> = Student[student_id: student_id];
+        to_unit(s);
+    }
+}
+
+// 79. AddTuitionBalance: credit balance for deposits and financial aid disbursements.
+transaction AddTuitionBalance(student_id: int, amount: int) {
+    hop {
+        var s: Row<Student> = Student[student_id: student_id];
+        if amount > 0 {
+            var new_balance: int = s.balance + amount;
+            Student[student_id: student_id].balance = new_balance;
+        }
+    }
+}
+
+// 80. ApplyScholarshipCredit: hop 1 verifies active scholarship; hop 2 credits student balance.
+transaction ApplyScholarshipCredit(scholarship_id: int, student_id: int, credit_amount: int) {
+    hop {
+        var sch: Row<Scholarship> = Scholarship[scholarship_id: scholarship_id, student_id: student_id];
+        if sch.status == 0 {
+            if credit_amount <= sch.amount {
+                to_unit(sch);
+            }
+        }
+    }
+    hop {
+        var s: Row<Student> = Student[student_id: student_id];
+        if s.is_active == 1 {
+            var new_balance: int = s.balance + credit_amount;
+            Student[student_id: student_id].balance = new_balance;
+        }
+    }
+}
+
+// 81. GetProfessorAndDepartment: cross-partition read.
+transaction GetProfessorAndDepartment(professor_id: int, dept_id: int) {
+    hop {
+        var pr: Row<Professor> = Professor[professor_id: professor_id];
+        var d: Row<Department> = Department[dept_id: dept_id];
+        to_unit(pr);
+        to_unit(d);
+    }
+}
+
+// 82. GetCourseAndSection: 2-hop cross-table read.
+transaction GetCourseAndSection(course_id: int, dept_id: int, section_id: int) {
+    hop {
+        var c: Row<Course> = Course[course_id: course_id, dept_id: dept_id];
+        to_unit(c);
+    }
+    hop {
+        var sec: Row<Section> = Section[section_id: section_id, course_id: course_id];
+        to_unit(sec);
+    }
+}
+
+// 83. TransferStudentDepartment: move active student to a different department.
+transaction TransferStudentDepartment(student_id: int, new_dept_id: int) {
+    hop {
+        var s: Row<Student> = Student[student_id: student_id];
+        if s.is_active == 1 {
+            Student[student_id: student_id].dept_id = new_dept_id;
+        }
+    }
+}
+
+// 84. SetStudentAdvisor: assign active professor as student advisor.
+transaction SetStudentAdvisor(student_id: int, professor_id: int) {
+    hop {
+        var pr: Row<Professor> = Professor[professor_id: professor_id];
+        var s: Row<Student> = Student[student_id: student_id];
+        if s.is_active == 1 {
+            if pr.is_active == 1 {
+                Student[student_id: student_id].advisor_id = professor_id;
+            }
+        }
+    }
+}
+
+// 85. GetStudentGPA
+transaction GetStudentGPA(student_id: int) {
+    hop {
+        var s: Row<Student> = Student[student_id: student_id];
+        to_unit(s);
+    }
+}
+
+// 86. IncreaseSectionCapacity: expand capacity before section is active.
+transaction IncreaseSectionCapacity(section_id: int, course_id: int, extra_seats: int) {
+    hop {
+        var sec: Row<Section> = Section[section_id: section_id, course_id: course_id];
+        if sec.status <= 2 {
+            if extra_seats > 0 {
+                var new_cap: int = sec.capacity + extra_seats;
+                Section[section_id: section_id, course_id: course_id].capacity = new_cap;
+            }
+        }
+    }
+}
+
+// 87. UpdateStudentGPA: update GPA field for active students after grade recalculation.
+transaction UpdateStudentGPA(student_id: int, new_gpa: int) {
+    hop {
+        var s: Row<Student> = Student[student_id: student_id];
+        if s.is_active == 1 {
+            if new_gpa >= 0 {
+                Student[student_id: student_id].gpa = new_gpa;
+            }
+        }
+    }
+}
+
+// 88. AddStudentCredits: award earned credits to active enrolled students.
+transaction AddStudentCredits(student_id: int, credits_earned: int) {
+    hop {
+        var s: Row<Student> = Student[student_id: student_id];
+        if s.is_active == 1 {
+            if credits_earned > 0 {
+                var new_credits: int = s.credits + credits_earned;
+                Student[student_id: student_id].credits = new_credits;
+            }
+        }
+    }
+}
+
+// 89. ActivateStudent: reactivate a previously deactivated student account.
+transaction ActivateStudent(student_id: int) {
+    hop {
+        var s: Row<Student> = Student[student_id: student_id];
+        if s.is_active == 0 {
+            Student[student_id: student_id].is_active = 1;
+        }
+    }
+}
+
+// 90. ScanDepartmentCourses: count active courses offered by a department.
+transaction ScanDepartmentCourses(dept_id: int) -> int {
+    @global hop {
+        var active_count: int = 0;
+        for (var iter: Iterator<Course> = scan(Course, dept_id, __slice__);
+             hasNext(iter); iter = next(iter)) {
+            var c_id = get_course_id(iter);
+            var d_id = get_dept_id(iter);
+            if d_id == dept_id {
+                var c: Row<Course> = Course[course_id: c_id, dept_id: d_id];
+                if c.status == 1 {
+                    active_count = active_count + 1;
+                }
+            }
+        }
+        return active_count;
+    }
+}
+
+// 91. DeductStudentBalance: deduct fees from student balance with balance guard.
+transaction DeductStudentBalance(student_id: int, amount: int) {
+    hop {
+        var s: Row<Student> = Student[student_id: student_id];
+        if s.balance >= amount {
+            if amount > 0 {
+                var new_balance: int = s.balance - amount;
+                Student[student_id: student_id].balance = new_balance;
+            }
+        }
+    }
+}
+
+// 92. AdjustScholarshipAmount: increase or decrease scholarship amount while active.
+transaction AdjustScholarshipAmount(scholarship_id: int, student_id: int, adjustment: int) {
+    hop {
+        var sch: Row<Scholarship> = Scholarship[scholarship_id: scholarship_id, student_id: student_id];
+        if sch.status == 0 {
+            var new_amount: int = sch.amount + adjustment;
+            if new_amount > 0 {
+                Scholarship[scholarship_id: scholarship_id, student_id: student_id].amount = new_amount;
+            }
+        }
+    }
+}
+
+// 93. GetEnrollmentAndSection: cross-partition read of enrollment and section.
+transaction GetEnrollmentAndSection(enrollment_id: int, student_id: int,
+                                     section_id: int, course_id: int) {
+    hop {
+        var e: Row<Enrollment> = Enrollment[enrollment_id: enrollment_id, student_id: student_id];
+        var sec: Row<Section> = Section[section_id: section_id, course_id: course_id];
+        to_unit(e);
+        to_unit(sec);
+    }
+}
+
+// 94. GetSubmissionScore
+transaction GetSubmissionScore(submission_id: int, student_id: int) {
+    hop {
+        var sub: Row<Submission> = Submission[submission_id: submission_id, student_id: student_id];
+        to_unit(sub);
+    }
+}
+
+// 95. GetDepartmentFaculty
+transaction GetDepartmentFaculty(dept_id: int) {
+    hop {
+        var d: Row<Department> = Department[dept_id: dept_id];
+        to_unit(d);
+    }
+}
+
+// 96. DecrementDepartmentFaculty: compute new count; guard against going negative.
+transaction DecrementDepartmentFaculty(dept_id: int) {
+    hop {
+        var d: Row<Department> = Department[dept_id: dept_id];
+        if d.faculty_count > 0 {
+            var new_count: int = d.faculty_count - 1;
+            Department[dept_id: dept_id].faculty_count = new_count;
+        }
+    }
+}
+
+// 97. GetAdvisorAndStudent: cross-partition read of advisor and student.
+transaction GetAdvisorAndStudent(professor_id: int, student_id: int) {
+    hop {
+        var pr: Row<Professor> = Professor[professor_id: professor_id];
+        var s: Row<Student> = Student[student_id: student_id];
+        to_unit(pr);
+        to_unit(s);
+    }
+}
+
+// 98. UpdateSectionCapacity: set explicit capacity for a planned section.
+transaction UpdateSectionCapacity(section_id: int, course_id: int, new_capacity: int) {
+    hop {
+        var sec: Row<Section> = Section[section_id: section_id, course_id: course_id];
+        if sec.status == 0 {
+            if new_capacity > sec.enrolled_count {
+                Section[section_id: section_id, course_id: course_id].capacity = new_capacity;
+            }
+        }
+    }
+}
+
+// 99. ScanSectionAssignments: count published assignments for a section.
+transaction ScanSectionAssignments(section_id: int) -> int {
+    @global hop {
+        var pub_count: int = 0;
+        for (var iter: Iterator<Assignment> = scan(Assignment, section_id, __slice__);
+             hasNext(iter); iter = next(iter)) {
+            var a_id = get_assignment_id(iter);
+            var s_id = get_section_id(iter);
+            if s_id == section_id {
+                var asgn: Row<Assignment> = Assignment[assignment_id: a_id, section_id: s_id];
+                if asgn.status >= 1 {
+                    pub_count = pub_count + 1;
+                }
+            }
+        }
+        return pub_count;
+    }
+}
+
+// 100. SetStudentStanding: forward-only academic standing escalation.
+transaction SetStudentStanding(student_id: int, new_standing: int) {
+    hop {
+        var s: Row<Student> = Student[student_id: student_id];
+        if s.is_active == 1 {
+            if new_standing > s.status {
+                Student[student_id: student_id].status = new_standing;
+            }
+        }
+    }
+}

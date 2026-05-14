@@ -1,0 +1,921 @@
+// ============================================================================
+// bench_060 — Warehouse Inventory System (60 transactions)
+// Domain: Multi-warehouse inventory, suppliers, orders, stock management
+// ============================================================================
+
+partition f(x: int) -> int { return x; }
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+table Warehouse {
+    primary wh_id: int;
+    node f(wh_id);
+    name: string;
+    city: string;
+    capacity: int;
+    used_capacity: int;
+    status: int;
+}
+
+table Product {
+    primary prod_id: int;
+    node f(prod_id);
+    sku: string;
+    name: string;
+    category: string;
+    unit_price: float;
+    reorder_pt: int;
+    is_active: int;
+}
+
+table Stock {
+    primary wh_id: int;
+    primary prod_id: int;
+    node f(wh_id);
+    qty: int;
+    reserved_qty: int;
+    reorder_qty: int;
+    location_code: string;
+    last_updated: int;
+}
+
+table Supplier {
+    primary sup_id: int;
+    node f(sup_id);
+    name: string;
+    email: string;
+    phone: string;
+    lead_days: int;
+    status: int;
+}
+
+table PurchaseOrder {
+    primary po_id: int;
+    primary sup_id: int;
+    node f(sup_id);
+    wh_id: int;
+    prod_id: int;
+    qty: int;
+    unit_cost: float;
+    status: int;
+    ordered_at: int;
+    received_at: int;
+}
+
+table SalesOrder {
+    primary so_id: int;
+    primary wh_id: int;
+    node f(wh_id);
+    prod_id: int;
+    qty: int;
+    status: int;
+    created_at: int;
+}
+
+table Transfer {
+    primary xfer_id: int;
+    primary src_wh_id: int;
+    node f(src_wh_id);
+    dst_wh_id: int;
+    prod_id: int;
+    qty: int;
+    status: int;
+    initiated_at: int;
+}
+
+table AuditLog {
+    primary audit_id: int;
+    primary wh_id: int;
+    node f(wh_id);
+    prod_id: int;
+    action: string;
+    qty_delta: int;
+    ts: int;
+}
+
+table Category {
+    primary cat_id: int;
+    node f(cat_id);
+    name: string;
+    parent_cat: int;
+}
+
+table ProductCategory {
+    primary prod_id: int;
+    primary cat_id: int;
+    node f(prod_id);
+}
+
+// ============================================================================
+// Transactions (60 total)
+// ============================================================================
+
+// 1. AddWarehouse: capacity must be positive.
+transaction AddWarehouse(wh_id: int, name: string, city: string, capacity: int) {
+    hop {
+        if capacity > 0 {
+            Warehouse[wh_id: wh_id] = {
+                name: name,
+                city: city,
+                capacity: capacity,
+                used_capacity: 0,
+                status: 1
+            };
+        }
+    }
+}
+
+// 2. GetWarehouse
+transaction GetWarehouse(wh_id: int) {
+    hop {
+        var w: Row<Warehouse> = Warehouse[wh_id: wh_id];
+        to_unit(w);
+    }
+}
+
+// 3. UpdateWarehouseCapacity: new capacity must not be less than already-used space.
+transaction UpdateWarehouseCapacity(wh_id: int, capacity: int) {
+    hop {
+        var w: Row<Warehouse> = Warehouse[wh_id: wh_id];
+        if w.status == 1 && capacity >= w.used_capacity {
+            Warehouse[wh_id: wh_id].capacity = capacity;
+        }
+    }
+}
+
+// 4. CloseWarehouse: only allowed when warehouse is empty and active.
+transaction CloseWarehouse(wh_id: int) {
+    hop {
+        var w: Row<Warehouse> = Warehouse[wh_id: wh_id];
+        if w.status == 1 && w.used_capacity == 0 {
+            Warehouse[wh_id: wh_id].status = 0;
+        }
+    }
+}
+
+// 5. AddProduct: price must be positive and reorder threshold non-negative.
+transaction AddProduct(prod_id: int, sku: string, name: string,
+                        category: string, price: float, reorder_pt: int) {
+    hop {
+        if price > 0.0 && reorder_pt >= 0 {
+            Product[prod_id: prod_id] = {
+                sku: sku,
+                name: name,
+                category: category,
+                unit_price: price,
+                reorder_pt: reorder_pt,
+                is_active: 1
+            };
+        }
+    }
+}
+
+// 6. GetProduct
+transaction GetProduct(prod_id: int) {
+    hop {
+        var p: Row<Product> = Product[prod_id: prod_id];
+        to_unit(p);
+    }
+}
+
+// 7. UpdateProductPrice: only update active products with positive price.
+transaction UpdateProductPrice(prod_id: int, price: float) {
+    hop {
+        var p: Row<Product> = Product[prod_id: prod_id];
+        if p.is_active == 1 && price > 0.0 {
+            Product[prod_id: prod_id].unit_price = price;
+        }
+    }
+}
+
+// 8. DeactivateProduct: only if currently active.
+transaction DeactivateProduct(prod_id: int) {
+    hop {
+        var p: Row<Product> = Product[prod_id: prod_id];
+        if p.is_active == 1 {
+            Product[prod_id: prod_id].is_active = 0;
+        }
+    }
+}
+
+// 9. SetReorderPoint: active products only; threshold must be non-negative.
+transaction SetReorderPoint(prod_id: int, reorder_pt: int) {
+    hop {
+        var p: Row<Product> = Product[prod_id: prod_id];
+        if p.is_active == 1 && reorder_pt >= 0 {
+            Product[prod_id: prod_id].reorder_pt = reorder_pt;
+        }
+    }
+}
+
+// 10. InitStock: warehouse must be active and have remaining capacity.
+transaction InitStock(wh_id: int, prod_id: int, qty: int, reorder_qty: int,
+                       location_code: string, ts: int) {
+    hop {
+        var w: Row<Warehouse> = Warehouse[wh_id: wh_id];
+        if w.status == 1 && qty >= 0 && (w.used_capacity + qty) <= w.capacity {
+            var new_used: int = w.used_capacity + qty;
+            Warehouse[wh_id: wh_id].used_capacity = new_used;
+            Stock[wh_id: wh_id, prod_id: prod_id] = {
+                qty: qty,
+                reserved_qty: 0,
+                reorder_qty: reorder_qty,
+                location_code: location_code,
+                last_updated: ts
+            };
+        }
+    }
+}
+
+// 11. GetStock
+transaction GetStock(wh_id: int, prod_id: int) {
+    hop {
+        var s: Row<Stock> = Stock[wh_id: wh_id, prod_id: prod_id];
+        to_unit(s);
+    }
+}
+
+// 12. ReceiveStock: add incoming goods; verify warehouse capacity is sufficient.
+transaction ReceiveStock(wh_id: int, prod_id: int, incoming_qty: int,
+                          audit_id: int, ts: int) {
+    hop {
+        var w: Row<Warehouse> = Warehouse[wh_id: wh_id];
+        var s: Row<Stock> = Stock[wh_id: wh_id, prod_id: prod_id];
+        if w.status == 1 && incoming_qty > 0 &&
+           (w.used_capacity + incoming_qty) <= w.capacity {
+            var new_qty: int = s.qty + incoming_qty;
+            var new_used: int = w.used_capacity + incoming_qty;
+            Stock[wh_id: wh_id, prod_id: prod_id].qty = new_qty;
+            Stock[wh_id: wh_id, prod_id: prod_id].last_updated = ts;
+            Warehouse[wh_id: wh_id].used_capacity = new_used;
+            AuditLog[audit_id: audit_id, wh_id: wh_id] = {
+                prod_id: prod_id,
+                action: "receive",
+                qty_delta: incoming_qty,
+                ts: ts
+            };
+        }
+    }
+}
+
+// 13. AdjustStock: manual correction; new quantity must not go negative.
+//     Records the signed delta in the audit log.
+transaction AdjustStock(wh_id: int, prod_id: int, new_qty: int,
+                         audit_id: int, ts: int) {
+    hop {
+        var s: Row<Stock> = Stock[wh_id: wh_id, prod_id: prod_id];
+        if new_qty >= 0 {
+            var delta: int = new_qty - s.qty;
+            Stock[wh_id: wh_id, prod_id: prod_id].qty = new_qty;
+            Stock[wh_id: wh_id, prod_id: prod_id].last_updated = ts;
+            AuditLog[audit_id: audit_id, wh_id: wh_id] = {
+                prod_id: prod_id,
+                action: "adjust",
+                qty_delta: delta,
+                ts: ts
+            };
+        }
+    }
+}
+
+// 14. ReserveStock: reserve qty for an order; available = qty - reserved_qty.
+transaction ReserveStock(wh_id: int, prod_id: int, qty_to_reserve: int, ts: int) {
+    hop {
+        var s: Row<Stock> = Stock[wh_id: wh_id, prod_id: prod_id];
+        var available: int = s.qty - s.reserved_qty;
+        if qty_to_reserve > 0 && available >= qty_to_reserve {
+            var new_reserved: int = s.reserved_qty + qty_to_reserve;
+            Stock[wh_id: wh_id, prod_id: prod_id].reserved_qty = new_reserved;
+            Stock[wh_id: wh_id, prod_id: prod_id].last_updated = ts;
+        }
+    }
+}
+
+// 15. ReleaseReservation: cannot release more than what is currently reserved.
+transaction ReleaseReservation(wh_id: int, prod_id: int, qty_to_release: int, ts: int) {
+    hop {
+        var s: Row<Stock> = Stock[wh_id: wh_id, prod_id: prod_id];
+        if qty_to_release > 0 && s.reserved_qty >= qty_to_release {
+            var new_reserved: int = s.reserved_qty - qty_to_release;
+            Stock[wh_id: wh_id, prod_id: prod_id].reserved_qty = new_reserved;
+            Stock[wh_id: wh_id, prod_id: prod_id].last_updated = ts;
+        }
+    }
+}
+
+// 16. UpdateStockLocation: only update when warehouse is active.
+transaction UpdateStockLocation(wh_id: int, prod_id: int, location_code: string) {
+    hop {
+        var w: Row<Warehouse> = Warehouse[wh_id: wh_id];
+        if w.status == 1 {
+            Stock[wh_id: wh_id, prod_id: prod_id].location_code = location_code;
+        }
+    }
+}
+
+// 17. AddSupplier: lead_days must be positive.
+transaction AddSupplier(sup_id: int, name: string, email: string,
+                         phone: string, lead_days: int) {
+    hop {
+        if lead_days > 0 {
+            Supplier[sup_id: sup_id] = {
+                name: name,
+                email: email,
+                phone: phone,
+                lead_days: lead_days,
+                status: 1
+            };
+        }
+    }
+}
+
+// 18. GetSupplier
+transaction GetSupplier(sup_id: int) {
+    hop {
+        var s: Row<Supplier> = Supplier[sup_id: sup_id];
+        to_unit(s);
+    }
+}
+
+// 19. UpdateSupplierLeadTime: active suppliers only; lead_days must be positive.
+transaction UpdateSupplierLeadTime(sup_id: int, lead_days: int) {
+    hop {
+        var s: Row<Supplier> = Supplier[sup_id: sup_id];
+        if s.status == 1 && lead_days > 0 {
+            Supplier[sup_id: sup_id].lead_days = lead_days;
+        }
+    }
+}
+
+// 20. DeactivateSupplier: only if currently active.
+transaction DeactivateSupplier(sup_id: int) {
+    hop {
+        var s: Row<Supplier> = Supplier[sup_id: sup_id];
+        if s.status == 1 {
+            Supplier[sup_id: sup_id].status = 0;
+        }
+    }
+}
+
+// 21. CreatePurchaseOrder: supplier must be active; qty and cost must be positive.
+transaction CreatePurchaseOrder(po_id: int, sup_id: int, wh_id: int,
+                                 prod_id: int, qty: int, unit_cost: float, ts: int) {
+    hop {
+        var s: Row<Supplier> = Supplier[sup_id: sup_id];
+        if s.status == 1 && qty > 0 && unit_cost > 0.0 {
+            PurchaseOrder[po_id: po_id, sup_id: sup_id] = {
+                wh_id: wh_id,
+                prod_id: prod_id,
+                qty: qty,
+                unit_cost: unit_cost,
+                status: 1,
+                ordered_at: ts,
+                received_at: 0
+            };
+        }
+    }
+}
+
+// 22. ApprovePurchaseOrder: only approve pending (status == 1) orders.
+transaction ApprovePurchaseOrder(po_id: int, sup_id: int) {
+    hop {
+        var po: Row<PurchaseOrder> = PurchaseOrder[po_id: po_id, sup_id: sup_id];
+        if po.status == 1 {
+            PurchaseOrder[po_id: po_id, sup_id: sup_id].status = 2;
+        }
+    }
+}
+
+// 23. ReceivePurchaseOrder: only receive approved orders.
+//     Hop 1 (supplier partition) marks PO received.
+//     Hop 2 (warehouse partition) adds qty to stock, checks capacity first.
+transaction ReceivePurchaseOrder(po_id: int, sup_id: int, wh_id: int,
+                                  prod_id: int, qty: int, audit_id: int, ts: int) {
+    hop {
+        var po: Row<PurchaseOrder> = PurchaseOrder[po_id: po_id, sup_id: sup_id];
+        if po.status == 2 {
+            PurchaseOrder[po_id: po_id, sup_id: sup_id].status = 3;
+            PurchaseOrder[po_id: po_id, sup_id: sup_id].received_at = ts;
+        }
+    }
+    hop {
+        var w: Row<Warehouse> = Warehouse[wh_id: wh_id];
+        var s: Row<Stock> = Stock[wh_id: wh_id, prod_id: prod_id];
+        if w.status == 1 && (w.used_capacity + qty) <= w.capacity {
+            var new_qty: int = s.qty + qty;
+            var new_used: int = w.used_capacity + qty;
+            Stock[wh_id: wh_id, prod_id: prod_id].qty = new_qty;
+            Stock[wh_id: wh_id, prod_id: prod_id].last_updated = ts;
+            Warehouse[wh_id: wh_id].used_capacity = new_used;
+            AuditLog[audit_id: audit_id, wh_id: wh_id] = {
+                prod_id: prod_id,
+                action: "po_receive",
+                qty_delta: qty,
+                ts: ts
+            };
+        }
+    }
+}
+
+// 24. CancelPurchaseOrder: only cancel pending or approved orders.
+transaction CancelPurchaseOrder(po_id: int, sup_id: int) {
+    hop {
+        var po: Row<PurchaseOrder> = PurchaseOrder[po_id: po_id, sup_id: sup_id];
+        if po.status == 1 || po.status == 2 {
+            PurchaseOrder[po_id: po_id, sup_id: sup_id].status = 0;
+        }
+    }
+}
+
+// 25. GetPurchaseOrder
+transaction GetPurchaseOrder(po_id: int, sup_id: int) {
+    hop {
+        var po: Row<PurchaseOrder> = PurchaseOrder[po_id: po_id, sup_id: sup_id];
+        to_unit(po);
+    }
+}
+
+// 26. CreateSalesOrder: warehouse must be active; available (unreserved) qty must cover demand.
+//     Immediately reserves the qty so no double-fulfillment can occur.
+transaction CreateSalesOrder(so_id: int, wh_id: int, prod_id: int, qty: int, ts: int) {
+    hop {
+        var w: Row<Warehouse> = Warehouse[wh_id: wh_id];
+        var s: Row<Stock> = Stock[wh_id: wh_id, prod_id: prod_id];
+        var available: int = s.qty - s.reserved_qty;
+        if w.status == 1 && qty > 0 && available >= qty {
+            var new_reserved: int = s.reserved_qty + qty;
+            Stock[wh_id: wh_id, prod_id: prod_id].reserved_qty = new_reserved;
+            SalesOrder[so_id: so_id, wh_id: wh_id] = {
+                prod_id: prod_id,
+                qty: qty,
+                status: 1,
+                created_at: ts
+            };
+        }
+    }
+}
+
+// 27. ShipSalesOrder: only ship confirmed (status == 1) orders with sufficient stock.
+//     Deducts from physical stock and releases the reservation.
+transaction ShipSalesOrder(so_id: int, wh_id: int, prod_id: int,
+                            audit_id: int, ts: int) {
+    hop {
+        var so: Row<SalesOrder> = SalesOrder[so_id: so_id, wh_id: wh_id];
+        var s: Row<Stock> = Stock[wh_id: wh_id, prod_id: prod_id];
+        if so.status == 1 && s.qty >= so.qty {
+            var new_qty: int = s.qty - so.qty;
+            var new_reserved: int = s.reserved_qty - so.qty;
+            if new_reserved < 0 {
+                new_reserved = 0;
+            }
+            var w: Row<Warehouse> = Warehouse[wh_id: wh_id];
+            var new_used: int = w.used_capacity - so.qty;
+            if new_used < 0 {
+                new_used = 0;
+            }
+            Stock[wh_id: wh_id, prod_id: prod_id].qty = new_qty;
+            Stock[wh_id: wh_id, prod_id: prod_id].reserved_qty = new_reserved;
+            Stock[wh_id: wh_id, prod_id: prod_id].last_updated = ts;
+            Warehouse[wh_id: wh_id].used_capacity = new_used;
+            SalesOrder[so_id: so_id, wh_id: wh_id].status = 2;
+            AuditLog[audit_id: audit_id, wh_id: wh_id] = {
+                prod_id: prod_id,
+                action: "ship",
+                qty_delta: so.qty,
+                ts: ts
+            };
+        }
+    }
+}
+
+// 28. CancelSalesOrder: only cancel confirmed (status == 1) orders; release reservation.
+transaction CancelSalesOrder(so_id: int, wh_id: int, prod_id: int, ts: int) {
+    hop {
+        var so: Row<SalesOrder> = SalesOrder[so_id: so_id, wh_id: wh_id];
+        if so.status == 1 {
+            var s: Row<Stock> = Stock[wh_id: wh_id, prod_id: prod_id];
+            var new_reserved: int = s.reserved_qty - so.qty;
+            if new_reserved < 0 {
+                new_reserved = 0;
+            }
+            Stock[wh_id: wh_id, prod_id: prod_id].reserved_qty = new_reserved;
+            Stock[wh_id: wh_id, prod_id: prod_id].last_updated = ts;
+            SalesOrder[so_id: so_id, wh_id: wh_id].status = 0;
+        }
+    }
+}
+
+// 29. GetSalesOrder
+transaction GetSalesOrder(so_id: int, wh_id: int) {
+    hop {
+        var so: Row<SalesOrder> = SalesOrder[so_id: so_id, wh_id: wh_id];
+        to_unit(so);
+    }
+}
+
+// 30. InitiateTransfer: source warehouse must have enough unreserved stock.
+//     Deducts from source immediately to prevent over-transfer.
+transaction InitiateTransfer(xfer_id: int, src_wh_id: int, dst_wh_id: int,
+                              prod_id: int, qty: int, audit_id: int, ts: int) {
+    hop {
+        var s: Row<Stock> = Stock[wh_id: src_wh_id, prod_id: prod_id];
+        var w: Row<Warehouse> = Warehouse[wh_id: src_wh_id];
+        var available: int = s.qty - s.reserved_qty;
+        if w.status == 1 && qty > 0 && available >= qty {
+            var new_qty: int = s.qty - qty;
+            var new_used: int = w.used_capacity - qty;
+            if new_used < 0 {
+                new_used = 0;
+            }
+            Stock[wh_id: src_wh_id, prod_id: prod_id].qty = new_qty;
+            Stock[wh_id: src_wh_id, prod_id: prod_id].last_updated = ts;
+            Warehouse[wh_id: src_wh_id].used_capacity = new_used;
+            Transfer[xfer_id: xfer_id, src_wh_id: src_wh_id] = {
+                dst_wh_id: dst_wh_id,
+                prod_id: prod_id,
+                qty: qty,
+                status: 1,
+                initiated_at: ts
+            };
+            AuditLog[audit_id: audit_id, wh_id: src_wh_id] = {
+                prod_id: prod_id,
+                action: "transfer_out",
+                qty_delta: qty,
+                ts: ts
+            };
+        }
+    }
+}
+
+// 31. CompleteTransfer: hop 1 marks transfer done on source partition;
+//     hop 2 adds stock to destination, checking capacity.
+transaction CompleteTransfer(xfer_id: int, src_wh_id: int, dst_wh_id: int,
+                              prod_id: int, qty: int, audit_id: int, ts: int) {
+    hop {
+        var x: Row<Transfer> = Transfer[xfer_id: xfer_id, src_wh_id: src_wh_id];
+        if x.status == 1 || x.status == 3 {
+            Transfer[xfer_id: xfer_id, src_wh_id: src_wh_id].status = 2;
+        }
+    }
+    hop {
+        var w: Row<Warehouse> = Warehouse[wh_id: dst_wh_id];
+        var s: Row<Stock> = Stock[wh_id: dst_wh_id, prod_id: prod_id];
+        if w.status == 1 && (w.used_capacity + qty) <= w.capacity {
+            var new_qty: int = s.qty + qty;
+            var new_used: int = w.used_capacity + qty;
+            Stock[wh_id: dst_wh_id, prod_id: prod_id].qty = new_qty;
+            Stock[wh_id: dst_wh_id, prod_id: prod_id].last_updated = ts;
+            Warehouse[wh_id: dst_wh_id].used_capacity = new_used;
+            AuditLog[audit_id: audit_id, wh_id: dst_wh_id] = {
+                prod_id: prod_id,
+                action: "transfer_in",
+                qty_delta: qty,
+                ts: ts
+            };
+        }
+    }
+}
+
+// 32. CancelTransfer: only cancel pending transfers; restore source stock.
+transaction CancelTransfer(xfer_id: int, src_wh_id: int, prod_id: int,
+                            qty: int, ts: int) {
+    hop {
+        var x: Row<Transfer> = Transfer[xfer_id: xfer_id, src_wh_id: src_wh_id];
+        if x.status == 1 {
+            var s: Row<Stock> = Stock[wh_id: src_wh_id, prod_id: prod_id];
+            var restored_qty: int = s.qty + qty;
+            var w: Row<Warehouse> = Warehouse[wh_id: src_wh_id];
+            var new_used: int = w.used_capacity + qty;
+            Stock[wh_id: src_wh_id, prod_id: prod_id].qty = restored_qty;
+            Stock[wh_id: src_wh_id, prod_id: prod_id].last_updated = ts;
+            Warehouse[wh_id: src_wh_id].used_capacity = new_used;
+            Transfer[xfer_id: xfer_id, src_wh_id: src_wh_id].status = 0;
+        }
+    }
+}
+
+// 33. GetTransfer
+transaction GetTransfer(xfer_id: int, src_wh_id: int) {
+    hop {
+        var x: Row<Transfer> = Transfer[xfer_id: xfer_id, src_wh_id: src_wh_id];
+        to_unit(x);
+    }
+}
+
+// 34. GetAuditEntry
+transaction GetAuditEntry(audit_id: int, wh_id: int) {
+    hop {
+        var a: Row<AuditLog> = AuditLog[audit_id: audit_id, wh_id: wh_id];
+        to_unit(a);
+    }
+}
+
+// 35. AddCategory
+transaction AddCategory(cat_id: int, name: string, parent_cat: int) {
+    hop {
+        Category[cat_id: cat_id] = {
+            name: name,
+            parent_cat: parent_cat
+        };
+    }
+}
+
+// 36. GetCategory
+transaction GetCategory(cat_id: int) {
+    hop {
+        var c: Row<Category> = Category[cat_id: cat_id];
+        to_unit(c);
+    }
+}
+
+// 37. UpdateCategoryName
+transaction UpdateCategoryName(cat_id: int, name: string) {
+    hop {
+        Category[cat_id: cat_id].name = name;
+    }
+}
+
+// 38. AssignProductCategory: only assign if product is active.
+transaction AssignProductCategory(prod_id: int, cat_id: int) {
+    hop {
+        var p: Row<Product> = Product[prod_id: prod_id];
+        if p.is_active == 1 {
+            ProductCategory[prod_id: prod_id, cat_id: cat_id] = {};
+        }
+    }
+}
+
+// 39. GetProductCategory
+transaction GetProductCategory(prod_id: int, cat_id: int) {
+    hop {
+        var pc: Row<ProductCategory> = ProductCategory[prod_id: prod_id, cat_id: cat_id];
+        to_unit(pc);
+    }
+}
+
+// 40. GetStockAndProduct: cross-partition read (wh vs prod partitions).
+transaction GetStockAndProduct(wh_id: int, prod_id: int) {
+    hop {
+        var s: Row<Stock> = Stock[wh_id: wh_id, prod_id: prod_id];
+        to_unit(s);
+    }
+    hop {
+        var p: Row<Product> = Product[prod_id: prod_id];
+        to_unit(p);
+    }
+}
+
+// 41. CheckWarehouseCapacity: return remaining free capacity.
+transaction CheckWarehouseCapacity(wh_id: int) {
+    hop {
+        var w: Row<Warehouse> = Warehouse[wh_id: wh_id];
+        var remaining: int = w.capacity - w.used_capacity;
+        to_unit(remaining);
+    }
+}
+
+// 42. FulfillSalesOrder: only mark fulfilled if order has been shipped (status == 2).
+transaction FulfillSalesOrder(so_id: int, wh_id: int) {
+    hop {
+        var so: Row<SalesOrder> = SalesOrder[so_id: so_id, wh_id: wh_id];
+        if so.status == 2 {
+            SalesOrder[so_id: so_id, wh_id: wh_id].status = 3;
+        }
+    }
+}
+
+// 43. ProcessReturn: add returned units back to stock; warehouse must have capacity.
+transaction ProcessReturn(wh_id: int, prod_id: int, return_qty: int,
+                           audit_id: int, ts: int) {
+    hop {
+        var w: Row<Warehouse> = Warehouse[wh_id: wh_id];
+        var s: Row<Stock> = Stock[wh_id: wh_id, prod_id: prod_id];
+        if w.status == 1 && return_qty > 0 &&
+           (w.used_capacity + return_qty) <= w.capacity {
+            var new_qty: int = s.qty + return_qty;
+            var new_used: int = w.used_capacity + return_qty;
+            Stock[wh_id: wh_id, prod_id: prod_id].qty = new_qty;
+            Stock[wh_id: wh_id, prod_id: prod_id].last_updated = ts;
+            Warehouse[wh_id: wh_id].used_capacity = new_used;
+            AuditLog[audit_id: audit_id, wh_id: wh_id] = {
+                prod_id: prod_id,
+                action: "return",
+                qty_delta: return_qty,
+                ts: ts
+            };
+        }
+    }
+}
+
+// 44. RecordShrinkage: cannot shrink more units than physically in stock.
+transaction RecordShrinkage(wh_id: int, prod_id: int, shrinkage_qty: int,
+                             audit_id: int, ts: int) {
+    hop {
+        var s: Row<Stock> = Stock[wh_id: wh_id, prod_id: prod_id];
+        if shrinkage_qty > 0 && s.qty >= shrinkage_qty {
+            var new_qty: int = s.qty - shrinkage_qty;
+            var w: Row<Warehouse> = Warehouse[wh_id: wh_id];
+            var new_used: int = w.used_capacity - shrinkage_qty;
+            if new_used < 0 {
+                new_used = 0;
+            }
+            Stock[wh_id: wh_id, prod_id: prod_id].qty = new_qty;
+            Stock[wh_id: wh_id, prod_id: prod_id].last_updated = ts;
+            Warehouse[wh_id: wh_id].used_capacity = new_used;
+            AuditLog[audit_id: audit_id, wh_id: wh_id] = {
+                prod_id: prod_id,
+                action: "shrinkage",
+                qty_delta: shrinkage_qty,
+                ts: ts
+            };
+        }
+    }
+}
+
+// 45. GetProductAndSupplier: cross-partition read.
+transaction GetProductAndSupplier(prod_id: int, sup_id: int) {
+    hop {
+        var p: Row<Product> = Product[prod_id: prod_id];
+        to_unit(p);
+    }
+    hop {
+        var s: Row<Supplier> = Supplier[sup_id: sup_id];
+        to_unit(s);
+    }
+}
+
+// 46. UpdateSupplierContact: only update active suppliers.
+transaction UpdateSupplierContact(sup_id: int, email: string, phone: string) {
+    hop {
+        var s: Row<Supplier> = Supplier[sup_id: sup_id];
+        if s.status == 1 {
+            Supplier[sup_id: sup_id].email = email;
+            Supplier[sup_id: sup_id].phone = phone;
+        }
+    }
+}
+
+// 47. UpdateProductName: only update active products.
+transaction UpdateProductName(prod_id: int, name: string) {
+    hop {
+        var p: Row<Product> = Product[prod_id: prod_id];
+        if p.is_active == 1 {
+            Product[prod_id: prod_id].name = name;
+        }
+    }
+}
+
+// 48. UpdateProductSku: only update active products.
+transaction UpdateProductSku(prod_id: int, sku: string) {
+    hop {
+        var p: Row<Product> = Product[prod_id: prod_id];
+        if p.is_active == 1 {
+            Product[prod_id: prod_id].sku = sku;
+        }
+    }
+}
+
+// 49. CheckStockAvailability: compute and output unreserved qty.
+transaction CheckStockAvailability(wh_id: int, prod_id: int) {
+    hop {
+        var s: Row<Stock> = Stock[wh_id: wh_id, prod_id: prod_id];
+        var available: int = s.qty - s.reserved_qty;
+        to_unit(available);
+    }
+}
+
+// 50. GetPurchaseOrderAndSupplier: cross-partition read (supplier vs product).
+transaction GetPurchaseOrderAndSupplier(po_id: int, sup_id: int, prod_id: int) {
+    hop {
+        var po: Row<PurchaseOrder> = PurchaseOrder[po_id: po_id, sup_id: sup_id];
+        to_unit(po);
+    }
+    hop {
+        var p: Row<Product> = Product[prod_id: prod_id];
+        to_unit(p);
+    }
+}
+
+// 51. OpenWarehouse: only re-open a closed warehouse.
+transaction OpenWarehouse(wh_id: int) {
+    hop {
+        var w: Row<Warehouse> = Warehouse[wh_id: wh_id];
+        if w.status == 0 {
+            Warehouse[wh_id: wh_id].status = 1;
+        }
+    }
+}
+
+// 52. UpdateWarehouseCity: only update non-closed warehouses.
+transaction UpdateWarehouseCity(wh_id: int, city: string) {
+    hop {
+        var w: Row<Warehouse> = Warehouse[wh_id: wh_id];
+        if w.status != 0 {
+            Warehouse[wh_id: wh_id].city = city;
+        }
+    }
+}
+
+// 53. MarkWarehouseMaintenance: only mark maintenance if currently active.
+transaction MarkWarehouseMaintenance(wh_id: int) {
+    hop {
+        var w: Row<Warehouse> = Warehouse[wh_id: wh_id];
+        if w.status == 1 {
+            Warehouse[wh_id: wh_id].status = 2;
+        }
+    }
+}
+
+// 54. UpdatePurchaseOrderQty: only allow quantity updates on pending (status == 1) orders.
+transaction UpdatePurchaseOrderQty(po_id: int, sup_id: int, qty: int) {
+    hop {
+        var po: Row<PurchaseOrder> = PurchaseOrder[po_id: po_id, sup_id: sup_id];
+        if po.status == 1 && qty > 0 {
+            PurchaseOrder[po_id: po_id, sup_id: sup_id].qty = qty;
+        }
+    }
+}
+
+// 55. UpdateSalesOrderQty: adjust qty on a pending order; check stock covers any increase.
+transaction UpdateSalesOrderQty(so_id: int, wh_id: int, prod_id: int,
+                                 qty: int, ts: int) {
+    hop {
+        var so: Row<SalesOrder> = SalesOrder[so_id: so_id, wh_id: wh_id];
+        var s: Row<Stock> = Stock[wh_id: wh_id, prod_id: prod_id];
+        if so.status == 1 && qty > 0 {
+            var old_qty: int = so.qty;
+            var delta: int = qty - old_qty;
+            var available: int = s.qty - s.reserved_qty;
+            if delta <= 0 || available >= delta {
+                var new_reserved: int = s.reserved_qty + delta;
+                if new_reserved < 0 {
+                    new_reserved = 0;
+                }
+                Stock[wh_id: wh_id, prod_id: prod_id].reserved_qty = new_reserved;
+                Stock[wh_id: wh_id, prod_id: prod_id].last_updated = ts;
+                SalesOrder[so_id: so_id, wh_id: wh_id].qty = qty;
+            }
+        }
+    }
+}
+
+// 56. GetTransferStatus: read and output current transfer status.
+transaction GetTransferStatus(xfer_id: int, src_wh_id: int) {
+    hop {
+        var x: Row<Transfer> = Transfer[xfer_id: xfer_id, src_wh_id: src_wh_id];
+        var st: int = x.status;
+        to_unit(st);
+    }
+}
+
+// 57. SetProductReorderPoint: active products only; threshold must be non-negative.
+transaction SetProductReorderPoint(prod_id: int, reorder_pt: int) {
+    hop {
+        var p: Row<Product> = Product[prod_id: prod_id];
+        if p.is_active == 1 && reorder_pt >= 0 {
+            Product[prod_id: prod_id].reorder_pt = reorder_pt;
+        }
+    }
+}
+
+// 58. MarkTransferInTransit: only advance from pending (1) to in-transit (3).
+transaction MarkTransferInTransit(xfer_id: int, src_wh_id: int) {
+    hop {
+        var x: Row<Transfer> = Transfer[xfer_id: xfer_id, src_wh_id: src_wh_id];
+        if x.status == 1 {
+            Transfer[xfer_id: xfer_id, src_wh_id: src_wh_id].status = 3;
+        }
+    }
+}
+
+// 59. UpdateProductCategory: only update active products.
+transaction UpdateProductCategory(prod_id: int, category: string) {
+    hop {
+        var p: Row<Product> = Product[prod_id: prod_id];
+        if p.is_active == 1 {
+            Product[prod_id: prod_id].category = category;
+        }
+    }
+}
+
+// 60. ScanWarehouseStockAlerts: scan all stock rows on this warehouse's partition;
+//     count how many products are at or below their local reorder threshold.
+transaction ScanWarehouseStockAlerts(wh_id: int) -> int {
+    @global hop {
+        var alert_count: int = 0;
+        for (var iter: Iterator<Stock> = scan(Stock, wh_id, __slice__);
+             hasNext(iter); iter = next(iter)) {
+            var w_id = get_wh_id(iter);
+            var p_id = get_prod_id(iter);
+            if w_id == wh_id {
+                var s: Row<Stock> = Stock[wh_id: w_id, prod_id: p_id];
+                if s.qty <= s.reorder_qty {
+                    alert_count = alert_count + 1;
+                }
+            }
+        }
+        return alert_count;
+    }
+}

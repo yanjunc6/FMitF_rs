@@ -1,0 +1,110 @@
+// ============================================================================
+// Partitions
+// ============================================================================
+
+partition f(x: int) -> int {
+    return x;
+}
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+table Accounts {
+    primary custid: int;
+    node f(custid);
+
+    name: string;
+}
+
+table Savings {
+    primary custid: int;
+    node f(custid);
+
+    bal: float;
+}
+
+table Checking {
+    primary custid: int;
+    node f(custid);
+
+    bal: float;
+}
+
+// ============================================================================
+// Transactions
+// ============================================================================
+
+transaction Amalgamate(custId0: int, custId1: int) {
+    // Hop 1: custId0 partition — verify account exists, zero out balances, compute total.
+    hop {
+        var sb: float = Savings[custid: custId0].bal;
+        var cb: float = Checking[custid: custId0].bal;
+
+        var total: float = sb + cb;
+        Savings[custid: custId0].bal = 0.0;
+        Checking[custid: custId0].bal = 0.0;
+    }
+
+    // Hop 2: custId1 partition — deposit total into custId1's checking.
+    // total flows from Hop 1 as a continuation variable.
+    hop {
+        Checking[custid: custId1].bal = Checking[custid: custId1].bal + total;
+    }
+}
+
+transaction Balance(custId: int) {
+    hop {
+        var a: Row<Accounts> = Accounts[custid: custId];
+        to_unit_return(a);
+        var s: float = Savings[custid: custId].bal;
+        var c: float = Checking[custid: custId].bal;
+        var total: float = s + c;
+        to_unit_return(total);
+    }
+}
+
+transaction DepositChecking(custId: int, amount: float) {
+    hop {
+        var a: Row<Accounts> = Accounts[custid: custId];
+        to_unit_return(a);
+        Checking[custid: custId].bal = Checking[custid: custId].bal + amount;
+    }
+}
+
+transaction SendPayment(sendAcct: int, destAcct: int, amount: float) {
+    // Hop 1: sender partition — debit checking account.
+    hop {
+        Checking[custid: sendAcct].bal = Checking[custid: sendAcct].bal - amount;
+    }
+
+    // Hop 2: destination partition — credit checking account.
+    hop {
+        Checking[custid: destAcct].bal = Checking[custid: destAcct].bal + amount;
+    }
+}
+
+transaction TransactSavings(custId: int, amount: float) {
+    hop {
+        var a: Row<Accounts> = Accounts[custid: custId];
+        to_unit_return(a);
+        Savings[custid: custId].bal = Savings[custid: custId].bal - amount;
+    }
+}
+
+transaction WriteCheck(custId: int, amount: float) {
+    hop {
+        var s: Row<Savings> = Savings[custid: custId];
+        var c: Row<Checking> = Checking[custid: custId];
+
+        var total: float = s.bal + c.bal;
+        // Apply $1 penalty if total balance is insufficient.
+        if total < amount {
+            c.bal = c.bal - amount - 1.0;
+        } else {
+            c.bal = c.bal - amount;
+        }
+
+        Checking[custid: custId] = c;
+    }
+}

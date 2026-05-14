@@ -1,0 +1,1102 @@
+// ============================================================================
+// bench_080 — Social Network Platform (80 transactions)
+// Domain: User profiles, posts, comments, messages, groups, notifications
+// ============================================================================
+
+partition f(x: int) -> int { return x; }
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+table UserProfile {
+    primary uid: int;
+    node f(uid);
+    username: string;
+    email: string;
+    bio: string;
+    status: int;
+    created_at: int;
+    privacy: int;
+}
+
+table Follow {
+    primary follower_id: int;
+    primary followee_id: int;
+    node f(follower_id);
+    created_at: int;
+    is_active: int;
+}
+
+table Block {
+    primary blocker_id: int;
+    primary blocked_id: int;
+    node f(blocker_id);
+    created_at: int;
+}
+
+table Post {
+    primary post_id: int;
+    primary uid: int;
+    node f(uid);
+    content: string;
+    media_id: int;
+    like_count: int;
+    comment_count: int;
+    share_count: int;
+    status: int;
+    created_at: int;
+    is_pinned: int;
+}
+
+table PostLike {
+    primary post_id: int;
+    primary uid: int;
+    node f(uid);
+    ts: int;
+    is_active: int;
+}
+
+table Comment {
+    primary comment_id: int;
+    primary post_id: int;
+    node f(post_id);
+    uid: int;
+    content: string;
+    like_count: int;
+    parent_comment_id: int;
+    status: int;
+    ts: int;
+}
+
+table CommentLike {
+    primary comment_id: int;
+    primary uid: int;
+    node f(uid);
+    ts: int;
+    is_active: int;
+}
+
+table Message {
+    primary msg_id: int;
+    primary sender_id: int;
+    node f(sender_id);
+    receiver_id: int;
+    content: string;
+    is_read: int;
+    is_deleted: int;
+    sent_at: int;
+}
+
+table Group {
+    primary group_id: int;
+    node f(group_id);
+    name: string;
+    description: string;
+    owner_id: int;
+    member_count: int;
+    status: int;
+    created_at: int;
+}
+
+table GroupMember {
+    primary group_id: int;
+    primary uid: int;
+    node f(group_id);
+    role: int;
+    joined_at: int;
+    is_active: int;
+}
+
+table Notification {
+    primary notif_id: int;
+    primary uid: int;
+    node f(uid);
+    notif_type: int;
+    ref_id: int;
+    is_read: int;
+    ts: int;
+}
+
+table Media {
+    primary media_id: int;
+    primary uid: int;
+    node f(uid);
+    media_type: string;
+    url: string;
+    status: int;
+    uploaded_at: int;
+}
+
+table SavedPost {
+    primary uid: int;
+    primary post_id: int;
+    node f(uid);
+    saved_at: int;
+    is_active: int;
+}
+
+table Story {
+    primary story_id: int;
+    primary uid: int;
+    node f(uid);
+    content: string;
+    view_count: int;
+    expires_at: int;
+    status: int;
+}
+
+// ============================================================================
+// Transactions (80 total)
+// ============================================================================
+
+// 1. CreateUser
+transaction CreateUser(uid: int, username: string, email: string,
+                        bio: string, ts: int) {
+    hop {
+        UserProfile[uid: uid] = {
+            username: username,
+            email: email,
+            bio: bio,
+            status: 1,
+            created_at: ts,
+            privacy: 0
+        };
+    }
+}
+
+// 2. GetUser
+transaction GetUser(uid: int) {
+    hop {
+        var u: Row<UserProfile> = UserProfile[uid: uid];
+        to_unit(u);
+    }
+}
+
+// 3. UpdateUserBio: only update active accounts.
+transaction UpdateUserBio(uid: int, bio: string) {
+    hop {
+        var u: Row<UserProfile> = UserProfile[uid: uid];
+        if u.status == 1 {
+            UserProfile[uid: uid].bio = bio;
+        }
+    }
+}
+
+// 4. UpdateUserEmail: only update active accounts.
+transaction UpdateUserEmail(uid: int, email: string) {
+    hop {
+        var u: Row<UserProfile> = UserProfile[uid: uid];
+        if u.status == 1 {
+            UserProfile[uid: uid].email = email;
+        }
+    }
+}
+
+// 5. SetPrivacy: active accounts only; privacy must be 0 (public) or 1 (private).
+transaction SetPrivacy(uid: int, privacy: int) {
+    hop {
+        var u: Row<UserProfile> = UserProfile[uid: uid];
+        if u.status == 1 && (privacy == 0 || privacy == 1) {
+            UserProfile[uid: uid].privacy = privacy;
+        }
+    }
+}
+
+// 6. DeactivateUser: only if currently active.
+transaction DeactivateUser(uid: int) {
+    hop {
+        var u: Row<UserProfile> = UserProfile[uid: uid];
+        if u.status == 1 {
+            UserProfile[uid: uid].status = 0;
+        }
+    }
+}
+
+// 7. FollowUser: follower must be active; hop 1 writes follow edge,
+//    hop 2 delivers notification to followee.
+transaction FollowUser(follower_id: int, followee_id: int,
+                        notif_id: int, ts: int) {
+    hop {
+        var u: Row<UserProfile> = UserProfile[uid: follower_id];
+        if u.status == 1 {
+            Follow[follower_id: follower_id, followee_id: followee_id] = {
+                created_at: ts,
+                is_active: 1
+            };
+        }
+    }
+    hop {
+        Notification[notif_id: notif_id, uid: followee_id] = {
+            notif_type: 1,
+            ref_id: follower_id,
+            is_read: 0,
+            ts: ts
+        };
+    }
+}
+
+// 8. UnfollowUser: only deactivate an active follow edge.
+transaction UnfollowUser(follower_id: int, followee_id: int) {
+    hop {
+        var f: Row<Follow> = Follow[follower_id: follower_id, followee_id: followee_id];
+        if f.is_active == 1 {
+            Follow[follower_id: follower_id, followee_id: followee_id].is_active = 0;
+        }
+    }
+}
+
+// 9. GetFollow
+transaction GetFollow(follower_id: int, followee_id: int) {
+    hop {
+        var f: Row<Follow> = Follow[follower_id: follower_id, followee_id: followee_id];
+        to_unit(f);
+    }
+}
+
+// 10. BlockUser: blocker must be active.
+transaction BlockUser(blocker_id: int, blocked_id: int, ts: int) {
+    hop {
+        var u: Row<UserProfile> = UserProfile[uid: blocker_id];
+        if u.status == 1 {
+            Block[blocker_id: blocker_id, blocked_id: blocked_id] = {
+                created_at: ts
+            };
+        }
+    }
+}
+
+// 11. GetBlock
+transaction GetBlock(blocker_id: int, blocked_id: int) {
+    hop {
+        var b: Row<Block> = Block[blocker_id: blocker_id, blocked_id: blocked_id];
+        to_unit(b);
+    }
+}
+
+// 12. CreatePost: user must be active.
+transaction CreatePost(post_id: int, uid: int, content: string,
+                        media_id: int, ts: int) {
+    hop {
+        var u: Row<UserProfile> = UserProfile[uid: uid];
+        if u.status == 1 {
+            Post[post_id: post_id, uid: uid] = {
+                content: content,
+                media_id: media_id,
+                like_count: 0,
+                comment_count: 0,
+                share_count: 0,
+                status: 1,
+                created_at: ts,
+                is_pinned: 0
+            };
+        }
+    }
+}
+
+// 13. GetPost
+transaction GetPost(post_id: int, uid: int) {
+    hop {
+        var p: Row<Post> = Post[post_id: post_id, uid: uid];
+        to_unit(p);
+    }
+}
+
+// 14. UpdatePostContent: only update active posts.
+transaction UpdatePostContent(post_id: int, uid: int, content: string) {
+    hop {
+        var p: Row<Post> = Post[post_id: post_id, uid: uid];
+        if p.status == 1 {
+            Post[post_id: post_id, uid: uid].content = content;
+        }
+    }
+}
+
+// 15. DeletePost: only soft-delete active posts.
+transaction DeletePost(post_id: int, uid: int) {
+    hop {
+        var p: Row<Post> = Post[post_id: post_id, uid: uid];
+        if p.status == 1 {
+            Post[post_id: post_id, uid: uid].status = 0;
+        }
+    }
+}
+
+// 16. PinPost: only pin active, currently unpinned posts.
+transaction PinPost(post_id: int, uid: int) {
+    hop {
+        var p: Row<Post> = Post[post_id: post_id, uid: uid];
+        if p.status == 1 && p.is_pinned == 0 {
+            Post[post_id: post_id, uid: uid].is_pinned = 1;
+        }
+    }
+}
+
+// 17. UnpinPost: only unpin currently pinned posts.
+transaction UnpinPost(post_id: int, uid: int) {
+    hop {
+        var p: Row<Post> = Post[post_id: post_id, uid: uid];
+        if p.is_pinned == 1 {
+            Post[post_id: post_id, uid: uid].is_pinned = 0;
+        }
+    }
+}
+
+// 18. LikePost: hop 1 increments post like_count (only if post is active).
+//     Hop 2 records the PostLike and creates a notification for the author.
+transaction LikePost(post_id: int, author_uid: int, liker_uid: int,
+                     notif_id: int, ts: int) {
+    hop {
+        var p: Row<Post> = Post[post_id: post_id, uid: author_uid];
+        if p.status == 1 {
+            var new_count: int = p.like_count + 1;
+            Post[post_id: post_id, uid: author_uid].like_count = new_count;
+        }
+    }
+    hop {
+        PostLike[post_id: post_id, uid: liker_uid] = {
+            ts: ts,
+            is_active: 1
+        };
+        Notification[notif_id: notif_id, uid: author_uid] = {
+            notif_type: 2,
+            ref_id: liker_uid,
+            is_read: 0,
+            ts: ts
+        };
+    }
+}
+
+// 19. UnlikePost: guard PostLike is active before decrementing.
+//     Hop 1 decrements post like_count. Hop 2 deactivates the PostLike.
+transaction UnlikePost(post_id: int, author_uid: int, liker_uid: int) {
+    hop {
+        var p: Row<Post> = Post[post_id: post_id, uid: author_uid];
+        if p.like_count > 0 {
+            var new_count: int = p.like_count - 1;
+            Post[post_id: post_id, uid: author_uid].like_count = new_count;
+        }
+    }
+    hop {
+        var pl: Row<PostLike> = PostLike[post_id: post_id, uid: liker_uid];
+        if pl.is_active == 1 {
+            PostLike[post_id: post_id, uid: liker_uid].is_active = 0;
+        }
+    }
+}
+
+// 20. GetPostLike
+transaction GetPostLike(post_id: int, uid: int) {
+    hop {
+        var pl: Row<PostLike> = PostLike[post_id: post_id, uid: uid];
+        to_unit(pl);
+    }
+}
+
+// 21. CommentOnPost: post must be active; compute new comment_count.
+//     Hop 1 writes comment and increments post's comment_count.
+//     Hop 2 notifies the post author.
+transaction CommentOnPost(comment_id: int, post_id: int, author_uid: int,
+                           commenter_uid: int, content: string,
+                           notif_id: int, ts: int) {
+    hop {
+        var post: Row<Post> = Post[post_id: post_id, uid: author_uid];
+        if post.status == 1 {
+            var new_count: int = post.comment_count + 1;
+            Comment[comment_id: comment_id, post_id: post_id] = {
+                uid: commenter_uid,
+                content: content,
+                like_count: 0,
+                parent_comment_id: 0,
+                status: 1,
+                ts: ts
+            };
+            Post[post_id: post_id, uid: author_uid].comment_count = new_count;
+        }
+    }
+    hop {
+        Notification[notif_id: notif_id, uid: author_uid] = {
+            notif_type: 3,
+            ref_id: commenter_uid,
+            is_read: 0,
+            ts: ts
+        };
+    }
+}
+
+// 22. GetComment
+transaction GetComment(comment_id: int, post_id: int) {
+    hop {
+        var c: Row<Comment> = Comment[comment_id: comment_id, post_id: post_id];
+        to_unit(c);
+    }
+}
+
+// 23. UpdateComment: only update active comments.
+transaction UpdateComment(comment_id: int, post_id: int, content: string) {
+    hop {
+        var c: Row<Comment> = Comment[comment_id: comment_id, post_id: post_id];
+        if c.status == 1 {
+            Comment[comment_id: comment_id, post_id: post_id].content = content;
+        }
+    }
+}
+
+// 24. DeleteComment: only soft-delete active comments.
+transaction DeleteComment(comment_id: int, post_id: int) {
+    hop {
+        var c: Row<Comment> = Comment[comment_id: comment_id, post_id: post_id];
+        if c.status == 1 {
+            Comment[comment_id: comment_id, post_id: post_id].status = 0;
+        }
+    }
+}
+
+// 25. LikeComment: comment must be active; compute new like_count.
+//     Hop 1 updates comment's like_count. Hop 2 records CommentLike.
+transaction LikeComment(comment_id: int, post_id: int, liker_uid: int, ts: int) {
+    hop {
+        var c: Row<Comment> = Comment[comment_id: comment_id, post_id: post_id];
+        if c.status == 1 {
+            var new_count: int = c.like_count + 1;
+            Comment[comment_id: comment_id, post_id: post_id].like_count = new_count;
+        }
+    }
+    hop {
+        CommentLike[comment_id: comment_id, uid: liker_uid] = {
+            ts: ts,
+            is_active: 1
+        };
+    }
+}
+
+// 26. UnlikeComment: guard CommentLike is active; decrement like_count.
+transaction UnlikeComment(comment_id: int, post_id: int, liker_uid: int) {
+    hop {
+        var c: Row<Comment> = Comment[comment_id: comment_id, post_id: post_id];
+        if c.like_count > 0 {
+            var new_count: int = c.like_count - 1;
+            Comment[comment_id: comment_id, post_id: post_id].like_count = new_count;
+        }
+    }
+    hop {
+        var cl: Row<CommentLike> = CommentLike[comment_id: comment_id, uid: liker_uid];
+        if cl.is_active == 1 {
+            CommentLike[comment_id: comment_id, uid: liker_uid].is_active = 0;
+        }
+    }
+}
+
+// 27. ReplyToComment: parent comment must be active before posting a reply.
+transaction ReplyToComment(comment_id: int, post_id: int, uid: int,
+                            parent_comment_id: int, content: string, ts: int) {
+    hop {
+        var parent: Row<Comment> = Comment[comment_id: parent_comment_id, post_id: post_id];
+        if parent.status == 1 {
+            Comment[comment_id: comment_id, post_id: post_id] = {
+                uid: uid,
+                content: content,
+                like_count: 0,
+                parent_comment_id: parent_comment_id,
+                status: 1,
+                ts: ts
+            };
+        }
+    }
+}
+
+// 28. SendMessage: sender must be active.
+transaction SendMessage(msg_id: int, sender_id: int, receiver_id: int,
+                         content: string, ts: int) {
+    hop {
+        var u: Row<UserProfile> = UserProfile[uid: sender_id];
+        if u.status == 1 {
+            Message[msg_id: msg_id, sender_id: sender_id] = {
+                receiver_id: receiver_id,
+                content: content,
+                is_read: 0,
+                is_deleted: 0,
+                sent_at: ts
+            };
+        }
+    }
+}
+
+// 29. GetMessage
+transaction GetMessage(msg_id: int, sender_id: int) {
+    hop {
+        var m: Row<Message> = Message[msg_id: msg_id, sender_id: sender_id];
+        to_unit(m);
+    }
+}
+
+// 30. MarkMessageRead: only mark currently unread messages.
+transaction MarkMessageRead(msg_id: int, sender_id: int) {
+    hop {
+        var m: Row<Message> = Message[msg_id: msg_id, sender_id: sender_id];
+        if m.is_read == 0 && m.is_deleted == 0 {
+            Message[msg_id: msg_id, sender_id: sender_id].is_read = 1;
+        }
+    }
+}
+
+// 31. DeleteMessage: only soft-delete non-deleted messages.
+transaction DeleteMessage(msg_id: int, sender_id: int) {
+    hop {
+        var m: Row<Message> = Message[msg_id: msg_id, sender_id: sender_id];
+        if m.is_deleted == 0 {
+            Message[msg_id: msg_id, sender_id: sender_id].is_deleted = 1;
+        }
+    }
+}
+
+// 32. CreateGroup: owner must be an active user; starts with 1 member (owner).
+transaction CreateGroup(group_id: int, name: string, description: string,
+                         owner_id: int, ts: int) {
+    hop {
+        var u: Row<UserProfile> = UserProfile[uid: owner_id];
+        if u.status == 1 {
+            Group[group_id: group_id] = {
+                name: name,
+                description: description,
+                owner_id: owner_id,
+                member_count: 1,
+                status: 1,
+                created_at: ts
+            };
+            GroupMember[group_id: group_id, uid: owner_id] = {
+                role: 2,
+                joined_at: ts,
+                is_active: 1
+            };
+        }
+    }
+}
+
+// 33. GetGroup
+transaction GetGroup(group_id: int) {
+    hop {
+        var g: Row<Group> = Group[group_id: group_id];
+        to_unit(g);
+    }
+}
+
+// 34. UpdateGroupName: only update active groups.
+transaction UpdateGroupName(group_id: int, name: string) {
+    hop {
+        var g: Row<Group> = Group[group_id: group_id];
+        if g.status == 1 {
+            Group[group_id: group_id].name = name;
+        }
+    }
+}
+
+// 35. DeleteGroup: only soft-delete active groups.
+transaction DeleteGroup(group_id: int) {
+    hop {
+        var g: Row<Group> = Group[group_id: group_id];
+        if g.status == 1 {
+            Group[group_id: group_id].status = 0;
+        }
+    }
+}
+
+// 36. JoinGroup: group must be active; compute new member_count.
+//     Guard: member not already active in the group.
+transaction JoinGroup(group_id: int, uid: int, ts: int) {
+    hop {
+        var g: Row<Group> = Group[group_id: group_id];
+        var gm: Row<GroupMember> = GroupMember[group_id: group_id, uid: uid];
+        if g.status == 1 && gm.is_active == 0 {
+            var new_count: int = g.member_count + 1;
+            GroupMember[group_id: group_id, uid: uid].is_active = 1;
+            GroupMember[group_id: group_id, uid: uid].joined_at = ts;
+            Group[group_id: group_id].member_count = new_count;
+        }
+    }
+}
+
+// 37. LeaveGroup: member must be active; compute new member_count.
+transaction LeaveGroup(group_id: int, uid: int) {
+    hop {
+        var g: Row<Group> = Group[group_id: group_id];
+        var gm: Row<GroupMember> = GroupMember[group_id: group_id, uid: uid];
+        if gm.is_active == 1 {
+            var new_count: int = g.member_count - 1;
+            if new_count < 0 {
+                new_count = 0;
+            }
+            GroupMember[group_id: group_id, uid: uid].is_active = 0;
+            Group[group_id: group_id].member_count = new_count;
+        }
+    }
+}
+
+// 38. GetGroupMember
+transaction GetGroupMember(group_id: int, uid: int) {
+    hop {
+        var gm: Row<GroupMember> = GroupMember[group_id: group_id, uid: uid];
+        to_unit(gm);
+    }
+}
+
+// 39. PromoteGroupMember: member must be active and a regular member (role == 1).
+transaction PromoteGroupMember(group_id: int, uid: int) {
+    hop {
+        var gm: Row<GroupMember> = GroupMember[group_id: group_id, uid: uid];
+        if gm.is_active == 1 && gm.role == 1 {
+            GroupMember[group_id: group_id, uid: uid].role = 2;
+        }
+    }
+}
+
+// 40. CreateNotification
+transaction CreateNotification(notif_id: int, uid: int, notif_type: int,
+                                ref_id: int, ts: int) {
+    hop {
+        Notification[notif_id: notif_id, uid: uid] = {
+            notif_type: notif_type,
+            ref_id: ref_id,
+            is_read: 0,
+            ts: ts
+        };
+    }
+}
+
+// 41. GetNotification
+transaction GetNotification(notif_id: int, uid: int) {
+    hop {
+        var n: Row<Notification> = Notification[notif_id: notif_id, uid: uid];
+        to_unit(n);
+    }
+}
+
+// 42. MarkNotificationRead: only mark currently unread notifications.
+transaction MarkNotificationRead(notif_id: int, uid: int) {
+    hop {
+        var n: Row<Notification> = Notification[notif_id: notif_id, uid: uid];
+        if n.is_read == 0 {
+            Notification[notif_id: notif_id, uid: uid].is_read = 1;
+        }
+    }
+}
+
+// 43. ClearNotification: clear only if not already cleared (is_read != 2).
+transaction ClearNotification(notif_id: int, uid: int) {
+    hop {
+        var n: Row<Notification> = Notification[notif_id: notif_id, uid: uid];
+        if n.is_read != 2 {
+            Notification[notif_id: notif_id, uid: uid].is_read = 2;
+        }
+    }
+}
+
+// 44. UploadMedia: user must be active.
+transaction UploadMedia(media_id: int, uid: int, media_type: string,
+                         url: string, ts: int) {
+    hop {
+        var u: Row<UserProfile> = UserProfile[uid: uid];
+        if u.status == 1 {
+            Media[media_id: media_id, uid: uid] = {
+                media_type: media_type,
+                url: url,
+                status: 1,
+                uploaded_at: ts
+            };
+        }
+    }
+}
+
+// 45. GetMedia
+transaction GetMedia(media_id: int, uid: int) {
+    hop {
+        var m: Row<Media> = Media[media_id: media_id, uid: uid];
+        to_unit(m);
+    }
+}
+
+// 46. DeleteMedia: only soft-delete active media.
+transaction DeleteMedia(media_id: int, uid: int) {
+    hop {
+        var m: Row<Media> = Media[media_id: media_id, uid: uid];
+        if m.status == 1 {
+            Media[media_id: media_id, uid: uid].status = 0;
+        }
+    }
+}
+
+// 47. SavePost: user must be active.
+transaction SavePost(uid: int, post_id: int, ts: int) {
+    hop {
+        var u: Row<UserProfile> = UserProfile[uid: uid];
+        if u.status == 1 {
+            SavedPost[uid: uid, post_id: post_id] = {
+                saved_at: ts,
+                is_active: 1
+            };
+        }
+    }
+}
+
+// 48. UnsavePost: only if currently saved (is_active == 1).
+transaction UnsavePost(uid: int, post_id: int) {
+    hop {
+        var sp: Row<SavedPost> = SavedPost[uid: uid, post_id: post_id];
+        if sp.is_active == 1 {
+            SavedPost[uid: uid, post_id: post_id].is_active = 0;
+        }
+    }
+}
+
+// 49. GetSavedPost
+transaction GetSavedPost(uid: int, post_id: int) {
+    hop {
+        var sp: Row<SavedPost> = SavedPost[uid: uid, post_id: post_id];
+        to_unit(sp);
+    }
+}
+
+// 50. SharePost: post must be active; compute new share_count.
+//     Hop 1 increments share_count. Hop 2 notifies the author.
+transaction SharePost(post_id: int, author_uid: int, sharer_uid: int,
+                       notif_id: int, ts: int) {
+    hop {
+        var p: Row<Post> = Post[post_id: post_id, uid: author_uid];
+        if p.status == 1 {
+            var new_count: int = p.share_count + 1;
+            Post[post_id: post_id, uid: author_uid].share_count = new_count;
+        }
+    }
+    hop {
+        Notification[notif_id: notif_id, uid: author_uid] = {
+            notif_type: 4,
+            ref_id: sharer_uid,
+            is_read: 0,
+            ts: ts
+        };
+    }
+}
+
+// 51. CreateStory: user must be active.
+transaction CreateStory(story_id: int, uid: int, content: string,
+                         expires_at: int, ts: int) {
+    hop {
+        var u: Row<UserProfile> = UserProfile[uid: uid];
+        if u.status == 1 {
+            Story[story_id: story_id, uid: uid] = {
+                content: content,
+                view_count: 0,
+                expires_at: expires_at,
+                status: 1
+            };
+        }
+    }
+}
+
+// 52. GetStory
+transaction GetStory(story_id: int, uid: int) {
+    hop {
+        var s: Row<Story> = Story[story_id: story_id, uid: uid];
+        to_unit(s);
+    }
+}
+
+// 53. ViewStory: only count views for active (non-expired) stories.
+transaction ViewStory(story_id: int, uid: int) {
+    hop {
+        var s: Row<Story> = Story[story_id: story_id, uid: uid];
+        if s.status == 1 {
+            var new_count: int = s.view_count + 1;
+            Story[story_id: story_id, uid: uid].view_count = new_count;
+        }
+    }
+}
+
+// 54. ExpireStory: only expire currently active stories.
+transaction ExpireStory(story_id: int, uid: int) {
+    hop {
+        var s: Row<Story> = Story[story_id: story_id, uid: uid];
+        if s.status == 1 {
+            Story[story_id: story_id, uid: uid].status = 0;
+        }
+    }
+}
+
+// 55. GetUserAndPost: cross-partition read.
+transaction GetUserAndPost(viewer_uid: int, post_id: int, author_uid: int) {
+    hop {
+        var u: Row<UserProfile> = UserProfile[uid: viewer_uid];
+        to_unit(u);
+    }
+    hop {
+        var p: Row<Post> = Post[post_id: post_id, uid: author_uid];
+        to_unit(p);
+    }
+}
+
+// 56. UpdateGroupDescription: only update active groups.
+transaction UpdateGroupDescription(group_id: int, description: string) {
+    hop {
+        var g: Row<Group> = Group[group_id: group_id];
+        if g.status == 1 {
+            Group[group_id: group_id].description = description;
+        }
+    }
+}
+
+// 57. UpdateMediaUrl: only update active media entries.
+transaction UpdateMediaUrl(media_id: int, uid: int, url: string) {
+    hop {
+        var m: Row<Media> = Media[media_id: media_id, uid: uid];
+        if m.status == 1 {
+            Media[media_id: media_id, uid: uid].url = url;
+        }
+    }
+}
+
+// 58. UpdateStoryContent: only update active stories.
+transaction UpdateStoryContent(story_id: int, uid: int, content: string) {
+    hop {
+        var s: Row<Story> = Story[story_id: story_id, uid: uid];
+        if s.status == 1 {
+            Story[story_id: story_id, uid: uid].content = content;
+        }
+    }
+}
+
+// 59. GetCommentAndPost: both on post_id partition — single hop.
+transaction GetCommentAndPost(comment_id: int, post_id: int, uid: int) {
+    hop {
+        var c: Row<Comment> = Comment[comment_id: comment_id, post_id: post_id];
+        to_unit(c);
+        var p: Row<Post> = Post[post_id: post_id, uid: uid];
+        to_unit(p);
+    }
+}
+
+// 60. ActivateUser: only if currently deactivated.
+transaction ActivateUser(uid: int) {
+    hop {
+        var u: Row<UserProfile> = UserProfile[uid: uid];
+        if u.status == 0 {
+            UserProfile[uid: uid].status = 1;
+        }
+    }
+}
+
+// 61. UpdateUsername: only update active accounts.
+transaction UpdateUsername(uid: int, username: string) {
+    hop {
+        var u: Row<UserProfile> = UserProfile[uid: uid];
+        if u.status == 1 {
+            UserProfile[uid: uid].username = username;
+        }
+    }
+}
+
+// 62. GetFollowStatus
+transaction GetFollowStatus(follower_id: int, followee_id: int) {
+    hop {
+        var f: Row<Follow> = Follow[follower_id: follower_id, followee_id: followee_id];
+        var active: int = f.is_active;
+        to_unit(active);
+    }
+}
+
+// 63. GetGroupAndMember: both on group_id partition — single hop.
+transaction GetGroupAndMember(group_id: int, uid: int) {
+    hop {
+        var g: Row<Group> = Group[group_id: group_id];
+        to_unit(g);
+        var gm: Row<GroupMember> = GroupMember[group_id: group_id, uid: uid];
+        to_unit(gm);
+    }
+}
+
+// 64. UpdatePostLikeCount: admin correction; post must be active and count non-negative.
+transaction UpdatePostLikeCount(post_id: int, uid: int, like_count: int) {
+    hop {
+        var p: Row<Post> = Post[post_id: post_id, uid: uid];
+        if p.status == 1 && like_count >= 0 {
+            Post[post_id: post_id, uid: uid].like_count = like_count;
+        }
+    }
+}
+
+// 65. UpdateCommentLikeCount: admin correction; comment must be active and count non-negative.
+transaction UpdateCommentLikeCount(comment_id: int, post_id: int,
+                                    like_count: int) {
+    hop {
+        var c: Row<Comment> = Comment[comment_id: comment_id, post_id: post_id];
+        if c.status == 1 && like_count >= 0 {
+            Comment[comment_id: comment_id, post_id: post_id].like_count = like_count;
+        }
+    }
+}
+
+// 66. GetNotificationStatus
+transaction GetNotificationStatus(notif_id: int, uid: int) {
+    hop {
+        var n: Row<Notification> = Notification[notif_id: notif_id, uid: uid];
+        var is_read: int = n.is_read;
+        to_unit(is_read);
+    }
+}
+
+// 67. DemoteGroupMember: only demote admins (role == 2) who are active members.
+transaction DemoteGroupMember(group_id: int, uid: int) {
+    hop {
+        var gm: Row<GroupMember> = GroupMember[group_id: group_id, uid: uid];
+        if gm.is_active == 1 && gm.role == 2 {
+            GroupMember[group_id: group_id, uid: uid].role = 1;
+        }
+    }
+}
+
+// 68. GetMessageReadStatus
+transaction GetMessageReadStatus(msg_id: int, sender_id: int) {
+    hop {
+        var m: Row<Message> = Message[msg_id: msg_id, sender_id: sender_id];
+        var is_read: int = m.is_read;
+        to_unit(is_read);
+    }
+}
+
+// 69. GetPostShareCount
+transaction GetPostShareCount(post_id: int, uid: int) {
+    hop {
+        var p: Row<Post> = Post[post_id: post_id, uid: uid];
+        var sc: int = p.share_count;
+        to_unit(sc);
+    }
+}
+
+// 70. GetStoryViewCount
+transaction GetStoryViewCount(story_id: int, uid: int) {
+    hop {
+        var s: Row<Story> = Story[story_id: story_id, uid: uid];
+        var vc: int = s.view_count;
+        to_unit(vc);
+    }
+}
+
+// 71. ScanActiveComments: scan all Comment rows on the post's partition;
+//     count those with status == 1 (active). Partition-local scan on post_id.
+transaction ScanActiveComments(post_id: int, uid: int) -> int {
+    @global hop {
+        var active_count: int = 0;
+        for (var iter: Iterator<Comment> = scan(Comment, post_id, __slice__);
+             hasNext(iter); iter = next(iter)) {
+            var c_id = get_comment_id(iter);
+            var p_id = get_post_id(iter);
+            if p_id == post_id {
+                var c: Row<Comment> = Comment[comment_id: c_id, post_id: p_id];
+                if c.status == 1 {
+                    active_count = active_count + 1;
+                }
+            }
+        }
+        return active_count;
+    }
+}
+
+// 72. ScanGroupActiveMembers: scan all GroupMember rows on the group partition;
+//     count those with is_active == 1. Partition-local scan on group_id.
+transaction ScanGroupActiveMembers(group_id: int) -> int {
+    @global hop {
+        var member_count: int = 0;
+        for (var iter: Iterator<GroupMember> = scan(GroupMember, group_id, __slice__);
+             hasNext(iter); iter = next(iter)) {
+            var g_id = get_group_id(iter);
+            var u_id = get_uid(iter);
+            if g_id == group_id {
+                var gm: Row<GroupMember> = GroupMember[group_id: g_id, uid: u_id];
+                if gm.is_active == 1 {
+                    member_count = member_count + 1;
+                }
+            }
+        }
+        return member_count;
+    }
+}
+
+// 73. GetPostAndUser: cross-partition read.
+transaction GetPostAndUser(post_id: int, author_uid: int, viewer_uid: int) {
+    hop {
+        var p: Row<Post> = Post[post_id: post_id, uid: author_uid];
+        to_unit(p);
+    }
+    hop {
+        var u: Row<UserProfile> = UserProfile[uid: viewer_uid];
+        to_unit(u);
+    }
+}
+
+// 74. GetMessageAndSender: both on sender partition — single hop.
+transaction GetMessageAndSender(msg_id: int, sender_id: int) {
+    hop {
+        var m: Row<Message> = Message[msg_id: msg_id, sender_id: sender_id];
+        to_unit(m);
+        var u: Row<UserProfile> = UserProfile[uid: sender_id];
+        to_unit(u);
+    }
+}
+
+// 75. SetGroupOwner: new owner must be an active member of the group.
+transaction SetGroupOwner(group_id: int, new_owner_id: int) {
+    hop {
+        var gm: Row<GroupMember> = GroupMember[group_id: group_id, uid: new_owner_id];
+        if gm.is_active == 1 {
+            Group[group_id: group_id].owner_id = new_owner_id;
+        }
+    }
+}
+
+// 76. ReactivateFollow: restore a deactivated follow edge.
+transaction ReactivateFollow(follower_id: int, followee_id: int, ts: int) {
+    hop {
+        var f: Row<Follow> = Follow[follower_id: follower_id, followee_id: followee_id];
+        if f.is_active == 0 {
+            Follow[follower_id: follower_id, followee_id: followee_id].is_active = 1;
+            Follow[follower_id: follower_id, followee_id: followee_id].created_at = ts;
+        }
+    }
+}
+
+// 77. GetMediaAndUser: both on uid partition — single hop.
+transaction GetMediaAndUser(media_id: int, uid: int) {
+    hop {
+        var m: Row<Media> = Media[media_id: media_id, uid: uid];
+        to_unit(m);
+        var u: Row<UserProfile> = UserProfile[uid: uid];
+        to_unit(u);
+    }
+}
+
+// 78. GetSavedPostStatus
+transaction GetSavedPostStatus(uid: int, post_id: int) {
+    hop {
+        var sp: Row<SavedPost> = SavedPost[uid: uid, post_id: post_id];
+        var active: int = sp.is_active;
+        to_unit(active);
+    }
+}
+
+// 79. UpdateStoryExpiry: only update active stories.
+transaction UpdateStoryExpiry(story_id: int, uid: int, expires_at: int) {
+    hop {
+        var s: Row<Story> = Story[story_id: story_id, uid: uid];
+        if s.status == 1 {
+            Story[story_id: story_id, uid: uid].expires_at = expires_at;
+        }
+    }
+}
+
+// 80. GetCommentLikeStatus
+transaction GetCommentLikeStatus(comment_id: int, uid: int) {
+    hop {
+        var cl: Row<CommentLike> = CommentLike[comment_id: comment_id, uid: uid];
+        var active: int = cl.is_active;
+        to_unit(active);
+    }
+}
