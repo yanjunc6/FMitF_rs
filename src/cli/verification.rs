@@ -174,6 +174,49 @@ pub fn run_verification_stage(
         if let Some((src_f, src_i, src_h, tgt_f, tgt_i, tgt_h)) =
             parse_commutative_edge_ids(&result.file_name)
         {
+            // Compute maximum primary key count across tables accessed by the two hops
+            // Use hop-level dataflow analysis (`analyze_table_mod_ref`) instead of scanning instructions.
+            let mut tables_used: std::collections::HashSet<crate::cfg::TableId> =
+                std::collections::HashSet::new();
+
+            // Collect tables using hop-level dataflow: find the Hop directly and run analysis on its owning function.
+            let collect_from_func_hop = |func_idx: usize,
+                                         hop_idx: usize,
+                                         prog: &crate::cfg::Program,
+                                         tables_used: &mut std::collections::HashSet<
+                crate::cfg::TableId,
+            >| {
+                if let Some((_, hop)) = prog.hops.iter().find(|(hid, hop)| {
+                    hid.index() == hop_idx && hop.function_id.index() == func_idx
+                }) {
+                    let fid = hop.function_id;
+                    let function = &prog.functions[fid];
+                    let analysis_results = crate::dataflow::analyze_table_mod_ref(function, prog);
+                    for &block_id in &hop.blocks {
+                        if let Some(exit) = analysis_results.block_exit.get(&block_id) {
+                            if let Some(accesses) = exit.as_set() {
+                                for a in accesses {
+                                    tables_used.insert(a.table);
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+
+            collect_from_func_hop(src_f, src_h, program, &mut tables_used);
+            collect_from_func_hop(tgt_f, tgt_h, program, &mut tables_used);
+
+            let mut max_pk = 0usize;
+            for &tid in &tables_used {
+                if let Some(table) = program.tables.get(tid) {
+                    let pk = table.primary_key_fields.len();
+                    if pk > max_pk {
+                        max_pk = pk;
+                    }
+                }
+            }
+
             let edge_data = CEdgeVerificationData {
                 source_function_id: src_f,
                 source_instance: src_i,
@@ -190,6 +233,7 @@ pub fn run_verification_stage(
                 has_loop: result.program_stats.has_loop,
                 db_read_count: result.program_stats.db_read_count,
                 db_write_count: result.program_stats.db_write_count,
+                max_primary_key_count: max_pk,
                 boogie_stdout: result.stdout,
                 boogie_stderr: result.stderr,
                 boogie_file: result.file_name,

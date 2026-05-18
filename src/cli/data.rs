@@ -50,6 +50,8 @@ pub struct CEdgeVerificationData {
     pub db_read_count: usize,
     /// Number of table write operations
     pub db_write_count: usize,
+    /// Maximum number of primary key fields for tables touched by this C-edge
+    pub max_primary_key_count: usize,
     /// Raw Boogie stdout
     pub boogie_stdout: String,
     /// Raw Boogie stderr
