@@ -157,6 +157,37 @@ pub fn run_verification_stage(
         logger.line(line)?;
     }
 
+    // Precompute hop table accesses to avoid re-running dataflow analysis in the verification loop
+    let mut func_analyses = std::collections::HashMap::new();
+    for (fid, func) in &program.functions {
+        func_analyses.insert(
+            fid.index(),
+            crate::dataflow::analyze_table_mod_ref(func, program),
+        );
+    }
+
+    let mut hop_tables: std::collections::HashMap<
+        (usize, usize),
+        std::collections::HashSet<crate::cfg::TableId>,
+    > = std::collections::HashMap::new();
+    for (hid, hop) in &program.hops {
+        let func_idx = hop.function_id.index();
+        let hop_idx = hid.index();
+        let mut tables = std::collections::HashSet::new();
+        if let Some(analysis) = func_analyses.get(&func_idx) {
+            for &block_id in &hop.blocks {
+                if let Some(exit) = analysis.block_exit.get(&block_id) {
+                    if let Some(accesses) = exit.as_set() {
+                        for a in accesses {
+                            tables.insert(a.table);
+                        }
+                    }
+                }
+            }
+        }
+        hop_tables.insert((func_idx, hop_idx), tables);
+    }
+
     let mut all_boogie_errors: Vec<BoogieError> = Vec::new();
     let mut exec_errors = Vec::new();
 
@@ -174,45 +205,18 @@ pub fn run_verification_stage(
         if let Some((src_f, src_i, src_h, tgt_f, tgt_i, tgt_h)) =
             parse_commutative_edge_ids(&result.file_name)
         {
-            // Compute maximum primary key count across tables accessed by the two hops
-            // Use hop-level dataflow analysis (`analyze_table_mod_ref`) instead of scanning instructions.
-            let mut tables_used: std::collections::HashSet<crate::cfg::TableId> =
-                std::collections::HashSet::new();
-
-            // Collect tables using hop-level dataflow: find the Hop directly and run analysis on its owning function.
-            let collect_from_func_hop = |func_idx: usize,
-                                         hop_idx: usize,
-                                         prog: &crate::cfg::Program,
-                                         tables_used: &mut std::collections::HashSet<
-                crate::cfg::TableId,
-            >| {
-                if let Some((_, hop)) = prog.hops.iter().find(|(hid, hop)| {
-                    hid.index() == hop_idx && hop.function_id.index() == func_idx
-                }) {
-                    let fid = hop.function_id;
-                    let function = &prog.functions[fid];
-                    let analysis_results = crate::dataflow::analyze_table_mod_ref(function, prog);
-                    for &block_id in &hop.blocks {
-                        if let Some(exit) = analysis_results.block_exit.get(&block_id) {
-                            if let Some(accesses) = exit.as_set() {
-                                for a in accesses {
-                                    tables_used.insert(a.table);
-                                }
-                            }
-                        }
+            let mut max_pk = 0usize;
+            if let Some(tables) = hop_tables.get(&(src_f, src_h)) {
+                for &tid in tables {
+                    if let Some(table) = program.tables.get(tid) {
+                        max_pk = max_pk.max(table.primary_key_fields.len());
                     }
                 }
-            };
-
-            collect_from_func_hop(src_f, src_h, program, &mut tables_used);
-            collect_from_func_hop(tgt_f, tgt_h, program, &mut tables_used);
-
-            let mut max_pk = 0usize;
-            for &tid in &tables_used {
-                if let Some(table) = program.tables.get(tid) {
-                    let pk = table.primary_key_fields.len();
-                    if pk > max_pk {
-                        max_pk = pk;
+            }
+            if let Some(tables) = hop_tables.get(&(tgt_f, tgt_h)) {
+                for &tid in tables {
+                    if let Some(table) = program.tables.get(tid) {
+                        max_pk = max_pk.max(table.primary_key_fields.len());
                     }
                 }
             }
