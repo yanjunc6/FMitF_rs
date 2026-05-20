@@ -1,0 +1,702 @@
+// ============================================================================
+// Travel Agency — Flight, Hotel, and Car Rental Booking Benchmark
+//
+// Models a full-service online travel agency handling flight reservations,
+// hotel bookings, car rentals, and bundled package deals (OLTP workload).
+//
+// Partition strategy:
+//   customerPartition(customer_id)  — Customer, FlightReservation,
+//                                     HotelReservation, CarReservation
+//   flightPartition(flight_id)      — Flight, Seat
+//   hotelPartition(hotel_id)        — Hotel, Room
+//   carPartition(car_id)            — Car
+//
+// Rationale:
+//   Reservations are co-located with the customer so that itinerary reads and
+//   cancellations stay single-partition.  Inventory tables (Seat, Room, Car)
+//   live with the asset so that availability checks and reservation writes are
+//   partition-local.  Booking transactions cross two partitions: inventory
+//   (claim the asset) → customer (record + charge).
+//
+// Chopping summary:
+//   1-hop (customerPartition):
+//     RegisterCustomer, GetCustomerProfile, UpdateCustomerContact,
+//     AddLoyaltyPoints, RedeemLoyaltyPoints,
+//     GetFlightReservation, GetHotelReservation, GetCarReservation,
+//     ProcessRefund
+//
+//   1-hop (flightPartition):
+//     GetFlightStatus, GetSeatStatus, UpdateFlightPrice
+//
+//   1-hop (hotelPartition):
+//     GetHotelAvailability, UpdateRoomPrice
+//
+//   1-hop (carPartition):
+//     GetCarAvailability
+//
+//   2-hop (inventory → customer):
+//     BookFlight, BookHotel, BookCar
+//
+//   2-hop (customer → inventory):
+//     CancelFlightReservation, CancelHotelReservation, CancelCarReservation
+//
+//   2-hop (customer → flight):
+//     CheckIn
+//
+//   3-hop (from customer → to customer → flight):
+//     TransferFlight
+//
+//   N-hop loop (one customerPartition per iteration):
+//     ProcessGroupCheckout
+//
+//   4-hop (flight → hotel → car → customer):
+//     BookBundle
+//
+// Notes:
+//   - DELETE is not supported; cancellations use status tombstone fields.
+//   - Write operations use direct column writes (Table[pk].field = val)
+//     rather than full row replacement.
+//   - Dates are represented as int (YYYYMMDD).
+//   - Prices and balances are float.
+// ============================================================================
+
+// ============================================================================
+// Partitions
+// ============================================================================
+
+partition customerPartition(customer_id: int) -> int { return customer_id; }
+partition flightPartition(flight_id: int) -> int { return flight_id; }
+partition hotelPartition(hotel_id: int) -> int { return hotel_id; }
+partition carPartition(car_id: int) -> int { return car_id; }
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+const CUSTOMER_ACTIVE: int = 1;
+const CUSTOMER_INACTIVE: int = 0;
+
+const RESERVATION_ACTIVE: int = 1;
+const RESERVATION_CANCELLED: int = 0;
+const RESERVATION_COMPLETED: int = 2;
+const RESERVATION_TRANSFERRED: int = 3;
+
+const GROUP_CHECKOUT_SIZE: int = 10;   // number of customers processed per group checkout
+
+const SEAT_FREE: int = 0;
+const SEAT_RESERVED: int = 1;
+const SEAT_CHECKED_IN: int = 2;
+
+const ROOM_FREE: int = 0;
+const ROOM_RESERVED: int = 1;
+
+const CAR_AVAILABLE: int = 1;
+const CAR_UNAVAILABLE: int = 0;
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+// Customer account — partitioned by customer_id.
+table Customer {
+    primary customer_id: int;
+    node customerPartition(customer_id);
+    name: string;
+    email: string;
+    phone: string;
+    loyalty_points: int;
+    balance: float;
+    status: int;            // CUSTOMER_ACTIVE | CUSTOMER_INACTIVE
+}
+
+// Flight reservation record — co-located with customer.
+// One row per (customer_id, reservation_id) booking.
+table FlightReservation {
+    primary customer_id: int;
+    primary reservation_id: int;
+    node customerPartition(customer_id);
+    flight_id: int;
+    seat_no: int;
+    price: float;
+    status: int;            // RESERVATION_ACTIVE | CANCELLED | COMPLETED
+}
+
+// Hotel reservation record — co-located with customer.
+table HotelReservation {
+    primary customer_id: int;
+    primary reservation_id: int;
+    node customerPartition(customer_id);
+    hotel_id: int;
+    room_id: int;
+    check_in: int;          // YYYYMMDD
+    check_out: int;         // YYYYMMDD
+    price: float;
+    status: int;
+}
+
+// Car rental reservation record — co-located with customer.
+table CarReservation {
+    primary customer_id: int;
+    primary reservation_id: int;
+    node customerPartition(customer_id);
+    car_id: int;
+    pickup_date: int;       // YYYYMMDD
+    return_date: int;       // YYYYMMDD
+    price: float;
+    status: int;
+}
+
+// Flight — partitioned by flight_id.
+table Flight {
+    primary flight_id: int;
+    node flightPartition(flight_id);
+    origin: string;
+    destination: string;
+    departure_date: int;    // YYYYMMDD
+    seats_total: int;
+    seats_available: int;
+    price_per_seat: float;
+    status: int;
+}
+
+// Seat — co-located with Flight via composite PK (flight_id, seat_no).
+table Seat {
+    primary flight_id: int;
+    primary seat_no: int;
+    node flightPartition(flight_id);
+    seat_class: string;     // "economy" | "business" | "first"
+    status: int;            // SEAT_FREE | SEAT_RESERVED | SEAT_CHECKED_IN
+    customer_id: int;       // 0 if unoccupied
+}
+
+// Hotel — partitioned by hotel_id.
+table Hotel {
+    primary hotel_id: int;
+    node hotelPartition(hotel_id);
+    name: string;
+    city: string;
+    rating: int;            // 1–5
+    status: int;
+}
+
+// Room — co-located with Hotel via composite PK (hotel_id, room_id).
+table Room {
+    primary hotel_id: int;
+    primary room_id: int;
+    node hotelPartition(hotel_id);
+    room_type: string;      // "single" | "double" | "suite"
+    price_per_night: float;
+    status: int;            // ROOM_FREE | ROOM_RESERVED
+    customer_id: int;       // 0 if unoccupied
+}
+
+// Car — partitioned by car_id.
+table Car {
+    primary car_id: int;
+    node carPartition(car_id);
+    model: string;
+    location: string;
+    price_per_day: float;
+    status: int;            // CAR_AVAILABLE | CAR_UNAVAILABLE
+    customer_id: int;       // 0 if unrented
+}
+
+// ============================================================================
+// Transactions
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// Customer Management — 1 hop (customerPartition)
+// ----------------------------------------------------------------------------
+
+// RegisterCustomer: create a new account with zero balance and loyalty points.
+transaction RegisterCustomer(customer_id: int, name: string,
+                             email: string, phone: string) {
+    hop {
+        Customer[customer_id: customer_id] = {
+            name: name,
+            email: email,
+            phone: phone,
+            loyalty_points: 0,
+            balance: 0.0,
+            status: CUSTOMER_ACTIVE
+        };
+    }
+}
+
+// GetCustomerProfile: read a customer's full account record.
+transaction GetCustomerProfile(customer_id: int) {
+    hop {
+        var c: Row<Customer> = Customer[customer_id: customer_id];
+        to_unit(c);
+    }
+}
+
+// UpdateCustomerContact: overwrite email and phone in place.
+transaction UpdateCustomerContact(customer_id: int, email: string, phone: string) {
+    hop {
+        Customer[customer_id: customer_id].email = email;
+        Customer[customer_id: customer_id].phone = phone;
+    }
+}
+
+// AddLoyaltyPoints: credit loyalty points after a completed trip.
+transaction AddLoyaltyPoints(customer_id: int, points: int) {
+    hop {
+        var cur: int = Customer[customer_id: customer_id].loyalty_points;
+        Customer[customer_id: customer_id].loyalty_points = cur + points;
+    }
+}
+
+// RedeemLoyaltyPoints: debit loyalty points for a discount; no-op if insufficient.
+transaction RedeemLoyaltyPoints(customer_id: int, points: int) {
+    hop {
+        var cur: int = Customer[customer_id: customer_id].loyalty_points;
+        if cur < points {
+            return;
+        }
+        Customer[customer_id: customer_id].loyalty_points = cur - points;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Flight Inventory Reads — 1 hop (flightPartition)
+// ----------------------------------------------------------------------------
+
+// GetFlightStatus: read flight metadata and current seat availability.
+transaction GetFlightStatus(flight_id: int) {
+    hop {
+        var f: Row<Flight> = Flight[flight_id: flight_id];
+        to_unit(f);
+    }
+}
+
+// GetSeatStatus: read a specific seat's occupancy and class.
+transaction GetSeatStatus(flight_id: int, seat_no: int) {
+    hop {
+        var s: Row<Seat> = Seat[flight_id: flight_id, seat_no: seat_no];
+        to_unit(s);
+    }
+}
+
+// UpdateFlightPrice: update the listed price per seat (admin/yield-management).
+transaction UpdateFlightPrice(flight_id: int, new_price: float) {
+    hop {
+        Flight[flight_id: flight_id].price_per_seat = new_price;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Hotel Inventory Reads — 1 hop (hotelPartition)
+// ----------------------------------------------------------------------------
+
+// GetHotelAvailability: read a specific room's status and pricing.
+transaction GetHotelAvailability(hotel_id: int, room_id: int) {
+    hop {
+        var r: Row<Room> = Room[hotel_id: hotel_id, room_id: room_id];
+        to_unit(r);
+    }
+}
+
+// UpdateRoomPrice: update the nightly rate for a room (admin/yield-management).
+transaction UpdateRoomPrice(hotel_id: int, room_id: int, new_price: float) {
+    hop {
+        Room[hotel_id: hotel_id, room_id: room_id].price_per_night = new_price;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Car Inventory Reads — 1 hop (carPartition)
+// ----------------------------------------------------------------------------
+
+// GetCarAvailability: read a car's availability status and daily rate.
+transaction GetCarAvailability(car_id: int) {
+    hop {
+        var c: Row<Car> = Car[car_id: car_id];
+        to_unit(c);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Reservation Reads — 1 hop (customerPartition)
+// ----------------------------------------------------------------------------
+
+// GetFlightReservation: read a specific flight booking for a customer.
+transaction GetFlightReservation(customer_id: int, reservation_id: int) {
+    hop {
+        var r: Row<FlightReservation> = FlightReservation[customer_id: customer_id,
+                                                           reservation_id: reservation_id];
+        to_unit(r);
+    }
+}
+
+// GetHotelReservation: read a specific hotel booking for a customer.
+transaction GetHotelReservation(customer_id: int, reservation_id: int) {
+    hop {
+        var r: Row<HotelReservation> = HotelReservation[customer_id: customer_id,
+                                                         reservation_id: reservation_id];
+        to_unit(r);
+    }
+}
+
+// GetCarReservation: read a specific car rental booking for a customer.
+transaction GetCarReservation(customer_id: int, reservation_id: int) {
+    hop {
+        var r: Row<CarReservation> = CarReservation[customer_id: customer_id,
+                                                     reservation_id: reservation_id];
+        to_unit(r);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Flight Booking — 2 hops (flightPartition → customerPartition)
+// ----------------------------------------------------------------------------
+
+// BookFlight: reserve a seat and charge the customer.
+//
+// Hop 1 (flight partition): verify seat is free, claim it, decrement availability.
+// Hop 2 (customer partition): deduct balance, insert FlightReservation record.
+//
+// customer_id and price are transaction parameters available in both hops.
+transaction BookFlight(customer_id: int, reservation_id: int,
+                       flight_id: int, seat_no: int, price: float) {
+    // Hop 1: flight partition — claim the seat.
+    hop {
+        var cur_status: int = Seat[flight_id: flight_id, seat_no: seat_no].status;
+        if cur_status != SEAT_FREE {
+            return;
+        }
+        Seat[flight_id: flight_id, seat_no: seat_no].status = SEAT_RESERVED;
+        Seat[flight_id: flight_id, seat_no: seat_no].customer_id = customer_id;
+
+        var avail: int = Flight[flight_id: flight_id].seats_available;
+        Flight[flight_id: flight_id].seats_available = avail - 1;
+    }
+
+    // Hop 2: customer partition — charge and record reservation.
+    hop {
+        var bal: float = Customer[customer_id: customer_id].balance;
+        Customer[customer_id: customer_id].balance = bal - price;
+
+        FlightReservation[customer_id: customer_id, reservation_id: reservation_id] = {
+            flight_id: flight_id,
+            seat_no: seat_no,
+            price: price,
+            status: RESERVATION_ACTIVE
+        };
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Hotel Booking — 2 hops (hotelPartition → customerPartition)
+// ----------------------------------------------------------------------------
+
+// BookHotel: reserve a room and charge the customer.
+//
+// Hop 1 (hotel partition): verify room is free, claim it.
+// Hop 2 (customer partition): deduct balance, insert HotelReservation record.
+transaction BookHotel(customer_id: int, reservation_id: int,
+                      hotel_id: int, room_id: int,
+                      check_in: int, check_out: int, price: float) {
+    // Hop 1: hotel partition — claim the room.
+    hop {
+        var cur_status: int = Room[hotel_id: hotel_id, room_id: room_id].status;
+        if cur_status != ROOM_FREE {
+            return;
+        }
+        Room[hotel_id: hotel_id, room_id: room_id].status = ROOM_RESERVED;
+        Room[hotel_id: hotel_id, room_id: room_id].customer_id = customer_id;
+    }
+
+    // Hop 2: customer partition — charge and record reservation.
+    hop {
+        var bal: float = Customer[customer_id: customer_id].balance;
+        Customer[customer_id: customer_id].balance = bal - price;
+
+        HotelReservation[customer_id: customer_id, reservation_id: reservation_id] = {
+            hotel_id: hotel_id,
+            room_id: room_id,
+            check_in: check_in,
+            check_out: check_out,
+            price: price,
+            status: RESERVATION_ACTIVE
+        };
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Car Rental Booking — 2 hops (carPartition → customerPartition)
+// ----------------------------------------------------------------------------
+
+// BookCar: reserve a car and charge the customer.
+//
+// Hop 1 (car partition): verify car is available, claim it.
+// Hop 2 (customer partition): deduct balance, insert CarReservation record.
+transaction BookCar(customer_id: int, reservation_id: int,
+                    car_id: int, pickup_date: int, return_date: int, price: float) {
+    // Hop 1: car partition — claim the car.
+    hop {
+        var cur_status: int = Car[car_id: car_id].status;
+        if cur_status != CAR_AVAILABLE {
+            return;
+        }
+        Car[car_id: car_id].status = CAR_UNAVAILABLE;
+        Car[car_id: car_id].customer_id = customer_id;
+    }
+
+    // Hop 2: customer partition — charge and record reservation.
+    hop {
+        var bal: float = Customer[customer_id: customer_id].balance;
+        Customer[customer_id: customer_id].balance = bal - price;
+
+        CarReservation[customer_id: customer_id, reservation_id: reservation_id] = {
+            car_id: car_id,
+            pickup_date: pickup_date,
+            return_date: return_date,
+            price: price,
+            status: RESERVATION_ACTIVE
+        };
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Bundle Booking — 4 hops (flight → hotel → car → customer)
+// ----------------------------------------------------------------------------
+
+// BookBundle: book a flight, hotel, and car rental in a single transaction.
+//
+// Hop 1 (flight partition): claim seat, decrement flight availability.
+// Hop 2 (hotel partition):  claim room.
+// Hop 3 (car partition):    claim car.
+// Hop 4 (customer partition): deduct combined total, insert all three reservations.
+//
+// All price parameters are available across all hops as continuation values.
+transaction BookBundle(customer_id: int,
+                       flight_res_id: int, hotel_res_id: int, car_res_id: int,
+                       flight_id: int, seat_no: int,
+                       hotel_id: int, room_id: int,
+                       car_id: int,
+                       check_in: int, check_out: int,
+                       pickup_date: int, return_date: int,
+                       flight_price: float, hotel_price: float, car_price: float) {
+    // Hop 1: flight partition — claim the seat.
+    hop {
+        var seat_status: int = Seat[flight_id: flight_id, seat_no: seat_no].status;
+        if seat_status != SEAT_FREE {
+            return;
+        }
+        Seat[flight_id: flight_id, seat_no: seat_no].status = SEAT_RESERVED;
+        Seat[flight_id: flight_id, seat_no: seat_no].customer_id = customer_id;
+
+        var avail: int = Flight[flight_id: flight_id].seats_available;
+        Flight[flight_id: flight_id].seats_available = avail - 1;
+    }
+
+    // Hop 2: hotel partition — claim the room.
+    hop {
+        var room_status: int = Room[hotel_id: hotel_id, room_id: room_id].status;
+        if room_status != ROOM_FREE {
+            return;
+        }
+        Room[hotel_id: hotel_id, room_id: room_id].status = ROOM_RESERVED;
+        Room[hotel_id: hotel_id, room_id: room_id].customer_id = customer_id;
+    }
+
+    // Hop 3: car partition — claim the car.
+    hop {
+        var car_status: int = Car[car_id: car_id].status;
+        if car_status != CAR_AVAILABLE {
+            return;
+        }
+        Car[car_id: car_id].status = CAR_UNAVAILABLE;
+        Car[car_id: car_id].customer_id = customer_id;
+    }
+
+    // Hop 4: customer partition — deduct total and insert all three reservations.
+    hop {
+        var total: float = flight_price + hotel_price + car_price;
+        var bal: float = Customer[customer_id: customer_id].balance;
+        Customer[customer_id: customer_id].balance = bal - total;
+
+        FlightReservation[customer_id: customer_id, reservation_id: flight_res_id] = {
+            flight_id: flight_id,
+            seat_no: seat_no,
+            price: flight_price,
+            status: RESERVATION_ACTIVE
+        };
+
+        HotelReservation[customer_id: customer_id, reservation_id: hotel_res_id] = {
+            hotel_id: hotel_id,
+            room_id: room_id,
+            check_in: check_in,
+            check_out: check_out,
+            price: hotel_price,
+            status: RESERVATION_ACTIVE
+        };
+
+        CarReservation[customer_id: customer_id, reservation_id: car_res_id] = {
+            car_id: car_id,
+            pickup_date: pickup_date,
+            return_date: return_date,
+            price: car_price,
+            status: RESERVATION_ACTIVE
+        };
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Cancellations — 2 hops (customerPartition → inventory partition)
+// ----------------------------------------------------------------------------
+
+// CancelFlightReservation: tombstone the reservation and free the seat.
+//
+// Hop 1 (customer partition): mark reservation cancelled.
+// Hop 2 (flight partition):   free the seat, restore availability count.
+transaction CancelFlightReservation(customer_id: int, reservation_id: int,
+                                    flight_id: int, seat_no: int) {
+    hop {
+        FlightReservation[customer_id: customer_id,
+                          reservation_id: reservation_id].status = RESERVATION_CANCELLED;
+    }
+    hop {
+        Seat[flight_id: flight_id, seat_no: seat_no].status = SEAT_FREE;
+        Seat[flight_id: flight_id, seat_no: seat_no].customer_id = 0;
+
+        var avail: int = Flight[flight_id: flight_id].seats_available;
+        Flight[flight_id: flight_id].seats_available = avail + 1;
+    }
+}
+
+// CancelHotelReservation: tombstone the reservation and free the room.
+//
+// Hop 1 (customer partition): mark reservation cancelled.
+// Hop 2 (hotel partition):    mark room free.
+transaction CancelHotelReservation(customer_id: int, reservation_id: int,
+                                   hotel_id: int, room_id: int) {
+    hop {
+        HotelReservation[customer_id: customer_id,
+                         reservation_id: reservation_id].status = RESERVATION_CANCELLED;
+    }
+    hop {
+        Room[hotel_id: hotel_id, room_id: room_id].status = ROOM_FREE;
+        Room[hotel_id: hotel_id, room_id: room_id].customer_id = 0;
+    }
+}
+
+// CancelCarReservation: tombstone the reservation and return the car.
+//
+// Hop 1 (customer partition): mark reservation cancelled.
+// Hop 2 (car partition):      make car available again.
+transaction CancelCarReservation(customer_id: int, reservation_id: int, car_id: int) {
+    hop {
+        CarReservation[customer_id: customer_id,
+                       reservation_id: reservation_id].status = RESERVATION_CANCELLED;
+    }
+    hop {
+        Car[car_id: car_id].status = CAR_AVAILABLE;
+        Car[car_id: car_id].customer_id = 0;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Check-In — 2 hops (customerPartition → flightPartition)
+// ----------------------------------------------------------------------------
+
+// CheckIn: validate an active flight reservation and mark the seat as checked-in.
+//
+// Hop 1 (customer partition): verify reservation is active, mark it completed.
+// Hop 2 (flight partition):   update seat status to SEAT_CHECKED_IN.
+transaction CheckIn(customer_id: int, reservation_id: int,
+                    flight_id: int, seat_no: int) {
+    hop {
+        var res_status: int = FlightReservation[customer_id: customer_id,
+                                                reservation_id: reservation_id].status;
+        if res_status != RESERVATION_ACTIVE {
+            return;
+        }
+        FlightReservation[customer_id: customer_id,
+                          reservation_id: reservation_id].status = RESERVATION_COMPLETED;
+    }
+    hop {
+        Seat[flight_id: flight_id, seat_no: seat_no].status = SEAT_CHECKED_IN;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Flight Transfer — 3 hops (from customerPartition → to customerPartition → flightPartition)
+// ----------------------------------------------------------------------------
+
+// TransferFlight: transfer a flight reservation from one customer to another.
+//
+// Hop 1 (from_customer partition): verify reservation is active, mark as transferred.
+// Hop 2 (to_customer partition):   insert a new active reservation for the recipient.
+// Hop 3 (flight partition):        update Seat.customer_id to the new owner.
+//
+// flight_id, seat_no, and price are transaction parameters available in all hops.
+transaction TransferFlight(from_customer_id: int, to_customer_id: int,
+                           from_reservation_id: int, to_reservation_id: int,
+                           flight_id: int, seat_no: int, price: float) {
+    // Hop 1: source customer partition — validate and mark as transferred.
+    hop {
+        var res_status: int = FlightReservation[customer_id: from_customer_id,
+                                                reservation_id: from_reservation_id].status;
+        if res_status != RESERVATION_ACTIVE {
+            return;
+        }
+        FlightReservation[customer_id: from_customer_id,
+                          reservation_id: from_reservation_id].status = RESERVATION_TRANSFERRED;
+    }
+
+    // Hop 2: destination customer partition — create reservation for the recipient.
+    hop {
+        FlightReservation[customer_id: to_customer_id, reservation_id: to_reservation_id] = {
+            flight_id: flight_id,
+            seat_no: seat_no,
+            price: price,
+            status: RESERVATION_ACTIVE
+        };
+    }
+
+    // Hop 3: flight partition — reassign seat ownership to the new customer.
+    hop {
+        Seat[flight_id: flight_id, seat_no: seat_no].customer_id = to_customer_id;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Group Checkout — N hops, one per customer (customerPartition × N)
+// ----------------------------------------------------------------------------
+
+// ProcessGroupCheckout: batch-process the checkout of a tour group.
+//
+// Per iteration (one hop per customer in the group):
+//   - Mark the customer's hotel reservation as COMPLETED.
+//   - Award loyalty points for the stay.
+//
+// Both HotelReservation and Customer are on customerPartition(base_customer_id + i),
+// so each hop is partition-local even though it touches two tables.
+transaction ProcessGroupCheckout(base_customer_id: int,
+                                 base_reservation_id: int,
+                                 points_per_stay: int) {
+    hops for i: int = 0 to GROUP_CHECKOUT_SIZE {
+        HotelReservation[customer_id: base_customer_id + i,
+                         reservation_id: base_reservation_id + i].status = RESERVATION_COMPLETED;
+
+        var cur: int = Customer[customer_id: base_customer_id + i].loyalty_points;
+        Customer[customer_id: base_customer_id + i].loyalty_points = cur + points_per_stay;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Refund — 1 hop (customerPartition)
+// ----------------------------------------------------------------------------
+
+// ProcessRefund: credit the customer's balance following a cancellation.
+// The corresponding reservation cancellation is issued separately via
+// CancelFlightReservation / CancelHotelReservation / CancelCarReservation.
+transaction ProcessRefund(customer_id: int, amount: float) {
+    hop {
+        var bal: float = Customer[customer_id: customer_id].balance;
+        Customer[customer_id: customer_id].balance = bal + amount;
+    }
+}

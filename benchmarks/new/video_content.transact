@@ -1,0 +1,1059 @@
+
+// ============================================================================
+// Video Content Management (VCM) Benchmark
+//
+// Domain: Video streaming platform modeled from the provided ER diagram.
+//   Users (uid) ←IsA← Viewers (name, subscription)   [not disjoint, covering]
+//   Users (uid) ←IsA← Producers (company, bio)        [not disjoint, covering]
+//   Producers -Publish→ Releases (posted_at on relationship)
+//   Releases (rid) ←IsA← Movies (website_url)          [disjoint, covering]
+//   Releases (rid) ←IsA← Series (introduction)         [disjoint, covering]
+//   Releases -Contain→ Videos (ep_num, weak entity; PK = rid+ep_num)
+//   Viewers -Play→ Sessions (initiate_at, leave_at on relationship)
+//   Sessions -SessionOn→ Videos
+//   Viewers -Post→ Reviews (posted_at on relationship)
+//   Reviews -About→ Releases
+//
+// Partition strategy:
+//   userPartition(uid)    — User, Viewer, Producer
+//   releasePartition(rid) — Release, Movie, Series, Video
+//   Session: node userPartition(viewer_uid), PK=(sid, viewer_uid)
+//     → co-located with the viewer's record; mirrors Activity in social.transact
+//   Review: node releasePartition(rid), PK=(rvid, rid)
+//     → co-located with the release's record
+//
+// Tables: 9
+// Transactions: 29
+//   1-hop:    9  (single-partition insert/update/status)
+//   2-hop:    8  (viewer↔release cross-partition ops)
+//   3-hop:    4  (producer↔release↔producer, viewer↔release↔viewer)
+//   4-hop:    2  (four-way swap/cascade across distinct shards)
+//   @global:  3  (scan-based read queries)
+//   hops for: 3  (batch operations; TPC-C Delivery analogue)
+//
+// Commutativity profile highlights:
+//   PostReview vs PostReview on same rid: hop 2 updates avg_rating via
+//     weighted average — non-commutative under floating-point arithmetic.
+//   StartSession vs StartSession on same video: view_count increment commutes.
+//   TransferRelease and SwapReleaseProducers share producer count fields —
+//     non-commutative when they target the same producer_uid.
+//   BatchEndSessions: iteration i lands on userPartition(base_viewer_uid + i),
+//     so all BATCH_SESSION_SIZE iterations are pairwise independent.
+//   BatchMarkEpisodesAvailable: all iterations share releasePartition(rid) but
+//     write to distinct (rid, base_ep_num+i) rows — commute among themselves.
+// ============================================================================
+
+partition userPartition(uid: int) -> int { return uid; }
+partition releasePartition(rid: int) -> int { return rid; }
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+const SUB_FREE: int     = 0;
+const SUB_BASIC: int    = 1;
+const SUB_PREMIUM: int  = 2;
+const SUB_ULTIMATE: int = 3;
+
+const USER_INACTIVE:  int = 0;
+const USER_ACTIVE:    int = 1;
+const USER_SUSPENDED: int = 2;
+
+const RELEASE_MOVIE:  int = 0;
+const RELEASE_SERIES: int = 1;
+
+const RELEASE_DRAFT:     int = 0;
+const RELEASE_PUBLISHED: int = 1;
+const RELEASE_ARCHIVED:  int = 2;
+const RELEASE_COMPLETED: int = 3;   // series with finale published
+
+const SESSION_ACTIVE:    int = 0;
+const SESSION_COMPLETED: int = 1;
+const SESSION_ABANDONED: int = 2;
+
+const REVIEW_ACTIVE:  int = 0;
+const REVIEW_HIDDEN:  int = 1;
+const REVIEW_REMOVED: int = 2;
+
+const VIDEO_PROCESSING: int = 0;
+const VIDEO_AVAILABLE:  int = 1;
+const VIDEO_REMOVED:    int = 2;
+
+const QUALITY_SD:  int = 0;
+const QUALITY_HD:  int = 1;
+const QUALITY_4K:  int = 2;
+
+const DEVICE_WEB:     int = 0;
+const DEVICE_MOBILE:  int = 1;
+const DEVICE_TV:      int = 2;
+const DEVICE_DESKTOP: int = 3;
+
+const MILESTONE_BASIC_HOURS:    int = 100;
+const MILESTONE_PREMIUM_HOURS:  int = 1000;
+const MILESTONE_ULTIMATE_HOURS: int = 5000;
+const MILESTONE_BASIC_REVIEWS:    int = 5;
+const MILESTONE_PREMIUM_REVIEWS:  int = 25;
+const MILESTONE_ULTIMATE_REVIEWS: int = 50;
+
+const BATCH_SESSION_SIZE: int = 20;
+const BATCH_EPISODE_SIZE: int = 8;
+const BATCH_VIEWER_SIZE:  int = 12;
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+// Base user record — viewer and producer sub-records share this uid.
+table User {
+    primary uid: int;
+    node userPartition(uid);
+    email:       string;
+    nickname:    string;
+    street:      string;
+    city:        string;
+    state:       string;
+    zip:         int;
+    genres:      string;     // genre preference bitmask encoded as int string
+    joined_date: int;        // YYYYMMDD
+    user_type:   int;        // 0=viewer, 1=producer, 2=both
+    status:      int;        // USER_* constants
+    invariant status >= 0;
+    invariant status <= 2;
+}
+
+// Viewer sub-record — IsA User (not disjoint, covering).
+table Viewer {
+    primary uid: int;
+    node userPartition(uid);
+    firstname:    string;
+    lastname:     string;
+    subscription: int;       // SUB_* constants
+    watch_hours:  int;       // cumulative hours watched
+    review_count: int;
+    invariant subscription >= 0;
+    invariant subscription <= 3;
+    invariant watch_hours >= 0;
+    invariant review_count >= 0;
+}
+
+// Producer sub-record — IsA User (not disjoint, covering).
+table Producer {
+    primary uid: int;
+    node userPartition(uid);
+    company:       string;
+    bio:           string;
+    release_count: int;
+    total_views:   int;      // aggregate views across all releases
+    invariant release_count >= 0;
+    invariant total_views >= 0;
+}
+
+// Streaming session — Play relationship between Viewer and Video.
+// Co-located with Viewer via node userPartition(viewer_uid).
+// PK = (sid, viewer_uid) mirrors Activity(AID, UID) in social.transact.
+table Session {
+    primary sid:        int;
+    primary viewer_uid: int;
+    node userPartition(viewer_uid);
+    video_rid:     int;
+    video_ep_num:  int;
+    quality:       int;      // QUALITY_* constants
+    device:        int;      // DEVICE_* constants
+    initiate_at:   int;      // seconds since epoch (Play.initiate_at)
+    leave_at:      int;      // seconds since epoch (Play.leave_at)
+    status:        int;      // SESSION_* constants
+    watch_seconds: int;
+    invariant watch_seconds >= 0;
+}
+
+// Release — base record for both Movies and Series.
+// Stores denormalized review aggregates for single-hop avg_rating updates.
+table Release {
+    primary rid: int;
+    node releasePartition(rid);
+    title:         string;
+    genre:         int;
+    release_date:  int;      // YYYYMMDD (attribute on Release entity)
+    published_at:  int;      // seconds since epoch (Publish.posted_at)
+    producer_uid:  int;
+    video_count:   int;
+    total_reviews: int;
+    avg_rating:    float;    // maintained incrementally across PostReview / HideReview
+    release_type:  int;      // RELEASE_MOVIE or RELEASE_SERIES
+    status:        int;      // RELEASE_* constants
+    view_count:    int;
+    invariant video_count >= 0;
+    invariant total_reviews >= 0;
+    invariant avg_rating >= 0.0;
+    invariant view_count >= 0;
+}
+
+// Movie sub-record — IsA Release (disjoint, covering).
+table Movie {
+    primary rid: int;
+    node releasePartition(rid);
+    website_url: string;
+    duration:    int;        // total length in seconds
+    invariant duration >= 0;
+}
+
+// Series sub-record — IsA Release (disjoint, covering).
+table Series {
+    primary rid: int;
+    node releasePartition(rid);
+    introduction:  string;
+    episode_count: int;
+    season_count:  int;
+    invariant episode_count >= 0;
+    invariant season_count >= 0;
+}
+
+// Video — weak entity of Release; PK = (rid, ep_num).
+// Co-located with Release via node releasePartition(rid).
+// For movies ep_num = 1; for series ep_num is the sequential episode number.
+table Video {
+    primary rid:    int;
+    primary ep_num: int;
+    node releasePartition(rid);
+    title:      string;
+    length:     int;         // seconds
+    view_count: int;
+    status:     int;         // VIDEO_* constants
+    invariant view_count >= 0;
+    invariant length >= 0;
+}
+
+// Review — Post relationship between Viewer and Release.
+// Co-located with Release via node releasePartition(rid).
+// PK = (rvid, rid) mirrors Activity(AID, UID) in social.transact.
+table Review {
+    primary rvid: int;
+    primary rid:  int;
+    node releasePartition(rid);
+    viewer_uid: int;
+    rating:     int;         // 1–10 (About relationship carries rating, body)
+    body:       string;
+    posted_at:  int;         // seconds since epoch (Post.posted_at)
+    status:     int;         // REVIEW_* constants
+    invariant rating >= 1;
+    invariant rating <= 10;
+}
+
+// ============================================================================
+// 1-hop Transactions
+// ============================================================================
+
+// Create a viewer account: base User record + Viewer sub-record.
+transaction RegisterViewer(uid: int, email: string, nickname: string,
+                           firstname: string, lastname: string,
+                           genres: string, joined_date: int) {
+    hop {
+        User[uid: uid] = {
+            email: email, nickname: nickname, street: "", city: "",
+            state: "", zip: 0, genres: genres, joined_date: joined_date,
+            user_type: 0, status: USER_ACTIVE
+        };
+        Viewer[uid: uid] = {
+            firstname: firstname, lastname: lastname,
+            subscription: SUB_FREE, watch_hours: 0, review_count: 0
+        };
+    }
+}
+
+// Create a producer account: base User record + Producer sub-record.
+transaction RegisterProducer(uid: int, email: string, nickname: string,
+                             company: string, bio: string, joined_date: int) {
+    hop {
+        User[uid: uid] = {
+            email: email, nickname: nickname, street: "", city: "",
+            state: "", zip: 0, genres: "", joined_date: joined_date,
+            user_type: 1, status: USER_ACTIVE
+        };
+        Producer[uid: uid] = {
+            company: company, bio: bio, release_count: 0, total_views: 0
+        };
+    }
+}
+
+// Update a user's address and genre preferences in place.
+transaction UpdateProfile(uid: int, street: string, city: string,
+                          state: string, zip: int, genres: string) {
+    hop {
+        if User[uid: uid].status == USER_SUSPENDED { return; }
+        User[uid: uid].street = street;
+        User[uid: uid].city = city;
+        User[uid: uid].state = state;
+        User[uid: uid].zip = zip;
+        User[uid: uid].genres = genres;
+    }
+}
+
+// Upgrade or downgrade a viewer's subscription tier.
+transaction UpdateSubscription(uid: int, new_subscription: int)
+    assume new_subscription >= 0;
+    assume new_subscription <= 3;
+{
+    hop {
+        if User[uid: uid].status != USER_ACTIVE { return; }
+        Viewer[uid: uid].subscription = new_subscription;
+    }
+}
+
+// Suspend a user account (reversible).
+transaction SuspendUser(uid: int) {
+    hop {
+        User[uid: uid].status = USER_SUSPENDED;
+    }
+}
+
+// Reactivate a suspended or inactive user account.
+transaction ReactivateUser(uid: int) {
+    hop {
+        var cur: int = User[uid: uid].status;
+        if cur == USER_ACTIVE { return; }
+        User[uid: uid].status = USER_ACTIVE;
+    }
+}
+
+// Add a video episode to a published or drafted release.
+// For movies ep_num = 1; for series ep_num is the sequential episode index.
+transaction AddVideo(rid: int, ep_num: int, title: string, length: int)
+    assume length > 0;
+    assume ep_num > 0;
+{
+    hop {
+        var rel_status: int = Release[rid: rid].status;
+        if rel_status == RELEASE_ARCHIVED  { return; }
+        if rel_status == RELEASE_COMPLETED { return; }
+        Video[rid: rid, ep_num: ep_num] = {
+            title: title, length: length, view_count: 0, status: VIDEO_AVAILABLE
+        };
+        var old_cnt: int = Release[rid: rid].video_count;
+        Release[rid: rid].video_count = old_cnt + 1;
+    }
+}
+
+// Soft-delete a video episode (marks VIDEO_REMOVED; does not delete the row).
+transaction RemoveVideo(rid: int, ep_num: int) {
+    hop {
+        if Video[rid: rid, ep_num: ep_num].status == VIDEO_REMOVED { return; }
+        Video[rid: rid, ep_num: ep_num].status = VIDEO_REMOVED;
+        var old_cnt: int = Release[rid: rid].video_count;
+        if old_cnt > 0 {
+            Release[rid: rid].video_count = old_cnt - 1;
+        }
+    }
+}
+
+// Mark an active session as abandoned (viewer dropped connection mid-watch).
+// Watch time is not credited on abandonment.
+transaction AbandonSession(viewer_uid: int, sid: int) {
+    hop {
+        var cur: int = Session[sid: sid, viewer_uid: viewer_uid].status;
+        if cur != SESSION_ACTIVE { return; }
+        Session[sid: sid, viewer_uid: viewer_uid].status = SESSION_ABANDONED;
+    }
+}
+
+// ============================================================================
+// 2-hop Transactions
+// ============================================================================
+
+// Producer publishes a new release.
+// Hop 1 (user): verify producer is active; increment release_count.
+// Hop 2 (release): insert Release base record; insert Movie or Series sub-record.
+transaction PublishRelease(producer_uid: int, rid: int, title: string, genre: int,
+                           release_date: int, published_at: int, release_type: int) {
+    hop {
+        var p_status: int = User[uid: producer_uid].status;
+        if p_status != USER_ACTIVE { return; }
+        var cnt: int = Producer[uid: producer_uid].release_count;
+        Producer[uid: producer_uid].release_count = cnt + 1;
+    }
+    hop {
+        Release[rid: rid] = {
+            title: title, genre: genre, release_date: release_date,
+            published_at: published_at, producer_uid: producer_uid,
+            video_count: 0, total_reviews: 0, avg_rating: 0.0,
+            release_type: release_type, status: RELEASE_PUBLISHED, view_count: 0
+        };
+        if release_type == RELEASE_MOVIE {
+            Movie[rid: rid] = { website_url: "", duration: 0 };
+        }
+        if release_type == RELEASE_SERIES {
+            Series[rid: rid] = { introduction: "", episode_count: 0, season_count: 1 };
+        }
+    }
+}
+
+// Viewer starts a streaming session on a video episode.
+// Hop 1 (user): gate on subscription tier for HD/4K; insert Session record.
+// Hop 2 (release): verify video is available; increment view_count on Video and Release.
+transaction StartSession(viewer_uid: int, sid: int, video_rid: int, video_ep_num: int,
+                         quality: int, device: int, initiate_at: int) {
+    hop {
+        var status: int = User[uid: viewer_uid].status;
+        if status != USER_ACTIVE { return; }
+        var sub: int = Viewer[uid: viewer_uid].subscription;
+        if quality == QUALITY_4K && sub < SUB_PREMIUM { return; }
+        if quality == QUALITY_HD && sub < SUB_BASIC   { return; }
+        Session[sid: sid, viewer_uid: viewer_uid] = {
+            video_rid: video_rid, video_ep_num: video_ep_num,
+            quality: quality, device: device, initiate_at: initiate_at,
+            leave_at: 0, status: SESSION_ACTIVE, watch_seconds: 0
+        };
+    }
+    hop {
+        var vid_status: int = Video[rid: video_rid, ep_num: video_ep_num].status;
+        if vid_status != VIDEO_AVAILABLE { return; }
+        var vid_views: int = Video[rid: video_rid, ep_num: video_ep_num].view_count;
+        Video[rid: video_rid, ep_num: video_ep_num].view_count = vid_views + 1;
+        var rel_views: int = Release[rid: video_rid].view_count;
+        Release[rid: video_rid].view_count = rel_views + 1;
+    }
+}
+
+// Viewer ends an active session; credits watch time, updates producer stats.
+// Hop 1 (user): mark session completed; add watch_seconds to Viewer.watch_hours.
+// Hop 2 (user): increment Producer.total_views (different uid → different shard).
+transaction EndSession(viewer_uid: int, sid: int, leave_at: int,
+                       watch_seconds: int, producer_uid: int)
+    assume watch_seconds >= 0;
+{
+    hop {
+        var s_status: int = Session[sid: sid, viewer_uid: viewer_uid].status;
+        if s_status != SESSION_ACTIVE { return; }
+        Session[sid: sid, viewer_uid: viewer_uid].status = SESSION_COMPLETED;
+        Session[sid: sid, viewer_uid: viewer_uid].leave_at = leave_at;
+        Session[sid: sid, viewer_uid: viewer_uid].watch_seconds = watch_seconds;
+        var cur_hours: int = Viewer[uid: viewer_uid].watch_hours;
+        Viewer[uid: viewer_uid].watch_hours = cur_hours + watch_seconds / 3600;
+    }
+    hop {
+        var cur_views: int = Producer[uid: producer_uid].total_views;
+        Producer[uid: producer_uid].total_views = cur_views + 1;
+    }
+}
+
+// Viewer posts a review on a release (subscription required).
+// Hop 1 (user): check status and subscription gate; increment review_count.
+// Hop 2 (release): insert Review; recalculate Release.avg_rating via weighted avg.
+transaction PostReview(viewer_uid: int, rvid: int, rid: int, rating: int,
+                       body: string, posted_at: int)
+    assume rating >= 1;
+    assume rating <= 10;
+{
+    hop {
+        var status: int = User[uid: viewer_uid].status;
+        if status != USER_ACTIVE { return; }
+        var sub: int = Viewer[uid: viewer_uid].subscription;
+        if sub == SUB_FREE { return; }
+        var cnt: int = Viewer[uid: viewer_uid].review_count;
+        Viewer[uid: viewer_uid].review_count = cnt + 1;
+    }
+    hop {
+        if Release[rid: rid].status == RELEASE_ARCHIVED { return; }
+        Review[rvid: rvid, rid: rid] = {
+            viewer_uid: viewer_uid, rating: rating, body: body,
+            posted_at: posted_at, status: REVIEW_ACTIVE
+        };
+        var old_total: int = Release[rid: rid].total_reviews;
+        var old_avg:   float = Release[rid: rid].avg_rating;
+        var new_total: int = old_total + 1;
+        var new_avg:   float = (old_avg * float(old_total) + float(rating)) / float(new_total);
+        Release[rid: rid].total_reviews = new_total;
+        Release[rid: rid].avg_rating = new_avg;
+    }
+}
+
+// Update the rating and body of an existing active review.
+// Applies a delta to avg_rating rather than recomputing from scratch.
+transaction UpdateReview(rvid: int, rid: int, new_rating: int, new_body: string)
+    assume new_rating >= 1;
+    assume new_rating <= 10;
+{
+    hop {
+        var cur_status: int = Review[rvid: rvid, rid: rid].status;
+        if cur_status != REVIEW_ACTIVE { return; }
+        var old_rating: int = Review[rvid: rvid, rid: rid].rating;
+        Review[rvid: rvid, rid: rid].rating = new_rating;
+        Review[rvid: rvid, rid: rid].body = new_body;
+        var total: int = Release[rid: rid].total_reviews;
+        if total > 0 {
+            var old_avg: float = Release[rid: rid].avg_rating;
+            var delta: float = float(new_rating) - float(old_rating);
+            Release[rid: rid].avg_rating = old_avg + delta / float(total);
+        }
+    }
+}
+
+// Hide a review (content moderation) and remove its contribution from avg_rating.
+transaction HideReview(rvid: int, rid: int) {
+    hop {
+        var cur_status: int = Review[rvid: rvid, rid: rid].status;
+        if cur_status != REVIEW_ACTIVE { return; }
+        var hidden_rating: int = Review[rvid: rvid, rid: rid].rating;
+        Review[rvid: rvid, rid: rid].status = REVIEW_HIDDEN;
+        var total: int = Release[rid: rid].total_reviews;
+        var new_total: int = total - 1;
+        Release[rid: rid].total_reviews = new_total;
+        if new_total > 0 {
+            var old_avg: float = Release[rid: rid].avg_rating;
+            var new_avg: float = (old_avg * float(total) - float(hidden_rating)) / float(new_total);
+            Release[rid: rid].avg_rating = new_avg;
+        } else {
+            Release[rid: rid].avg_rating = 0.0;
+        }
+    }
+}
+
+// Archive a release; prevents new sessions but preserves all reviews.
+// Hop 1 (user): verify producer is active.
+// Hop 2 (release): confirm ownership then set status to ARCHIVED.
+transaction ArchiveRelease(producer_uid: int, rid: int) {
+    hop {
+        var status: int = User[uid: producer_uid].status;
+        if status != USER_ACTIVE { return; }
+    }
+    hop {
+        var rel_producer: int = Release[rid: rid].producer_uid;
+        if rel_producer != producer_uid { return; }
+        var rel_status: int = Release[rid: rid].status;
+        if rel_status == RELEASE_ARCHIVED { return; }
+        Release[rid: rid].status = RELEASE_ARCHIVED;
+    }
+}
+
+// Gift a subscription tier upgrade from one viewer to another.
+// Gifter must hold a tier >= the gifted tier; recipient is upgraded only if lower.
+// Hop 1 (user A): validate gifter status and tier.
+// Hop 2 (user B): validate recipient and apply upgrade.
+transaction GiftSubscription(gifter_uid: int, recipient_uid: int, subscription_tier: int)
+    assume subscription_tier >= SUB_BASIC;
+    assume subscription_tier <= SUB_ULTIMATE;
+{
+    hop {
+        var status: int = User[uid: gifter_uid].status;
+        if status != USER_ACTIVE { return; }
+        var gifter_sub: int = Viewer[uid: gifter_uid].subscription;
+        if gifter_sub < subscription_tier { return; }
+    }
+    hop {
+        var rec_status: int = User[uid: recipient_uid].status;
+        if rec_status != USER_ACTIVE { return; }
+        var cur_sub: int = Viewer[uid: recipient_uid].subscription;
+        if cur_sub >= subscription_tier { return; }
+        Viewer[uid: recipient_uid].subscription = subscription_tier;
+    }
+}
+
+// ============================================================================
+// 3-hop Transactions
+// ============================================================================
+
+// Transfer release ownership between two producers.
+// Hop 1 (user A): verify from-producer status; decrement release_count.
+// Hop 2 (release): validate ownership; reassign producer_uid.
+// Hop 3 (user B): verify to-producer status; increment release_count.
+transaction TransferRelease(from_producer_uid: int, to_producer_uid: int, rid: int) {
+    hop {
+        var status: int = User[uid: from_producer_uid].status;
+        if status != USER_ACTIVE { return; }
+        var from_cnt: int = Producer[uid: from_producer_uid].release_count;
+        if from_cnt <= 0 { return; }
+        Producer[uid: from_producer_uid].release_count = from_cnt - 1;
+    }
+    hop {
+        var rel_producer: int = Release[rid: rid].producer_uid;
+        if rel_producer != from_producer_uid { return; }
+        if Release[rid: rid].status == RELEASE_ARCHIVED { return; }
+        Release[rid: rid].producer_uid = to_producer_uid;
+    }
+    hop {
+        var to_status: int = User[uid: to_producer_uid].status;
+        if to_status != USER_ACTIVE { return; }
+        var to_cnt: int = Producer[uid: to_producer_uid].release_count;
+        Producer[uid: to_producer_uid].release_count = to_cnt + 1;
+    }
+}
+
+// Atomic watch-and-review: viewer completes an episode and posts a review in one shot.
+// Hop 1 (user): gate on status, subscription, and quality tier.
+// Hop 2 (release): confirm video available; increment view counts; insert Review;
+//                  recalculate avg_rating.
+// Hop 3 (user): insert completed Session record; update watch_hours and review_count.
+//   (Return hop on the user partition — same pattern as campus EnrollStudent.)
+transaction WatchAndReview(viewer_uid: int, sid: int, video_rid: int, video_ep_num: int,
+                            rvid: int, quality: int, device: int,
+                            initiate_at: int, leave_at: int, watch_seconds: int,
+                            rating: int, body: string, posted_at: int)
+    assume rating >= 1;
+    assume rating <= 10;
+    assume watch_seconds > 0;
+{
+    hop {
+        var status: int = User[uid: viewer_uid].status;
+        if status != USER_ACTIVE { return; }
+        var sub: int = Viewer[uid: viewer_uid].subscription;
+        if quality == QUALITY_4K && sub < SUB_PREMIUM { return; }
+        if quality == QUALITY_HD && sub < SUB_BASIC   { return; }
+        if sub == SUB_FREE { return; }   // review requires subscription
+    }
+    hop {
+        var vid_status: int = Video[rid: video_rid, ep_num: video_ep_num].status;
+        if vid_status != VIDEO_AVAILABLE { return; }
+        if Release[rid: video_rid].status == RELEASE_ARCHIVED { return; }
+
+        var vid_views: int = Video[rid: video_rid, ep_num: video_ep_num].view_count;
+        Video[rid: video_rid, ep_num: video_ep_num].view_count = vid_views + 1;
+        var rel_views: int = Release[rid: video_rid].view_count;
+        Release[rid: video_rid].view_count = rel_views + 1;
+
+        Review[rvid: rvid, rid: video_rid] = {
+            viewer_uid: viewer_uid, rating: rating, body: body,
+            posted_at: posted_at, status: REVIEW_ACTIVE
+        };
+        var old_total: int = Release[rid: video_rid].total_reviews;
+        var old_avg:   float = Release[rid: video_rid].avg_rating;
+        var new_total: int = old_total + 1;
+        var new_avg:   float = (old_avg * float(old_total) + float(rating)) / float(new_total);
+        Release[rid: video_rid].total_reviews = new_total;
+        Release[rid: video_rid].avg_rating = new_avg;
+    }
+    hop {
+        Session[sid: sid, viewer_uid: viewer_uid] = {
+            video_rid: video_rid, video_ep_num: video_ep_num,
+            quality: quality, device: device, initiate_at: initiate_at,
+            leave_at: leave_at, status: SESSION_COMPLETED,
+            watch_seconds: watch_seconds
+        };
+        var cur_hours: int = Viewer[uid: viewer_uid].watch_hours;
+        Viewer[uid: viewer_uid].watch_hours = cur_hours + watch_seconds / 3600;
+        var cur_rev: int = Viewer[uid: viewer_uid].review_count;
+        Viewer[uid: viewer_uid].review_count = cur_rev + 1;
+    }
+}
+
+// Update a movie's core metadata and type-specific fields.
+// Hop 1 (user): verify producer is active and owns the release.
+// Hop 2 (release): update Release title/genre/date and Movie URL/duration.
+// Hop 3 (user): credit one engagement unit to producer.total_views as activity signal.
+//   (Return hop on the user partition — same pattern as campus EnrollStudent.)
+transaction UpdateMovieMetadata(producer_uid: int, rid: int, new_title: string,
+                                 new_genre: int, new_release_date: int,
+                                 new_website_url: string, new_duration: int)
+    assume new_duration > 0;
+{
+    hop {
+        var p_status: int = User[uid: producer_uid].status;
+        if p_status != USER_ACTIVE { return; }
+    }
+    hop {
+        var rel_producer: int = Release[rid: rid].producer_uid;
+        if rel_producer != producer_uid { return; }
+        if Release[rid: rid].release_type != RELEASE_MOVIE { return; }
+        if Release[rid: rid].status == RELEASE_ARCHIVED { return; }
+        Release[rid: rid].title        = new_title;
+        Release[rid: rid].genre        = new_genre;
+        Release[rid: rid].release_date = new_release_date;
+        Movie[rid: rid].website_url    = new_website_url;
+        Movie[rid: rid].duration       = new_duration;
+    }
+    hop {
+        var prod_views: int = Producer[uid: producer_uid].total_views;
+        Producer[uid: producer_uid].total_views = prod_views + 1;
+    }
+}
+
+// Publish the finale episode of a series and close it as COMPLETED.
+// Hop 1 (user): verify producer is active.
+// Hop 2 (release): validate ownership and series status; add Video; mark COMPLETED;
+//                  update Series.episode_count and season_count.
+// Hop 3 (user): increment Producer.total_views as post-finale engagement signal.
+transaction PublishSeriesFinale(producer_uid: int, rid: int, ep_num: int,
+                                 title: string, length: int, final_season: int)
+    assume length > 0;
+    assume ep_num > 0;
+    assume final_season > 0;
+{
+    hop {
+        var p_status: int = User[uid: producer_uid].status;
+        if p_status != USER_ACTIVE { return; }
+        var p_cnt: int = Producer[uid: producer_uid].release_count;
+        to_unit(p_cnt);
+    }
+    hop {
+        var rel_producer: int = Release[rid: rid].producer_uid;
+        if rel_producer != producer_uid { return; }
+        var rel_type: int = Release[rid: rid].release_type;
+        if rel_type != RELEASE_SERIES { return; }
+        var rel_status: int = Release[rid: rid].status;
+        if rel_status != RELEASE_PUBLISHED { return; }
+
+        Video[rid: rid, ep_num: ep_num] = {
+            title: title, length: length, view_count: 0, status: VIDEO_AVAILABLE
+        };
+
+        var old_cnt: int = Release[rid: rid].video_count;
+        var new_cnt: int = old_cnt + 1;
+        Release[rid: rid].video_count = new_cnt;
+        Release[rid: rid].status = RELEASE_COMPLETED;
+
+        Series[rid: rid].episode_count = new_cnt;
+        var old_season: int = Series[rid: rid].season_count;
+        if final_season > old_season {
+            Series[rid: rid].season_count = final_season;
+        }
+    }
+    hop {
+        var prod_views: int = Producer[uid: producer_uid].total_views;
+        Producer[uid: producer_uid].total_views = prod_views + 1;
+    }
+}
+
+// ============================================================================
+// 4-hop Transactions
+// ============================================================================
+
+// Swap two releases between two producers (co-production restructuring).
+// Release counts are swap-neutral (each producer loses one, gains one).
+// Hop 1 (user A): validate producer A is active.
+// Hop 2 (user B): validate producer B is active.
+// Hop 3 (release X): confirm ownership by A; reassign to B.
+// Hop 4 (release Y): confirm ownership by B; reassign to A.
+transaction SwapReleaseProducers(producer_a_uid: int, producer_b_uid: int,
+                                  rid_a: int, rid_b: int) {
+    hop {
+        var a_status: int = User[uid: producer_a_uid].status;
+        if a_status != USER_ACTIVE { return; }
+        var a_cnt: int = Producer[uid: producer_a_uid].release_count;
+        to_unit(a_cnt);
+    }
+    hop {
+        var b_status: int = User[uid: producer_b_uid].status;
+        if b_status != USER_ACTIVE { return; }
+        var b_cnt: int = Producer[uid: producer_b_uid].release_count;
+        to_unit(b_cnt);
+    }
+    hop {
+        var a_rel_producer: int = Release[rid: rid_a].producer_uid;
+        if a_rel_producer != producer_a_uid { return; }
+        if Release[rid: rid_a].status == RELEASE_ARCHIVED { return; }
+        Release[rid: rid_a].producer_uid = producer_b_uid;
+    }
+    hop {
+        var b_rel_producer: int = Release[rid: rid_b].producer_uid;
+        if b_rel_producer != producer_b_uid { return; }
+        if Release[rid: rid_b].status == RELEASE_ARCHIVED { return; }
+        Release[rid: rid_b].producer_uid = producer_a_uid;
+    }
+}
+
+// Viewer rates two competing releases in a single atomic transaction.
+// Used for head-to-head comparison reviews (movie sequel vs original, etc.).
+// Hop 1 (user): gate check — active and subscribed.
+// Hop 2 (release A): insert first review; update avg_rating on release A.
+// Hop 3 (release B): insert second review; update avg_rating on release B.
+// Hop 4 (user): credit review_count += 2 and check milestone upgrades.
+transaction ComparativeReview(viewer_uid: int, rvid_a: int, rid_a: int, rating_a: int,
+                               body_a: string, rvid_b: int, rid_b: int, rating_b: int,
+                               body_b: string, posted_at: int)
+    assume rating_a >= 1;
+    assume rating_a <= 10;
+    assume rating_b >= 1;
+    assume rating_b <= 10;
+{
+    hop {
+        var status: int = User[uid: viewer_uid].status;
+        if status != USER_ACTIVE { return; }
+        var sub: int = Viewer[uid: viewer_uid].subscription;
+        if sub < SUB_BASIC { return; }
+    }
+    hop {
+        if Release[rid: rid_a].status == RELEASE_ARCHIVED { return; }
+        Review[rvid: rvid_a, rid: rid_a] = {
+            viewer_uid: viewer_uid, rating: rating_a, body: body_a,
+            posted_at: posted_at, status: REVIEW_ACTIVE
+        };
+        var old_total_a: int = Release[rid: rid_a].total_reviews;
+        var old_avg_a:   float = Release[rid: rid_a].avg_rating;
+        var new_total_a: int = old_total_a + 1;
+        Release[rid: rid_a].total_reviews = new_total_a;
+        Release[rid: rid_a].avg_rating =
+            (old_avg_a * float(old_total_a) + float(rating_a)) / float(new_total_a);
+    }
+    hop {
+        if Release[rid: rid_b].status == RELEASE_ARCHIVED { return; }
+        Review[rvid: rvid_b, rid: rid_b] = {
+            viewer_uid: viewer_uid, rating: rating_b, body: body_b,
+            posted_at: posted_at, status: REVIEW_ACTIVE
+        };
+        var old_total_b: int = Release[rid: rid_b].total_reviews;
+        var old_avg_b:   float = Release[rid: rid_b].avg_rating;
+        var new_total_b: int = old_total_b + 1;
+        Release[rid: rid_b].total_reviews = new_total_b;
+        Release[rid: rid_b].avg_rating =
+            (old_avg_b * float(old_total_b) + float(rating_b)) / float(new_total_b);
+    }
+    hop {
+        var cur_rev: int = Viewer[uid: viewer_uid].review_count;
+        Viewer[uid: viewer_uid].review_count = cur_rev + 2;
+
+        // Milestone: 25 reviews + 1000 hours → upgrade basic to premium
+        var new_rev: int = cur_rev + 2;
+        var cur_sub: int = Viewer[uid: viewer_uid].subscription;
+        var watch_hrs: int = Viewer[uid: viewer_uid].watch_hours;
+        if new_rev >= MILESTONE_PREMIUM_REVIEWS && watch_hrs >= MILESTONE_PREMIUM_HOURS &&
+           cur_sub == SUB_BASIC {
+            Viewer[uid: viewer_uid].subscription = SUB_PREMIUM;
+        }
+    }
+}
+
+// ============================================================================
+// @global Transactions (scan-based read queries)
+// ============================================================================
+
+// Return all release IDs matching the requested genre and status = PUBLISHED.
+transaction GetReleasesForGenre(genre: int) -> List<int> {
+    @global hop {
+        var rids: List<int> = emptyList();
+        for (var rel_iter: Iterator<Release> = scan(Release, 0, __slice__);
+             hasNext(rel_iter); rel_iter = next(rel_iter)) {
+            var r_rid: int = get_rid(rel_iter);
+            var r_genre:  int = Release[rid: r_rid].genre;
+            var r_status: int = Release[rid: r_rid].status;
+            if r_genre == genre && r_status == RELEASE_PUBLISHED {
+                rids = append(rids, r_rid);
+            }
+        }
+        return rids;
+    }
+}
+
+// Return all review IDs posted about a specific release.
+transaction GetReleaseReviews(rid: int) -> List<int> {
+    @global hop {
+        var rvids: List<int> = emptyList();
+        for (var rev_iter: Iterator<Review> = scan(Review, 1, __slice__);
+             hasNext(rev_iter); rev_iter = next(rev_iter)) {
+            var r_rvid: int = get_rvid(rev_iter);
+            var r_rid:  int = get_rid(rev_iter);
+            var r_status: int = Review[rvid: r_rvid, rid: r_rid].status;
+            if r_rid == rid && r_status == REVIEW_ACTIVE {
+                rvids = append(rvids, r_rvid);
+            }
+        }
+        return rvids;
+    }
+}
+
+// Return all session IDs for a specific viewer (watch history).
+transaction GetViewerWatchHistory(viewer_uid: int) -> List<int> {
+    @global hop {
+        var sids: List<int> = emptyList();
+        for (var sess_iter: Iterator<Session> = scan(Session, 2, __slice__);
+             hasNext(sess_iter); sess_iter = next(sess_iter)) {
+            var s_sid: int        = get_sid(sess_iter);
+            var s_uid: int        = get_viewer_uid(sess_iter);
+            var s_status: int     = Session[sid: s_sid, viewer_uid: s_uid].status;
+            if s_uid == viewer_uid && s_status == SESSION_COMPLETED {
+                sids = append(sids, s_sid);
+            }
+        }
+        return sids;
+    }
+}
+
+// ============================================================================
+// hops for Transactions (TPC-C Delivery analogues)
+// ============================================================================
+
+// Bulk end a cohort of active sessions for sequential viewer IDs.
+// Each iteration i lands on userPartition(base_viewer_uid + i) — distinct shards.
+// Iterations are pairwise independent: no shared partition key across iterations.
+transaction BatchEndSessions(base_viewer_uid: int, base_sid: int,
+                              leave_at: int, watch_seconds: int)
+    assume watch_seconds >= 0;
+{
+    hops for i: int = 0 to BATCH_SESSION_SIZE {
+        var cur_status: int = Session[sid: base_sid + i,
+                                      viewer_uid: base_viewer_uid + i].status;
+        if cur_status == SESSION_ACTIVE {
+            Session[sid: base_sid + i, viewer_uid: base_viewer_uid + i].status        = SESSION_COMPLETED;
+            Session[sid: base_sid + i, viewer_uid: base_viewer_uid + i].leave_at      = leave_at;
+            Session[sid: base_sid + i, viewer_uid: base_viewer_uid + i].watch_seconds = watch_seconds;
+            var cur_hours: int = Viewer[uid: base_viewer_uid + i].watch_hours;
+            Viewer[uid: base_viewer_uid + i].watch_hours = cur_hours + watch_seconds / 3600;
+        }
+    }
+}
+
+// Mark a contiguous range of video episodes as available (e.g., after transcoding).
+// All iterations share releasePartition(rid) but write to distinct (rid, ep_num) rows.
+// Iterations commute among themselves; contends with StartSession on the same rid.
+transaction BatchMarkEpisodesAvailable(rid: int, base_ep_num: int)
+    assume base_ep_num > 0;
+{
+    hops for i: int = 0 to BATCH_EPISODE_SIZE {
+        var cur: int = Video[rid: rid, ep_num: base_ep_num + i].status;
+        if cur == VIDEO_PROCESSING {
+            Video[rid: rid, ep_num: base_ep_num + i].status = VIDEO_AVAILABLE;
+        }
+    }
+}
+
+// Bulk upgrade a cohort of free-tier viewers to BASIC (promotional campaign).
+// Each iteration i lands on userPartition(base_uid + i) — distinct shards.
+// Non-commutative with UpdateSubscription on the same uid in the cohort.
+transaction BatchSubscriptionUpgrade(base_uid: int, target_tier: int)
+    assume target_tier >= SUB_BASIC;
+    assume target_tier <= SUB_ULTIMATE;
+{
+    hops for i: int = 0 to BATCH_VIEWER_SIZE {
+        var cur_status: int = User[uid: base_uid + i].status;
+        if cur_status == USER_ACTIVE {
+            var cur_sub: int = Viewer[uid: base_uid + i].subscription;
+            if cur_sub < target_tier {
+                Viewer[uid: base_uid + i].subscription = target_tier;
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Complex Transactions (extended internal logic)
+// ============================================================================
+
+// Process watch-hour and review milestones for a viewer.
+// Multi-level threshold logic: Free→Basic→Premium→Ultimate based on engagement.
+// Single hop; the complexity is entirely in the branching logic.
+// Non-commutative with UpdateSubscription and PostReview on the same uid.
+transaction ProcessViewerMilestone(uid: int) {
+    hop {
+        var v_status: int = User[uid: uid].status;
+        if v_status != USER_ACTIVE { return; }
+
+        var watch_hrs: int = Viewer[uid: uid].watch_hours;
+        var cur_sub:   int = Viewer[uid: uid].subscription;
+        var rev_cnt:   int = Viewer[uid: uid].review_count;
+
+        // Tier 1: 100 hours → Free upgrades to Basic (viewing loyalty gate).
+        if watch_hrs >= MILESTONE_BASIC_HOURS && cur_sub == SUB_FREE {
+            Viewer[uid: uid].subscription = SUB_BASIC;
+            cur_sub = SUB_BASIC;
+        }
+
+        // Tier 2: 1000 hours + 25 reviews → Basic upgrades to Premium.
+        // Both conditions must hold simultaneously; partial fulfillment does nothing.
+        if watch_hrs >= MILESTONE_PREMIUM_HOURS && rev_cnt >= MILESTONE_PREMIUM_REVIEWS &&
+           cur_sub == SUB_BASIC {
+            Viewer[uid: uid].subscription = SUB_PREMIUM;
+            cur_sub = SUB_PREMIUM;
+        }
+
+        // Tier 3: 5000 hours + 50 reviews → Premium upgrades to Ultimate.
+        // Ultimate is the ceiling; already-Ultimate viewers are unaffected.
+        if watch_hrs >= MILESTONE_ULTIMATE_HOURS && rev_cnt >= MILESTONE_ULTIMATE_REVIEWS &&
+           cur_sub == SUB_PREMIUM {
+            Viewer[uid: uid].subscription = SUB_ULTIMATE;
+        }
+    }
+}
+
+// Viewer completes watching an entire series and posts a comprehensive review.
+// Three-hop to cross both the series/release partition and the viewer partition.
+//
+// Hop 1 (user): gate on status and subscription; enforce minimum watch-hours
+//   heuristic (total_episodes × min_minutes_per_ep) to detect implausible completions.
+// Hop 2 (release): validate this is a published or completed series; insert Review;
+//   recalculate avg_rating; increment series view_count.
+// Hop 3 (user): update watch_hours and review_count; apply multi-level milestone
+//   logic — series completion unlocks faster tier promotion than generic viewing.
+//
+// Commutativity: hop 2 updates avg_rating (non-commutative with PostReview on same rid);
+//   hop 3 updates subscription (non-commutative with ProcessViewerMilestone on same uid).
+transaction CompleteSeriesWatchthrough(viewer_uid: int, rid: int, rvid: int,
+                                        total_episodes: int, watch_hours: int,
+                                        rating: int, body: string, posted_at: int)
+    assume rating >= 1;
+    assume rating <= 10;
+    assume total_episodes > 0;
+    assume watch_hours > 0;
+{
+    hop {
+        var v_status: int = User[uid: viewer_uid].status;
+        if v_status != USER_ACTIVE { return; }
+        var sub: int = Viewer[uid: viewer_uid].subscription;
+        if sub == SUB_FREE { return; }   // series completion review requires subscription
+        // Sanity check: must have watched at least 10 minutes per episode
+        if watch_hours * 60 < total_episodes * 10 { return; }
+        var cur_watch: int = Viewer[uid: viewer_uid].watch_hours;
+        var cur_rev:   int = Viewer[uid: viewer_uid].review_count;
+        to_unit(cur_watch);
+        to_unit(cur_rev);
+    }
+    hop {
+        var rel_type:   int = Release[rid: rid].release_type;
+        if rel_type != RELEASE_SERIES { return; }
+        var rel_status: int = Release[rid: rid].status;
+        // Allow reviewing both PUBLISHED (ongoing) and COMPLETED (finale aired) series
+        if rel_status == RELEASE_ARCHIVED { return; }
+        if rel_status == RELEASE_DRAFT    { return; }
+
+        // Post completion review
+        Review[rvid: rvid, rid: rid] = {
+            viewer_uid: viewer_uid, rating: rating, body: body,
+            posted_at: posted_at, status: REVIEW_ACTIVE
+        };
+
+        // Weighted average recalculation
+        var old_total: int = Release[rid: rid].total_reviews;
+        var old_avg:   float = Release[rid: rid].avg_rating;
+        var new_total: int = old_total + 1;
+        var new_avg:   float = (old_avg * float(old_total) + float(rating)) / float(new_total);
+        Release[rid: rid].total_reviews = new_total;
+        Release[rid: rid].avg_rating = new_avg;
+
+        // Series view_count tracks full-series completions (distinct from episode view_count)
+        var cur_views: int = Release[rid: rid].view_count;
+        Release[rid: rid].view_count = cur_views + 1;
+
+        // Validate episode count matches expectation (read-only assertion)
+        var ep_cnt: int = Series[rid: rid].episode_count;
+        to_unit(ep_cnt);
+    }
+    hop {
+        // Credit watch hours and review count
+        var old_watch: int = Viewer[uid: viewer_uid].watch_hours;
+        var new_watch: int = old_watch + watch_hours;
+        Viewer[uid: viewer_uid].watch_hours = new_watch;
+
+        var old_rev: int = Viewer[uid: viewer_uid].review_count;
+        var new_rev: int = old_rev + 1;
+        Viewer[uid: viewer_uid].review_count = new_rev;
+
+        var cur_sub: int = Viewer[uid: viewer_uid].subscription;
+
+        // Series completion grants an accelerated path compared to passive watching:
+        //   5 series reviews (vs 5 generic) + 100 hours → Basic
+        if new_rev >= MILESTONE_BASIC_REVIEWS && new_watch >= MILESTONE_BASIC_HOURS &&
+           cur_sub == SUB_FREE {
+            Viewer[uid: viewer_uid].subscription = SUB_BASIC;
+            cur_sub = SUB_BASIC;
+        }
+
+        //   25 series reviews + 1000 hours → Premium (same thresholds as milestone)
+        if new_rev >= MILESTONE_PREMIUM_REVIEWS && new_watch >= MILESTONE_PREMIUM_HOURS &&
+           cur_sub == SUB_BASIC {
+            Viewer[uid: viewer_uid].subscription = SUB_PREMIUM;
+            cur_sub = SUB_PREMIUM;
+        }
+
+        //   50 complete series + 5000 hours → Ultimate (power-viewer recognition)
+        if new_rev >= MILESTONE_ULTIMATE_REVIEWS && new_watch >= MILESTONE_ULTIMATE_HOURS &&
+           cur_sub == SUB_PREMIUM {
+            Viewer[uid: viewer_uid].subscription = SUB_ULTIMATE;
+        }
+    }
+}
