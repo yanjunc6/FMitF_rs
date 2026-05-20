@@ -57,11 +57,6 @@
 //   3-hop (faculty → section → student):
 //     SubmitGrade
 //
-//   N-hop loop (one studentPartition per iteration):
-//     BatchGradeSubmission
-//
-//   N-hop loop (one sectionPartition per iteration):
-//     SemesterActivation
 //
 // Notes:
 //   - DELETE is not supported; all removals use status tombstone fields.
@@ -1060,80 +1055,5 @@ transaction GraduateStudent(student_id: int) {
         if cnt > 0 {
             Faculty[faculty_id: advisor_id].advisee_count = cnt - 1;
         }
-    }
-}
-
-// ----------------------------------------------------------------------------
-// Batch Grade Submission — N hops (one studentPartition per iteration)
-// ----------------------------------------------------------------------------
-
-// BatchGradeSubmission: submit the same final grade for a contiguous range of
-// students in a section (e.g., a pass/fail lab section where all students
-// receive the same mark).
-//
-// Mirrors TPC-C Delivery: GRADE_BATCH_SIZE iterations; each hop targets a
-// different studentPartition shard (base_student_id + i).  All three tables
-// updated per hop (Transcript, Enrollment, Student) are co-located on the
-// same student partition, so each iteration is a single-partition write.
-//
-// GPA recalculation is applied per student using the same weighted formula
-// as SubmitGrade, making each hop computationally non-trivial.
-transaction BatchGradeSubmission(section_id: int, base_student_id: int,
-                                 grade: int, sec_credits: int,
-                                 course_code: string, semester: int) {
-    hops for i: int = 0 to GRADE_BATCH_SIZE {
-        // --- student partition for (base_student_id + i) ---
-
-        // GPA recalculation (same weighted formula as SubmitGrade).
-        var old_gpa: float = Student[student_id: base_student_id + i].gpa;
-        var old_credits: int = Student[student_id: base_student_id + i].credits_earned;
-        var cur_enrolled: int = Student[student_id: base_student_id + i].credits_enrolled;
-        var grade_points: float = float(grade) / 25.0;
-        var new_credits: int = old_credits + sec_credits;
-        var new_gpa: float = (old_gpa * float(old_credits) +
-                              grade_points * float(sec_credits)) / float(new_credits);
-
-        Student[student_id: base_student_id + i].gpa = new_gpa;
-        Student[student_id: base_student_id + i].credits_earned = new_credits;
-        Student[student_id: base_student_id + i].credits_enrolled = cur_enrolled - sec_credits;
-
-        // Apply standing rules identically to SubmitGrade.
-        if new_gpa < GPA_SUSPENSION_THRESHOLD {
-            Student[student_id: base_student_id + i].standing = STUDENT_SUSPENDED;
-            Student[student_id: base_student_id + i].fee_hold = FEE_HOLD_ACTIVE;
-        } else {
-            if new_gpa < GPA_PROBATION_THRESHOLD {
-                Student[student_id: base_student_id + i].standing = STUDENT_PROBATION;
-            }
-        }
-
-        Enrollment[student_id: base_student_id + i,
-                   section_id: section_id].status = ENROLLMENT_COMPLETED;
-
-        Transcript[student_id: base_student_id + i, section_id: section_id] = {
-            course_code: course_code,
-            grade: grade,
-            credits: sec_credits,
-            semester: semester
-        };
-    }
-}
-
-// ----------------------------------------------------------------------------
-// Semester Activation — N hops (one sectionPartition per iteration)
-// ----------------------------------------------------------------------------
-
-// SemesterActivation: flip a batch of closed sections to OPEN at the start of
-// a registration window (e.g., when the registrar opens enrollment).
-//
-// Each hop targets sectionPartition(base_section_id + i) — a different shard
-// per iteration.  Simple but high-fan-out: a single transaction spans
-// SEMESTER_BATCH_SIZE partition boundaries, exercising the scheduler's ability
-// to pipeline independent partition writes.
-transaction SemesterActivation(base_section_id: int, semester: int) {
-    hops for i: int = 0 to SEMESTER_BATCH_SIZE {
-        CourseSection[section_id: base_section_id + i].status = SECTION_OPEN;
-        CourseSection[section_id: base_section_id + i].semester = semester;
-        CourseSection[section_id: base_section_id + i].waitlist_count = 0;
     }
 }
