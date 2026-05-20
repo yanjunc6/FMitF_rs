@@ -1,0 +1,1139 @@
+// ============================================================================
+// Campus Management System — University Enrollment Benchmark
+//
+// Models a full-service university campus: student enrollment, course section
+// management, faculty assignments, classroom scheduling, grade submission,
+// and financial aid.  Enrollment contention during registration windows is
+// the primary hot path.
+//
+// Partition strategy:
+//   studentPartition(student_id)  — Student, Enrollment, Transcript, Waitlist
+//   sectionPartition(section_id)  — CourseSection, SectionRoster, GradeRecord
+//   facultyPartition(faculty_id)  — Faculty, TeachingAssignment
+//   roomPartition(room_id)        — Classroom, RoomBooking
+//
+// Rationale:
+//   Co-locating Enrollment/Transcript with the student keeps itinerary reads
+//   and grade lookups single-partition.  SectionRoster and GradeRecord live
+//   with the section so that roster updates and grade submissions are
+//   partition-local.  Enrollment (hot path) crosses student → section.
+//
+// Chopping summary:
+//   1-hop (studentPartition):
+//     RegisterStudent, GetStudentProfile, GetTranscript, GetEnrollmentList,
+//     UpdateStudentInfo, SetFeeHold, PayTuition, AcademicProbationReview
+//
+//   1-hop (sectionPartition):
+//     CreateCourseSection, GetSectionDetails, GetSectionRoster,
+//     UpdateSectionCapacity, OpenEnrollment, CancelSection
+//
+//   1-hop (facultyPartition):
+//     HireFaculty, GetFacultyProfile, UpdateFacultyStatus
+//
+//   1-hop (roomPartition):
+//     AddClassroom, GetRoomSchedule
+//
+//   2-hop (student → section):
+//     DropCourse, AddToWaitlist
+//
+//   2-hop (student → faculty):
+//     GraduateStudent
+//
+//   2-hop (room → faculty):
+//     BookRoomForOfficeHours, CancelRoomBooking
+//
+//   3-hop (student → section → student):
+//     EnrollStudent
+//
+//   3-hop (section → student → student):
+//     ProcessDropWithWaitlistPromotion
+//
+//   3-hop (student → from_section → to_section):
+//     TransferSection  [student write-back is in to_section hop via continuation]
+//
+//   3-hop (faculty → section → room):
+//     ScheduleSection
+//
+//   3-hop (faculty → section → student):
+//     SubmitGrade
+//
+//   N-hop loop (one studentPartition per iteration):
+//     BatchGradeSubmission
+//
+//   N-hop loop (one sectionPartition per iteration):
+//     SemesterActivation
+//
+// Notes:
+//   - DELETE is not supported; all removals use status tombstone fields.
+//   - Write operations use direct column writes (Table[pk].field = val).
+//   - Grades are stored as 0–100 int; GPA uses 0.0–4.0 float (grade/25.0).
+//   - Semester is encoded as int: YYYYT where T=1 spring, 2 summer, 3 fall.
+//   - Times are encoded as int HHMM (e.g. 930, 1400).
+// ============================================================================
+
+// ============================================================================
+// Partitions
+// ============================================================================
+
+partition studentPartition(student_id: int) -> int { return student_id; }
+partition sectionPartition(section_id: int) -> int { return section_id; }
+partition facultyPartition(faculty_id: int) -> int { return faculty_id; }
+partition roomPartition(room_id: int) -> int { return room_id; }
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+// Student standing
+const STUDENT_ACTIVE: int = 1;
+const STUDENT_INACTIVE: int = 0;
+const STUDENT_GRADUATED: int = 2;
+const STUDENT_SUSPENDED: int = 3;
+const STUDENT_PROBATION: int = 4;
+
+// Fee hold
+const FEE_HOLD_CLEAR: int = 0;
+const FEE_HOLD_ACTIVE: int = 1;
+
+// Enrollment status
+const ENROLLMENT_ENROLLED: int = 1;
+const ENROLLMENT_DROPPED: int = 0;
+const ENROLLMENT_WAITLISTED: int = 2;
+const ENROLLMENT_COMPLETED: int = 3;
+
+// Section status
+const SECTION_OPEN: int = 1;
+const SECTION_CLOSED: int = 0;
+const SECTION_CANCELLED: int = 2;
+
+// Faculty status
+const FACULTY_ACTIVE: int = 1;
+const FACULTY_INACTIVE: int = 0;
+const FACULTY_ON_LEAVE: int = 2;
+
+// Room / booking status
+const ROOM_ACTIVE: int = 1;
+const ROOM_INACTIVE: int = 0;
+const BOOKING_ACTIVE: int = 1;
+const BOOKING_CANCELLED: int = 0;
+
+// Academic policy thresholds
+const MAX_STUDENT_CREDITS: int = 21;         // credit cap per semester
+const MIN_GRADUATION_CREDITS: int = 120;     // total credits to graduate
+const MIN_GRADUATION_GPA: float = 2.0;       // minimum GPA to graduate
+const GPA_PROBATION_THRESHOLD: float = 2.0;  // below this → academic probation
+const GPA_SUSPENSION_THRESHOLD: float = 1.5; // below this → suspended + fee hold
+const MAX_FACULTY_LOAD: int = 4;             // max sections per semester
+
+// Batch sizes (mirror TPC-C Delivery pattern)
+const GRADE_BATCH_SIZE: int = 30;        // students per BatchGradeSubmission
+const SEMESTER_BATCH_SIZE: int = 10;     // sections per SemesterActivation
+
+// ============================================================================
+// Tables
+// ============================================================================
+
+// Core student record — partitioned by student_id.
+table Student {
+    primary student_id: int;
+    node studentPartition(student_id);
+    name: string;
+    email: string;
+    major: string;
+    standing: int;           // STUDENT_ACTIVE | PROBATION | SUSPENDED | GRADUATED | INACTIVE
+    fee_hold: int;           // FEE_HOLD_CLEAR | FEE_HOLD_ACTIVE
+    gpa: float;              // 0.0–4.0 cumulative GPA
+    credits_earned: int;     // completed credits contributing to GPA
+    credits_enrolled: int;   // in-progress credits this semester
+    tuition_balance: float;  // amount currently owed (positive = owes)
+    advisor_id: int;         // faculty_id of academic advisor
+}
+
+// Per-semester enrollment record — co-located with student.
+// One row per (student_id, section_id) registration attempt.
+table Enrollment {
+    primary student_id: int;
+    primary section_id: int;
+    node studentPartition(student_id);
+    status: int;             // ENROLLMENT_ENROLLED | DROPPED | WAITLISTED | COMPLETED
+    waitlist_position: int;  // 0 if not waitlisted
+    tuition_charged: float;  // amount charged when enrolled (refunded on drop)
+}
+
+// Permanent academic transcript — co-located with student.
+// Written once when a grade is finalized; never updated.
+table Transcript {
+    primary student_id: int;
+    primary section_id: int;
+    node studentPartition(student_id);
+    course_code: string;
+    grade: int;              // 0–100
+    credits: int;
+    semester: int;           // YYYYT
+}
+
+// Course section (one offering of a course) — partitioned by section_id.
+table CourseSection {
+    primary section_id: int;
+    node sectionPartition(section_id);
+    course_code: string;
+    title: string;
+    faculty_id: int;         // 0 if unassigned
+    room_id: int;            // 0 if unassigned
+    semester: int;
+    seats_total: int;
+    seats_available: int;
+    waitlist_count: int;
+    credits: int;
+    tuition_per_credit: float;
+    status: int;             // SECTION_OPEN | CLOSED | CANCELLED
+}
+
+// Per-section enrollment roster — co-located with CourseSection.
+table SectionRoster {
+    primary section_id: int;
+    primary student_id: int;
+    node sectionPartition(section_id);
+    enrollment_status: int;  // mirrors Enrollment.status
+    grade_submitted: int;    // 0 = pending, 1 = submitted
+}
+
+// Final grade record written by faculty — co-located with CourseSection.
+table GradeRecord {
+    primary section_id: int;
+    primary student_id: int;
+    node sectionPartition(section_id);
+    grade: int;              // 0–100
+    submitted_by: int;       // faculty_id
+}
+
+// Faculty member — partitioned by faculty_id.
+table Faculty {
+    primary faculty_id: int;
+    node facultyPartition(faculty_id);
+    name: string;
+    email: string;
+    department: string;
+    rank: string;            // "instructor" | "assistant" | "associate" | "professor"
+    status: int;             // FACULTY_ACTIVE | INACTIVE | ON_LEAVE
+    current_load: int;       // sections assigned this semester
+    advisee_count: int;      // active advisees currently enrolled
+}
+
+// Teaching assignment linking faculty to a section — co-located with Faculty.
+table TeachingAssignment {
+    primary faculty_id: int;
+    primary section_id: int;
+    node facultyPartition(faculty_id);
+    semester: int;
+    role: string;            // "primary" | "co-instructor" | "grader"
+}
+
+// Physical classroom — partitioned by room_id.
+table Classroom {
+    primary room_id: int;
+    node roomPartition(room_id);
+    building: string;
+    room_number: string;
+    capacity: int;
+    room_type: string;       // "lecture" | "lab" | "seminar"
+    status: int;             // ROOM_ACTIVE | ROOM_INACTIVE
+}
+
+// Room booking (section schedule or office hours) — co-located with Classroom.
+table RoomBooking {
+    primary room_id: int;
+    primary booking_id: int;
+    node roomPartition(room_id);
+    section_id: int;         // 0 for office-hours bookings
+    faculty_id: int;
+    day_of_week: int;        // 1=Mon … 5=Fri
+    start_time: int;         // HHMM
+    end_time: int;           // HHMM
+    semester: int;
+    status: int;             // BOOKING_ACTIVE | BOOKING_CANCELLED
+}
+
+// ============================================================================
+// Transactions
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// Student Management — 1 hop (studentPartition)
+// ----------------------------------------------------------------------------
+
+// RegisterStudent: create a new student account with zero GPA and balance.
+transaction RegisterStudent(student_id: int, name: string, email: string,
+                            major: string, advisor_id: int) {
+    hop {
+        Student[student_id: student_id] = {
+            name: name,
+            email: email,
+            major: major,
+            standing: STUDENT_ACTIVE,
+            fee_hold: FEE_HOLD_CLEAR,
+            gpa: 0.0,
+            credits_earned: 0,
+            credits_enrolled: 0,
+            tuition_balance: 0.0,
+            advisor_id: advisor_id
+        };
+    }
+}
+
+// GetStudentProfile: read a student's full record.
+transaction GetStudentProfile(student_id: int) {
+    hop {
+        var s: Row<Student> = Student[student_id: student_id];
+        to_unit(s);
+    }
+}
+
+// GetTranscript: read a student's grade entry for a specific completed section.
+transaction GetTranscript(student_id: int, section_id: int) {
+    hop {
+        var t: Row<Transcript> = Transcript[student_id: student_id, section_id: section_id];
+        to_unit(t);
+    }
+}
+
+// GetEnrollmentList: read a student's enrollment record for a specific section.
+transaction GetEnrollmentList(student_id: int, section_id: int) {
+    hop {
+        var e: Row<Enrollment> = Enrollment[student_id: student_id, section_id: section_id];
+        to_unit(e);
+    }
+}
+
+// UpdateStudentInfo: update contact details in place.
+transaction UpdateStudentInfo(student_id: int, email: string, major: string) {
+    hop {
+        Student[student_id: student_id].email = email;
+        Student[student_id: student_id].major = major;
+    }
+}
+
+// SetFeeHold: manually place or clear a financial hold on a student account.
+transaction SetFeeHold(student_id: int, hold_value: int) {
+    hop {
+        Student[student_id: student_id].fee_hold = hold_value;
+    }
+}
+
+// PayTuition: credit a payment against the student's balance.
+// Automatically clears a fee hold when the balance reaches zero.
+transaction PayTuition(student_id: int, amount: float) {
+    hop {
+        var bal: float = Student[student_id: student_id].tuition_balance;
+        var new_bal: float = bal - amount;
+        Student[student_id: student_id].tuition_balance = new_bal;
+        if new_bal <= 0.0 {
+            Student[student_id: student_id].fee_hold = FEE_HOLD_CLEAR;
+        }
+    }
+}
+
+// AcademicProbationReview: re-evaluate a student's academic standing after
+// grades are processed.  Applies or removes probation/suspension based on
+// GPA thresholds; automatically places a fee hold on suspension.
+// Complex single-hop: reads GPA, applies multi-level conditional logic.
+transaction AcademicProbationReview(student_id: int) {
+    hop {
+        var standing: int = Student[student_id: student_id].standing;
+        if standing == STUDENT_GRADUATED || standing == STUDENT_INACTIVE {
+            return;
+        }
+
+        var gpa: float = Student[student_id: student_id].gpa;
+        var credits: int = Student[student_id: student_id].credits_earned;
+
+        // Only apply standing rules once the student has completed at least
+        // one semester (12 credits) — new students start with GPA 0.0.
+        if credits < 12 {
+            return;
+        }
+
+        if gpa < GPA_SUSPENSION_THRESHOLD {
+            // Below 1.5 GPA: suspend and block further enrollment.
+            Student[student_id: student_id].standing = STUDENT_SUSPENDED;
+            Student[student_id: student_id].fee_hold = FEE_HOLD_ACTIVE;
+        } else {
+            // Between 1.5 and 2.0: probation (can still enroll, warned).
+            if gpa < GPA_PROBATION_THRESHOLD {
+                Student[student_id: student_id].standing = STUDENT_PROBATION;
+            } else {
+                // At or above 2.0: restore to good standing if previously on probation.
+                if standing == STUDENT_PROBATION {
+                    Student[student_id: student_id].standing = STUDENT_ACTIVE;
+                }
+                // A suspension can only be lifted by a faculty advisor override
+                // (SetFeeHold + manual standing update), not automatically here.
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Section Management — 1 hop (sectionPartition)
+// ----------------------------------------------------------------------------
+
+// CreateCourseSection: create a new course offering for a semester.
+transaction CreateCourseSection(section_id: int, course_code: string, title: string,
+                                semester: int, seats_total: int, credits: int,
+                                tuition_per_credit: float) {
+    hop {
+        CourseSection[section_id: section_id] = {
+            course_code: course_code,
+            title: title,
+            faculty_id: 0,
+            room_id: 0,
+            semester: semester,
+            seats_total: seats_total,
+            seats_available: seats_total,
+            waitlist_count: 0,
+            credits: credits,
+            tuition_per_credit: tuition_per_credit,
+            status: SECTION_CLOSED
+        };
+    }
+}
+
+// GetSectionDetails: read a course section's full record.
+transaction GetSectionDetails(section_id: int) {
+    hop {
+        var s: Row<CourseSection> = CourseSection[section_id: section_id];
+        to_unit(s);
+    }
+}
+
+// GetSectionRoster: read a student's roster entry in a section.
+transaction GetSectionRoster(section_id: int, student_id: int) {
+    hop {
+        var r: Row<SectionRoster> = SectionRoster[section_id: section_id,
+                                                   student_id: student_id];
+        to_unit(r);
+    }
+}
+
+// UpdateSectionCapacity: increase or decrease total seat count (admin).
+transaction UpdateSectionCapacity(section_id: int, new_total: int, delta: int) {
+    hop {
+        CourseSection[section_id: section_id].seats_total = new_total;
+        var avail: int = CourseSection[section_id: section_id].seats_available;
+        CourseSection[section_id: section_id].seats_available = avail + delta;
+    }
+}
+
+// OpenEnrollment: flip a closed section to OPEN so students can register.
+transaction OpenEnrollment(section_id: int) {
+    hop {
+        CourseSection[section_id: section_id].status = SECTION_OPEN;
+    }
+}
+
+// CancelSection: cancel a section (tombstone; does not refund — use DropCourse).
+transaction CancelSection(section_id: int) {
+    hop {
+        CourseSection[section_id: section_id].status = SECTION_CANCELLED;
+        CourseSection[section_id: section_id].seats_available = 0;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Faculty Management — 1 hop (facultyPartition)
+// ----------------------------------------------------------------------------
+
+// HireFaculty: create a new faculty record.
+transaction HireFaculty(faculty_id: int, name: string, email: string,
+                        department: string, rank: string) {
+    hop {
+        Faculty[faculty_id: faculty_id] = {
+            name: name,
+            email: email,
+            department: department,
+            rank: rank,
+            status: FACULTY_ACTIVE,
+            current_load: 0,
+            advisee_count: 0
+        };
+    }
+}
+
+// GetFacultyProfile: read a faculty member's full record.
+transaction GetFacultyProfile(faculty_id: int) {
+    hop {
+        var f: Row<Faculty> = Faculty[faculty_id: faculty_id];
+        to_unit(f);
+    }
+}
+
+// UpdateFacultyStatus: set active / on-leave / inactive.
+transaction UpdateFacultyStatus(faculty_id: int, status: int) {
+    hop {
+        Faculty[faculty_id: faculty_id].status = status;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Room Management — 1 hop (roomPartition)
+// ----------------------------------------------------------------------------
+
+// AddClassroom: register a new room in the system.
+transaction AddClassroom(room_id: int, building: string, room_number: string,
+                         capacity: int, room_type: string) {
+    hop {
+        Classroom[room_id: room_id] = {
+            building: building,
+            room_number: room_number,
+            capacity: capacity,
+            room_type: room_type,
+            status: ROOM_ACTIVE
+        };
+    }
+}
+
+// GetRoomSchedule: read a room booking record.
+transaction GetRoomSchedule(room_id: int, booking_id: int) {
+    hop {
+        var b: Row<RoomBooking> = RoomBooking[room_id: room_id, booking_id: booking_id];
+        to_unit(b);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Enrollment — 3 hops (studentPartition → sectionPartition → studentPartition)
+// ----------------------------------------------------------------------------
+
+// EnrollStudent: register a student in a course section.
+//
+// This is the hot-path transaction during registration windows — the primary
+// source of contention in the benchmark.
+//
+// Hop 1 (student partition): validate eligibility — active standing, no fee
+//   hold, credit cap not exceeded.  Reads cur_enrolled as a continuation var.
+// Hop 2 (section partition): verify section is open and has seats available;
+//   enforce credit cap using cur_enrolled from hop 1; claim the seat; write
+//   the roster entry; read sec_credits and tuition into continuation vars.
+// Hop 3 (student partition): create the Enrollment record, deduct tuition,
+//   and increment credits_enrolled.
+//
+// Returning to the same student partition in hop 3 is intentional — hop 1
+// only validates (no write), preserving a clean read-then-write separation.
+transaction EnrollStudent(student_id: int, section_id: int) {
+    // Hop 1: student partition — multi-condition eligibility gate.
+    hop {
+        var standing: int = Student[student_id: student_id].standing;
+        if standing == STUDENT_SUSPENDED {
+            return;
+        }
+        if standing == STUDENT_GRADUATED {
+            return;
+        }
+        if standing == STUDENT_INACTIVE {
+            return;
+        }
+        if Student[student_id: student_id].fee_hold == FEE_HOLD_ACTIVE {
+            return;
+        }
+        var cur_enrolled: int = Student[student_id: student_id].credits_enrolled;
+    }
+
+    // Hop 2: section partition — claim seat, compute tuition charge.
+    hop {
+        if CourseSection[section_id: section_id].status != SECTION_OPEN {
+            return;
+        }
+        var avail: int = CourseSection[section_id: section_id].seats_available;
+        if avail <= 0 {
+            return;
+        }
+        var sec_credits: int = CourseSection[section_id: section_id].credits;
+        if cur_enrolled + sec_credits > MAX_STUDENT_CREDITS {
+            return;
+        }
+        var tpc: float = CourseSection[section_id: section_id].tuition_per_credit;
+        var tuition: float = float(sec_credits) * tpc;
+
+        CourseSection[section_id: section_id].seats_available = avail - 1;
+        SectionRoster[section_id: section_id, student_id: student_id] = {
+            enrollment_status: ENROLLMENT_ENROLLED,
+            grade_submitted: 0
+        };
+    }
+
+    // Hop 3: student partition — record enrollment and charge tuition.
+    hop {
+        Enrollment[student_id: student_id, section_id: section_id] = {
+            status: ENROLLMENT_ENROLLED,
+            waitlist_position: 0,
+            tuition_charged: tuition
+        };
+        Student[student_id: student_id].credits_enrolled = cur_enrolled + sec_credits;
+        Student[student_id: student_id].tuition_balance =
+            Student[student_id: student_id].tuition_balance + tuition;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Drop Course — 2 hops (studentPartition → sectionPartition)
+// ----------------------------------------------------------------------------
+
+// DropCourse: withdraw a student from a section and refund tuition.
+//
+// section_credits is passed as a parameter (application knows it from the
+// section record) so hop 1 can update credits_enrolled without a cross-
+// partition lookup.
+//
+// Hop 1 (student partition): validate enrollment is active; tombstone it;
+//   refund the charged tuition; decrement credits_enrolled.
+// Hop 2 (section partition): tombstone the roster entry; restore one seat.
+transaction DropCourse(student_id: int, section_id: int, section_credits: int) {
+    hop {
+        var status: int = Enrollment[student_id: student_id,
+                                     section_id: section_id].status;
+        if status != ENROLLMENT_ENROLLED {
+            return;
+        }
+        var refund: float = Enrollment[student_id: student_id,
+                                       section_id: section_id].tuition_charged;
+        Enrollment[student_id: student_id, section_id: section_id].status = ENROLLMENT_DROPPED;
+
+        var bal: float = Student[student_id: student_id].tuition_balance;
+        Student[student_id: student_id].tuition_balance = bal - refund;
+
+        var cur: int = Student[student_id: student_id].credits_enrolled;
+        Student[student_id: student_id].credits_enrolled = cur - section_credits;
+    }
+    hop {
+        SectionRoster[section_id: section_id,
+                      student_id: student_id].enrollment_status = ENROLLMENT_DROPPED;
+        var avail: int = CourseSection[section_id: section_id].seats_available;
+        CourseSection[section_id: section_id].seats_available = avail + 1;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Waitlist — 2 hops (sectionPartition → studentPartition)
+// ----------------------------------------------------------------------------
+
+// AddToWaitlist: place a student on the waitlist for a full section.
+//
+// Hop 1 (section partition): verify section is open and actually full;
+//   increment waitlist counter; add a WAITLISTED roster entry.
+//   Captures waitlist_position as a continuation var for hop 2.
+// Hop 2 (student partition): validate no fee hold; create a WAITLISTED
+//   enrollment record with the assigned queue position.
+transaction AddToWaitlist(student_id: int, section_id: int) {
+    hop {
+        if CourseSection[section_id: section_id].status != SECTION_OPEN {
+            return;
+        }
+        if CourseSection[section_id: section_id].seats_available > 0 {
+            return;
+        }
+        var wl_pos: int = CourseSection[section_id: section_id].waitlist_count;
+        CourseSection[section_id: section_id].waitlist_count = wl_pos + 1;
+        SectionRoster[section_id: section_id, student_id: student_id] = {
+            enrollment_status: ENROLLMENT_WAITLISTED,
+            grade_submitted: 0
+        };
+    }
+    hop {
+        if Student[student_id: student_id].fee_hold == FEE_HOLD_ACTIVE {
+            return;
+        }
+        Enrollment[student_id: student_id, section_id: section_id] = {
+            status: ENROLLMENT_WAITLISTED,
+            waitlist_position: wl_pos + 1,
+            tuition_charged: 0.0
+        };
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Waitlist Promotion — 3 hops (dropping → sectionPartition → promoted)
+// ----------------------------------------------------------------------------
+
+// ProcessDropWithWaitlistPromotion: atomically drop one student from a section
+// and immediately promote the next student off the waitlist into their seat.
+//
+// This is the most complex enrollment transaction.  It chains three separate
+// partition writes in a single atomic unit, ensuring the freed seat is never
+// visible as available (avoiding a race with concurrent EnrollStudent calls).
+//
+// Hop 1 (dropping student partition): validate active enrollment; tombstone
+//   the enrollment; refund the charged tuition; decrement credits_enrolled.
+//   Reads refund as a continuation var for tuition accounting.
+// Hop 2 (section partition): tombstone the dropping student's roster entry;
+//   immediately promote the waitlisted student's roster entry to ENROLLED
+//   (seat count stays unchanged — one in, one out); decrement waitlist_count;
+//   read sec_credits and tuition rate as continuation vars for hop 3.
+// Hop 3 (promoted student partition): activate enrollment; update credits;
+//   charge tuition.
+//
+// section_credits is passed as a parameter for hop 1's credits_enrolled
+// adjustment (avoids a third round-trip to the section partition).
+transaction ProcessDropWithWaitlistPromotion(dropping_student_id: int,
+                                             promoted_student_id: int,
+                                             section_id: int,
+                                             section_credits: int) {
+    // Hop 1: dropping student partition — validate, tombstone, refund.
+    hop {
+        var status: int = Enrollment[student_id: dropping_student_id,
+                                     section_id: section_id].status;
+        if status != ENROLLMENT_ENROLLED {
+            return;
+        }
+        var refund: float = Enrollment[student_id: dropping_student_id,
+                                       section_id: section_id].tuition_charged;
+        Enrollment[student_id: dropping_student_id,
+                   section_id: section_id].status = ENROLLMENT_DROPPED;
+
+        var bal: float = Student[student_id: dropping_student_id].tuition_balance;
+        Student[student_id: dropping_student_id].tuition_balance = bal - refund;
+
+        var cur: int = Student[student_id: dropping_student_id].credits_enrolled;
+        Student[student_id: dropping_student_id].credits_enrolled = cur - section_credits;
+    }
+
+    // Hop 2: section partition — swap roster entries; compute new tuition charge.
+    hop {
+        SectionRoster[section_id: section_id,
+                      student_id: dropping_student_id].enrollment_status = ENROLLMENT_DROPPED;
+        SectionRoster[section_id: section_id,
+                      student_id: promoted_student_id].enrollment_status = ENROLLMENT_ENROLLED;
+
+        var wl: int = CourseSection[section_id: section_id].waitlist_count;
+        CourseSection[section_id: section_id].waitlist_count = wl - 1;
+
+        var tpc: float = CourseSection[section_id: section_id].tuition_per_credit;
+        var new_tuition: float = float(section_credits) * tpc;
+    }
+
+    // Hop 3: promoted student partition — activate enrollment, charge tuition.
+    hop {
+        Enrollment[student_id: promoted_student_id,
+                   section_id: section_id].status = ENROLLMENT_ENROLLED;
+        Enrollment[student_id: promoted_student_id,
+                   section_id: section_id].waitlist_position = 0;
+        Enrollment[student_id: promoted_student_id,
+                   section_id: section_id].tuition_charged = new_tuition;
+
+        var promoted_cur: int = Student[student_id: promoted_student_id].credits_enrolled;
+        Student[student_id: promoted_student_id].credits_enrolled = promoted_cur + section_credits;
+        var cur_bal: float = Student[student_id: promoted_student_id].tuition_balance;
+        Student[student_id: promoted_student_id].tuition_balance = cur_bal + new_tuition;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Section Transfer — 3 hops (student → from_section → to_section)
+// ----------------------------------------------------------------------------
+
+// TransferSection: move a student from one section of a course to another
+// (e.g., switching lecture times during add/drop).
+//
+// Hop 1 (student partition): validate the existing enrollment is active;
+//   tombstone it; refund the old tuition; decrement credits_enrolled.
+// Hop 2 (from_section partition): tombstone the roster entry; free the seat.
+// Hop 3 (to_section partition): verify target is open and has seats; claim
+//   the seat; write the new roster entry; compute the new tuition charge;
+//   update the student's enrollment and balance via continuation writes back
+//   to the student's fields (continuation var new_tuition carries the charge).
+//
+// NOTE: A write-back to the student partition for the new enrollment record
+// requires a 4th hop.  Modeled as 3 hops + an extra student partition hop.
+transaction TransferSection(student_id: int, from_section_id: int,
+                            to_section_id: int, section_credits: int) {
+    // Hop 1: student partition — tombstone old enrollment and refund.
+    hop {
+        var old_status: int = Enrollment[student_id: student_id,
+                                         section_id: from_section_id].status;
+        if old_status != ENROLLMENT_ENROLLED {
+            return;
+        }
+        var old_tuition: float = Enrollment[student_id: student_id,
+                                            section_id: from_section_id].tuition_charged;
+        Enrollment[student_id: student_id,
+                   section_id: from_section_id].status = ENROLLMENT_DROPPED;
+
+        var bal: float = Student[student_id: student_id].tuition_balance;
+        Student[student_id: student_id].tuition_balance = bal - old_tuition;
+
+        var cur: int = Student[student_id: student_id].credits_enrolled;
+        Student[student_id: student_id].credits_enrolled = cur - section_credits;
+    }
+
+    // Hop 2: from_section partition — free the roster slot and seat.
+    hop {
+        SectionRoster[section_id: from_section_id,
+                      student_id: student_id].enrollment_status = ENROLLMENT_DROPPED;
+        var avail: int = CourseSection[section_id: from_section_id].seats_available;
+        CourseSection[section_id: from_section_id].seats_available = avail + 1;
+    }
+
+    // Hop 3: to_section partition — claim seat, compute new tuition.
+    hop {
+        if CourseSection[section_id: to_section_id].status != SECTION_OPEN {
+            return;
+        }
+        var to_avail: int = CourseSection[section_id: to_section_id].seats_available;
+        if to_avail <= 0 {
+            return;
+        }
+        var new_tpc: float = CourseSection[section_id: to_section_id].tuition_per_credit;
+        var new_tuition: float = float(section_credits) * new_tpc;
+
+        CourseSection[section_id: to_section_id].seats_available = to_avail - 1;
+        SectionRoster[section_id: to_section_id, student_id: student_id] = {
+            enrollment_status: ENROLLMENT_ENROLLED,
+            grade_submitted: 0
+        };
+    }
+
+    // Hop 4: student partition — create new enrollment, update balance.
+    hop {
+        Enrollment[student_id: student_id, section_id: to_section_id] = {
+            status: ENROLLMENT_ENROLLED,
+            waitlist_position: 0,
+            tuition_charged: new_tuition
+        };
+        var cur2: int = Student[student_id: student_id].credits_enrolled;
+        Student[student_id: student_id].credits_enrolled = cur2 + section_credits;
+        var bal2: float = Student[student_id: student_id].tuition_balance;
+        Student[student_id: student_id].tuition_balance = bal2 + new_tuition;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Section Scheduling — 3 hops (facultyPartition → sectionPartition → roomPartition)
+// ----------------------------------------------------------------------------
+
+// ScheduleSection: assign a faculty member to a section and book a classroom.
+//
+// This transaction binds three independent domains atomically — faculty load,
+// section assignment, and room availability — making it the widest-spanning
+// write in the benchmark.
+//
+// Hop 1 (faculty partition): verify faculty is active; enforce the per-semester
+//   section load cap; increment current_load; write TeachingAssignment.
+// Hop 2 (section partition): verify section is not already assigned and not
+//   cancelled; record faculty_id and room_id; capture seats_total to validate
+//   room capacity in hop 3.
+// Hop 3 (room partition): verify the room is active and can seat all enrolled
+//   students (capacity >= required_capacity); create the RoomBooking record.
+transaction ScheduleSection(faculty_id: int, section_id: int, room_id: int,
+                            booking_id: int, day_of_week: int,
+                            start_time: int, end_time: int, semester: int) {
+    // Hop 1: faculty partition — load check and teaching assignment.
+    hop {
+        if Faculty[faculty_id: faculty_id].status != FACULTY_ACTIVE {
+            return;
+        }
+        var load: int = Faculty[faculty_id: faculty_id].current_load;
+        if load >= MAX_FACULTY_LOAD {
+            return;
+        }
+        Faculty[faculty_id: faculty_id].current_load = load + 1;
+        TeachingAssignment[faculty_id: faculty_id, section_id: section_id] = {
+            semester: semester,
+            role: "primary"
+        };
+    }
+
+    // Hop 2: section partition — assign faculty and room; capture required capacity.
+    hop {
+        if CourseSection[section_id: section_id].status == SECTION_CANCELLED {
+            return;
+        }
+        if CourseSection[section_id: section_id].faculty_id != 0 {
+            return;
+        }
+        var required_capacity: int = CourseSection[section_id: section_id].seats_total;
+
+        CourseSection[section_id: section_id].faculty_id = faculty_id;
+        CourseSection[section_id: section_id].room_id = room_id;
+    }
+
+    // Hop 3: room partition — capacity check and booking.
+    hop {
+        if Classroom[room_id: room_id].status != ROOM_ACTIVE {
+            return;
+        }
+        if Classroom[room_id: room_id].capacity < required_capacity {
+            return;
+        }
+        RoomBooking[room_id: room_id, booking_id: booking_id] = {
+            section_id: section_id,
+            faculty_id: faculty_id,
+            day_of_week: day_of_week,
+            start_time: start_time,
+            end_time: end_time,
+            semester: semester,
+            status: BOOKING_ACTIVE
+        };
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Room Booking — 2 hops (roomPartition → facultyPartition)
+// ----------------------------------------------------------------------------
+
+// BookRoomForOfficeHours: reserve a room for faculty office hours.
+//
+// Hop 1 (room partition): verify room is active; create the booking record.
+// Hop 2 (faculty partition): validate faculty is still active.
+transaction BookRoomForOfficeHours(faculty_id: int, room_id: int, booking_id: int,
+                                   day_of_week: int, start_time: int,
+                                   end_time: int, semester: int) {
+    hop {
+        if Classroom[room_id: room_id].status != ROOM_ACTIVE {
+            return;
+        }
+        RoomBooking[room_id: room_id, booking_id: booking_id] = {
+            section_id: 0,
+            faculty_id: faculty_id,
+            day_of_week: day_of_week,
+            start_time: start_time,
+            end_time: end_time,
+            semester: semester,
+            status: BOOKING_ACTIVE
+        };
+    }
+    hop {
+        if Faculty[faculty_id: faculty_id].status == FACULTY_INACTIVE {
+            return;
+        }
+        to_unit(Faculty[faculty_id: faculty_id]);
+    }
+}
+
+// CancelRoomBooking: tombstone a room booking.
+transaction CancelRoomBooking(room_id: int, booking_id: int) {
+    hop {
+        RoomBooking[room_id: room_id, booking_id: booking_id].status = BOOKING_CANCELLED;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Grade Submission — 3 hops (facultyPartition → sectionPartition → studentPartition)
+// ----------------------------------------------------------------------------
+
+// SubmitGrade: record a student's final grade and update their academic record.
+//
+// This is the most computationally complex transaction in the benchmark.
+//
+// Hop 1 (faculty partition): verify the faculty member has a teaching
+//   assignment for this section (authorization check).
+// Hop 2 (section partition): guard against duplicate submission; write the
+//   GradeRecord; mark the roster entry as grade_submitted; read section
+//   metadata (credits, course_code, semester) as continuation vars.
+// Hop 3 (student partition): weighted GPA recalculation using the 4.0 scale
+//   (grade_points = grade/25.0); update credits_earned and credits_enrolled;
+//   apply academic standing rules (probation at GPA < 2.0, suspension +
+//   fee hold at GPA < 1.5); write the final Transcript entry; mark enrollment
+//   as COMPLETED.
+transaction SubmitGrade(faculty_id: int, student_id: int,
+                        section_id: int, grade: int) {
+    // Hop 1: faculty partition — authorization check.
+    hop {
+        var assign: Row<TeachingAssignment> = TeachingAssignment[faculty_id: faculty_id,
+                                                                  section_id: section_id];
+        to_unit(assign);
+    }
+
+    // Hop 2: section partition — write grade, mark submitted, capture metadata.
+    hop {
+        var roster_status: int = SectionRoster[section_id: section_id,
+                                               student_id: student_id].enrollment_status;
+        if roster_status != ENROLLMENT_ENROLLED {
+            return;
+        }
+        if SectionRoster[section_id: section_id, student_id: student_id].grade_submitted == 1 {
+            return;
+        }
+        GradeRecord[section_id: section_id, student_id: student_id] = {
+            grade: grade,
+            submitted_by: faculty_id
+        };
+        SectionRoster[section_id: section_id,
+                      student_id: student_id].grade_submitted = 1;
+        SectionRoster[section_id: section_id,
+                      student_id: student_id].enrollment_status = ENROLLMENT_COMPLETED;
+
+        var sec_credits: int = CourseSection[section_id: section_id].credits;
+        var course_code: string = CourseSection[section_id: section_id].course_code;
+        var semester: int = CourseSection[section_id: section_id].semester;
+    }
+
+    // Hop 3: student partition — GPA update, standing check, transcript write.
+    hop {
+        var old_gpa: float = Student[student_id: student_id].gpa;
+        var old_credits: int = Student[student_id: student_id].credits_earned;
+        var cur_enrolled: int = Student[student_id: student_id].credits_enrolled;
+
+        // Weighted GPA: convert 0–100 grade to 4.0 scale, blend into cumulative.
+        var grade_points: float = float(grade) / 25.0;
+        var new_credits: int = old_credits + sec_credits;
+        var new_gpa: float = (old_gpa * float(old_credits) +
+                              grade_points * float(sec_credits)) / float(new_credits);
+
+        Student[student_id: student_id].gpa = new_gpa;
+        Student[student_id: student_id].credits_earned = new_credits;
+        Student[student_id: student_id].credits_enrolled = cur_enrolled - sec_credits;
+
+        // Re-evaluate academic standing based on updated GPA.
+        if new_gpa < GPA_SUSPENSION_THRESHOLD {
+            Student[student_id: student_id].standing = STUDENT_SUSPENDED;
+            Student[student_id: student_id].fee_hold = FEE_HOLD_ACTIVE;
+        } else {
+            if new_gpa < GPA_PROBATION_THRESHOLD {
+                Student[student_id: student_id].standing = STUDENT_PROBATION;
+            } else {
+                var cur_standing: int = Student[student_id: student_id].standing;
+                if cur_standing == STUDENT_PROBATION {
+                    Student[student_id: student_id].standing = STUDENT_ACTIVE;
+                }
+            }
+        }
+
+        // Finalize enrollment and append to transcript.
+        Enrollment[student_id: student_id, section_id: section_id].status = ENROLLMENT_COMPLETED;
+        Transcript[student_id: student_id, section_id: section_id] = {
+            course_code: course_code,
+            grade: grade,
+            credits: sec_credits,
+            semester: semester
+        };
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Graduation — 2 hops (studentPartition → facultyPartition)
+// ----------------------------------------------------------------------------
+
+// GraduateStudent: process a student's graduation after degree requirements
+// are confirmed to be met.
+//
+// Hop 1 (student partition): six-condition eligibility gate —
+//   active standing, no fee hold, minimum credit hours, minimum GPA,
+//   no in-progress credits, no outstanding balance.
+//   Reads advisor_id as a continuation var for hop 2.
+// Hop 2 (faculty partition): decrement the advisor's active advisee count
+//   (the student is no longer a current advisee after graduation).
+transaction GraduateStudent(student_id: int) {
+    // Hop 1: student partition — comprehensive eligibility check.
+    hop {
+        var standing: int = Student[student_id: student_id].standing;
+        if standing == STUDENT_SUSPENDED {
+            return;
+        }
+        if standing == STUDENT_GRADUATED {
+            return;
+        }
+        if standing == STUDENT_INACTIVE {
+            return;
+        }
+        if Student[student_id: student_id].fee_hold == FEE_HOLD_ACTIVE {
+            return;
+        }
+        if Student[student_id: student_id].credits_earned < MIN_GRADUATION_CREDITS {
+            return;
+        }
+        if Student[student_id: student_id].gpa < MIN_GRADUATION_GPA {
+            return;
+        }
+        if Student[student_id: student_id].credits_enrolled > 0 {
+            return;
+        }
+        if Student[student_id: student_id].tuition_balance > 0.0 {
+            return;
+        }
+
+        Student[student_id: student_id].standing = STUDENT_GRADUATED;
+        var advisor_id: int = Student[student_id: student_id].advisor_id;
+    }
+
+    // Hop 2: faculty partition — decrement advisor's active advisee count.
+    hop {
+        var cnt: int = Faculty[faculty_id: advisor_id].advisee_count;
+        if cnt > 0 {
+            Faculty[faculty_id: advisor_id].advisee_count = cnt - 1;
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Batch Grade Submission — N hops (one studentPartition per iteration)
+// ----------------------------------------------------------------------------
+
+// BatchGradeSubmission: submit the same final grade for a contiguous range of
+// students in a section (e.g., a pass/fail lab section where all students
+// receive the same mark).
+//
+// Mirrors TPC-C Delivery: GRADE_BATCH_SIZE iterations; each hop targets a
+// different studentPartition shard (base_student_id + i).  All three tables
+// updated per hop (Transcript, Enrollment, Student) are co-located on the
+// same student partition, so each iteration is a single-partition write.
+//
+// GPA recalculation is applied per student using the same weighted formula
+// as SubmitGrade, making each hop computationally non-trivial.
+transaction BatchGradeSubmission(section_id: int, base_student_id: int,
+                                 grade: int, sec_credits: int,
+                                 course_code: string, semester: int) {
+    hops for i: int = 0 to GRADE_BATCH_SIZE {
+        // --- student partition for (base_student_id + i) ---
+
+        // GPA recalculation (same weighted formula as SubmitGrade).
+        var old_gpa: float = Student[student_id: base_student_id + i].gpa;
+        var old_credits: int = Student[student_id: base_student_id + i].credits_earned;
+        var cur_enrolled: int = Student[student_id: base_student_id + i].credits_enrolled;
+        var grade_points: float = float(grade) / 25.0;
+        var new_credits: int = old_credits + sec_credits;
+        var new_gpa: float = (old_gpa * float(old_credits) +
+                              grade_points * float(sec_credits)) / float(new_credits);
+
+        Student[student_id: base_student_id + i].gpa = new_gpa;
+        Student[student_id: base_student_id + i].credits_earned = new_credits;
+        Student[student_id: base_student_id + i].credits_enrolled = cur_enrolled - sec_credits;
+
+        // Apply standing rules identically to SubmitGrade.
+        if new_gpa < GPA_SUSPENSION_THRESHOLD {
+            Student[student_id: base_student_id + i].standing = STUDENT_SUSPENDED;
+            Student[student_id: base_student_id + i].fee_hold = FEE_HOLD_ACTIVE;
+        } else {
+            if new_gpa < GPA_PROBATION_THRESHOLD {
+                Student[student_id: base_student_id + i].standing = STUDENT_PROBATION;
+            }
+        }
+
+        Enrollment[student_id: base_student_id + i,
+                   section_id: section_id].status = ENROLLMENT_COMPLETED;
+
+        Transcript[student_id: base_student_id + i, section_id: section_id] = {
+            course_code: course_code,
+            grade: grade,
+            credits: sec_credits,
+            semester: semester
+        };
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Semester Activation — N hops (one sectionPartition per iteration)
+// ----------------------------------------------------------------------------
+
+// SemesterActivation: flip a batch of closed sections to OPEN at the start of
+// a registration window (e.g., when the registrar opens enrollment).
+//
+// Each hop targets sectionPartition(base_section_id + i) — a different shard
+// per iteration.  Simple but high-fan-out: a single transaction spans
+// SEMESTER_BATCH_SIZE partition boundaries, exercising the scheduler's ability
+// to pipeline independent partition writes.
+transaction SemesterActivation(base_section_id: int, semester: int) {
+    hops for i: int = 0 to SEMESTER_BATCH_SIZE {
+        CourseSection[section_id: base_section_id + i].status = SECTION_OPEN;
+        CourseSection[section_id: base_section_id + i].semester = semester;
+        CourseSection[section_id: base_section_id + i].waitlist_count = 0;
+    }
+}
