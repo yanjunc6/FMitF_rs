@@ -62,7 +62,7 @@ This produces the optimized `fmitf` binary at `target/release/fmitf`. You can al
 The `fmitf` CLI accepts a `.transact` source file and optionally an output directory and verification parameters. Example:
 
 ```bash
-cargo run --release -- examples/tpcc.transact
+cargo run --release -- benchmarks/main/tpcc.transact
 ```
 
 Key options (all can be passed after `--` when using `cargo run`):
@@ -89,11 +89,8 @@ To inspect verification failures, open the associated `.bpl` files or review the
 
 ## Evaluation
 
-A script is provided to compile three benchmark:
-```
-bash ./run_benchmark.sh
-```
+The notebook `benchmark_pipeline.ipynb` provides code to run all benchmarks.
 
-Please note that this will take a few hours. A quick benchmark can be achieved by commenting out first two tpcc passes in script.
+Please note that this will take around 30 minutes.
 
 To run them on our prototype database, please refer [database engine guide](db_engine/README.md).
