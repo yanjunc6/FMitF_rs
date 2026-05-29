@@ -1,5 +1,0 @@
-transaction test(x: int) {
-    var y: int = 42;
-    var z: string = "hello";
-    var w: bool = true;
-}

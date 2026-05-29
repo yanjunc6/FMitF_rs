@@ -1,7 +1,0 @@
-function identity<T>(x: T) -> T {
-    return x;
-}
-
-function main() {
-    return;
-}
